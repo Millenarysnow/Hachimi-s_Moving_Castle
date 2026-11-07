@@ -25,7 +25,7 @@ public class Moving_Castle : ModuleRules
 
 		PublicIncludePaths.AddRange(new string[] {
 			"Moving_Castle",
-			"Moving_Castle/Castle",
+			"Moving_Castle/Castle", // 城堡基础逻辑的公共头文件路径，供生成器、棋盘和建筑类共用。
 			"Moving_Castle/Variant_Platforming",
 			"Moving_Castle/Variant_Platforming/Animation",
 			"Moving_Castle/Variant_Combat",
