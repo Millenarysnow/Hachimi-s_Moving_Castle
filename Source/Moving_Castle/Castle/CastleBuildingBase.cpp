@@ -2,12 +2,51 @@
 
 #include "CastleBuildingBase.h"
 
+#include "Components/StaticMeshComponent.h"
+#include "Components/TextRenderComponent.h"
+#include "Engine/StaticMesh.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 #include "Moving_Castle.h"
+#include "UObject/ConstructorHelpers.h"
 
 ACastleBuildingBase::ACastleBuildingBase()
 {
-	// 建筑 Actor 当前阶段不绑定任何美术组件，只保留可供棋盘和蓝图访问的数据。
+	// 使用 UE 自带的 BasicShapes/Cube 作为临时占位网格，避免当前阶段依赖正式美术资源。
 	PrimaryActorTick.bCanEverTick = false;
+
+	PrototypeMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PrototypeMesh"));
+	SetRootComponent(PrototypeMesh);
+	PrototypeMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	PrototypeMesh->SetCanEverAffectNavigation(false);
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMeshFinder(TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (CubeMeshFinder.Succeeded())
+	{
+		PrototypeMesh->SetStaticMesh(CubeMeshFinder.Object);
+	}
+	else
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑占位可视化初始化失败：找不到 UE BasicShapes/Cube。"));
+	}
+
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BasicMaterialFinder(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+	if (BasicMaterialFinder.Succeeded())
+	{
+		PrototypeMesh->SetMaterial(0, BasicMaterialFinder.Object);
+	}
+	else
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑占位可视化初始化失败：找不到 UE BasicShapeMaterial。"));
+	}
+
+	PrototypeLabel = CreateDefaultSubobject<UTextRenderComponent>(TEXT("PrototypeLabel"));
+	PrototypeLabel->SetupAttachment(PrototypeMesh);
+	PrototypeLabel->SetHorizontalAlignment(EHorizTextAligment::EHTA_Center);
+	PrototypeLabel->SetVerticalAlignment(EVerticalTextAligment::EVRTA_TextCenter);
+	PrototypeLabel->SetTextRenderColor(FColor::White);
+	PrototypeLabel->SetWorldSize(32.0f);
+	PrototypeLabel->SetText(FText::FromString(TEXT("Building")));
 }
 bool ACastleBuildingBase::InitializeBuilding(const FCastleBuildingDescriptor& Descriptor, const TArray<FIntVector>& InOccupiedCoordinates)
 {
@@ -84,6 +123,25 @@ bool ACastleBuildingBase::InitializeBuilding(const FCastleBuildingDescriptor& De
 	Color = Descriptor.Color;
 	Number = Descriptor.Number;
 	OccupiedCoordinates = InOccupiedCoordinates;
+
+	// 标签在 Actor 生成后立即更新；网格尺寸由棋盘在知道格子大小后补充配置。
+	const TCHAR* TypeText = TEXT("Road");
+	switch (BuildingType)
+	{
+	case ECastleBuildingType::ArcherTower:
+		TypeText = TEXT("Archer");
+		break;
+	case ECastleBuildingType::CannonTower:
+		TypeText = TEXT("Cannon");
+		break;
+	case ECastleBuildingType::Farm:
+		TypeText = TEXT("Farm");
+		break;
+	default:
+		break;
+	}
+	PrototypeLabel->SetText(FText::FromString(FString::Printf(TEXT("%s %d\nLv%d"), TypeText, Number, BuildingLevel)));
+
 	return true;
 }
 
@@ -141,5 +199,78 @@ int32 ACastleBuildingBase::GetExpectedFootprintCellCount(int32 InLevel)
 	// 等级 1、2、3、4 分别对应 1、2、4、8 个合成方块；5 级由奖励直接升级，
 	// 仍然代表一座建筑，因此恢复为单格占用而不是继续扩大合成形状。
 	return InLevel == 5 ? 1 : (1 << (InLevel - 1));
+}
+
+void ACastleBuildingBase::ConfigurePrototypeVisual(float InCellSize, float InLayerHeight)
+{
+	if (PrototypeMesh == nullptr || PrototypeLabel == nullptr)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑占位可视化配置失败：组件为空。"));
+		return;
+	}
+
+	if (InCellSize <= 0.0f || InLayerHeight <= 0.0f)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑占位可视化配置失败：CellSize 和 LayerHeight 必须大于 0。"));
+		return;
+	}
+
+	if (OccupiedCoordinates.Num() == 0)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑占位可视化配置失败：没有占用坐标。"));
+		return;
+	}
+
+	FIntVector Minimum = OccupiedCoordinates[0];
+	FIntVector Maximum = OccupiedCoordinates[0];
+	for (const FIntVector& Coordinate : OccupiedCoordinates)
+	{
+		Minimum.X = FMath::Min(Minimum.X, Coordinate.X);
+		Minimum.Y = FMath::Min(Minimum.Y, Coordinate.Y);
+		Minimum.Z = FMath::Min(Minimum.Z, Coordinate.Z);
+		Maximum.X = FMath::Max(Maximum.X, Coordinate.X);
+		Maximum.Y = FMath::Max(Maximum.Y, Coordinate.Y);
+		Maximum.Z = FMath::Max(Maximum.Z, Coordinate.Z);
+	}
+
+	const FIntVector Dimensions = Maximum - Minimum + FIntVector(1, 1, 1);
+	// BasicShapes/Cube 的原始边长是 100 Unreal Units，因此按网格尺寸换算缩放。
+	PrototypeMesh->SetRelativeScale3D(FVector(
+		static_cast<float>(Dimensions.X) * InCellSize / 100.0f * 0.86f,
+		static_cast<float>(Dimensions.Y) * InCellSize / 100.0f * 0.86f,
+		static_cast<float>(Dimensions.Z) * InLayerHeight / 100.0f * 0.72f));
+
+	FLinearColor DisplayColor = FLinearColor::Gray;
+	switch (Color)
+	{
+	case ECastleTileColor::Red:
+		DisplayColor = FLinearColor(0.85f, 0.12f, 0.12f, 1.0f);
+		break;
+	case ECastleTileColor::Blue:
+		DisplayColor = FLinearColor(0.10f, 0.35f, 0.90f, 1.0f);
+		break;
+	case ECastleTileColor::Green:
+		DisplayColor = FLinearColor(0.10f, 0.75f, 0.25f, 1.0f);
+		break;
+	case ECastleTileColor::Yellow:
+		DisplayColor = FLinearColor(0.95f, 0.70f, 0.08f, 1.0f);
+		break;
+	case ECastleTileColor::Purple:
+		DisplayColor = FLinearColor(0.60f, 0.20f, 0.85f, 1.0f);
+		break;
+	default:
+		DisplayColor = FLinearColor(0.35f, 0.35f, 0.38f, 1.0f);
+		break;
+	}
+
+	if (UMaterialInterface* BaseMaterial = PrototypeMesh->GetMaterial(0))
+	{
+		UMaterialInstanceDynamic* DynamicMaterial = UMaterialInstanceDynamic::Create(BaseMaterial, this);
+		if (DynamicMaterial != nullptr)
+		{
+			DynamicMaterial->SetVectorParameterValue(TEXT("Color"), DisplayColor);
+			PrototypeMesh->SetMaterial(0, DynamicMaterial);
+		}
+	}
 }
 

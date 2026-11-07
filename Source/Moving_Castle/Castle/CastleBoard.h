@@ -10,6 +10,10 @@
 class ACastleBuildingBase;
 class UCastleBackpackComponent;
 class UCastleGroundGenerator;
+class UMaterialInterface;
+class USceneComponent;
+class UStaticMesh;
+class UStaticMeshComponent;
 
 /**
  * 逻辑棋盘 Actor。
@@ -43,6 +47,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "1.0"))
 	float LayerHeight = 200.0f;
 
+	/**
+	 * 棋盘第一层建筑中心相对于棋盘 Actor 原点的高度。
+	 *
+	 * 测试地图保留了 UE 模板地板，原型棋盘需要抬到地板上方才能同时看见并
+	 * 点击运行时创建的地面格；后续替换正式场景时仍可在实例上调整这个值。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "0.0"))
+	float WorldBaseHeight = 100.0f;
+
 	/** 地面生成策略类，可替换为固定模板或其他自定义策略。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|地面")
 	TSubclassOf<UCastleGroundGenerator> GroundGeneratorClass;
@@ -58,6 +71,22 @@ public:
 	/** BeginPlay 时自动生成地面，关闭后可以由关卡蓝图手动调用 GenerateGround。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|地面")
 	bool bGenerateGroundOnBeginPlay = true;
+
+	/** 是否启用当前阶段的直接操作原型输入：数字键选择卡牌，鼠标左键放置。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|原型操作")
+	bool bEnablePrototypeInput = true;
+
+	/** 原型背包会自动装入道路、箭塔、炮塔和农田样例卡牌。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "棋盘|原型操作")
+	TObjectPtr<UCastleBackpackComponent> PrototypeBackpack;
+
+	/** 当前数字键对应的样例卡牌，便于在没有 UI 资源时直接验证放置和合成。 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "棋盘|原型操作")
+	TArray<FCastleBuildingDescriptor> PrototypePalette;
+
+	/** 当前选中的样例卡牌槽位，范围为 0 到 PrototypePalette.Num()-1。 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "棋盘|原型操作")
+	int32 SelectedPrototypeSlot = 0;
 
 	/** 使用当前 GroundGeneratorClass 生成并接收一份新的地面结果。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|棋盘")
@@ -118,8 +147,54 @@ public:
 	FVector GetGridWorldLocation(const FIntVector& Coordinate) const;
 
 protected:
+	/** 仅用于挂载地面占位组件和背包组件的根节点。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
+	TObjectPtr<USceneComponent> SceneRoot;
+
+	/** UE 自带 BasicShapes/Cube，占位地面和建筑都使用该网格。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
+	TObjectPtr<UStaticMesh> PrototypeCubeMesh;
+
+	/** UE 自带基础材质，运行时为每个地面格子创建动态颜色实例。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
+	TObjectPtr<UMaterialInterface> PrototypeMaterial;
+
+	/** 每个地面坐标对应的可点击占位组件。 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "占位可视化")
+	TMap<FIntVector, TObjectPtr<UStaticMeshComponent>> GroundVisuals;
+
 	/** 根据 bGenerateGroundOnBeginPlay 决定是否在运行开始时生成地面。 */
 	virtual void BeginPlay() override;
+
+	/** 生成原型背包和四个数字键样例卡，卡牌属性来自本次实际生成的地面。 */
+	void InitializePrototypeDeck();
+
+	/** 启用棋盘自身的鼠标和数字键输入，避免要求验收者调用蓝图函数。 */
+	void SetupPrototypeInput();
+
+	/** 处理鼠标左键，将光标下的地面占位格转换为网格坐标并放置当前卡牌。 */
+	void HandlePrototypePlacementClick();
+
+	/** 数字键 1 到 4 的独立绑定函数，使用独立函数以兼容 UE 输入组件的成员函数绑定。 */
+	void SelectPrototypeSlot1();
+	void SelectPrototypeSlot2();
+	void SelectPrototypeSlot3();
+	void SelectPrototypeSlot4();
+
+	/** 切换样例卡牌并把当前选择打印到屏幕。 */
+	void SelectPrototypeSlot(int32 SlotIndex);
+
+	/** 查找背包中与当前样例卡牌完全匹配的第一张卡牌。 */
+	int32 FindPrototypeCardIndex(const FCastleBuildingDescriptor& Descriptor) const;
+
+	/** 将已接收的地面结果生成成可点击的彩色立方体占位格。 */
+	void RebuildGroundVisualization();
+
+	/** 返回颜色对应的占位显示颜色。 */
+	static FLinearColor GetPrototypeColor(ECastleTileColor Color);
+
+	/** 在屏幕上显示当前原型操作结果和失败原因。 */
+	void ShowPrototypeMessage(const FString& Message, const FColor& Color = FColor::White) const;
 
 	/** 已经通过校验并被棋盘接收的地面结果。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "棋盘|地面")

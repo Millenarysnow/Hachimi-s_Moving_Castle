@@ -6,15 +6,51 @@
 #include "CastleBuildingBase.h"
 #include "CastleBuildings.h"
 #include "CastleGroundGenerator.h"
+#include "Components/SceneComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Components/TextRenderComponent.h"
+#include "Engine/Engine.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
+#include "InputCoreTypes.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 #include "Moving_Castle.h"
+#include "UObject/ConstructorHelpers.h"
 
 ACastleBoard::ACastleBoard()
 {
-	// 棋盘本身只维护逻辑状态，不需要 Tick，也不在这里创建任何美术组件。
+	// 棋盘逻辑不需要 Tick；占位地面通过组件注册生成，不依赖 PCG 或正式模型。
 	PrimaryActorTick.bCanEverTick = false;
+
+	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
+	SetRootComponent(SceneRoot);
+	PrototypeBackpack = CreateDefaultSubobject<UCastleBackpackComponent>(TEXT("PrototypeBackpack"));
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMeshFinder(TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (CubeMeshFinder.Succeeded())
+	{
+		PrototypeCubeMesh = CubeMeshFinder.Object;
+	}
+	else
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘占位可视化初始化失败：找不到 UE BasicShapes/Cube。"));
+	}
+
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BasicMaterialFinder(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+	if (BasicMaterialFinder.Succeeded())
+	{
+		PrototypeMaterial = BasicMaterialFinder.Object;
+	}
+	else
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘占位可视化初始化失败：找不到 UE BasicShapeMaterial。"));
+	}
+
 	GroundGeneratorClass = UCastleRandomGroundGenerator::StaticClass();
 }
+
 void ACastleBoard::BeginPlay()
 {
 	Super::BeginPlay();
@@ -25,6 +61,15 @@ void ACastleBoard::BeginPlay()
 		if (!GenerateGround(FailureReason))
 		{
 			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 BeginPlay 生成地面失败：%s"), *FailureReason.ToString());
+		}
+	}
+
+	if (GeneratedGroundCells.Num() > 0)
+	{
+		InitializePrototypeDeck();
+		if (bEnablePrototypeInput)
+		{
+			SetupPrototypeInput();
 		}
 	}
 }
@@ -124,6 +169,7 @@ bool ACastleBoard::ApplyGroundGenerationResult(const FCastleGroundGenerationResu
 
 	// 所有检查完成后才替换旧数组，保证错误结果不会留下半份地面。
 	GeneratedGroundCells = Result.Cells;
+	RebuildGroundVisualization();
 	return true;
 }
 
@@ -374,10 +420,13 @@ TArray<ACastleBuildingBase*> ACastleBoard::GetPlacedBuildings() const
 FVector ACastleBoard::GetGridWorldLocation(const FIntVector& Coordinate) const
 {
 	const FIntVector RelativeCoordinate = Coordinate - GridOrigin;
-	return GetActorLocation() + FVector(
+	const FVector LocalGridLocation(
 		static_cast<float>(RelativeCoordinate.X) * CellSize,
 		static_cast<float>(RelativeCoordinate.Y) * CellSize,
-		static_cast<float>(RelativeCoordinate.Z) * LayerHeight);
+		WorldBaseHeight + static_cast<float>(RelativeCoordinate.Z) * LayerHeight);
+
+	// 使用棋盘 Actor 的完整变换，保证棋盘被旋转或缩放时逻辑坐标与占位表现仍一致。
+	return GetActorTransform().TransformPosition(LocalGridLocation);
 }
 
 void ACastleBoard::GetFaceNeighborCoordinates(const FIntVector& Coordinate, TArray<FIntVector>& OutNeighbors) const
@@ -521,6 +570,9 @@ ACastleBuildingBase* ACastleBoard::SpawnBuildingActor(const FCastleBuildingDescr
 		OutFailureReason = FText::FromString(TEXT("建筑 Actor 初始化数据失败。"));
 		return nullptr;
 	}
+
+	// 占位网格尺寸由棋盘统一配置，合成后的新 Actor 也会在这里显示为完整占用范围。
+	NewBuilding->ConfigurePrototypeVisual(CellSize, LayerHeight);
 
 	return NewBuilding;
 }
@@ -912,5 +964,349 @@ bool ACastleBoard::HasPlacementMatch(const FIntVector& Coordinate, const FCastle
 	}
 
 	return false;
+}
+
+void ACastleBoard::InitializePrototypeDeck()
+{
+	PrototypePalette.Reset();
+
+	if (PrototypeBackpack == nullptr)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘原型卡组初始化失败：PrototypeBackpack 为空。"));
+		return;
+	}
+
+	if (PrototypeBackpack->GetItemCount() > 0)
+	{
+		// 允许关卡蓝图预先配置背包；检测到已有卡牌时不再偷偷追加样例卡。
+		UE_LOG(LogMoving_Castle, Log, TEXT("棋盘检测到预先配置的原型背包，跳过自动样例卡组。"));
+		return;
+	}
+
+	TArray<FCastleGroundCell> FunctionalCells;
+	for (const FCastleGroundCell& Cell : GeneratedGroundCells)
+	{
+		if (!Cell.IsRoadTile())
+		{
+			FunctionalCells.Add(Cell);
+		}
+	}
+
+	if (FunctionalCells.Num() == 0)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘原型卡组初始化失败：生成结果中没有功能地面格。"));
+		return;
+	}
+
+	// 样例功能卡牌的颜色和数字直接取本局实际地面，保证第一次点击时不用手动猜匹配属性。
+	const FCastleGroundCell& ArcherCell = FunctionalCells[0];
+	const FCastleGroundCell& CannonCell = FunctionalCells[FMath::Min(1, FunctionalCells.Num() - 1)];
+	const FCastleGroundCell& FarmCell = FunctionalCells[FMath::Min(2, FunctionalCells.Num() - 1)];
+
+	FCastleBuildingDescriptor RoadDescriptor;
+	RoadDescriptor.BuildingClass = ACastleRoadBuilding::StaticClass();
+	RoadDescriptor.BuildingType = ECastleBuildingType::Road;
+	RoadDescriptor.Color = ECastleTileColor::Gray;
+	RoadDescriptor.Number = 0;
+	RoadDescriptor.Level = 1;
+
+	auto MakeFunctionalDescriptor = [](TSubclassOf<ACastleBuildingBase> BuildingClass, const FCastleGroundCell& Cell)
+	{
+		FCastleBuildingDescriptor Descriptor;
+		Descriptor.BuildingClass = BuildingClass;
+		Descriptor.Color = Cell.Color;
+		Descriptor.Number = Cell.Number;
+		const ACastleBuildingBase* DefaultBuilding = BuildingClass->GetDefaultObject<ACastleBuildingBase>();
+		if (DefaultBuilding != nullptr)
+		{
+			Descriptor.BuildingType = DefaultBuilding->GetBuildingType();
+			Descriptor.Level = DefaultBuilding->GetBuildingLevel();
+		}
+		return Descriptor;
+	};
+
+	PrototypePalette.Add(RoadDescriptor);
+	PrototypePalette.Add(MakeFunctionalDescriptor(ACastleArcherTowerLevel1::StaticClass(), ArcherCell));
+	PrototypePalette.Add(MakeFunctionalDescriptor(ACastleCannonTowerLevel1::StaticClass(), CannonCell));
+	PrototypePalette.Add(MakeFunctionalDescriptor(ACastleFarmLevel1::StaticClass(), FarmCell));
+
+	// 每种样例卡放两张，箭塔可以直接在相邻地块完成一次 1 级到 2 级的合成。
+	for (int32 PaletteIndex = 0; PaletteIndex < PrototypePalette.Num(); ++PaletteIndex)
+	{
+		const int32 CardCount = PaletteIndex == 0 ? 2 : 2;
+		for (int32 CardIndex = 0; CardIndex < CardCount; ++CardIndex)
+		{
+			int32 AddedIndex = INDEX_NONE;
+			FText AddReason;
+			if (!PrototypeBackpack->TryAddItem(PrototypePalette[PaletteIndex], AddedIndex, AddReason))
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("棋盘原型卡组加入失败：%s"), *AddReason.ToString());
+			}
+		}
+	}
+
+	SelectedPrototypeSlot = 0;
+	ShowPrototypeMessage(TEXT("原型操作：数字键 1 道路 / 2 箭塔 / 3 炮塔 / 4 农田；鼠标左键点击地块放置。"), FColor::Cyan);
+}
+
+void ACastleBoard::SetupPrototypeInput()
+{
+	APlayerController* PlayerController = GetWorld() != nullptr ? GetWorld()->GetFirstPlayerController() : nullptr;
+	if (PlayerController == nullptr)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘原型输入初始化失败：当前 World 没有 PlayerController。"));
+		return;
+	}
+
+	EnableInput(PlayerController);
+	if (InputComponent == nullptr)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘原型输入初始化失败：EnableInput 没有创建 InputComponent。"));
+		return;
+	}
+
+	InputComponent->BindKey(EKeys::One, IE_Pressed, this, &ACastleBoard::SelectPrototypeSlot1);
+	InputComponent->BindKey(EKeys::Two, IE_Pressed, this, &ACastleBoard::SelectPrototypeSlot2);
+	InputComponent->BindKey(EKeys::Three, IE_Pressed, this, &ACastleBoard::SelectPrototypeSlot3);
+	InputComponent->BindKey(EKeys::Four, IE_Pressed, this, &ACastleBoard::SelectPrototypeSlot4);
+	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ACastleBoard::HandlePrototypePlacementClick);
+
+	PlayerController->bEnableClickEvents = true;
+	PlayerController->bEnableMouseOverEvents = true;
+	PlayerController->bShowMouseCursor = true;
+
+	ShowPrototypeMessage(TEXT("鼠标已启用：点击彩色地面格即可放置当前样例卡。"), FColor::Cyan);
+}
+
+void ACastleBoard::HandlePrototypePlacementClick()
+{
+	if (!PrototypePalette.IsValidIndex(SelectedPrototypeSlot) || PrototypeBackpack == nullptr)
+	{
+		ShowPrototypeMessage(TEXT("当前没有可用的样例卡牌。"), FColor::Red);
+		return;
+	}
+
+	APlayerController* PlayerController = GetWorld() != nullptr ? GetWorld()->GetFirstPlayerController() : nullptr;
+	if (PlayerController == nullptr)
+	{
+		ShowPrototypeMessage(TEXT("无法放置：没有找到 PlayerController。"), FColor::Red);
+		return;
+	}
+
+	FHitResult HitResult;
+	if (!PlayerController->GetHitResultUnderCursor(ECC_Visibility, true, HitResult))
+	{
+		ShowPrototypeMessage(TEXT("请点击棋盘上的彩色地面格。"), FColor::Yellow);
+		return;
+	}
+
+	FIntVector TargetCoordinate = FIntVector::ZeroValue;
+	bool bFoundGroundCoordinate = false;
+	for (const TPair<FIntVector, TObjectPtr<UStaticMeshComponent>>& Pair : GroundVisuals)
+	{
+		if (Pair.Value != nullptr && Pair.Value.Get() == HitResult.GetComponent())
+		{
+			TargetCoordinate = Pair.Key;
+			bFoundGroundCoordinate = true;
+			break;
+		}
+	}
+
+	if (!bFoundGroundCoordinate)
+	{
+		ShowPrototypeMessage(TEXT("请点击地面占位方块，建筑本身不会作为点击目标。"), FColor::Yellow);
+		return;
+	}
+
+	const FCastleBuildingDescriptor& SelectedDescriptor = PrototypePalette[SelectedPrototypeSlot];
+	const int32 BackpackIndex = FindPrototypeCardIndex(SelectedDescriptor);
+	if (BackpackIndex == INDEX_NONE)
+	{
+		ShowPrototypeMessage(TEXT("当前样例卡已经用完，请切换数字键选择其他卡牌。"), FColor::Yellow);
+		return;
+	}
+
+	FText FailureReason;
+	ACastleBuildingBase* PlacedBuilding = PlaceBuildingFromBackpack(TargetCoordinate, PrototypeBackpack, BackpackIndex, true, FailureReason);
+	if (PlacedBuilding == nullptr)
+	{
+		ShowPrototypeMessage(FailureReason.ToString(), FColor::Red);
+		return;
+	}
+
+	if (PlacedBuilding->GetBuildingLevel() > SelectedDescriptor.Level)
+	{
+		ShowPrototypeMessage(FString::Printf(TEXT("合成完成：新 Actor 为 Lv%d，占用 %d 格。"), PlacedBuilding->GetBuildingLevel(), PlacedBuilding->GetOccupiedCoordinates().Num()), FColor::Green);
+	}
+	else
+	{
+		ShowPrototypeMessage(FString::Printf(TEXT("放置成功：%s，坐标 (%d, %d, %d)。"), *PlacedBuilding->GetBuildingDescriptor().BuildingClass->GetName(), TargetCoordinate.X, TargetCoordinate.Y, TargetCoordinate.Z), FColor::Green);
+	}
+}
+
+void ACastleBoard::SelectPrototypeSlot1()
+{
+	SelectPrototypeSlot(0);
+}
+
+void ACastleBoard::SelectPrototypeSlot2()
+{
+	SelectPrototypeSlot(1);
+}
+
+void ACastleBoard::SelectPrototypeSlot3()
+{
+	SelectPrototypeSlot(2);
+}
+
+void ACastleBoard::SelectPrototypeSlot4()
+{
+	SelectPrototypeSlot(3);
+}
+
+void ACastleBoard::SelectPrototypeSlot(int32 SlotIndex)
+{
+	if (!PrototypePalette.IsValidIndex(SlotIndex))
+	{
+		ShowPrototypeMessage(TEXT("无效的样例卡槽位。"), FColor::Red);
+		return;
+	}
+
+	SelectedPrototypeSlot = SlotIndex;
+	const FCastleBuildingDescriptor& Descriptor = PrototypePalette[SlotIndex];
+	const int32 RemainingCount = FindPrototypeCardIndex(Descriptor) == INDEX_NONE ? 0 : 1;
+	ShowPrototypeMessage(FString::Printf(TEXT("已选择样例槽 %d：类型 %d，颜色 %d，数字 %d，可用卡牌至少 %d 张。"), SlotIndex + 1, static_cast<int32>(Descriptor.BuildingType), static_cast<int32>(Descriptor.Color), Descriptor.Number, RemainingCount), FColor::Cyan);
+}
+
+int32 ACastleBoard::FindPrototypeCardIndex(const FCastleBuildingDescriptor& Descriptor) const
+{
+	if (PrototypeBackpack == nullptr)
+	{
+		return INDEX_NONE;
+	}
+
+	const TArray<FCastleBuildingDescriptor> Items = PrototypeBackpack->GetItems();
+	for (int32 Index = 0; Index < Items.Num(); ++Index)
+	{
+		const FCastleBuildingDescriptor& Item = Items[Index];
+		if (Item.BuildingClass == Descriptor.BuildingClass
+			&& Item.BuildingType == Descriptor.BuildingType
+			&& Item.Color == Descriptor.Color
+			&& Item.Number == Descriptor.Number
+			&& Item.Level == Descriptor.Level)
+		{
+			return Index;
+		}
+	}
+
+	return INDEX_NONE;
+}
+
+void ACastleBoard::RebuildGroundVisualization()
+{
+	for (const TPair<FIntVector, TObjectPtr<UStaticMeshComponent>>& Pair : GroundVisuals)
+	{
+		if (Pair.Value != nullptr)
+		{
+			Pair.Value->DestroyComponent();
+		}
+	}
+	GroundVisuals.Reset();
+
+	if (GetWorld() == nullptr)
+	{
+		// 自动化测试可以在没有 World 的 UObject 上验证地面数据，此时不创建组件。
+		return;
+	}
+
+	if (SceneRoot == nullptr || PrototypeCubeMesh == nullptr || PrototypeMaterial == nullptr)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘地面可视化创建失败：占位资源或根组件为空。"));
+		return;
+	}
+
+	for (const FCastleGroundCell& Cell : GeneratedGroundCells)
+	{
+		const FIntVector RelativeCoordinate = Cell.Coordinate - GridOrigin;
+		const FName TileName(*FString::Printf(TEXT("GroundTile_%d_%d_%d"), Cell.Coordinate.X, Cell.Coordinate.Y, Cell.Coordinate.Z));
+		UStaticMeshComponent* TileComponent = NewObject<UStaticMeshComponent>(this, TileName);
+		if (TileComponent == nullptr)
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘地面可视化创建失败：无法创建地面组件。"));
+			return;
+		}
+
+		// 运行时创建的组件必须加入 Actor 的实例组件列表，再注册到当前 World，
+		// 否则在 PIE/World Partition 中可能只存在于内存而没有渲染状态。
+		AddInstanceComponent(TileComponent);
+		TileComponent->SetupAttachment(SceneRoot);
+		TileComponent->SetStaticMesh(PrototypeCubeMesh);
+		TileComponent->SetMobility(EComponentMobility::Movable);
+		TileComponent->SetRelativeLocation(FVector(
+			static_cast<float>(RelativeCoordinate.X) * CellSize,
+			static_cast<float>(RelativeCoordinate.Y) * CellSize,
+			WorldBaseHeight + static_cast<float>(RelativeCoordinate.Z) * LayerHeight - LayerHeight * 0.45f));
+		TileComponent->SetRelativeScale3D(FVector(CellSize / 100.0f * 0.92f, CellSize / 100.0f * 0.92f, 0.12f));
+		TileComponent->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		TileComponent->SetCollisionResponseToAllChannels(ECR_Ignore);
+		TileComponent->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+		TileComponent->SetVisibility(true, true);
+
+		UMaterialInstanceDynamic* TileMaterial = UMaterialInstanceDynamic::Create(PrototypeMaterial, TileComponent);
+		if (TileMaterial != nullptr)
+		{
+			TileMaterial->SetVectorParameterValue(TEXT("Color"), GetPrototypeColor(Cell.Color));
+			TileComponent->SetMaterial(0, TileMaterial);
+		}
+
+		TileComponent->RegisterComponentWithWorld(GetWorld());
+
+		const FName LabelName(*FString::Printf(TEXT("GroundLabel_%d_%d_%d"), Cell.Coordinate.X, Cell.Coordinate.Y, Cell.Coordinate.Z));
+		UTextRenderComponent* NumberLabel = NewObject<UTextRenderComponent>(this, LabelName);
+		if (NumberLabel != nullptr)
+		{
+			AddInstanceComponent(NumberLabel);
+			NumberLabel->SetupAttachment(TileComponent);
+			NumberLabel->SetHorizontalAlignment(EHorizTextAligment::EHTA_Center);
+			NumberLabel->SetVerticalAlignment(EVerticalTextAligment::EVRTA_TextCenter);
+			NumberLabel->SetTextRenderColor(FColor::Black);
+			NumberLabel->SetWorldSize(28.0f);
+			NumberLabel->SetText(FText::FromString(FString::Printf(TEXT("%d"), Cell.Number)));
+			NumberLabel->SetRelativeLocation(FVector(0.0f, 0.0f, 55.0f));
+			NumberLabel->RegisterComponentWithWorld(GetWorld());
+		}
+
+		GroundVisuals.Add(Cell.Coordinate, TileComponent);
+	}
+
+	UE_LOG(LogMoving_Castle, Log, TEXT("棋盘已创建 %d 个地面占位组件，世界基准高度为 %.1f。"), GroundVisuals.Num(), WorldBaseHeight);
+}
+
+FLinearColor ACastleBoard::GetPrototypeColor(ECastleTileColor Color)
+{
+	switch (Color)
+	{
+	case ECastleTileColor::Red:
+		return FLinearColor(0.75f, 0.08f, 0.08f, 1.0f);
+	case ECastleTileColor::Blue:
+		return FLinearColor(0.06f, 0.25f, 0.80f, 1.0f);
+	case ECastleTileColor::Green:
+		return FLinearColor(0.05f, 0.58f, 0.18f, 1.0f);
+	case ECastleTileColor::Yellow:
+		return FLinearColor(0.90f, 0.60f, 0.04f, 1.0f);
+	case ECastleTileColor::Purple:
+		return FLinearColor(0.48f, 0.12f, 0.72f, 1.0f);
+	default:
+		return FLinearColor(0.30f, 0.30f, 0.34f, 1.0f);
+	}
+}
+
+void ACastleBoard::ShowPrototypeMessage(const FString& Message, const FColor& Color) const
+{
+	UE_LOG(LogMoving_Castle, Log, TEXT("原型操作：%s"), *Message);
+	if (GEngine != nullptr)
+	{
+		GEngine->AddOnScreenDebugMessage(20261107, 5.0f, Color, Message);
+	}
 }
 

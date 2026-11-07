@@ -69,6 +69,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
 	FCastleBuildingDescriptor GetBuildingDescriptor() const;
 
+	/**
+	 * 配置当前阶段使用的占位可视化。
+	 *
+	 * 该函数只使用 UE 自带 BasicShapes/Cube 和动态颜色材质，不依赖正式美术资源；
+	 * 合成后棋盘会对新 Actor 再调用一次，因此合成结果会直接显示为更大的立方体。
+	 */
+	void ConfigurePrototypeVisual(float InCellSize, float InLayerHeight);
+
 	/** 判断当前建筑是否属于道路。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
 	bool IsRoad() const
@@ -113,4 +121,12 @@ protected:
 	/** 该 Actor 当前占用的全部网格坐标，合成后的 Actor 会拥有多个坐标。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "建筑")
 	TArray<FIntVector> OccupiedCoordinates;
+
+	/** 建筑的占位立方体组件，后续替换为正式建筑网格时只需替换这个组件的资源。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
+	TObjectPtr<class UStaticMeshComponent> PrototypeMesh;
+
+	/** 显示建筑类别和等级的文字组件，便于无正式美术时直接观察合成结果。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
+	TObjectPtr<class UTextRenderComponent> PrototypeLabel;
 };
