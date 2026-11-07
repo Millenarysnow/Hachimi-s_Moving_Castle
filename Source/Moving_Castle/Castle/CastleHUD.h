@@ -6,11 +6,13 @@
 #include "GameFramework/HUD.h"
 #include "CastleHUD.generated.h"
 
+class UCastleBackpackWidget;
+
 /**
  * 移动城堡的最小中心指针 HUD。
  *
- * 只绘制屏幕中心的四段准星，不承载背包或商店 UI；网格面本身由世界空间的
- * ACastleGridCursor 显示，二者共同让玩家能明确看到当前视线目标。
+ * 绘制屏幕中心的四段准星，并创建当前阶段的背包卡片 UI；网格面本身由世界
+ * 空间的 ACastleGridCursor 显示，二者共同让玩家能明确看到当前视线目标。
  */
 UCLASS()
 class MOVING_CASTLE_API ACastleHUD : public AHUD
@@ -18,10 +20,20 @@ class MOVING_CASTLE_API ACastleHUD : public AHUD
 	GENERATED_BODY()
 
 public:
+	/** 创建背包 UI；当前阶段 UI 仅展示，不接收鼠标输入。 */
+	virtual void BeginPlay() override;
+
+	/** 移除运行时创建的背包 UI。 */
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
 	/** 在屏幕中心绘制轻量准星。 */
 	virtual void DrawHUD() override;
 
 protected:
+	/** 当前 HUD 持有的背包展示控件。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCastleBackpackWidget> BackpackWidget;
+
 	/** 准星颜色。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "中心指针")
 	FLinearColor CrosshairColor = FLinearColor(0.65f, 0.92f, 1.0f, 0.95f);
