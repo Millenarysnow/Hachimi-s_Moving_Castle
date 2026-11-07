@@ -112,9 +112,9 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "飞行控制", meta = (ClampMin = "1.0"))
 	float FlightBrakingDeceleration = 5000.0f;
 
-	/** 鼠标旋转灵敏度。 */
+	/** 鼠标旋转倍率；引擎已在输入配置中设置 MouseX/MouseY 灵敏度，默认不再额外压低轴值。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "飞行控制", meta = (ClampMin = "0.001"))
-	float MouseSensitivity = 0.08f;
+	float MouseSensitivity = 1.0f;
 
 	/** 当前连续按键状态。 */
 	bool bMoveForward = false;
