@@ -1270,6 +1270,16 @@ void ACastleBoard::RebuildGroundVisualization()
 
 		TileComponent->RegisterComponentWithWorld(GetWorld());
 
+		// BasicShapes/Cube 原始边长为 100，地面薄片的实际半厚度为 6 个单位。
+		// 数字牌只抬到地块顶面上方，不能再使用完整 LayerHeight 计算高度。
+		const float TileCenterHeight = WorldBaseHeight
+			+ static_cast<float>(RelativeCoordinate.Z) * LayerHeight
+			- LayerHeight * 0.45f;
+		const float TileHalfHeight = 100.0f * 0.12f * 0.5f;
+		const float NumberPlateHalfHeight = 100.0f * 0.035f * 0.5f;
+		const float NumberVisualClearance = 1.0f;
+		const float NumberPlateCenterHeight = TileCenterHeight + TileHalfHeight + NumberPlateHalfHeight + NumberVisualClearance;
+
 		// 数字牌使用深色小方块做底，给白色数字提供稳定的高对比背景，避免
 		// 红、蓝、绿色地面上的黑色文字在远处与材质颜色混在一起。
 		const FName PlateName(*FString::Printf(TEXT("GroundNumberPlate_%d_%d_%d"), Cell.Coordinate.X, Cell.Coordinate.Y, Cell.Coordinate.Z));
@@ -1283,7 +1293,7 @@ void ACastleBoard::RebuildGroundVisualization()
 			NumberPlate->SetRelativeLocation(FVector(
 				static_cast<float>(RelativeCoordinate.X) * CellSize,
 				static_cast<float>(RelativeCoordinate.Y) * CellSize,
-				WorldBaseHeight + static_cast<float>(RelativeCoordinate.Z) * LayerHeight + LayerHeight * 0.13f));
+				NumberPlateCenterHeight));
 			NumberPlate->SetRelativeScale3D(FVector(CellSize / 100.0f * 0.62f, CellSize / 100.0f * 0.62f, 0.035f));
 			NumberPlate->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 			NumberPlate->SetVisibility(true, true);
@@ -1317,7 +1327,7 @@ void ACastleBoard::RebuildGroundVisualization()
 			NumberLabel->SetRelativeLocation(FVector(
 				static_cast<float>(RelativeCoordinate.X) * CellSize,
 				static_cast<float>(RelativeCoordinate.Y) * CellSize,
-				WorldBaseHeight + static_cast<float>(RelativeCoordinate.Z) * LayerHeight + LayerHeight * 0.18f));
+				NumberPlateCenterHeight + NumberPlateHalfHeight + 0.5f));
 			NumberLabel->RegisterComponentWithWorld(GetWorld());
 			GroundAuxiliaryVisuals.Add(NumberLabel);
 		}

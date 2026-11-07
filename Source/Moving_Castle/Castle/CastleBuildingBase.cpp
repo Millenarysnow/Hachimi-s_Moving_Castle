@@ -4,6 +4,7 @@
 
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
+#include "Components/SceneComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
@@ -15,8 +16,11 @@ ACastleBuildingBase::ACastleBuildingBase()
 	// 使用 UE 自带的 BasicShapes/Cube 作为临时占位网格，避免当前阶段依赖正式美术资源。
 	PrimaryActorTick.bCanEverTick = false;
 
+	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
+	SetRootComponent(VisualRoot);
+
 	PrototypeMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PrototypeMesh"));
-	SetRootComponent(PrototypeMesh);
+	PrototypeMesh->SetupAttachment(VisualRoot);
 	PrototypeMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	PrototypeMesh->SetCanEverAffectNavigation(false);
 
@@ -41,12 +45,29 @@ ACastleBuildingBase::ACastleBuildingBase()
 	}
 
 	PrototypeLabel = CreateDefaultSubobject<UTextRenderComponent>(TEXT("PrototypeLabel"));
-	PrototypeLabel->SetupAttachment(PrototypeMesh);
+	PrototypeLabel->SetupAttachment(VisualRoot);
 	PrototypeLabel->SetHorizontalAlignment(EHorizTextAligment::EHTA_Center);
 	PrototypeLabel->SetVerticalAlignment(EVerticalTextAligment::EVRTA_TextCenter);
 	PrototypeLabel->SetTextRenderColor(FColor::White);
-	PrototypeLabel->SetWorldSize(32.0f);
+	PrototypeLabel->SetWorldSize(52.0f);
+	PrototypeLabel->SetXScale(1.1f);
+	PrototypeLabel->SetYScale(1.1f);
+	PrototypeLabel->SetRelativeRotation(FRotator(90.0f, 0.0f, 0.0f));
 	PrototypeLabel->SetText(FText::FromString(TEXT("Building")));
+
+	// 标签底牌与文字都挂在独立根节点上，合成时只改变建筑网格尺寸，不会把标签压扁。
+	PrototypeLabelPlate = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PrototypeLabelPlate"));
+	PrototypeLabelPlate->SetupAttachment(VisualRoot);
+	PrototypeLabelPlate->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	PrototypeLabelPlate->SetCanEverAffectNavigation(false);
+	if (CubeMeshFinder.Succeeded())
+	{
+		PrototypeLabelPlate->SetStaticMesh(CubeMeshFinder.Object);
+	}
+	if (BasicMaterialFinder.Succeeded())
+	{
+		PrototypeLabelPlate->SetMaterial(0, BasicMaterialFinder.Object);
+	}
 }
 bool ACastleBuildingBase::InitializeBuilding(const FCastleBuildingDescriptor& Descriptor, const TArray<FIntVector>& InOccupiedCoordinates)
 {
@@ -125,17 +146,18 @@ bool ACastleBuildingBase::InitializeBuilding(const FCastleBuildingDescriptor& De
 	OccupiedCoordinates = InOccupiedCoordinates;
 
 	// 标签在 Actor 生成后立即更新；网格尺寸由棋盘在知道格子大小后补充配置。
-	const TCHAR* TypeText = TEXT("Road");
+	// 标签使用短类别缩写，把有限的牌面空间优先留给玩家需要读取的数字和等级。
+	const TCHAR* TypeText = TEXT("R");
 	switch (BuildingType)
 	{
 	case ECastleBuildingType::ArcherTower:
-		TypeText = TEXT("Archer");
+		TypeText = TEXT("A");
 		break;
 	case ECastleBuildingType::CannonTower:
-		TypeText = TEXT("Cannon");
+		TypeText = TEXT("C");
 		break;
 	case ECastleBuildingType::Farm:
-		TypeText = TEXT("Farm");
+		TypeText = TEXT("F");
 		break;
 	default:
 		break;
@@ -239,6 +261,34 @@ void ACastleBuildingBase::ConfigurePrototypeVisual(float InCellSize, float InLay
 		static_cast<float>(Dimensions.X) * InCellSize / 100.0f * 0.86f,
 		static_cast<float>(Dimensions.Y) * InCellSize / 100.0f * 0.86f,
 		static_cast<float>(Dimensions.Z) * InLayerHeight / 100.0f * 0.72f));
+
+	if (PrototypeLabelPlate != nullptr)
+	{
+		// 标签底牌贴在建筑占位立方体最高面上方，只按占用范围计算宽高，
+		// 不继承 PrototypeMesh 的缩放，合成后的 Lv2/Lv3 标签仍保持可读。
+		const float BuildingHeight = static_cast<float>(Dimensions.Z) * InLayerHeight * 0.72f;
+		const float LabelPlateWidth = FMath::Min(static_cast<float>(Dimensions.X) * InCellSize * 0.72f, 260.0f);
+		const float LabelPlateDepth = FMath::Min(static_cast<float>(Dimensions.Y) * InCellSize * 0.72f, 180.0f);
+		PrototypeLabelPlate->SetRelativeLocation(FVector(0.0f, 0.0f, BuildingHeight * 0.5f + 8.0f));
+		PrototypeLabelPlate->SetRelativeScale3D(FVector(LabelPlateWidth / 100.0f, LabelPlateDepth / 100.0f, 0.035f));
+
+		if (UMaterialInterface* PlateBaseMaterial = PrototypeLabelPlate->GetMaterial(0))
+		{
+			UMaterialInstanceDynamic* PlateMaterial = UMaterialInstanceDynamic::Create(PlateBaseMaterial, this);
+			if (PlateMaterial != nullptr)
+			{
+				PlateMaterial->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.015f, 0.015f, 0.02f, 1.0f));
+				PrototypeLabelPlate->SetMaterial(0, PlateMaterial);
+			}
+		}
+	}
+
+	if (PrototypeLabel != nullptr)
+	{
+		const float BuildingHeight = static_cast<float>(Dimensions.Z) * InLayerHeight * 0.72f;
+		PrototypeLabel->SetRelativeLocation(FVector(0.0f, 0.0f, BuildingHeight * 0.5f + 11.0f));
+		PrototypeLabel->SetRelativeRotation(FRotator(90.0f, 0.0f, 0.0f));
+	}
 
 	FLinearColor DisplayColor = FLinearColor::Gray;
 	switch (Color)

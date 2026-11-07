@@ -102,6 +102,10 @@ public:
 	static int32 GetExpectedFootprintCellCount(int32 InLevel);
 
 protected:
+	/** 独立的可视化根节点，避免标签继承建筑网格的非均匀缩放。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
+	TObjectPtr<class USceneComponent> VisualRoot;
+
 	/** 建筑类别由具体建筑族构造函数设置，初始化时会再次校验描述。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "建筑")
 	ECastleBuildingType BuildingType = ECastleBuildingType::Road;
@@ -129,4 +133,8 @@ protected:
 	/** 显示建筑类别和等级的文字组件，便于无正式美术时直接观察合成结果。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
 	TObjectPtr<class UTextRenderComponent> PrototypeLabel;
+
+	/** 建筑标签的深色底牌，确保数字在各种建筑颜色上都能读取。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
+	TObjectPtr<class UStaticMeshComponent> PrototypeLabelPlate;
 };
