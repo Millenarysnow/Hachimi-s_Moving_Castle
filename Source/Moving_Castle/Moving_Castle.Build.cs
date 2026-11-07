@@ -25,6 +25,7 @@ public class Moving_Castle : ModuleRules
 
 		PublicIncludePaths.AddRange(new string[] {
 			"Moving_Castle",
+			"Moving_Castle/Castle",
 			"Moving_Castle/Variant_Platforming",
 			"Moving_Castle/Variant_Platforming/Animation",
 			"Moving_Castle/Variant_Combat",
