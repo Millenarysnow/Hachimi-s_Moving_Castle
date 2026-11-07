@@ -21,7 +21,11 @@ ACastleBuildingBase::ACastleBuildingBase()
 
 	PrototypeMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PrototypeMesh"));
 	PrototypeMesh->SetupAttachment(VisualRoot);
-	PrototypeMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	// 建筑占位网格需要参与屏幕中心射线查询，才能显示建筑侧面和顶部的吸附面；
+	// 它仍然不参与物理阻挡，飞行玩家不会被原型建筑卡住。
+	PrototypeMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	PrototypeMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
+	PrototypeMesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	PrototypeMesh->SetCanEverAffectNavigation(false);
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMeshFinder(TEXT("/Engine/BasicShapes/Cube.Cube"));

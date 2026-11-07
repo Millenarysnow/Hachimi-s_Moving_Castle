@@ -72,10 +72,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|地面")
 	bool bGenerateGroundOnBeginPlay = true;
 
-	/** 是否启用当前阶段的直接操作原型输入：数字键选择卡牌，鼠标左键放置。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|原型操作")
-	bool bEnablePrototypeInput = true;
-
 	/** 原型背包会自动装入道路、箭塔、炮塔和农田样例卡牌。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "棋盘|原型操作")
 	TObjectPtr<UCastleBackpackComponent> PrototypeBackpack;
@@ -87,6 +83,22 @@ public:
 	/** 当前选中的样例卡牌槽位，范围为 0 到 PrototypePalette.Num()-1。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "棋盘|原型操作")
 	int32 SelectedPrototypeSlot = 0;
+
+	/**
+	 * 切换供原型操作使用的背包卡槽。
+	 *
+	 * 按键由 CastlePlayerController 接收，棋盘只负责验证卡槽并更新样例状态，
+	 * 这样棋盘不再创建自己的输入组件，也不会改变中心指针的鼠标捕获状态。
+	 */
+	void SelectPrototypeSlot(int32 SlotIndex);
+
+	/**
+	 * 使用中心指针结果放置当前样例卡。
+	 *
+	 * 地面顶面作为初始落点时使用该地面格坐标；指向建筑或其他格面时使用
+	 * 当前格面外侧的相邻候选坐标。实际合法性仍完全由棋盘放置规则校验。
+	 */
+	ACastleBuildingBase* PlacePrototypeBuildingAtCursor(const FCastleGridCursorTarget& CursorTarget, FText& OutFailureReason);
 
 	/** 使用当前 GroundGeneratorClass 生成并接收一份新的地面结果。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|棋盘")
@@ -146,6 +158,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
 	FVector GetGridWorldLocation(const FIntVector& Coordinate) const;
 
+	/**
+	 * 将一条世界空间射线解析为当前吸附的格子和格面。
+	 *
+	 * 控制器只提供屏幕中心射线，棋盘负责处理实际地面、建筑和空网格体积，
+	 * 避免不同系统各自实现一套不一致的坐标换算。
+	 */
+	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
+	bool TryResolveGridCursorTarget(const FVector& RayStart, const FVector& RayEnd, FCastleGridCursorTarget& OutTarget) const;
+
 protected:
 	/** 仅用于挂载地面占位组件和背包组件的根节点。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
@@ -173,26 +194,17 @@ protected:
 	/** 生成原型背包和四个数字键样例卡，卡牌属性来自本次实际生成的地面。 */
 	void InitializePrototypeDeck();
 
-	/** 启用棋盘自身的鼠标和数字键输入，避免要求验收者调用蓝图函数。 */
-	void SetupPrototypeInput();
-
-	/** 处理鼠标左键，将光标下的地面占位格转换为网格坐标并放置当前卡牌。 */
-	void HandlePrototypePlacementClick();
-
-	/** 数字键 1 到 4 的独立绑定函数，使用独立函数以兼容 UE 输入组件的成员函数绑定。 */
-	void SelectPrototypeSlot1();
-	void SelectPrototypeSlot2();
-	void SelectPrototypeSlot3();
-	void SelectPrototypeSlot4();
-
-	/** 切换样例卡牌并把当前选择打印到屏幕。 */
-	void SelectPrototypeSlot(int32 SlotIndex);
-
 	/** 查找背包中与当前样例卡牌完全匹配的第一张卡牌。 */
 	int32 FindPrototypeCardIndex(const FCastleBuildingDescriptor& Descriptor) const;
 
 	/** 将已接收的地面结果生成成可点击的彩色立方体占位格。 */
 	void RebuildGroundVisualization();
+
+	/** 根据命中信息生成一个完整的网格指针结果。 */
+	void BuildGridCursorTarget(const FIntVector& Cell, const FVector& LocalImpactPoint, const FVector& LocalNormal, FCastleGridCursorTarget& OutTarget) const;
+
+	/** 在没有可碰撞组件的空网格区域内解析射线，保证指针不会只在地面组件上工作。 */
+	bool TryResolveGridVolumeCursorTarget(const FVector& RayStart, const FVector& RayEnd, FCastleGridCursorTarget& OutTarget) const;
 
 	/** 返回颜色对应的占位显示颜色。 */
 	static FLinearColor GetPrototypeColor(ECastleTileColor Color);

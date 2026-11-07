@@ -12,12 +12,82 @@
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
-#include "GameFramework/PlayerController.h"
-#include "InputCoreTypes.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Moving_Castle.h"
 #include "UObject/ConstructorHelpers.h"
+
+namespace
+{
+	/** 将局部空间法线转换成六面枚举，优先使用绝对值最大的轴。 */
+	ECastleGridFace GetGridFaceFromNormal(const FVector& LocalNormal)
+	{
+		const FVector AbsNormal = LocalNormal.GetAbs();
+		if (AbsNormal.Z >= AbsNormal.X && AbsNormal.Z >= AbsNormal.Y)
+		{
+			return LocalNormal.Z >= 0.0f ? ECastleGridFace::Up : ECastleGridFace::Down;
+		}
+
+		if (AbsNormal.X >= AbsNormal.Y)
+		{
+			return LocalNormal.X >= 0.0f ? ECastleGridFace::PositiveX : ECastleGridFace::NegativeX;
+		}
+
+		return LocalNormal.Y >= 0.0f ? ECastleGridFace::PositiveY : ECastleGridFace::NegativeY;
+	}
+
+	/** 返回一个面外侧紧邻的坐标增量。 */
+	FIntVector GetGridFaceOffset(ECastleGridFace Face)
+	{
+		switch (Face)
+		{
+		case ECastleGridFace::Up:
+			return FIntVector(0, 0, 1);
+		case ECastleGridFace::Down:
+			return FIntVector(0, 0, -1);
+		case ECastleGridFace::PositiveX:
+			return FIntVector(1, 0, 0);
+		case ECastleGridFace::NegativeX:
+			return FIntVector(-1, 0, 0);
+		case ECastleGridFace::PositiveY:
+			return FIntVector(0, 1, 0);
+		case ECastleGridFace::NegativeY:
+			return FIntVector(0, -1, 0);
+		default:
+			return FIntVector::ZeroValue;
+		}
+	}
+
+	/** 返回一个面在棋盘局部坐标中的单位法线。 */
+	FVector GetGridFaceNormal(ECastleGridFace Face)
+	{
+		switch (Face)
+		{
+		case ECastleGridFace::Up:
+			return FVector::UpVector;
+		case ECastleGridFace::Down:
+			return FVector::DownVector;
+		case ECastleGridFace::PositiveX:
+			return FVector::ForwardVector;
+		case ECastleGridFace::NegativeX:
+			return -FVector::ForwardVector;
+		case ECastleGridFace::PositiveY:
+			return FVector::RightVector;
+		case ECastleGridFace::NegativeY:
+			return -FVector::RightVector;
+		default:
+			return FVector::UpVector;
+		}
+	}
+
+	/** 判断局部射线起点是否在网格体积内。 */
+	bool IsInsideGridVolume(const FVector& Point, const FVector& BoxMin, const FVector& BoxMax)
+	{
+		return Point.X >= BoxMin.X && Point.X <= BoxMax.X
+			&& Point.Y >= BoxMin.Y && Point.Y <= BoxMax.Y
+			&& Point.Z >= BoxMin.Z && Point.Z <= BoxMax.Z;
+	}
+}
 
 ACastleBoard::ACastleBoard()
 {
@@ -67,10 +137,6 @@ void ACastleBoard::BeginPlay()
 	if (GeneratedGroundCells.Num() > 0)
 	{
 		InitializePrototypeDeck();
-		if (bEnablePrototypeInput)
-		{
-			SetupPrototypeInput();
-		}
 	}
 }
 
@@ -427,6 +493,221 @@ FVector ACastleBoard::GetGridWorldLocation(const FIntVector& Coordinate) const
 
 	// 使用棋盘 Actor 的完整变换，保证棋盘被旋转或缩放时逻辑坐标与占位表现仍一致。
 	return GetActorTransform().TransformPosition(LocalGridLocation);
+}
+
+bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVector& RayEnd, FCastleGridCursorTarget& OutTarget) const
+{
+	OutTarget = FCastleGridCursorTarget();
+
+	if (GetWorld() == nullptr || RayStart.Equals(RayEnd))
+	{
+		return false;
+	}
+
+	// 先查询实际可碰撞的地面和建筑表面；它们提供了比抽象网格边界更准确的命中面。
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(CastleGridCursor), true);
+	FHitResult HitResult;
+	if (GetWorld()->LineTraceSingleByChannel(HitResult, RayStart, RayEnd, ECC_Visibility, QueryParams))
+	{
+		FIntVector HitCell = FIntVector::ZeroValue;
+		bool bFoundCell = false;
+
+		for (const TPair<FIntVector, TObjectPtr<UStaticMeshComponent>>& Pair : GroundVisuals)
+		{
+			if (Pair.Value != nullptr && Pair.Value.Get() == HitResult.GetComponent())
+			{
+				HitCell = Pair.Key;
+				bFoundCell = true;
+				break;
+			}
+		}
+
+		// 建筑网格可以覆盖多个坐标，取距离命中点最近的占用格作为当前面所属格子。
+		if (!bFoundCell)
+		{
+			if (const ACastleBuildingBase* HitBuilding = Cast<ACastleBuildingBase>(HitResult.GetActor()))
+			{
+				float BestDistanceSquared = TNumericLimits<float>::Max();
+				for (const FIntVector& OccupiedCoordinate : HitBuilding->GetOccupiedCoordinates())
+				{
+					const float DistanceSquared = FVector::DistSquared(HitResult.ImpactPoint, GetGridWorldLocation(OccupiedCoordinate));
+					if (DistanceSquared < BestDistanceSquared)
+					{
+						BestDistanceSquared = DistanceSquared;
+						HitCell = OccupiedCoordinate;
+						bFoundCell = true;
+					}
+				}
+			}
+		}
+
+		if (bFoundCell)
+		{
+			const FTransform BoardTransform = GetActorTransform();
+			const FVector LocalImpactPoint = BoardTransform.InverseTransformPosition(HitResult.ImpactPoint);
+			const FVector LocalNormal = BoardTransform.InverseTransformVectorNoScale(HitResult.ImpactNormal).GetSafeNormal();
+			if (!LocalNormal.IsNearlyZero())
+			{
+				BuildGridCursorTarget(HitCell, LocalImpactPoint, LocalNormal, OutTarget);
+				return OutTarget.bValid;
+			}
+		}
+	}
+
+	// 空格没有碰撞体时，继续在棋盘逻辑体积内求交，保证玩家能指向尚未放置的格子。
+	return TryResolveGridVolumeCursorTarget(RayStart, RayEnd, OutTarget);
+}
+
+void ACastleBoard::BuildGridCursorTarget(const FIntVector& Cell, const FVector& LocalImpactPoint, const FVector& LocalNormal, FCastleGridCursorTarget& OutTarget) const
+{
+	if (!IsCoordinateWithinBoard(Cell))
+	{
+		return;
+	}
+
+	const FIntVector RelativeCoordinate = Cell - GridOrigin;
+	const FVector LocalCellCenter(
+		static_cast<float>(RelativeCoordinate.X) * CellSize,
+		static_cast<float>(RelativeCoordinate.Y) * CellSize,
+		WorldBaseHeight + static_cast<float>(RelativeCoordinate.Z) * LayerHeight);
+
+	const ECastleGridFace Face = GetGridFaceFromNormal(LocalNormal);
+	FVector LocalPlaneCenter = LocalCellCenter;
+	FVector LocalPlaneScale(
+		CellSize * 0.94f / 100.0f,
+		CellSize * 0.94f / 100.0f,
+		2.0f / 100.0f);
+
+	// 指示器使用薄立方体模拟平面；根据命中面切换薄轴，并把其他轴吸附到当前格中心。
+	switch (Face)
+	{
+	case ECastleGridFace::Up:
+	case ECastleGridFace::Down:
+		LocalPlaneCenter.Z = LocalImpactPoint.Z;
+		break;
+	case ECastleGridFace::PositiveX:
+	case ECastleGridFace::NegativeX:
+		LocalPlaneCenter.X = LocalImpactPoint.X;
+		LocalPlaneScale = FVector(2.0f / 100.0f, CellSize * 0.94f / 100.0f, LayerHeight * 0.94f / 100.0f);
+		break;
+	case ECastleGridFace::PositiveY:
+	case ECastleGridFace::NegativeY:
+		LocalPlaneCenter.Y = LocalImpactPoint.Y;
+		LocalPlaneScale = FVector(CellSize * 0.94f / 100.0f, 2.0f / 100.0f, LayerHeight * 0.94f / 100.0f);
+		break;
+	default:
+		return;
+	}
+
+	// 轻微离开实际表面，避免薄片与地面或建筑产生深度冲突。
+	LocalPlaneCenter += LocalNormal * 1.5f;
+
+	const FTransform BoardTransform = GetActorTransform();
+	OutTarget.Cell = Cell;
+	OutTarget.Face = Face;
+	OutTarget.AdjacentCell = Cell + GetGridFaceOffset(Face);
+	OutTarget.WorldNormal = BoardTransform.TransformVectorNoScale(LocalNormal).GetSafeNormal();
+	OutTarget.IndicatorTransform = FTransform(
+		BoardTransform.GetRotation(),
+		BoardTransform.TransformPosition(LocalPlaneCenter),
+		LocalPlaneScale * BoardTransform.GetScale3D());
+	OutTarget.bValid = true;
+}
+
+bool ACastleBoard::TryResolveGridVolumeCursorTarget(const FVector& RayStart, const FVector& RayEnd, FCastleGridCursorTarget& OutTarget) const
+{
+	const FTransform BoardTransform = GetActorTransform();
+	const FVector LocalStart = BoardTransform.InverseTransformPosition(RayStart);
+	const FVector LocalEnd = BoardTransform.InverseTransformPosition(RayEnd);
+	const FVector Direction = LocalEnd - LocalStart;
+	if (Direction.IsNearlyZero())
+	{
+		return false;
+	}
+
+	if (GridSize.X <= 0 || GridSize.Y <= 0 || GridSize.Z <= 0 || CellSize <= 0.0f || LayerHeight <= 0.0f)
+	{
+		return false;
+	}
+
+	const FVector BoxMin(
+		-CellSize * 0.5f,
+		-CellSize * 0.5f,
+		WorldBaseHeight - LayerHeight * 0.5f);
+	const FVector BoxMax(
+		(static_cast<float>(GridSize.X) - 0.5f) * CellSize,
+		(static_cast<float>(GridSize.Y) - 0.5f) * CellSize,
+		WorldBaseHeight + (static_cast<float>(GridSize.Z) - 0.5f) * LayerHeight);
+
+	float EnterTime = 0.0f;
+	float ExitTime = 1.0f;
+	FVector EnterNormal = FVector::ZeroVector;
+	FVector ExitNormal = FVector::ZeroVector;
+	const FVector AxisNormals[] = { FVector::ForwardVector, FVector::RightVector, FVector::UpVector };
+	const float StartValues[] = { LocalStart.X, LocalStart.Y, LocalStart.Z };
+	const float DirectionValues[] = { Direction.X, Direction.Y, Direction.Z };
+	const float MinValues[] = { BoxMin.X, BoxMin.Y, BoxMin.Z };
+	const float MaxValues[] = { BoxMax.X, BoxMax.Y, BoxMax.Z };
+
+	for (int32 AxisIndex = 0; AxisIndex < 3; ++AxisIndex)
+	{
+		if (FMath::IsNearlyZero(DirectionValues[AxisIndex]))
+		{
+			if (StartValues[AxisIndex] < MinValues[AxisIndex] || StartValues[AxisIndex] > MaxValues[AxisIndex])
+			{
+				return false;
+			}
+			continue;
+		}
+
+		float NearTime = (MinValues[AxisIndex] - StartValues[AxisIndex]) / DirectionValues[AxisIndex];
+		float FarTime = (MaxValues[AxisIndex] - StartValues[AxisIndex]) / DirectionValues[AxisIndex];
+		FVector NearNormal = -AxisNormals[AxisIndex];
+		FVector FarNormal = AxisNormals[AxisIndex];
+		if (NearTime > FarTime)
+		{
+			Swap(NearTime, FarTime);
+			Swap(NearNormal, FarNormal);
+		}
+
+		if (NearTime > EnterTime)
+		{
+			EnterTime = NearTime;
+			EnterNormal = NearNormal;
+		}
+		if (FarTime < ExitTime)
+		{
+			ExitTime = FarTime;
+			ExitNormal = FarNormal;
+		}
+		if (EnterTime > ExitTime)
+		{
+			return false;
+		}
+	}
+
+	if (EnterTime > 1.0f || ExitTime < 0.0f)
+	{
+		return false;
+	}
+
+	const bool bStartInside = IsInsideGridVolume(LocalStart, BoxMin, BoxMax);
+	const float HitTime = bStartInside ? ExitTime : EnterTime;
+	const FVector HitNormal = bStartInside ? ExitNormal : EnterNormal;
+	if (HitTime < 0.0f || HitTime > 1.0f || HitNormal.IsNearlyZero())
+	{
+		return false;
+	}
+
+	const FVector LocalHitPoint = LocalStart + Direction * HitTime;
+	const FVector ProbePoint = LocalHitPoint - HitNormal * 0.01f;
+	const int32 RelativeX = FMath::Clamp(FMath::FloorToInt((ProbePoint.X - BoxMin.X) / CellSize), 0, GridSize.X - 1);
+	const int32 RelativeY = FMath::Clamp(FMath::FloorToInt((ProbePoint.Y - BoxMin.Y) / CellSize), 0, GridSize.Y - 1);
+	const int32 RelativeZ = FMath::Clamp(FMath::FloorToInt((ProbePoint.Z - BoxMin.Z) / LayerHeight), 0, GridSize.Z - 1);
+	const FIntVector Cell = GridOrigin + FIntVector(RelativeX, RelativeY, RelativeZ);
+
+	BuildGridCursorTarget(Cell, LocalHitPoint, HitNormal, OutTarget);
+	return OutTarget.bValid;
 }
 
 void ACastleBoard::GetFaceNeighborCoordinates(const FIntVector& Coordinate, TArray<FIntVector>& OutNeighbors) const
@@ -1046,92 +1327,51 @@ void ACastleBoard::InitializePrototypeDeck()
 	}
 
 	SelectedPrototypeSlot = 0;
-	ShowPrototypeMessage(TEXT("原型操作：数字键 1 道路 / 2 箭塔 / 3 炮塔 / 4 农田；鼠标左键点击地块放置。"), FColor::Cyan);
+	ShowPrototypeMessage(TEXT("原型卡牌已准备：按 1-4 选择卡牌，屏幕中心对准格面后按鼠标左键放置。"), FColor::Cyan);
 }
 
-void ACastleBoard::SetupPrototypeInput()
+ACastleBuildingBase* ACastleBoard::PlacePrototypeBuildingAtCursor(const FCastleGridCursorTarget& CursorTarget, FText& OutFailureReason)
 {
-	APlayerController* PlayerController = GetWorld() != nullptr ? GetWorld()->GetFirstPlayerController() : nullptr;
-	if (PlayerController == nullptr)
+	OutFailureReason = FText::GetEmpty();
+	if (!CursorTarget.bValid)
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘原型输入初始化失败：当前 World 没有 PlayerController。"));
-		return;
+		OutFailureReason = FText::FromString(TEXT("屏幕中心没有对准棋盘格面。"));
+		ShowPrototypeMessage(OutFailureReason.ToString(), FColor::Yellow);
+		return nullptr;
 	}
 
-	EnableInput(PlayerController);
-	if (InputComponent == nullptr)
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘原型输入初始化失败：EnableInput 没有创建 InputComponent。"));
-		return;
-	}
-
-	InputComponent->BindKey(EKeys::One, IE_Pressed, this, &ACastleBoard::SelectPrototypeSlot1);
-	InputComponent->BindKey(EKeys::Two, IE_Pressed, this, &ACastleBoard::SelectPrototypeSlot2);
-	InputComponent->BindKey(EKeys::Three, IE_Pressed, this, &ACastleBoard::SelectPrototypeSlot3);
-	InputComponent->BindKey(EKeys::Four, IE_Pressed, this, &ACastleBoard::SelectPrototypeSlot4);
-	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ACastleBoard::HandlePrototypePlacementClick);
-
-	PlayerController->bEnableClickEvents = true;
-	PlayerController->bEnableMouseOverEvents = true;
-	PlayerController->bShowMouseCursor = true;
-
-	ShowPrototypeMessage(TEXT("鼠标已启用：点击彩色地面格即可放置当前样例卡。"), FColor::Cyan);
-}
-
-void ACastleBoard::HandlePrototypePlacementClick()
-{
 	if (!PrototypePalette.IsValidIndex(SelectedPrototypeSlot) || PrototypeBackpack == nullptr)
 	{
-		ShowPrototypeMessage(TEXT("当前没有可用的样例卡牌。"), FColor::Red);
-		return;
-	}
-
-	APlayerController* PlayerController = GetWorld() != nullptr ? GetWorld()->GetFirstPlayerController() : nullptr;
-	if (PlayerController == nullptr)
-	{
-		ShowPrototypeMessage(TEXT("无法放置：没有找到 PlayerController。"), FColor::Red);
-		return;
-	}
-
-	FHitResult HitResult;
-	if (!PlayerController->GetHitResultUnderCursor(ECC_Visibility, true, HitResult))
-	{
-		ShowPrototypeMessage(TEXT("请点击棋盘上的彩色地面格。"), FColor::Yellow);
-		return;
-	}
-
-	FIntVector TargetCoordinate = FIntVector::ZeroValue;
-	bool bFoundGroundCoordinate = false;
-	for (const TPair<FIntVector, TObjectPtr<UStaticMeshComponent>>& Pair : GroundVisuals)
-	{
-		if (Pair.Value != nullptr && Pair.Value.Get() == HitResult.GetComponent())
-		{
-			TargetCoordinate = Pair.Key;
-			bFoundGroundCoordinate = true;
-			break;
-		}
-	}
-
-	if (!bFoundGroundCoordinate)
-	{
-		ShowPrototypeMessage(TEXT("请点击地面占位方块，建筑本身不会作为点击目标。"), FColor::Yellow);
-		return;
+		OutFailureReason = FText::FromString(TEXT("当前没有可用的样例卡牌。"));
+		ShowPrototypeMessage(OutFailureReason.ToString(), FColor::Red);
+		return nullptr;
 	}
 
 	const FCastleBuildingDescriptor& SelectedDescriptor = PrototypePalette[SelectedPrototypeSlot];
 	const int32 BackpackIndex = FindPrototypeCardIndex(SelectedDescriptor);
 	if (BackpackIndex == INDEX_NONE)
 	{
-		ShowPrototypeMessage(TEXT("当前样例卡已经用完，请切换数字键选择其他卡牌。"), FColor::Yellow);
-		return;
+		OutFailureReason = FText::FromString(TEXT("当前样例卡已经用完，请切换数字键选择其他卡牌。"));
+		ShowPrototypeMessage(OutFailureReason.ToString(), FColor::Yellow);
+		return nullptr;
 	}
 
-	FText FailureReason;
-	ACastleBuildingBase* PlacedBuilding = PlaceBuildingFromBackpack(TargetCoordinate, PrototypeBackpack, BackpackIndex, true, FailureReason);
+	// 地面顶面是初始建筑的支撑格，其他格面则把放置位置设为该面的外侧邻格。
+	FIntVector TargetCoordinate = CursorTarget.AdjacentCell;
+	if (CursorTarget.Face == ECastleGridFace::Up && CursorTarget.Cell.Z == GridOrigin.Z)
+	{
+		FCastleGroundCell GroundCell;
+		if (TryGetGroundCellAtPlane(CursorTarget.Cell, GroundCell) && GetBuildingAt(CursorTarget.Cell) == nullptr)
+		{
+			TargetCoordinate = CursorTarget.Cell;
+		}
+	}
+
+	ACastleBuildingBase* PlacedBuilding = PlaceBuildingFromBackpack(TargetCoordinate, PrototypeBackpack, BackpackIndex, true, OutFailureReason);
 	if (PlacedBuilding == nullptr)
 	{
-		ShowPrototypeMessage(FailureReason.ToString(), FColor::Red);
-		return;
+		ShowPrototypeMessage(OutFailureReason.ToString(), FColor::Red);
+		return nullptr;
 	}
 
 	if (PlacedBuilding->GetBuildingLevel() > SelectedDescriptor.Level)
@@ -1142,26 +1382,7 @@ void ACastleBoard::HandlePrototypePlacementClick()
 	{
 		ShowPrototypeMessage(FString::Printf(TEXT("放置成功：%s，坐标 (%d, %d, %d)。"), *PlacedBuilding->GetBuildingDescriptor().BuildingClass->GetName(), TargetCoordinate.X, TargetCoordinate.Y, TargetCoordinate.Z), FColor::Green);
 	}
-}
-
-void ACastleBoard::SelectPrototypeSlot1()
-{
-	SelectPrototypeSlot(0);
-}
-
-void ACastleBoard::SelectPrototypeSlot2()
-{
-	SelectPrototypeSlot(1);
-}
-
-void ACastleBoard::SelectPrototypeSlot3()
-{
-	SelectPrototypeSlot(2);
-}
-
-void ACastleBoard::SelectPrototypeSlot4()
-{
-	SelectPrototypeSlot(3);
+	return PlacedBuilding;
 }
 
 void ACastleBoard::SelectPrototypeSlot(int32 SlotIndex)

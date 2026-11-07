@@ -39,6 +39,60 @@ enum class ECastleBuildingType : uint8
 };
 
 /**
+ * 网格单元的六个可吸附面。
+ *
+ * 该枚举只描述射线当前命中的面，不直接决定是否允许放置建筑；放置规则
+ * 仍然由棋盘统一校验，控制器只负责把玩家视线转换成稳定的网格目标。
+ */
+UENUM(BlueprintType)
+enum class ECastleGridFace : uint8
+{
+	Up UMETA(DisplayName = "上"),
+	Down UMETA(DisplayName = "下"),
+	PositiveX UMETA(DisplayName = "+X"),
+	NegativeX UMETA(DisplayName = "-X"),
+	PositiveY UMETA(DisplayName = "+Y"),
+	NegativeY UMETA(DisplayName = "-Y")
+};
+
+/**
+ * 屏幕中心射线解析后的网格目标。
+ *
+ * Board 负责产生这份结果，PlayerController 只消费它来更新可视化指示器。
+ * IndicatorTransform 已经包含棋盘 Actor 的世界变换，因此棋盘旋转或缩放
+ * 时指示平面仍会与实际网格保持一致。
+ */
+USTRUCT(BlueprintType)
+struct MOVING_CASTLE_API FCastleGridCursorTarget
+{
+	GENERATED_BODY()
+
+	/** 当前射线命中的格子坐标。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")
+	FIntVector Cell = FIntVector::ZeroValue;
+
+	/** 当前命中的格子面。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")
+	ECastleGridFace Face = ECastleGridFace::Up;
+
+	/** 面外侧紧邻的候选坐标，供后续放置系统直接使用。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")
+	FIntVector AdjacentCell = FIntVector::ZeroValue;
+
+	/** 指示平面在世界中的法线方向。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")
+	FVector WorldNormal = FVector::UpVector;
+
+	/** 指示平面的完整世界变换，包含位置、朝向和尺寸。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")
+	FTransform IndicatorTransform = FTransform::Identity;
+
+	/** 射线是否成功吸附到棋盘网格。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")
+	bool bValid = false;
+};
+
+/**
  * 单个地面格子的生成结果。
  *
  * 地面生成器只负责产生这份纯数据，棋盘不会反过来修改生成器的策略。
