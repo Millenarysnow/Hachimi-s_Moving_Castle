@@ -161,8 +161,8 @@ public:
 	/**
 	 * 将一条世界空间射线解析为当前吸附的格子和格面。
 	 *
-	 * 控制器只提供屏幕中心射线，棋盘负责处理实际地面、建筑和空网格体积，
-	 * 避免不同系统各自实现一套不一致的坐标换算。
+	 * 控制器只提供屏幕中心射线，棋盘只接受真实命中地面或建筑网格的结果，
+	 * 没有命中可见建造面时返回无效目标，避免空中或棋盘边界产生虚假高亮。
 	 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
 	bool TryResolveGridCursorTarget(const FVector& RayStart, const FVector& RayEnd, FCastleGridCursorTarget& OutTarget) const;
@@ -202,9 +202,6 @@ protected:
 
 	/** 根据命中信息生成一个完整的网格指针结果。 */
 	void BuildGridCursorTarget(const FIntVector& Cell, const FVector& LocalImpactPoint, const FVector& LocalNormal, FCastleGridCursorTarget& OutTarget) const;
-
-	/** 在没有可碰撞组件的空网格区域内解析射线，保证指针不会只在地面组件上工作。 */
-	bool TryResolveGridVolumeCursorTarget(const FVector& RayStart, const FVector& RayEnd, FCastleGridCursorTarget& OutTarget) const;
 
 	/** 返回颜色对应的占位显示颜色。 */
 	static FLinearColor GetPrototypeColor(ECastleTileColor Color);

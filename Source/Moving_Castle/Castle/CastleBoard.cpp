@@ -80,13 +80,6 @@ namespace
 		}
 	}
 
-	/** 判断局部射线起点是否在网格体积内。 */
-	bool IsInsideGridVolume(const FVector& Point, const FVector& BoxMin, const FVector& BoxMax)
-	{
-		return Point.X >= BoxMin.X && Point.X <= BoxMax.X
-			&& Point.Y >= BoxMin.Y && Point.Y <= BoxMax.Y
-			&& Point.Z >= BoxMin.Z && Point.Z <= BoxMax.Z;
-	}
 }
 
 ACastleBoard::ACastleBoard()
@@ -504,58 +497,61 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 		return false;
 	}
 
-	// 先查询实际可碰撞的地面和建筑表面；它们提供了比抽象网格边界更准确的命中面。
+	// 只接受地面格和建筑网格的真实碰撞命中；空中或棋盘边界不代表可选中的建造面。
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(CastleGridCursor), true);
 	FHitResult HitResult;
-	if (GetWorld()->LineTraceSingleByChannel(HitResult, RayStart, RayEnd, ECC_Visibility, QueryParams))
+	if (!GetWorld()->LineTraceSingleByChannel(HitResult, RayStart, RayEnd, ECC_Visibility, QueryParams))
 	{
-		FIntVector HitCell = FIntVector::ZeroValue;
-		bool bFoundCell = false;
+		return false;
+	}
 
-		for (const TPair<FIntVector, TObjectPtr<UStaticMeshComponent>>& Pair : GroundVisuals)
+	FIntVector HitCell = FIntVector::ZeroValue;
+	bool bFoundCell = false;
+
+	for (const TPair<FIntVector, TObjectPtr<UStaticMeshComponent>>& Pair : GroundVisuals)
+	{
+		if (Pair.Value != nullptr && Pair.Value.Get() == HitResult.GetComponent())
 		{
-			if (Pair.Value != nullptr && Pair.Value.Get() == HitResult.GetComponent())
-			{
-				HitCell = Pair.Key;
-				bFoundCell = true;
-				break;
-			}
+			HitCell = Pair.Key;
+			bFoundCell = true;
+			break;
 		}
+	}
 
-		// 建筑网格可以覆盖多个坐标，取距离命中点最近的占用格作为当前面所属格子。
-		if (!bFoundCell)
+	// 建筑网格可以覆盖多个坐标，取距离命中点最近的占用格作为当前面所属格子。
+	if (!bFoundCell)
+	{
+		if (const ACastleBuildingBase* HitBuilding = Cast<ACastleBuildingBase>(HitResult.GetActor()))
 		{
-			if (const ACastleBuildingBase* HitBuilding = Cast<ACastleBuildingBase>(HitResult.GetActor()))
+			float BestDistanceSquared = TNumericLimits<float>::Max();
+			for (const FIntVector& OccupiedCoordinate : HitBuilding->GetOccupiedCoordinates())
 			{
-				float BestDistanceSquared = TNumericLimits<float>::Max();
-				for (const FIntVector& OccupiedCoordinate : HitBuilding->GetOccupiedCoordinates())
+				const float DistanceSquared = FVector::DistSquared(HitResult.ImpactPoint, GetGridWorldLocation(OccupiedCoordinate));
+				if (DistanceSquared < BestDistanceSquared)
 				{
-					const float DistanceSquared = FVector::DistSquared(HitResult.ImpactPoint, GetGridWorldLocation(OccupiedCoordinate));
-					if (DistanceSquared < BestDistanceSquared)
-					{
-						BestDistanceSquared = DistanceSquared;
-						HitCell = OccupiedCoordinate;
-						bFoundCell = true;
-					}
+					BestDistanceSquared = DistanceSquared;
+					HitCell = OccupiedCoordinate;
+					bFoundCell = true;
 				}
-			}
-		}
-
-		if (bFoundCell)
-		{
-			const FTransform BoardTransform = GetActorTransform();
-			const FVector LocalImpactPoint = BoardTransform.InverseTransformPosition(HitResult.ImpactPoint);
-			const FVector LocalNormal = BoardTransform.InverseTransformVectorNoScale(HitResult.ImpactNormal).GetSafeNormal();
-			if (!LocalNormal.IsNearlyZero())
-			{
-				BuildGridCursorTarget(HitCell, LocalImpactPoint, LocalNormal, OutTarget);
-				return OutTarget.bValid;
 			}
 		}
 	}
 
-	// 空格没有碰撞体时，继续在棋盘逻辑体积内求交，保证玩家能指向尚未放置的格子。
-	return TryResolveGridVolumeCursorTarget(RayStart, RayEnd, OutTarget);
+	if (!bFoundCell)
+	{
+		return false;
+	}
+
+	const FTransform BoardTransform = GetActorTransform();
+	const FVector LocalImpactPoint = BoardTransform.InverseTransformPosition(HitResult.ImpactPoint);
+	const FVector LocalNormal = BoardTransform.InverseTransformVectorNoScale(HitResult.ImpactNormal).GetSafeNormal();
+	if (LocalNormal.IsNearlyZero())
+	{
+		return false;
+	}
+
+	BuildGridCursorTarget(HitCell, LocalImpactPoint, LocalNormal, OutTarget);
+	return OutTarget.bValid;
 }
 
 void ACastleBoard::BuildGridCursorTarget(const FIntVector& Cell, const FVector& LocalImpactPoint, const FVector& LocalNormal, FCastleGridCursorTarget& OutTarget) const
@@ -612,102 +608,6 @@ void ACastleBoard::BuildGridCursorTarget(const FIntVector& Cell, const FVector& 
 		BoardTransform.TransformPosition(LocalPlaneCenter),
 		LocalPlaneScale * BoardTransform.GetScale3D());
 	OutTarget.bValid = true;
-}
-
-bool ACastleBoard::TryResolveGridVolumeCursorTarget(const FVector& RayStart, const FVector& RayEnd, FCastleGridCursorTarget& OutTarget) const
-{
-	const FTransform BoardTransform = GetActorTransform();
-	const FVector LocalStart = BoardTransform.InverseTransformPosition(RayStart);
-	const FVector LocalEnd = BoardTransform.InverseTransformPosition(RayEnd);
-	const FVector Direction = LocalEnd - LocalStart;
-	if (Direction.IsNearlyZero())
-	{
-		return false;
-	}
-
-	if (GridSize.X <= 0 || GridSize.Y <= 0 || GridSize.Z <= 0 || CellSize <= 0.0f || LayerHeight <= 0.0f)
-	{
-		return false;
-	}
-
-	const FVector BoxMin(
-		-CellSize * 0.5f,
-		-CellSize * 0.5f,
-		WorldBaseHeight - LayerHeight * 0.5f);
-	const FVector BoxMax(
-		(static_cast<float>(GridSize.X) - 0.5f) * CellSize,
-		(static_cast<float>(GridSize.Y) - 0.5f) * CellSize,
-		WorldBaseHeight + (static_cast<float>(GridSize.Z) - 0.5f) * LayerHeight);
-
-	float EnterTime = 0.0f;
-	float ExitTime = 1.0f;
-	FVector EnterNormal = FVector::ZeroVector;
-	FVector ExitNormal = FVector::ZeroVector;
-	const FVector AxisNormals[] = { FVector::ForwardVector, FVector::RightVector, FVector::UpVector };
-	const float StartValues[] = { LocalStart.X, LocalStart.Y, LocalStart.Z };
-	const float DirectionValues[] = { Direction.X, Direction.Y, Direction.Z };
-	const float MinValues[] = { BoxMin.X, BoxMin.Y, BoxMin.Z };
-	const float MaxValues[] = { BoxMax.X, BoxMax.Y, BoxMax.Z };
-
-	for (int32 AxisIndex = 0; AxisIndex < 3; ++AxisIndex)
-	{
-		if (FMath::IsNearlyZero(DirectionValues[AxisIndex]))
-		{
-			if (StartValues[AxisIndex] < MinValues[AxisIndex] || StartValues[AxisIndex] > MaxValues[AxisIndex])
-			{
-				return false;
-			}
-			continue;
-		}
-
-		float NearTime = (MinValues[AxisIndex] - StartValues[AxisIndex]) / DirectionValues[AxisIndex];
-		float FarTime = (MaxValues[AxisIndex] - StartValues[AxisIndex]) / DirectionValues[AxisIndex];
-		FVector NearNormal = -AxisNormals[AxisIndex];
-		FVector FarNormal = AxisNormals[AxisIndex];
-		if (NearTime > FarTime)
-		{
-			Swap(NearTime, FarTime);
-			Swap(NearNormal, FarNormal);
-		}
-
-		if (NearTime > EnterTime)
-		{
-			EnterTime = NearTime;
-			EnterNormal = NearNormal;
-		}
-		if (FarTime < ExitTime)
-		{
-			ExitTime = FarTime;
-			ExitNormal = FarNormal;
-		}
-		if (EnterTime > ExitTime)
-		{
-			return false;
-		}
-	}
-
-	if (EnterTime > 1.0f || ExitTime < 0.0f)
-	{
-		return false;
-	}
-
-	const bool bStartInside = IsInsideGridVolume(LocalStart, BoxMin, BoxMax);
-	const float HitTime = bStartInside ? ExitTime : EnterTime;
-	const FVector HitNormal = bStartInside ? ExitNormal : EnterNormal;
-	if (HitTime < 0.0f || HitTime > 1.0f || HitNormal.IsNearlyZero())
-	{
-		return false;
-	}
-
-	const FVector LocalHitPoint = LocalStart + Direction * HitTime;
-	const FVector ProbePoint = LocalHitPoint - HitNormal * 0.01f;
-	const int32 RelativeX = FMath::Clamp(FMath::FloorToInt((ProbePoint.X - BoxMin.X) / CellSize), 0, GridSize.X - 1);
-	const int32 RelativeY = FMath::Clamp(FMath::FloorToInt((ProbePoint.Y - BoxMin.Y) / CellSize), 0, GridSize.Y - 1);
-	const int32 RelativeZ = FMath::Clamp(FMath::FloorToInt((ProbePoint.Z - BoxMin.Z) / LayerHeight), 0, GridSize.Z - 1);
-	const FIntVector Cell = GridOrigin + FIntVector(RelativeX, RelativeY, RelativeZ);
-
-	BuildGridCursorTarget(Cell, LocalHitPoint, HitNormal, OutTarget);
-	return OutTarget.bValid;
 }
 
 void ACastleBoard::GetFaceNeighborCoordinates(const FIntVector& Coordinate, TArray<FIntVector>& OutNeighbors) const
