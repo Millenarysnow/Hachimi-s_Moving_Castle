@@ -163,6 +163,10 @@ protected:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "占位可视化")
 	TMap<FIntVector, TObjectPtr<UStaticMeshComponent>> GroundVisuals;
 
+	/** 地面数字牌和数字文本等辅助组件，重建地面时必须一并销毁，避免重复显示。 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "占位可视化")
+	TArray<TObjectPtr<USceneComponent>> GroundAuxiliaryVisuals;
+
 	/** 根据 bGenerateGroundOnBeginPlay 决定是否在运行开始时生成地面。 */
 	virtual void BeginPlay() override;
 

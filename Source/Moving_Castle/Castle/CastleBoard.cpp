@@ -1204,6 +1204,15 @@ int32 ACastleBoard::FindPrototypeCardIndex(const FCastleBuildingDescriptor& Desc
 
 void ACastleBoard::RebuildGroundVisualization()
 {
+	for (const TObjectPtr<USceneComponent>& AuxiliaryComponent : GroundAuxiliaryVisuals)
+	{
+		if (AuxiliaryComponent != nullptr)
+		{
+			AuxiliaryComponent->DestroyComponent();
+		}
+	}
+	GroundAuxiliaryVisuals.Reset();
+
 	for (const TPair<FIntVector, TObjectPtr<UStaticMeshComponent>>& Pair : GroundVisuals)
 	{
 		if (Pair.Value != nullptr)
@@ -1261,19 +1270,56 @@ void ACastleBoard::RebuildGroundVisualization()
 
 		TileComponent->RegisterComponentWithWorld(GetWorld());
 
+		// 数字牌使用深色小方块做底，给白色数字提供稳定的高对比背景，避免
+		// 红、蓝、绿色地面上的黑色文字在远处与材质颜色混在一起。
+		const FName PlateName(*FString::Printf(TEXT("GroundNumberPlate_%d_%d_%d"), Cell.Coordinate.X, Cell.Coordinate.Y, Cell.Coordinate.Z));
+		UStaticMeshComponent* NumberPlate = NewObject<UStaticMeshComponent>(this, PlateName);
+		if (NumberPlate != nullptr)
+		{
+			AddInstanceComponent(NumberPlate);
+			NumberPlate->SetupAttachment(SceneRoot);
+			NumberPlate->SetStaticMesh(PrototypeCubeMesh);
+			NumberPlate->SetMobility(EComponentMobility::Movable);
+			NumberPlate->SetRelativeLocation(FVector(
+				static_cast<float>(RelativeCoordinate.X) * CellSize,
+				static_cast<float>(RelativeCoordinate.Y) * CellSize,
+				WorldBaseHeight + static_cast<float>(RelativeCoordinate.Z) * LayerHeight + LayerHeight * 0.13f));
+			NumberPlate->SetRelativeScale3D(FVector(CellSize / 100.0f * 0.62f, CellSize / 100.0f * 0.62f, 0.035f));
+			NumberPlate->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			NumberPlate->SetVisibility(true, true);
+
+			UMaterialInstanceDynamic* PlateMaterial = UMaterialInstanceDynamic::Create(PrototypeMaterial, NumberPlate);
+			if (PlateMaterial != nullptr)
+			{
+				PlateMaterial->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.015f, 0.015f, 0.02f, 1.0f));
+				NumberPlate->SetMaterial(0, PlateMaterial);
+			}
+
+			NumberPlate->RegisterComponentWithWorld(GetWorld());
+			GroundAuxiliaryVisuals.Add(NumberPlate);
+		}
+
 		const FName LabelName(*FString::Printf(TEXT("GroundLabel_%d_%d_%d"), Cell.Coordinate.X, Cell.Coordinate.Y, Cell.Coordinate.Z));
 		UTextRenderComponent* NumberLabel = NewObject<UTextRenderComponent>(this, LabelName);
 		if (NumberLabel != nullptr)
 		{
 			AddInstanceComponent(NumberLabel);
-			NumberLabel->SetupAttachment(TileComponent);
+			// 文本直接挂到棋盘根节点，避免继承地面薄片的 Z 缩放而被压进网格内部。
+			NumberLabel->SetupAttachment(SceneRoot);
 			NumberLabel->SetHorizontalAlignment(EHorizTextAligment::EHTA_Center);
 			NumberLabel->SetVerticalAlignment(EVerticalTextAligment::EVRTA_TextCenter);
-			NumberLabel->SetTextRenderColor(FColor::Black);
-			NumberLabel->SetWorldSize(28.0f);
+			NumberLabel->SetTextRenderColor(FColor::White);
+			NumberLabel->SetWorldSize(64.0f);
+			NumberLabel->SetXScale(1.15f);
+			NumberLabel->SetYScale(1.15f);
 			NumberLabel->SetText(FText::FromString(FString::Printf(TEXT("%d"), Cell.Number)));
-			NumberLabel->SetRelativeLocation(FVector(0.0f, 0.0f, 55.0f));
+			NumberLabel->SetRelativeRotation(FRotator(90.0f, 0.0f, 0.0f));
+			NumberLabel->SetRelativeLocation(FVector(
+				static_cast<float>(RelativeCoordinate.X) * CellSize,
+				static_cast<float>(RelativeCoordinate.Y) * CellSize,
+				WorldBaseHeight + static_cast<float>(RelativeCoordinate.Z) * LayerHeight + LayerHeight * 0.18f));
 			NumberLabel->RegisterComponentWithWorld(GetWorld());
+			GroundAuxiliaryVisuals.Add(NumberLabel);
 		}
 
 		GroundVisuals.Add(Cell.Coordinate, TileComponent);
