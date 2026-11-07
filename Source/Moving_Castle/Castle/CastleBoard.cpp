@@ -507,6 +507,7 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 
 	FIntVector HitCell = FIntVector::ZeroValue;
 	bool bFoundCell = false;
+	bool bHitGroundTile = false;
 
 	for (const TPair<FIntVector, TObjectPtr<UStaticMeshComponent>>& Pair : GroundVisuals)
 	{
@@ -514,6 +515,7 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 		{
 			HitCell = Pair.Key;
 			bFoundCell = true;
+			bHitGroundTile = true;
 			break;
 		}
 	}
@@ -546,6 +548,11 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 	const FVector LocalImpactPoint = BoardTransform.InverseTransformPosition(HitResult.ImpactPoint);
 	const FVector LocalNormal = BoardTransform.InverseTransformVectorNoScale(HitResult.ImpactNormal).GetSafeNormal();
 	if (LocalNormal.IsNearlyZero())
+	{
+		return false;
+	}
+	// 地面只提供建筑的支撑顶面；薄地块侧面和底面不能作为悬空建造目标。
+	if (bHitGroundTile && GetGridFaceFromNormal(LocalNormal) != ECastleGridFace::Up)
 	{
 		return false;
 	}
