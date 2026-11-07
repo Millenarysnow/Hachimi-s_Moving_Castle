@@ -140,4 +140,3 @@ bool FCastleBackpackAutomationTest::RunTest(const FString& Parameters)
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS
-

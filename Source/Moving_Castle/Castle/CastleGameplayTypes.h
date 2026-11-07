@@ -23,7 +23,6 @@ enum class ECastleTileColor : uint8
 	Yellow UMETA(DisplayName = "黄色"),
 	Purple UMETA(DisplayName = "紫色")
 };
-
 /**
  * 当前阶段实现的建筑类别。
  *

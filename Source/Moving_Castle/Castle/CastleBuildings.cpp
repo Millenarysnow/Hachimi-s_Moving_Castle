@@ -8,7 +8,6 @@ ACastleRoadBuilding::ACastleRoadBuilding()
 	BuildingType = ECastleBuildingType::Road;
 	BuildingLevel = 1;
 }
-
 ACastleArcherTowerBuilding::ACastleArcherTowerBuilding()
 {
 	// 箭塔族的具体等级由等级子类构造函数设置，此处只设置类别。

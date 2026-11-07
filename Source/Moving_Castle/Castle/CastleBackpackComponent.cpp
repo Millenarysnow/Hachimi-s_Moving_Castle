@@ -11,7 +11,6 @@ UCastleBackpackComponent::UCastleBackpackComponent()
 	PrimaryComponentTick.bCanEverTick = false;
 	Capacity = 10;
 }
-
 void UCastleBackpackComponent::BeginPlay()
 {
 	Super::BeginPlay();

@@ -31,7 +31,6 @@ public:
 	/** BlueprintNativeEvent 的 C++ 默认实现。 */
 	virtual FCastleGroundGenerationResult GenerateGround_Implementation(const FCastleGroundGenerationRequest& Request) const;
 };
-
 /**
  * 当前阶段使用的随机地面生成策略。
  *

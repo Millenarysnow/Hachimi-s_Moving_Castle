@@ -15,7 +15,6 @@ ACastleBoard::ACastleBoard()
 	PrimaryActorTick.bCanEverTick = false;
 	GroundGeneratorClass = UCastleRandomGroundGenerator::StaticClass();
 }
-
 void ACastleBoard::BeginPlay()
 {
 	Super::BeginPlay();

@@ -16,7 +16,6 @@ public:
 	/** 设置道路类别和固定的 1 级属性。 */
 	ACastleRoadBuilding();
 };
-
 /** 箭塔建筑族的抽象基类，等级子类负责提供具体的替换类。 */
 UCLASS(Abstract, Blueprintable)
 class MOVING_CASTLE_API ACastleArcherTowerBuilding : public ACastleBuildingBase

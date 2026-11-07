@@ -114,4 +114,3 @@ protected:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "建筑")
 	TArray<FIntVector> OccupiedCoordinates;
 };
-

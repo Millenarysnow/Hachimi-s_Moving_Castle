@@ -17,7 +17,6 @@ FCastleGroundGenerationResult UCastleGroundGenerator::GenerateGround_Implementat
 	UE_LOG(LogMoving_Castle, Error, TEXT("地面生成失败：没有提供具体的生成策略类。"));
 	return EmptyResult;
 }
-
 UCastleRandomGroundGenerator::UCastleRandomGroundGenerator()
 {
 	// 默认颜色池与策划案中的功能房间颜色一致；灰色道路由起始格逻辑单独处理。

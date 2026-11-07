@@ -165,4 +165,3 @@ protected:
 	/** 判断一个建筑描述是否能和邻居或目标地面形成匹配。 */
 	bool HasPlacementMatch(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor) const;
 };
-

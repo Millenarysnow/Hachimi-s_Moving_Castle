@@ -10,4 +10,3 @@ bool FCastleBuildingDescriptor::HasBuildingClass() const
 	// 触发 TSubclassOf 模板对不完整类型的 StaticClass 调用。
 	return BuildingClass != nullptr;
 }
-

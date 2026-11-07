@@ -90,4 +90,3 @@ protected:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "背包")
 	TArray<FCastleBuildingDescriptor> Items;
 };
-

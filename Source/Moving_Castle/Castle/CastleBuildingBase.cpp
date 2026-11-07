@@ -9,7 +9,6 @@ ACastleBuildingBase::ACastleBuildingBase()
 	// 建筑 Actor 当前阶段不绑定任何美术组件，只保留可供棋盘和蓝图访问的数据。
 	PrimaryActorTick.bCanEverTick = false;
 }
-
 bool ACastleBuildingBase::InitializeBuilding(const FCastleBuildingDescriptor& Descriptor, const TArray<FIntVector>& InOccupiedCoordinates)
 {
 	if (!Descriptor.HasBuildingClass())
