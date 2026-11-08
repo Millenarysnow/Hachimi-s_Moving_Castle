@@ -10,10 +10,17 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
+#include "Moving_Castle.h"
 
-void UCastleBuildingCardWidget::NativeConstruct()
+void UCastleBuildingCardWidget::NativeOnInitialized()
 {
-	Super::NativeConstruct();
+	Super::NativeOnInitialized();
+	UE_LOG(LogMoving_Castle, Log, TEXT("建筑卡片 NativeOnInitialized 已执行。"));
+
+	if (bWidgetTreeBuilt)
+	{
+		return;
+	}
 
 	if (WidgetTree == nullptr)
 	{
@@ -73,6 +80,12 @@ void UCastleBuildingCardWidget::NativeConstruct()
 		DetailSlot->SetHorizontalAlignment(EHorizontalAlignment::HAlign_Center);
 	}
 
+	bWidgetTreeBuilt = true;
+}
+
+void UCastleBuildingCardWidget::NativeConstruct()
+{
+	Super::NativeConstruct();
 	RefreshVisuals();
 }
 

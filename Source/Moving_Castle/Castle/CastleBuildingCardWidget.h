@@ -39,7 +39,10 @@ public:
 	}
 
 protected:
-	/** 创建卡片的纯 C++ UMG 布局，避免当前阶段依赖 Widget Blueprint 资源。 */
+	/** 在 Slate 根控件取走前创建卡片的纯 C++ UMG 布局。 */
+	virtual void NativeOnInitialized() override;
+
+	/** 执行每次加入屏幕时的视觉同步。 */
 	virtual void NativeConstruct() override;
 
 	/** 创建并返回颜色对应的边框色。 */
@@ -77,4 +80,7 @@ protected:
 	/** 卡片中央的三维线框预览。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCastleBuildingPreviewWidget> PreviewWidget;
+
+	/** 防止布局重复创建。 */
+	bool bWidgetTreeBuilt = false;
 };

@@ -26,7 +26,10 @@ class MOVING_CASTLE_API UCastleBackpackWidget : public UUserWidget
 	GENERATED_BODY()
 
 protected:
-	/** 创建背包面板和卡片容器。 */
+	/** 在 Slate 根控件取走前创建背包面板和卡片容器。 */
+	virtual void NativeOnInitialized() override;
+
+	/** 执行每次加入屏幕时的背包数据同步。 */
 	virtual void NativeConstruct() override;
 
 	/** 检查棋盘背包是否变化，变化后重建卡片内容。 */
@@ -49,7 +52,7 @@ protected:
 	UPROPERTY(Transient)
 	TObjectPtr<UHorizontalBox> CardBox;
 
-	/** 根尺寸盒，用于根据背包容量稳定面板宽度。 */
+	/** 根尺寸盒，用于根据背包容量稳定面板宽度，并作为视口槽位的直接内容。 */
 	UPROPERTY(Transient)
 	TObjectPtr<USizeBox> RootSizeBox;
 
@@ -71,4 +74,10 @@ protected:
 	/** 选中槽位或容量变化也需要刷新，即使卡牌描述数组相同。 */
 	int32 CachedSelection = INDEX_NONE;
 	int32 CachedCapacity = INDEX_NONE;
+
+	/** 防止布局在 NativeOnInitialized 和后续生命周期回调中重复创建。 */
+	bool bWidgetTreeBuilt = false;
+
+	/** 仅用于首次运行时记录 Slate 是否已经为背包分配几何体。 */
+	bool bLoggedSlateGeometry = false;
 };
