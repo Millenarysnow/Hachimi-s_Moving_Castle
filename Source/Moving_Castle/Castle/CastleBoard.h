@@ -100,6 +100,9 @@ public:
 	 */
 	ACastleBuildingBase* PlacePrototypeBuildingAtCursor(const FCastleGridCursorTarget& CursorTarget, FText& OutFailureReason);
 
+	/** 根据实际背包槽位放置卡牌，供商店购买后的任意颜色数字卡使用。 */
+	ACastleBuildingBase* PlaceBackpackBuildingAtCursor(const FCastleGridCursorTarget& CursorTarget, int32 BackpackIndex, FText& OutFailureReason);
+
 	/** 使用当前 GroundGeneratorClass 生成并接收一份新的地面结果。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|棋盘")
 	bool GenerateGround(FText& OutFailureReason);

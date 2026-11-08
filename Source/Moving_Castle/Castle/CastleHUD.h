@@ -7,6 +7,7 @@
 #include "CastleHUD.generated.h"
 
 class UCastleBackpackWidget;
+class UCastleShopWidget;
 
 /**
  * 移动城堡的最小中心指针 HUD。
@@ -33,6 +34,10 @@ protected:
 	/** 当前 HUD 持有的背包展示控件。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCastleBackpackWidget> BackpackWidget;
+
+	/** 商店覆盖层独立控制自己的开关，复用玩家的账户和商店逻辑组件。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCastleShopWidget> ShopWidget;
 
 	/** 准星颜色。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "中心指针")

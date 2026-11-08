@@ -10,6 +10,8 @@
 #include "CastleCardPricing.h"
 #include "CastleEconomyComponent.h"
 #include "CastleShopComponent.h"
+#include "Engine/World.h"
+#include "Misc/ScopeExit.h"
 
 /** 验证收入、支出、免费操作、非法负数和溢出都具有明确且无副作用的结果。 */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleEconomyTest, "MovingCastle.Logic.Economy",
@@ -103,6 +105,71 @@ bool FCastleShopTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("道路属性固定"), Offer.Descriptor.BuildingType != ECastleBuildingType::Road
 			|| (Offer.Descriptor.Color == ECastleTileColor::Gray && Offer.Descriptor.Number == 0));
 	}
+	// 即使卖出能释放容量，也必须先保证收款不会溢出，不能先删除卡牌再发现无法入账。
+	Economy->TryAddGold(MAX_int32 - Economy->GetGold(), Reason);
+	TestFalse(TEXT("金币已满时出售失败"), Shop->TrySellBackpackItem(0, Reason));
+	TestEqual(TEXT("出售失败保留卡牌"), Board->PrototypeBackpack->GetItemCount(), 1);
+	TestEqual(TEXT("出售失败保留余额"), Economy->GetGold(), MAX_int32);
+	return true;
+}
+
+/** 购买后的随机卡必须能经过实际背包槽位入口变成建筑，不能停留在显示或接口层。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleShopConstructionTest, "MovingCastle.Logic.ShopToConstruction",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleShopConstructionTest::RunTest(const FString& Parameters)
+{
+	// UE 5.8 的 CreateWorld 已经负责 InitializeNewWorld，初始化参数一次性传入，
+	// 不能创建后再初始化一次，否则会重复生成同名 WorldSettings。
+	const UWorld::InitializationValues WorldSettings = UWorld::InitializationValues().AllowAudioPlayback(false)
+		.CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(false);
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &WorldSettings);
+	if (!TestNotNull(TEXT("创建独立建造测试世界"), World))
+	{
+		return false;
+	}
+	ON_SCOPE_EXIT { World->DestroyWorld(false); };
+	ACastleBoard* Board = World->SpawnActor<ACastleBoard>();
+	if (!TestNotNull(TEXT("在真实 World 中生成棋盘"), Board))
+	{
+		return false;
+	}
+	Board->GridSize = FIntVector(1, 1, 3);
+	UCastleEconomyComponent* Economy = NewObject<UCastleEconomyComponent>();
+	UCastleShopComponent* Shop = NewObject<UCastleShopComponent>();
+	Shop->OfferBuildingClasses = { ACastleArcherTowerLevel1::StaticClass() };
+	FText Reason;
+	Economy->TryAddGold(100, Reason);
+	if (!TestTrue(TEXT("商店初始化"), Shop->InitializeShop(Economy, Board, Reason))
+		|| !TestTrue(TEXT("商店自动出牌"), Shop->TryOpenShop(Reason)))
+	{
+		return false;
+	}
+	const FCastleBuildingDescriptor Card = Shop->GetOffers()[0].Descriptor;
+	FCastleGroundCell Cell;
+	Cell.Color = Card.Color;
+	Cell.Number = Card.Number;
+	FCastleGroundGenerationResult Ground;
+	Ground.Cells.Add(Cell);
+	TestTrue(TEXT("棋盘接收与商品匹配的测试地面"), Board->ApplyGroundGenerationResult(Ground, Reason));
+	if (!TestTrue(TEXT("购买随机卡牌"), Shop->TryBuyOffer(0, Reason)))
+	{
+		return false;
+	}
+	FCastleGridCursorTarget Target;
+	Target.bValid = true;
+	Target.Face = ECastleGridFace::Up;
+	Shop->CloseShop();
+	ACastleBuildingBase* Placed = Board->PlaceBackpackBuildingAtCursor(Target, 0, Reason);
+	if (!TestNotNull(TEXT("购买牌能从实际背包槽位成功放置"), Placed))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	TestEqual(TEXT("放置消耗背包卡牌"), Board->PrototypeBackpack->GetItemCount(), 0);
+	TestEqual(TEXT("场上新增一个占用格"), Board->GetOccupiedRoomCellCount(), 1);
+	TestTrue(TEXT("Actor 保留购买的随机属性"), Placed->GetBuildingColor() == Card.Color && Placed->GetBuildingNumber() == Card.Number);
+	TestEqual(TEXT("买牌到建造总量保持不变"), Shop->GetOwnedRoomCount(), 1);
 	return true;
 }
 
@@ -154,6 +221,16 @@ bool FCastleShopGenerationTest::RunTest(const FString& Parameters)
 	InvalidCard.BuildingClass = nullptr;
 	int32 Price = 0;
 	TestFalse(TEXT("无效卡牌明确拒绝定价"), ICastleCardPricing::Execute_TryCalculatePrice(Pricing, InvalidCard, ECastleCardPriceKind::Buy, Price, Reason));
+	FCastleBuildingDescriptor Archer;
+	Archer.BuildingClass = ACastleArcherTowerLevel2::StaticClass();
+	Archer.BuildingType = ECastleBuildingType::ArcherTower;
+	Archer.Color = ECastleTileColor::Blue;
+	Archer.Number = 3;
+	Archer.Level = 2;
+	TestTrue(TEXT("有效卡牌可通过接口报价"), ICastleCardPricing::Execute_TryCalculatePrice(Pricing, Archer, ECastleCardPriceKind::Buy, Price, Reason));
+	TestEqual(TEXT("数字和等级参与测试买价"), Price, 21);
+	ICastleCardPricing::Execute_TryCalculatePrice(Pricing, Archer, ECastleCardPriceKind::Sell, Price, Reason);
+	TestEqual(TEXT("卖价为买价一半向下取整"), Price, 10);
 	return true;
 }
 

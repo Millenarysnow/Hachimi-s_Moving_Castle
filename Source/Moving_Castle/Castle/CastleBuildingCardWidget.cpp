@@ -37,6 +37,11 @@ void UCastleBuildingCardWidget::NativeConstruct()
 
 	TitleText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("TitleText"));
 	TitleText->SetJustification(ETextJustify::Center);
+	// 标题和详情使用明确字号，使固定 212 高度的卡片能同时容纳线框和文字，
+	// 商店在卡片外增加价格按钮时也不会被溢出的默认大字号覆盖。
+	FSlateFontInfo TitleFont = TitleText->GetFont();
+	TitleFont.Size = 16;
+	TitleText->SetFont(TitleFont);
 	TitleText->SetColorAndOpacity(FSlateColor(FLinearColor(0.92f, 0.96f, 1.0f, 1.0f)));
 	TitleText->SetText(FText::FromString(TEXT("空槽位")));
 	if (UVerticalBoxSlot* TitleSlot = CardColumn->AddChildToVerticalBox(TitleText))
@@ -58,6 +63,9 @@ void UCastleBuildingCardWidget::NativeConstruct()
 
 	DetailText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("DetailText"));
 	DetailText->SetJustification(ETextJustify::Center);
+	FSlateFontInfo DetailFont = DetailText->GetFont();
+	DetailFont.Size = 13;
+	DetailText->SetFont(DetailFont);
 	DetailText->SetColorAndOpacity(FSlateColor(FLinearColor(0.64f, 0.72f, 0.82f, 1.0f)));
 	DetailText->SetText(FText::FromString(TEXT("未存入卡牌")));
 	if (UVerticalBoxSlot* DetailSlot = CardColumn->AddChildToVerticalBox(DetailText))

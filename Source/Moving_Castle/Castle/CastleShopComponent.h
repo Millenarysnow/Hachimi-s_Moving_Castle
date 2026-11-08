@@ -105,6 +105,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|商店")
 	TArray<FCastleShopOffer> GetOffers() const { return Offers; }
 
+	/** 返回待出售背包卡牌的副本，面板可展示类型、颜色和数字后让玩家选择。 */
+	UFUNCTION(BlueprintPure, Category = "移动城堡|商店")
+	TArray<FCastleBuildingDescriptor> GetBackpackItems() const;
+
 	/** 合成房间按实际格数计数，避免合成后凭空释放购买额度。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|商店")
 	int32 GetOwnedRoomCount() const;

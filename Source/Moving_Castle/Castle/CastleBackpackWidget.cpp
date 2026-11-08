@@ -7,6 +7,7 @@
 #include "CastleBuildingBase.h"
 #include "CastleBuildingCardWidget.h"
 #include "CastleBackpackComponent.h"
+#include "CastlePlayerController.h"
 #include "Components/Border.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
@@ -29,7 +30,7 @@ void UCastleBackpackWidget::NativeConstruct()
 	// 面板宽度按固定容量计算，卡片数量变化时不会引起屏幕布局抖动。
 	RootSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("BackpackRootSizeBox"));
 	RootSizeBox->SetWidthOverride(1584.0f);
-	RootSizeBox->SetHeightOverride(240.0f);
+	RootSizeBox->SetHeightOverride(268.0f);
 	WidgetTree->RootWidget = RootSizeBox;
 
 	UBorder* PanelBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("BackpackPanelBorder"));
@@ -42,6 +43,9 @@ void UCastleBackpackWidget::NativeConstruct()
 
 	CapacityText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("CapacityText"));
 	CapacityText->SetJustification(ETextJustify::Center);
+	FSlateFontInfo CapacityFont = CapacityText->GetFont();
+	CapacityFont.Size = 14;
+	CapacityText->SetFont(CapacityFont);
 	CapacityText->SetColorAndOpacity(FSlateColor(FLinearColor(0.72f, 0.84f, 0.95f, 1.0f)));
 	CapacityText->SetText(FText::FromString(TEXT("背包 0 / 10")));
 	if (UVerticalBoxSlot* CapacitySlot = PanelColumn->AddChildToVerticalBox(CapacityText))
@@ -97,18 +101,32 @@ void UCastleBackpackWidget::RefreshFromBackpack()
 
 	UCastleBackpackComponent* Backpack = ActiveBoard->PrototypeBackpack;
 	const TArray<FCastleBuildingDescriptor> Items = Backpack->GetItems();
-	if (bHasSynchronizedBackpack && AreDescriptorsEqual(CachedItems, Items))
+	const ACastlePlayerController* Controller = Cast<ACastlePlayerController>(GetOwningPlayer());
+	const int32 SelectedIndex = Controller != nullptr ? Controller->GetSelectedBackpackIndex() : INDEX_NONE;
+	if (bHasSynchronizedBackpack && AreDescriptorsEqual(CachedItems, Items)
+		&& CachedSelection == SelectedIndex && CachedCapacity == Backpack->Capacity)
 	{
 		return;
 	}
 
 	CachedItems = Items;
+	CachedSelection = SelectedIndex;
+	CachedCapacity = Backpack->Capacity;
 	bHasSynchronizedBackpack = true;
 
 	const int32 Capacity = FMath::Max(Backpack->Capacity, 1);
 	const int32 ItemCount = Items.Num();
-	CapacityText->SetText(FText::FromString(FString::Printf(TEXT("背包 %d / %d"), ItemCount, Capacity)));
-	RootSizeBox->SetWidthOverride(static_cast<float>(Capacity * 156 + 24));
+	CapacityText->SetText(FText::FromString(FString::Printf(TEXT("背包 %d / %d  |  数字键 1-9、0 选槽  |  当前第 %d 格  |  B 打开商店"),
+		ItemCount, Capacity, SelectedIndex == INDEX_NONE ? 0 : SelectedIndex + 1)));
+	const FVector2D PanelSize(static_cast<float>(Capacity * 156 + 24), 268.0f);
+	RootSizeBox->SetWidthOverride(PanelSize.X);
+	// 视口槽位的实际尺寸与根控件保持一致，避免 NativeConstruct 首次布局前
+	// GetDesiredSize 返回零，导致控件内部已经有卡片但父级不给它任何绘制区域。
+	SetDesiredSizeInViewport(PanelSize);
+	// UE 5.8 的 SetDesiredSizeInViewport 会清除现有锚点，刷新尺寸后必须恢复，
+	// 选牌或购买导致内容同步时也不能把底部面板移回左上角。
+	SetAnchorsInViewport(FAnchors(0.5f, 1.0f));
+	SetAlignmentInViewport(FVector2D(0.5f, 1.0f));
 
 	CardBox->ClearChildren();
 	CardWidgets.Reset();
@@ -131,6 +149,8 @@ void UCastleBackpackWidget::RefreshFromBackpack()
 		{
 			CardWidget->SetEmptySlot();
 		}
+		// 当前槽位保持明亮，其余槽位降低透明度，选择结果有直接的视觉反馈。
+		CardWidget->SetRenderOpacity(SlotIndex == SelectedIndex ? 1.0f : 0.60f);
 
 		if (UHorizontalBoxSlot* CardSlot = CardBox->AddChildToHorizontalBox(CardWidget))
 		{

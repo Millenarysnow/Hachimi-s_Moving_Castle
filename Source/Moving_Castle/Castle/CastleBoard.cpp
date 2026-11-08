@@ -1234,7 +1234,7 @@ void ACastleBoard::InitializePrototypeDeck()
 	}
 
 	SelectedPrototypeSlot = 0;
-	ShowPrototypeMessage(TEXT("原型卡牌已准备：按 1-4 选择卡牌，屏幕中心对准格面后按鼠标左键放置。"), FColor::Cyan);
+	ShowPrototypeMessage(TEXT("测试卡牌已准备：按 1-9、0 选择背包槽位，左键放置，B 打开房间商店。"), FColor::Cyan);
 }
 
 ACastleBuildingBase* ACastleBoard::PlacePrototypeBuildingAtCursor(const FCastleGridCursorTarget& CursorTarget, FText& OutFailureReason)
@@ -1259,6 +1259,19 @@ ACastleBuildingBase* ACastleBoard::PlacePrototypeBuildingAtCursor(const FCastleG
 	if (BackpackIndex == INDEX_NONE)
 	{
 		OutFailureReason = FText::FromString(TEXT("当前样例卡已经用完，请切换数字键选择其他卡牌。"));
+		ShowPrototypeMessage(OutFailureReason.ToString(), FColor::Yellow);
+		return nullptr;
+	}
+	return PlaceBackpackBuildingAtCursor(CursorTarget, BackpackIndex, OutFailureReason);
+}
+
+ACastleBuildingBase* ACastleBoard::PlaceBackpackBuildingAtCursor(const FCastleGridCursorTarget& CursorTarget, int32 BackpackIndex, FText& OutFailureReason)
+{
+	OutFailureReason = FText::GetEmpty();
+	FCastleBuildingDescriptor SelectedDescriptor;
+	if (!CursorTarget.bValid || PrototypeBackpack == nullptr || !PrototypeBackpack->TryGetItemAt(BackpackIndex, SelectedDescriptor))
+	{
+		OutFailureReason = FText::FromString(TEXT("放置失败：请先选择有效背包卡牌，并将中心指针对准棋盘格面。"));
 		ShowPrototypeMessage(OutFailureReason.ToString(), FColor::Yellow);
 		return nullptr;
 	}

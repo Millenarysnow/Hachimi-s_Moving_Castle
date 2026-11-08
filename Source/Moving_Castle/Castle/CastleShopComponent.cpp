@@ -216,6 +216,11 @@ int32 UCastleShopComponent::GetOwnedRoomCount() const
 	return Count;
 }
 
+TArray<FCastleBuildingDescriptor> UCastleShopComponent::GetBackpackItems() const
+{
+	return IsValid(Backpack) ? Backpack->GetItems() : TArray<FCastleBuildingDescriptor>();
+}
+
 bool UCastleShopComponent::TryBuyOffer(int32 OfferIndex, FText& OutFailureReason)
 {
 	if (!ValidateTrade(OutFailureReason))

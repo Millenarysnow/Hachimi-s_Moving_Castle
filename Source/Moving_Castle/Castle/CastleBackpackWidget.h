@@ -67,4 +67,8 @@ protected:
 
 	/** 是否已经执行过至少一次背包同步。 */
 	bool bHasSynchronizedBackpack = false;
+
+	/** 选中槽位或容量变化也需要刷新，即使卡牌描述数组相同。 */
+	int32 CachedSelection = INDEX_NONE;
+	int32 CachedCapacity = INDEX_NONE;
 };
