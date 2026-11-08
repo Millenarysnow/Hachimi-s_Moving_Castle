@@ -8,5 +8,7 @@
 !/Source/**
 !/Docs/**
 !/RawContent/**
+!/.codex/
+!/.codex/config.toml
 
 !/*.uproject

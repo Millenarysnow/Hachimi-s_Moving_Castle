@@ -1,0 +1,5 @@
+# UE 5.8 官方 Unreal MCP，使用本项目已配置的本机 9876 端口。
+[mcp_servers.unreal-mcp]
+url = "http://127.0.0.1:9876/mcp"
+enabled = true
+default_tools_approval_mode = "prompt"
