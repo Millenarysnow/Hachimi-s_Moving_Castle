@@ -150,6 +150,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
 	int32 GetPlacedBuildingCount() const;
 
+	/** 读取场上实际占用格数；合成 Actor 的多个格子分别计入房间总量。 */
+	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
+	int32 GetOccupiedRoomCellCount() const { return BuildingByCoordinate.Num(); }
+
 	/** 返回当前场上独立建筑 Actor 的列表副本，供调试和后续效果统计使用。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
 	TArray<ACastleBuildingBase*> GetPlacedBuildings() const;
