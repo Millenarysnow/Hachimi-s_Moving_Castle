@@ -3,6 +3,7 @@
 #include "CastleBuildingBase.h"
 
 #include "CastleBuildingDefinition.h"
+#include "BuildingMergeComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -18,6 +19,7 @@ ACastleBuildingBase::ACastleBuildingBase()
 	// 建筑逻辑和模型组件现在位于同一个 Actor；VisualRoot 只提供统一的组件根节点。
 	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
 	SetRootComponent(VisualRoot);
+	BuildingMerge = CreateDefaultSubobject<UBuildingMergeComponent>(TEXT("BuildingMerge"));
 
 	// 只有没有美术模型的等级才显示这个组件，正式模型直接来自等级蓝图自身。
 	PrototypeMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PrototypeMesh"));
@@ -42,6 +44,8 @@ ACastleBuildingBase::ACastleBuildingBase()
 	PrototypeLabel->SetVisibility(false);
 
 	PrototypeLabelPlate = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PrototypeLabelPlate"));
+	// 数字牌是界面辅助物，合并时随旧 Actor 消失，不把它误当成屋顶零件卷入建筑。
+	PrototypeLabelPlate->ComponentTags.Add(TEXT("MergeExclude"));
 	PrototypeLabelPlate->SetupAttachment(VisualRoot);
 	PrototypeLabelPlate->SetStaticMesh(PlaceholderCube);
 	PrototypeLabelPlate->SetMaterial(0, PlaceholderMaterial);

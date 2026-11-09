@@ -12,6 +12,7 @@ class USceneComponent;
 class UStaticMesh;
 class UStaticMeshComponent;
 class UTextRenderComponent;
+class UBuildingMergeComponent;
 
 /**
  * 所有可放置建筑的共同 Actor 基类。
@@ -28,6 +29,10 @@ class MOVING_CASTLE_API ACastleBuildingBase : public AActor
 public:
 	/** 创建逻辑根节点、占位网格和通用建筑标签。 */
 	ACastleBuildingBase();
+
+	/** 所有建筑原生携带的零件合并组件；仅在棋盘合并时启动，卡片预览和普通放置不播放。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="建筑|动画")
+	TObjectPtr<UBuildingMergeComponent> BuildingMerge;
 
 	/**
 	 * 用背包描述和占用格子初始化一个新建筑。

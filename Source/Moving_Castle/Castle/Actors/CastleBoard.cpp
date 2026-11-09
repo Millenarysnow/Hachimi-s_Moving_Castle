@@ -5,6 +5,7 @@
 #include "CastleBackpackComponent.h"
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
+#include "BuildingMergeComponent.h"
 #include "CastleGroundGenerator.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -803,6 +804,10 @@ ACastleBuildingBase* ACastleBoard::TryMergePlacedBuilding(ACastleBuildingBase* B
 	}
 
 	ACastleBuildingBase* CurrentBuilding = Building;
+	// 一次放置可能连续升级。先完成全部逻辑替换，再用真正参与的原建筑播放一次重组。
+	// 原建筑暂时保留到抓取完成；中间等级只更新索引，不会闪现或反复播多轮动画。
+	TArray<AActor*> MergeSources = { Building };
+	bool bHasMerged = false;
 	while (CurrentBuilding != nullptr && CurrentBuilding->CanMergeToNextLevel())
 	{
 		ACastleBuildingBase* MergePartner = FindMergePartner(CurrentBuilding);
@@ -825,12 +830,31 @@ ACastleBuildingBase* ACastleBoard::TryMergePlacedBuilding(ACastleBuildingBase* B
 		{
 			OutFailureReason = MergeReason;
 			// 合成替换失败时保留合法的原有建筑，避免静默丢失场上对象。
-			return CurrentBuilding;
+			break;
 		}
 
+		MergeSources.Add(MergePartner);
+		if (bHasMerged)
+		{
+			// 上一轮生成的中间等级并非真实输入零件，不加入表现快照。
+			CurrentBuilding->Destroy();
+		}
 		CurrentBuilding = MergedBuilding;
+		bHasMerged = true;
 	}
 
+	if (bHasMerged)
+	{
+		if (GetWorld()->IsGameWorld() && !CurrentBuilding->BuildingMerge->StartMerge(MergeSources))
+		{
+			// 规则替换已经完成，表现错误明确传回并由组件输出 Error，不能静默改播其他效果。
+			OutFailureReason = FText::FromString(CurrentBuilding->BuildingMerge->LastError);
+		}
+		for (AActor* Source : MergeSources)
+		{
+			Source->Destroy();
+		}
+	}
 	return CurrentBuilding;
 }
 
@@ -1057,8 +1081,7 @@ ACastleBuildingBase* ACastleBoard::MergeBuildings(ACastleBuildingBase* First, AC
 		return nullptr;
 	}
 
-	First->Destroy();
-	Second->Destroy();
+	// 调用方完成连续合成并抓取所有真实输入零件后统一销毁旧 Actor。
 	return MergedBuilding;
 }
 

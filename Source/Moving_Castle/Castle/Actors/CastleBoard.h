@@ -267,7 +267,7 @@ protected:
 	/** 校验两个建筑的联合占用坐标是否符合当前等级规定的形状。 */
 	bool BuildMergedFootprint(const ACastleBuildingBase* First, const ACastleBuildingBase* Second, TArray<FIntVector>& OutFootprint) const;
 
-	/** 生成高一级 Actor、替换两个旧 Actor，并更新全部坐标索引。 */
+	/** 生成高一级 Actor 并替换坐标索引；旧 Actor 由整次连续合成抓取视觉后统一销毁。 */
 	ACastleBuildingBase* MergeBuildings(ACastleBuildingBase* First, ACastleBuildingBase* Second, const TArray<FIntVector>& MergedFootprint, FText& OutFailureReason);
 
 	/** 校验建筑描述和具体类默认对象是否一致。 */
