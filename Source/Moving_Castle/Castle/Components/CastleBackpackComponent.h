@@ -57,12 +57,11 @@ public:
 	bool TryInsertItemAt(int32 Index, const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason);
 
 	/**
-	 * 根据具体建筑类、颜色和数字创建一张卡牌并加入背包。
-	 *
-	 * 建筑类别和等级从类默认对象读取，避免调用者手填错误的类别/等级。
+	 * 根据建筑 Data Asset、等级、颜色和数字创建一张卡牌并加入背包。
+	 * 具体逻辑类和模型始终由资产解析，不在背包里复制第二份配置。
 	 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|背包")
-	bool TryAddBuilding(TSubclassOf<ACastleBuildingBase> BuildingClass, ECastleTileColor Color, int32 Number, int32& OutIndex, FText& OutFailureReason);
+	bool TryAddBuilding(UCastleBuildingDefinition* Definition, int32 Level, ECastleTileColor Color, int32 Number, int32& OutIndex, FText& OutFailureReason);
 
 	/** 从指定槽位取出卡牌，成功时返回被取出的描述。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|背包")

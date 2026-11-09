@@ -4,7 +4,8 @@
 
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
-#include "CastleBuildings.h"
+#include "CastleBuildingBase.h"
+#include "CastleBuildingDefinition.h"
 #include "CastleCardPricing.h"
 #include "CastleEconomyComponent.h"
 #include "Moving_Castle.h"
@@ -13,8 +14,6 @@ UCastleShopComponent::UCastleShopComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
 	PricingStrategyClass = UCastleSimpleCardPricing::StaticClass();
-	OfferBuildingClasses = { ACastleRoadBuilding::StaticClass(), ACastleArcherTowerLevel1::StaticClass(),
-		ACastleCannonTowerLevel1::StaticClass(), ACastleFarmLevel1::StaticClass() };
 }
 
 bool UCastleShopComponent::InitializeShop(UCastleEconomyComponent* InEconomy, ACastleBoard* InBoard, FText& OutFailureReason)
@@ -31,19 +30,14 @@ bool UCastleShopComponent::InitializeShop(UCastleEconomyComponent* InEconomy, AC
 		OutFailureReason = FText::FromString(TEXT("商店初始化失败：定价类必须实现 CastleCardPricing 接口且可实例化。"));
 		return false;
 	}
-	if (OfferBuildingClasses.IsEmpty() || RefreshCost < 0 || RoomLimit < 1)
+	if (RefreshCost < 0 || RoomLimit < 1)
 	{
-		OutFailureReason = FText::FromString(TEXT("商店初始化失败：商品池不能为空，刷新费用不能为负，总房间上限必须为正。"));
+		OutFailureReason = FText::FromString(TEXT("商店初始化失败：刷新费用不能为负，总房间上限必须为正。"));
 		return false;
 	}
-	for (const TSubclassOf<ACastleBuildingBase>& BuildingClass : OfferBuildingClasses)
+	if (!InBoard->ValidateBuildingDefinitions(OutFailureReason))
 	{
-		if (BuildingClass == nullptr || BuildingClass->HasAnyClassFlags(CLASS_Abstract)
-			|| BuildingClass->GetDefaultObject<ACastleBuildingBase>()->GetBuildingLevel() != 1)
-		{
-			OutFailureReason = FText::FromString(TEXT("商店初始化失败：商品池必须全部使用可生成的一级建筑类。"));
-			return false;
-		}
+		return false;
 	}
 	PricingStrategy = NewObject<UObject>(this, PricingStrategyClass);
 	if (PricingStrategy == nullptr)
@@ -89,30 +83,30 @@ bool UCastleShopComponent::GenerateOffers(FRandomStream& Stream, TArray<FCastleS
 {
 	OutOffers.Reset();
 	OutFailureReason = FText::GetEmpty();
-	if (OfferBuildingClasses.IsEmpty())
+	if (!IsValid(Board) || !Board->ValidateBuildingDefinitions(OutFailureReason))
 	{
-		OutFailureReason = FText::FromString(TEXT("商店生成失败：商品池为空。"));
+		if (OutFailureReason.IsEmpty())
+		{
+			OutFailureReason = FText::FromString(TEXT("商店生成失败：没有绑定有效棋盘。"));
+		}
 		return false;
 	}
 	for (int32 Index = 0; Index < 6; ++Index)
 	{
-		const TSubclassOf<ACastleBuildingBase> BuildingClass = OfferBuildingClasses[Stream.RandRange(0, OfferBuildingClasses.Num() - 1)];
-		if (BuildingClass == nullptr || BuildingClass->HasAnyClassFlags(CLASS_Abstract))
+		UCastleBuildingDefinition* Definition = Board->BuildingDefinitions[Stream.RandRange(0, Board->BuildingDefinitions.Num() - 1)];
+		ECastleTileColor Color = ECastleTileColor::Gray;
+		int32 Number = 0;
+		if (Definition->BuildingType != ECastleBuildingType::Road)
 		{
-			OutFailureReason = FText::FromString(TEXT("商店生成失败：商品池包含无效建筑类。"));
-			return false;
-		}
-		const ACastleBuildingBase* Defaults = BuildingClass->GetDefaultObject<ACastleBuildingBase>();
-		FCastleShopOffer Offer;
-		Offer.Descriptor.BuildingClass = BuildingClass;
-		Offer.Descriptor.BuildingType = Defaults->GetBuildingType();
-		Offer.Descriptor.Level = Defaults->GetBuildingLevel();
-		if (Offer.Descriptor.BuildingType != ECastleBuildingType::Road)
-		{
-			// 有放回抽样：允许一轮出现多张同类牌，颜色覆盖五种功能颜色，数字为 1 至 9。
-			Offer.Descriptor.Color = static_cast<ECastleTileColor>(Stream.RandRange(
+			// 允许重复商品，沿用五种颜色、1 至 9 的数字范围；建筑身份直接来自定义池。
+			Color = static_cast<ECastleTileColor>(Stream.RandRange(
 				static_cast<int32>(ECastleTileColor::Red), static_cast<int32>(ECastleTileColor::Purple)));
-			Offer.Descriptor.Number = Stream.RandRange(1, 9);
+			Number = Stream.RandRange(1, 9);
+		}
+		FCastleShopOffer Offer;
+		if (!Definition->CreateDescriptor(1, Color, Number, Offer.Descriptor, OutFailureReason))
+		{
+			return false;
 		}
 		if (Offer.Descriptor.Level != 1 || !CalculatePrice(Offer.Descriptor, false, Offer.Price, OutFailureReason))
 		{

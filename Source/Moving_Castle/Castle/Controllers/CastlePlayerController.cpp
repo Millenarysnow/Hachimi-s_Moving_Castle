@@ -2,6 +2,8 @@
 
 #include "CastlePlayerController.h"
 
+#include "CastleBuildingDefinition.h"
+
 #include "CastleBoard.h"
 #include "CastleBackpackComponent.h"
 #include "CastleBuildingBase.h"
@@ -239,7 +241,7 @@ void ACastlePlayerController::SelectBackpackSlot(int32 SlotIndex)
 	}
 	SelectedBackpackIndex = SlotIndex;
 	ShowGameplayMessage(FString::Printf(TEXT("已选中背包第 %d 格：%s，数字 %d。"), SlotIndex + 1,
-		*Descriptor.BuildingClass->GetName(), Descriptor.Number), true);
+		*Descriptor.Definition->DisplayName.ToString(), Descriptor.Number), true);
 }
 
 void ACastlePlayerController::PlacePrototypeBuildingAtCursor()

@@ -7,6 +7,7 @@
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
 #include "CastleBuildings.h"
+#include "CastleBuildingTestUtilities.h"
 #include "CastleGroundGenerator.h"
 
 /**
@@ -119,17 +120,17 @@ bool FCastleBackpackAutomationTest::RunTest(const FString& Parameters)
 
 	FText FailureReason;
 	int32 AddedIndex = INDEX_NONE;
-	TestTrue(TEXT("合法箭塔卡牌应能加入背包"), Backpack->TryAddBuilding(ACastleArcherTowerLevel1::StaticClass(), ECastleTileColor::Red, 3, AddedIndex, FailureReason));
+	TestTrue(TEXT("合法箭塔卡牌应能加入背包"), Backpack->TryAddBuilding(CastleBuildingTests::MakeDefinition(ECastleBuildingType::ArcherTower), 1, ECastleTileColor::Red, 3, AddedIndex, FailureReason));
 	TestEqual(TEXT("加入第一张卡牌后数量应为 1"), Backpack->GetItemCount(), 1);
 
-	TestFalse(TEXT("道路不能使用非灰色 0 号属性"), Backpack->TryAddBuilding(ACastleRoadBuilding::StaticClass(), ECastleTileColor::Red, 3, AddedIndex, FailureReason));
+	TestFalse(TEXT("道路不能使用非灰色 0 号属性"), Backpack->TryAddBuilding(CastleBuildingTests::MakeDefinition(ECastleBuildingType::Road), 1, ECastleTileColor::Red, 3, AddedIndex, FailureReason));
 
 	for (int32 Index = Backpack->GetItemCount(); Index < Backpack->Capacity; ++Index)
 	{
-		TestTrue(TEXT("容量未满时应能继续加入合法卡牌"), Backpack->TryAddBuilding(ACastleFarmLevel1::StaticClass(), ECastleTileColor::Blue, 2, AddedIndex, FailureReason));
+		TestTrue(TEXT("容量未满时应能继续加入合法卡牌"), Backpack->TryAddBuilding(CastleBuildingTests::MakeDefinition(ECastleBuildingType::Farm), 1, ECastleTileColor::Blue, 2, AddedIndex, FailureReason));
 	}
 	TestEqual(TEXT("背包应达到策划案规定的 10 格上限"), Backpack->GetItemCount(), 10);
-	TestFalse(TEXT("背包满后不能继续加入卡牌"), Backpack->TryAddBuilding(ACastleCannonTowerLevel1::StaticClass(), ECastleTileColor::Green, 4, AddedIndex, FailureReason));
+	TestFalse(TEXT("背包满后不能继续加入卡牌"), Backpack->TryAddBuilding(CastleBuildingTests::MakeDefinition(ECastleBuildingType::CannonTower), 1, ECastleTileColor::Green, 4, AddedIndex, FailureReason));
 
 	FCastleBuildingDescriptor RemovedDescriptor;
 	TestTrue(TEXT("应能取出第一个槽位"), Backpack->TryRemoveItemAt(0, RemovedDescriptor, FailureReason));

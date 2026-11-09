@@ -2,6 +2,8 @@
 
 #include "CastleBuildingCardWidget.h"
 
+#include "CastleBuildingDefinition.h"
+
 #include "Blueprint/WidgetTree.h"
 #include "CastleBuildingPreviewWidget.h"
 #include "Components/Border.h"
@@ -28,7 +30,7 @@ void UCastleBuildingCardWidget::NativeOnInitialized()
 		return;
 	}
 
-	// 根 SizeBox 固定卡片尺寸，防止预览线框或动态文字导致相邻卡片跳动。
+	// 根 SizeBox 固定卡片尺寸，防止预览模型或动态文字导致相邻卡片跳动。
 	USizeBox* CardSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("CardSizeBox"));
 	CardSizeBox->SetWidthOverride(148.0f);
 	CardSizeBox->SetHeightOverride(212.0f);
@@ -44,7 +46,7 @@ void UCastleBuildingCardWidget::NativeOnInitialized()
 
 	TitleText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("TitleText"));
 	TitleText->SetJustification(ETextJustify::Center);
-	// 标题和详情使用明确字号，使固定 212 高度的卡片能同时容纳线框和文字，
+	// 标题和详情使用明确字号，使固定 212 高度的卡片能同时容纳模型和文字，
 	// 商店在卡片外增加价格按钮时也不会被溢出的默认大字号覆盖。
 	FSlateFontInfo TitleFont = TitleText->GetFont();
 	TitleFont.Size = 16;
@@ -92,7 +94,7 @@ void UCastleBuildingCardWidget::NativeConstruct()
 void UCastleBuildingCardWidget::SetBuildingDescriptor(const FCastleBuildingDescriptor& InDescriptor)
 {
 	Descriptor = InDescriptor;
-	bHasDescriptor = Descriptor.HasBuildingClass();
+	bHasDescriptor = Descriptor.HasDefinition();
 	RefreshVisuals();
 }
 
@@ -121,7 +123,7 @@ void UCastleBuildingCardWidget::RefreshVisuals()
 		return;
 	}
 
-	const FText TypeText = GetBuildingTypeText(Descriptor.BuildingType);
+	const FText TypeText = Descriptor.Definition->DisplayName;
 	TitleText->SetText(FText::FromString(FString::Printf(TEXT("%s  |  %d"), *TypeText.ToString(), Descriptor.Number)));
 	DetailText->SetText(FText::FromString(FString::Printf(TEXT("Lv%d  |  %s"), Descriptor.Level, *GetBuildingColorText(Descriptor.Color).ToString())));
 	PreviewWidget->SetVisibility(ESlateVisibility::Visible);
@@ -148,22 +150,6 @@ FLinearColor UCastleBuildingCardWidget::GetCardColor(ECastleTileColor Color)
 	case ECastleTileColor::Gray:
 	default:
 		return FLinearColor(0.72f, 0.82f, 0.90f, 1.0f);
-	}
-}
-
-FText UCastleBuildingCardWidget::GetBuildingTypeText(ECastleBuildingType BuildingType)
-{
-	switch (BuildingType)
-	{
-	case ECastleBuildingType::ArcherTower:
-		return FText::FromString(TEXT("箭塔"));
-	case ECastleBuildingType::CannonTower:
-		return FText::FromString(TEXT("炮塔"));
-	case ECastleBuildingType::Farm:
-		return FText::FromString(TEXT("农田"));
-	case ECastleBuildingType::Road:
-	default:
-		return FText::FromString(TEXT("道路"));
 	}
 }
 

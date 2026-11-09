@@ -6,6 +6,7 @@
 #include "CastleGameplayTypes.generated.h"
 
 class ACastleBuildingBase;
+class UCastleBuildingDefinition;
 
 /**
  * 地面和房间共用的颜色枚举。
@@ -197,13 +198,9 @@ struct MOVING_CASTLE_API FCastleBuildingDescriptor
 {
 	GENERATED_BODY()
 
-	/** 用于生成建筑 Actor 的具体类，必须是 ACastleBuildingBase 的子类。 */
+	/** 建筑唯一的定义来源；放置、升级和卡片显示都通过此资产读取当前等级配置。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑")
-	TSubclassOf<ACastleBuildingBase> BuildingClass;
-
-	/** 建筑的类别，必须和 BuildingClass 的默认类别一致。 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑")
-	ECastleBuildingType BuildingType = ECastleBuildingType::Road;
+	TObjectPtr<UCastleBuildingDefinition> Definition;
 
 	/** 建筑颜色。道路必须使用灰色。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑")
@@ -213,11 +210,20 @@ struct MOVING_CASTLE_API FCastleBuildingDescriptor
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑")
 	int32 Number = 0;
 
-	/** 建筑等级。道路固定为 1，功能建筑由具体等级子类决定。 */
+	/** 当前卡牌等级。道路固定为 1，升级只改变此值并读取同一资产的下一级配置。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑")
 	int32 Level = 1;
 
-	/** 判断描述是否至少指定了一个可生成的建筑类。详细属性校验由棋盘完成。 */
-	bool HasBuildingClass() const;
+	/** 判断资产和对应等级是否存在，供空槽位和卡片显示快速查询。 */
+	bool HasDefinition() const;
+
+	/** 获取此等级的实际 C++ 逻辑类；无效描述返回空类，由调用入口报告错误。 */
+	TSubclassOf<ACastleBuildingBase> GetBuildingClass() const;
+
+	/** 读取已绑定资产的类别；调用者必须先校验描述，不提供替代类别。 */
+	ECastleBuildingType GetBuildingType() const;
+
+	/** 统一校验共享定义、等级和卡牌属性，避免各系统维护不同版本的规则。 */
+	bool Validate(FText& OutFailureReason) const;
 };
 

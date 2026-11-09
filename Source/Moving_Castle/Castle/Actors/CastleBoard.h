@@ -60,6 +60,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "0.0", Units = "cm"))
 	float WorldBaseHeight = 235.0f;
 
+	/** 可用建筑定义，也是商店商品池与开局测试卡组的唯一配置入口。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|建筑定义")
+	TArray<TObjectPtr<UCastleBuildingDefinition>> BuildingDefinitions;
+
+	/** 商店和开局卡组在使用前校验整个池；无效或空配置直接拒绝。 */
+	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑定义")
+	bool ValidateBuildingDefinitions(FText& OutFailureReason) const;
+
+	/** 开局样例使用池中此类别的首个定义，不生成资产之外的替代建筑。 */
+	UCastleBuildingDefinition* FindBuildingDefinition(ECastleBuildingType BuildingType) const;
+
 	/** 地面生成策略类，可替换为固定模板或其他自定义策略。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|地面")
 	TSubclassOf<UCastleGroundGenerator> GroundGeneratorClass;
@@ -227,6 +238,9 @@ protected:
 	/** 每个被占用坐标对应的建筑 Actor，合成 Actor 会映射多个坐标。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "棋盘|建筑")
 	TMap<FIntVector, TObjectPtr<ACastleBuildingBase>> BuildingByCoordinate;
+
+	/** 根据卡牌等级生成标准放置形状；以选择格作为最小角，沿用既有 1/2/4/8 格规则。 */
+	TArray<FIntVector> BuildPlacementFootprint(const FIntVector& Coordinate, int32 Level) const;
 
 	/** 获取六个面相邻坐标，不包含斜角坐标。 */
 	void GetFaceNeighborCoordinates(const FIntVector& Coordinate, TArray<FIntVector>& OutNeighbors) const;

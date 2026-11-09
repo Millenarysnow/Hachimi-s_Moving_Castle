@@ -14,24 +14,6 @@ ACastleArcherTowerBuilding::ACastleArcherTowerBuilding()
 	BuildingType = ECastleBuildingType::ArcherTower;
 }
 
-TSubclassOf<ACastleBuildingBase> ACastleArcherTowerBuilding::GetClassForLevel(int32 InLevel) const
-{
-	switch (InLevel)
-	{
-	case 1:
-		return ACastleArcherTowerLevel1::StaticClass();
-	case 2:
-		return ACastleArcherTowerLevel2::StaticClass();
-	case 3:
-		return ACastleArcherTowerLevel3::StaticClass();
-	case 4:
-		return ACastleArcherTowerLevel4::StaticClass();
-	case 5:
-		return ACastleArcherTowerLevel5::StaticClass();
-	default:
-		return nullptr;
-	}
-}
 
 ACastleArcherTowerLevel1::ACastleArcherTowerLevel1()
 {
@@ -64,24 +46,6 @@ ACastleCannonTowerBuilding::ACastleCannonTowerBuilding()
 	BuildingType = ECastleBuildingType::CannonTower;
 }
 
-TSubclassOf<ACastleBuildingBase> ACastleCannonTowerBuilding::GetClassForLevel(int32 InLevel) const
-{
-	switch (InLevel)
-	{
-	case 1:
-		return ACastleCannonTowerLevel1::StaticClass();
-	case 2:
-		return ACastleCannonTowerLevel2::StaticClass();
-	case 3:
-		return ACastleCannonTowerLevel3::StaticClass();
-	case 4:
-		return ACastleCannonTowerLevel4::StaticClass();
-	case 5:
-		return ACastleCannonTowerLevel5::StaticClass();
-	default:
-		return nullptr;
-	}
-}
 
 ACastleCannonTowerLevel1::ACastleCannonTowerLevel1()
 {
@@ -114,24 +78,6 @@ ACastleFarmBuilding::ACastleFarmBuilding()
 	BuildingType = ECastleBuildingType::Farm;
 }
 
-TSubclassOf<ACastleBuildingBase> ACastleFarmBuilding::GetClassForLevel(int32 InLevel) const
-{
-	switch (InLevel)
-	{
-	case 1:
-		return ACastleFarmLevel1::StaticClass();
-	case 2:
-		return ACastleFarmLevel2::StaticClass();
-	case 3:
-		return ACastleFarmLevel3::StaticClass();
-	case 4:
-		return ACastleFarmLevel4::StaticClass();
-	case 5:
-		return ACastleFarmLevel5::StaticClass();
-	default:
-		return nullptr;
-	}
-}
 
 ACastleFarmLevel1::ACastleFarmLevel1()
 {

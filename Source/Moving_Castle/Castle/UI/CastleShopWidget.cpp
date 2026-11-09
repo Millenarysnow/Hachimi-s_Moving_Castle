@@ -2,6 +2,8 @@
 
 #include "CastleShopWidget.h"
 
+#include "CastleBuildingDefinition.h"
+
 #include "Blueprint/WidgetTree.h"
 #include "CastleBuildingCardWidget.h"
 #include "CastleEconomyComponent.h"
@@ -252,7 +254,7 @@ void UCastleShopWidget::RefreshShop()
 			if (bHasItem)
 			{
 				const FCastleBuildingDescriptor& Item = BackpackItems[SlotIndex];
-				const FString Type = StaticEnum<ECastleBuildingType>()->GetDisplayNameTextByValue(static_cast<int64>(Item.BuildingType)).ToString();
+				const FString Type = Item.Definition->DisplayName.ToString();
 				const FString Color = StaticEnum<ECastleTileColor>()->GetDisplayNameTextByValue(static_cast<int64>(Item.Color)).ToString();
 				Label = FString::Printf(TEXT("%d %s %s%d\nLv%d · %s"), SlotIndex + 1, *Type, *Color, Item.Number, Item.Level,
 					bCanQuote ? *FString::Printf(TEXT("出售 +%d 金币"), Price) : TEXT("报价失败"));

@@ -2,7 +2,7 @@
 
 #include "CastleBackpackComponent.h"
 
-#include "CastleBuildingBase.h"
+#include "CastleBuildingDefinition.h"
 #include "Moving_Castle.h"
 
 UCastleBackpackComponent::UCastleBackpackComponent()
@@ -99,31 +99,18 @@ bool UCastleBackpackComponent::TryInsertItemAt(int32 Index, const FCastleBuildin
 	return true;
 }
 
-bool UCastleBackpackComponent::TryAddBuilding(TSubclassOf<ACastleBuildingBase> BuildingClass, ECastleTileColor Color, int32 Number, int32& OutIndex, FText& OutFailureReason)
+bool UCastleBackpackComponent::TryAddBuilding(UCastleBuildingDefinition* Definition, int32 Level, ECastleTileColor Color, int32 Number, int32& OutIndex, FText& OutFailureReason)
 {
 	OutIndex = INDEX_NONE;
-	OutFailureReason = FText::GetEmpty();
-
-	if (BuildingClass == nullptr)
+	if (!IsValid(Definition))
 	{
-		OutFailureReason = FText::FromString(TEXT("没有指定要加入背包的建筑类。"));
+		OutFailureReason = FText::FromString(TEXT("没有指定要加入背包的建筑 Data Asset。"));
 		return false;
 	}
-
-	const ACastleBuildingBase* DefaultBuilding = BuildingClass->GetDefaultObject<ACastleBuildingBase>();
-	if (DefaultBuilding == nullptr)
-	{
-		OutFailureReason = FText::FromString(TEXT("建筑类默认对象无效，无法生成卡牌。"));
-		return false;
-	}
-
+	// 工厂只生成携带同一资产引用的描述，存入时仍经过背包容量与属性校验。
 	FCastleBuildingDescriptor Descriptor;
-	Descriptor.BuildingClass = BuildingClass;
-	Descriptor.BuildingType = DefaultBuilding->GetBuildingType();
-	Descriptor.Color = Color;
-	Descriptor.Number = Number;
-	Descriptor.Level = DefaultBuilding->GetBuildingLevel();
-	return TryAddItem(Descriptor, OutIndex, OutFailureReason);
+	return Definition->CreateDescriptor(Level, Color, Number, Descriptor, OutFailureReason)
+		&& TryAddItem(Descriptor, OutIndex, OutFailureReason);
 }
 
 bool UCastleBackpackComponent::TryRemoveItemAt(int32 Index, FCastleBuildingDescriptor& OutDescriptor, FText& OutFailureReason)
@@ -164,47 +151,6 @@ bool UCastleBackpackComponent::TrySetCapacity(int32 NewCapacity, FText& OutFailu
 
 bool UCastleBackpackComponent::ValidateDescriptorForStorage(const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason) const
 {
-	OutFailureReason = FText::GetEmpty();
-
-	if (!Descriptor.HasBuildingClass())
-	{
-		OutFailureReason = FText::FromString(TEXT("建筑卡牌没有指定具体建筑类。"));
-		return false;
-	}
-
-	const ACastleBuildingBase* DefaultBuilding = Descriptor.BuildingClass->GetDefaultObject<ACastleBuildingBase>();
-	if (DefaultBuilding == nullptr)
-	{
-		OutFailureReason = FText::FromString(TEXT("建筑类默认对象无效，无法存入背包。"));
-		return false;
-	}
-
-	if (DefaultBuilding->GetBuildingType() != Descriptor.BuildingType || DefaultBuilding->GetBuildingLevel() != Descriptor.Level)
-	{
-		OutFailureReason = FText::FromString(TEXT("建筑卡牌的类别或等级与具体建筑类不一致。"));
-		return false;
-	}
-
-	if (Descriptor.Number < 0 || Descriptor.Number > 9)
-	{
-		OutFailureReason = FText::FromString(TEXT("建筑数字必须在 0 到 9 之间。"));
-		return false;
-	}
-
-	if (Descriptor.BuildingType == ECastleBuildingType::Road)
-	{
-		if (Descriptor.Color != ECastleTileColor::Gray || Descriptor.Number != 0)
-		{
-			OutFailureReason = FText::FromString(TEXT("道路卡牌必须是灰色 0 号。"));
-			return false;
-		}
-	}
-	else if (Descriptor.Color == ECastleTileColor::Gray || Descriptor.Number == 0)
-	{
-		OutFailureReason = FText::FromString(TEXT("功能建筑卡牌不能使用灰色或 0 号属性。"));
-		return false;
-	}
-
-	return true;
+	// 与放置、预览和定价共用描述校验，不按类名重新推断建筑身份。
+	return Descriptor.Validate(OutFailureReason);
 }
-

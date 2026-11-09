@@ -2,6 +2,8 @@
 
 #include "CastleBackpackWidget.h"
 
+#include "CastleBuildingDefinition.h"
+
 #include "Blueprint/WidgetTree.h"
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
@@ -212,8 +214,7 @@ bool UCastleBackpackWidget::AreDescriptorsEqual(const TArray<FCastleBuildingDesc
 	{
 		const FCastleBuildingDescriptor& LeftDescriptor = Left[Index];
 		const FCastleBuildingDescriptor& RightDescriptor = Right[Index];
-		if (LeftDescriptor.BuildingClass != RightDescriptor.BuildingClass
-			|| LeftDescriptor.BuildingType != RightDescriptor.BuildingType
+		if (LeftDescriptor.Definition != RightDescriptor.Definition
 			|| LeftDescriptor.Color != RightDescriptor.Color
 			|| LeftDescriptor.Number != RightDescriptor.Number
 			|| LeftDescriptor.Level != RightDescriptor.Level)

@@ -8,25 +8,12 @@ bool UCastleSimpleCardPricing::TryCalculatePrice_Implementation(const FCastleBui
 {
 	OutPrice = 0;
 	OutFailureReason = FText::GetEmpty();
-	if (Descriptor.BuildingClass == nullptr || Descriptor.BuildingClass->HasAnyClassFlags(CLASS_Abstract))
+	// 报价前使用共享定义校验，防止无效等级或丢失资产的卡牌进入交易。
+	if (!Descriptor.Validate(OutFailureReason))
 	{
-		OutFailureReason = FText::FromString(TEXT("定价失败：卡牌必须指定可生成的具体建筑类。"));
 		return false;
 	}
-	const ACastleBuildingBase* Defaults = Descriptor.BuildingClass->GetDefaultObject<ACastleBuildingBase>();
-	if (Defaults->GetBuildingType() != Descriptor.BuildingType || Defaults->GetBuildingLevel() != Descriptor.Level || Descriptor.Level < 1 || Descriptor.Level > 5)
-	{
-		OutFailureReason = FText::FromString(TEXT("定价失败：卡牌类别或等级与建筑类不一致。"));
-		return false;
-	}
-	const bool bRoad = Descriptor.BuildingType == ECastleBuildingType::Road;
-	const bool bValidColor = Descriptor.Color >= ECastleTileColor::Red && Descriptor.Color <= ECastleTileColor::Purple;
-	if ((bRoad && (Descriptor.Color != ECastleTileColor::Gray || Descriptor.Number != 0))
-		|| (!bRoad && (!bValidColor || Descriptor.Number < 1 || Descriptor.Number > 9)))
-	{
-		OutFailureReason = FText::FromString(TEXT("定价失败：道路必须是灰色 0 号，功能卡必须是有效颜色的 1 至 9 号。"));
-		return false;
-	}
+	const bool bRoad = Descriptor.GetBuildingType() == ECastleBuildingType::Road;
 	if (Kind != ECastleCardPriceKind::Buy && Kind != ECastleCardPriceKind::Sell)
 	{
 		OutFailureReason = FText::FromString(TEXT("定价失败：未知的交易类型。"));

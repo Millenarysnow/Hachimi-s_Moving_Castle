@@ -44,16 +44,12 @@ class MOVING_CASTLE_API UCastleShopComponent : public UActorComponent
 	GENERATED_BODY()
 
 public:
-	/** 配置四种一级建筑商品池和简单定价策略，不依赖 Data Asset。 */
+	/** 配置定价策略；商品池直接读取绑定棋盘的 BuildingDefinitions。 */
 	UCastleShopComponent();
 
 	/** 可在控制器蓝图的组件默认值中替换为任何实现 CastleCardPricing 的类。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "商店|定价", meta = (MustImplement = "/Script/Moving_Castle.CastleCardPricing"))
 	TSubclassOf<UObject> PricingStrategyClass;
-
-	/** 当前商品池只支持具体一级建筑类；颜色和数字在每次生成时随机抽取。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "商店|出牌")
-	TArray<TSubclassOf<ACastleBuildingBase>> OfferBuildingClasses;
 
 	/** 随机流在初始化时设置一次，刷新推进随机流，重新开关商店不会推进。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "商店|出牌")

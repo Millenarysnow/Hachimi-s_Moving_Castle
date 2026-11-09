@@ -16,7 +16,7 @@ public:
 	/** 设置道路类别和固定的 1 级属性。 */
 	ACastleRoadBuilding();
 };
-/** 箭塔建筑族的抽象基类，等级子类负责提供具体的替换类。 */
+/** 箭塔建筑族的抽象基类，等级子类只定义 C++ 逻辑类型，模型与升级映射来自 Data Asset。 */
 UCLASS(Abstract, Blueprintable)
 class MOVING_CASTLE_API ACastleArcherTowerBuilding : public ACastleBuildingBase
 {
@@ -26,8 +26,6 @@ public:
 	/** 设置箭塔类别。 */
 	ACastleArcherTowerBuilding();
 
-	/** 返回箭塔 1 到 5 级的具体子类。 */
-	virtual TSubclassOf<ACastleBuildingBase> GetClassForLevel(int32 InLevel) const override;
 };
 
 /** 箭塔 1 级，默认占用一个网格。 */
@@ -80,7 +78,7 @@ public:
 	ACastleArcherTowerLevel5();
 };
 
-/** 炮塔建筑族的抽象基类，等级子类负责提供具体的替换类。 */
+/** 炮塔建筑族的抽象基类，等级子类只定义 C++ 逻辑类型，模型与升级映射来自 Data Asset。 */
 UCLASS(Abstract, Blueprintable)
 class MOVING_CASTLE_API ACastleCannonTowerBuilding : public ACastleBuildingBase
 {
@@ -90,8 +88,6 @@ public:
 	/** 设置炮塔类别。 */
 	ACastleCannonTowerBuilding();
 
-	/** 返回炮塔 1 到 5 级的具体子类。 */
-	virtual TSubclassOf<ACastleBuildingBase> GetClassForLevel(int32 InLevel) const override;
 };
 
 /** 炮塔 1 级。 */
@@ -144,7 +140,7 @@ public:
 	ACastleCannonTowerLevel5();
 };
 
-/** 农田建筑族的抽象基类，等级子类负责提供具体的替换类。 */
+/** 农田建筑族的抽象基类，等级子类只定义 C++ 逻辑类型，模型与升级映射来自 Data Asset。 */
 UCLASS(Abstract, Blueprintable)
 class MOVING_CASTLE_API ACastleFarmBuilding : public ACastleBuildingBase
 {
@@ -154,8 +150,6 @@ public:
 	/** 设置农田类别。 */
 	ACastleFarmBuilding();
 
-	/** 返回农田 1 到 5 级的具体子类。 */
-	virtual TSubclassOf<ACastleBuildingBase> GetClassForLevel(int32 InLevel) const override;
 };
 
 /** 农田 1 级。 */

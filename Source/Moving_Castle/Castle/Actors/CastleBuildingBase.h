@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Actor.h"
+#include "CastleBuildingModelActor.h"
 #include "CastleGameplayTypes.h"
 #include "CastleBuildingBase.generated.h"
 
@@ -14,7 +14,7 @@
  * 每个功能建筑族再派生自己的等级类，合成时由棋盘删除旧 Actor 并生成新类。
  */
 UCLASS(Abstract, Blueprintable)
-class MOVING_CASTLE_API ACastleBuildingBase : public AActor
+class MOVING_CASTLE_API ACastleBuildingBase : public ACastleBuildingModelActor
 {
 	GENERATED_BODY()
 
@@ -69,13 +69,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
 	FCastleBuildingDescriptor GetBuildingDescriptor() const;
 
+	/** 返回卡牌、场上建筑和升级结果共享的同一份建筑定义。 */
+	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
+	UCastleBuildingDefinition* GetBuildingDefinition() const { return BuildingDefinition; }
+
 	/**
-	 * 配置当前阶段使用的占位可视化。
-	 *
-	 * 该函数只使用 UE 自带 BasicShapes/Cube 和动态颜色材质，不依赖正式美术资源；
-	 * 合成后棋盘会对新 Actor 再调用一次，因此合成结果会直接显示为更大的立方体。
+	 * 从 Data Asset 读取当前等级模型，并把卡牌标签放到实际模型上方。
+	 * 只允许未配置模型的等级使用立方体；配置错误返回失败，棋盘保留原卡牌/建筑。
 	 */
-	void ConfigurePrototypeVisual(float InCellSize, float InLayerHeight);
+	bool ConfigureBuildingVisual(float InCellSize, float InLayerHeight, FText& OutFailureReason);
 
 	/** 判断当前建筑是否属于道路。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
@@ -87,10 +89,9 @@ public:
 	/**
 	 * 返回指定等级对应的具体 Actor 类。
 	 *
-	 * 基类没有等级映射；箭塔、炮塔和农田族会覆盖此函数，返回各自的等级
-	 * 子类。Road 不支持合成，因此保持返回空类。
+	 * 等级映射只来自本建筑的 Data Asset，不再在各个建筑族中维护另一份表。
 	 */
-	virtual TSubclassOf<ACastleBuildingBase> GetClassForLevel(int32 InLevel) const;
+	TSubclassOf<ACastleBuildingBase> GetClassForLevel(int32 InLevel) const;
 
 	/** 判断当前建筑是否还有可合成的下一级，功能建筑默认最多自动合成到 4 级。 */
 	bool CanMergeToNextLevel() const;
@@ -102,9 +103,9 @@ public:
 	static int32 GetExpectedFootprintCellCount(int32 InLevel);
 
 protected:
-	/** 独立的可视化根节点，避免标签继承建筑网格的非均匀缩放。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
-	TObjectPtr<class USceneComponent> VisualRoot;
+	/** 当前建筑的共享定义；初始化后始终随回收和合成描述一起传递。 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "建筑")
+	TObjectPtr<UCastleBuildingDefinition> BuildingDefinition;
 
 	/** 建筑类别由具体建筑族构造函数设置，初始化时会再次校验描述。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "建筑")
@@ -126,11 +127,7 @@ protected:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "建筑")
 	TArray<FIntVector> OccupiedCoordinates;
 
-	/** 建筑的占位立方体组件，后续替换为正式建筑网格时只需替换这个组件的资源。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
-	TObjectPtr<class UStaticMeshComponent> PrototypeMesh;
-
-	/** 显示建筑类别和等级的文字组件，便于无正式美术时直接观察合成结果。 */
+	/** 无论是否使用正式模型，都显示建筑的颜色、数字和等级以便判断放置规则。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
 	TObjectPtr<class UTextRenderComponent> PrototypeLabel;
 

@@ -48,9 +48,6 @@ protected:
 	/** 创建并返回颜色对应的边框色。 */
 	static FLinearColor GetCardColor(ECastleTileColor Color);
 
-	/** 返回建筑类别的中文显示名。 */
-	static FText GetBuildingTypeText(ECastleBuildingType BuildingType);
-
 	/** 返回建筑颜色的中文显示名。 */
 	static FText GetBuildingColorText(ECastleTileColor Color);
 
@@ -77,7 +74,7 @@ protected:
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> DetailText;
 
-	/** 卡片中央的三维线框预览。 */
+	/** 卡片中央的共享建筑模型预览。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCastleBuildingPreviewWidget> PreviewWidget;
 

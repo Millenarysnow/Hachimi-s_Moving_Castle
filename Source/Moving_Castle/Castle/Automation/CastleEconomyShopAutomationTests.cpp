@@ -7,6 +7,7 @@
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
 #include "CastleBuildings.h"
+#include "CastleBuildingTestUtilities.h"
 #include "CastleCardPricing.h"
 #include "CastleEconomyComponent.h"
 #include "CastleShopComponent.h"
@@ -42,6 +43,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleShopTest, "MovingCastle.Logic.ShopTransa
 bool FCastleShopTest::RunTest(const FString& Parameters)
 {
 	ACastleBoard* Board = NewObject<ACastleBoard>();
+	CastleBuildingTests::ConfigureBoard(Board);
 	UCastleEconomyComponent* Economy = NewObject<UCastleEconomyComponent>();
 	UCastleShopComponent* Shop = NewObject<UCastleShopComponent>();
 	FText Reason;
@@ -66,7 +68,7 @@ bool FCastleShopTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("同一槽位不能重复购买"), Shop->TryBuyOffer(0, Reason));
 	FCastleBuildingDescriptor Purchased;
 	TestTrue(TEXT("购买所得卡牌进入背包"), Board->PrototypeBackpack->TryGetItemAt(0, Purchased));
-	TestTrue(TEXT("购买的卡牌和商品完全相同"), Purchased.BuildingClass == FirstOffers[0].Descriptor.BuildingClass
+	TestTrue(TEXT("购买的卡牌和商品完全相同"), Purchased.Definition == FirstOffers[0].Descriptor.Definition
 		&& Purchased.Number == FirstOffers[0].Descriptor.Number && Purchased.Color == FirstOffers[0].Descriptor.Color);
 
 	Shop->CloseShop();
@@ -90,7 +92,7 @@ bool FCastleShopTest::RunTest(const FString& Parameters)
 	// 二级合成卡按两个格子计入全局额度，不能因为只占一个背包槽而多买。
 	int32 AddedIndex = INDEX_NONE;
 	Board->PrototypeBackpack->TrySetCapacity(10, Reason);
-	Board->PrototypeBackpack->TryAddBuilding(ACastleArcherTowerLevel2::StaticClass(), ECastleTileColor::Red, 3, AddedIndex, Reason);
+	Board->PrototypeBackpack->TryAddBuilding(Board->FindBuildingDefinition(ECastleBuildingType::ArcherTower), 2, ECastleTileColor::Red, 3, AddedIndex, Reason);
 	Shop->RoomLimit = 2;
 	TestEqual(TEXT("合成卡按实际格数计入总量"), Shop->GetOwnedRoomCount(), 2);
 	TestFalse(TEXT("全局上限拒绝新购买"), Shop->TryBuyOffer(1, Reason));
@@ -102,7 +104,7 @@ bool FCastleShopTest::RunTest(const FString& Parameters)
 	{
 		TestFalse(TEXT("刷新后全部可购买"), Offer.bSold);
 		TestTrue(TEXT("所有商品使用一级类"), Offer.Descriptor.Level == 1);
-		TestTrue(TEXT("道路属性固定"), Offer.Descriptor.BuildingType != ECastleBuildingType::Road
+		TestTrue(TEXT("道路属性固定"), Offer.Descriptor.GetBuildingType() != ECastleBuildingType::Road
 			|| (Offer.Descriptor.Color == ECastleTileColor::Gray && Offer.Descriptor.Number == 0));
 	}
 	// 即使卖出能释放容量，也必须先保证收款不会溢出，不能先删除卡牌再发现无法入账。
@@ -137,7 +139,7 @@ bool FCastleShopConstructionTest::RunTest(const FString& Parameters)
 	Board->GridSize = FIntVector(1, 1, 3);
 	UCastleEconomyComponent* Economy = NewObject<UCastleEconomyComponent>();
 	UCastleShopComponent* Shop = NewObject<UCastleShopComponent>();
-	Shop->OfferBuildingClasses = { ACastleArcherTowerLevel1::StaticClass() };
+	Board->BuildingDefinitions = { CastleBuildingTests::MakeDefinition(ECastleBuildingType::ArcherTower) };
 	FText Reason;
 	Economy->TryAddGold(100, Reason);
 	if (!TestTrue(TEXT("商店初始化"), Shop->InitializeShop(Economy, Board, Reason))
@@ -180,6 +182,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleShopGenerationTest, "MovingCastle.Logic.
 bool FCastleShopGenerationTest::RunTest(const FString& Parameters)
 {
 	ACastleBoard* Board = NewObject<ACastleBoard>();
+	CastleBuildingTests::ConfigureBoard(Board);
 	UCastleEconomyComponent* Economy = NewObject<UCastleEconomyComponent>();
 	UCastleShopComponent* Shop = NewObject<UCastleShopComponent>();
 	UCastleShopComponent* Twin = NewObject<UCastleShopComponent>();
@@ -200,30 +203,30 @@ bool FCastleShopGenerationTest::RunTest(const FString& Parameters)
 	}
 	for (int32 Index = 0; Index < 6; ++Index)
 	{
-		TestTrue(TEXT("相同种子可复现完整商品"), Offers[Index].Descriptor.BuildingClass == TwinOffers[Index].Descriptor.BuildingClass
+		TestTrue(TEXT("相同种子可复现完整商品"), Offers[Index].Descriptor.Definition == TwinOffers[Index].Descriptor.Definition
 			&& Offers[Index].Descriptor.Color == TwinOffers[Index].Descriptor.Color
 			&& Offers[Index].Descriptor.Number == TwinOffers[Index].Descriptor.Number
 			&& Offers[Index].Price == TwinOffers[Index].Price);
 	}
 	Economy->TryAddGold(100, Reason);
-	Shop->OfferBuildingClasses = { nullptr };
+	const auto OriginalDefinitions = Board->BuildingDefinitions;
+	Board->BuildingDefinitions = { nullptr };
 	TestFalse(TEXT("错误商品池不生成替代牌"), Shop->TryRefreshOffers(Reason));
 	TestEqual(TEXT("生成失败不扣款"), Economy->GetGold(), 100);
 	TestEqual(TEXT("生成失败保留整批旧商品"), Shop->GetOffers().Num(), 6);
-	TestTrue(TEXT("旧商品描述未修改"), Shop->GetOffers()[0].Descriptor.BuildingClass == Offers[0].Descriptor.BuildingClass);
-	Shop->OfferBuildingClasses = Twin->OfferBuildingClasses;
+	TestTrue(TEXT("旧商品描述未修改"), Shop->GetOffers()[0].Descriptor.Definition == Offers[0].Descriptor.Definition);
+	Board->BuildingDefinitions = OriginalDefinitions;
 	TestTrue(TEXT("修复商品池后刷新可成功"), Shop->TryRefreshOffers(Reason));
 	Twin->TryRefreshOffers(Reason);
 	TestEqual(TEXT("失败刷新不消耗随机流"), Shop->GetOffers()[0].Descriptor.Number, Twin->GetOffers()[0].Descriptor.Number);
 
 	UCastleSimpleCardPricing* Pricing = NewObject<UCastleSimpleCardPricing>();
 	FCastleBuildingDescriptor InvalidCard = Offers[0].Descriptor;
-	InvalidCard.BuildingClass = nullptr;
+	InvalidCard.Definition = nullptr;
 	int32 Price = 0;
 	TestFalse(TEXT("无效卡牌明确拒绝定价"), ICastleCardPricing::Execute_TryCalculatePrice(Pricing, InvalidCard, ECastleCardPriceKind::Buy, Price, Reason));
 	FCastleBuildingDescriptor Archer;
-	Archer.BuildingClass = ACastleArcherTowerLevel2::StaticClass();
-	Archer.BuildingType = ECastleBuildingType::ArcherTower;
+	Archer.Definition = Board->FindBuildingDefinition(ECastleBuildingType::ArcherTower);
 	Archer.Color = ECastleTileColor::Blue;
 	Archer.Number = 3;
 	Archer.Level = 2;

@@ -4,7 +4,7 @@
 
 #include "CastleBackpackComponent.h"
 #include "CastleBuildingBase.h"
-#include "CastleBuildings.h"
+#include "CastleBuildingDefinition.h"
 #include "CastleGroundGenerator.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -263,39 +263,36 @@ bool ACastleBoard::CanPlaceBuilding(const FIntVector& Coordinate, const FCastleB
 		return false;
 	}
 
-	if (!IsCoordinateWithinBoard(Coordinate))
+	const TArray<FIntVector> Footprint = BuildPlacementFootprint(Coordinate, Descriptor.Level);
+	bool bHasMatch = false;
+	for (const FIntVector& Cell : Footprint)
 	{
-		OutFailureReason = FText::FromString(TEXT("目标坐标超出棋盘边界。"));
-		return false;
-	}
-
-	if (GetBuildingAt(Coordinate) != nullptr)
-	{
-		OutFailureReason = FText::FromString(TEXT("目标坐标已经被建筑占用。"));
-		return false;
-	}
-
-	FCastleGroundCell GroundCell;
-	if (!TryGetGroundCellAtPlane(Coordinate, GroundCell) && Coordinate.Z == GridOrigin.Z)
-	{
-		OutFailureReason = FText::FromString(TEXT("目标地面格子尚未生成。"));
-		return false;
-	}
-
-	if (Coordinate.Z > GridOrigin.Z)
-	{
-		FIntVector SupportCoordinate = Coordinate;
-		--SupportCoordinate.Z;
-		if (GetBuildingAt(SupportCoordinate) == nullptr)
+		if (!IsCoordinateWithinBoard(Cell) || GetBuildingAt(Cell) != nullptr)
 		{
-			OutFailureReason = FText::FromString(TEXT("上层建筑必须由紧贴下方的建筑支撑。"));
+			OutFailureReason = FText::FromString(TEXT("建筑占用范围超出棋盘，或其中有格子已被占用。"));
 			return false;
 		}
+		FCastleGroundCell GroundCell;
+		if (Cell.Z == GridOrigin.Z && !TryGetGroundCellAtPlane(Cell, GroundCell))
+		{
+			OutFailureReason = FText::FromString(TEXT("建筑占用范围中的地面尚未生成。"));
+			return false;
+		}
+		if (Cell.Z > GridOrigin.Z)
+		{
+			const FIntVector Support = Cell - FIntVector(0, 0, 1);
+			// 四级卡自带的下层格也能支撑自身上层；其他底面仍必须有实际建筑支撑。
+			if (!Footprint.Contains(Support) && GetBuildingAt(Support) == nullptr)
+			{
+				OutFailureReason = FText::FromString(TEXT("上层建筑的整个底面必须有紧贴下方的建筑支撑。"));
+				return false;
+			}
+		}
+		bHasMatch |= HasPlacementMatch(Cell, Descriptor);
 	}
-
-	if (!HasPlacementMatch(Coordinate, Descriptor))
+	if (!bHasMatch)
 	{
-		OutFailureReason = FText::FromString(TEXT("目标格或六面相邻格没有满足颜色/数字匹配规则的对象。"));
+		OutFailureReason = FText::FromString(TEXT("建筑占用范围或六面相邻格没有满足颜色/数字匹配规则的对象。"));
 		return false;
 	}
 
@@ -311,8 +308,8 @@ ACastleBuildingBase* ACastleBoard::PlaceBuilding(const FIntVector& Coordinate, c
 		return nullptr;
 	}
 
-	const TArray<FIntVector> SingleCellFootprint = { Coordinate };
-	ACastleBuildingBase* NewBuilding = SpawnBuildingActor(Descriptor, SingleCellFootprint, OutFailureReason);
+	const TArray<FIntVector> Footprint = BuildPlacementFootprint(Coordinate, Descriptor.Level);
+	ACastleBuildingBase* NewBuilding = SpawnBuildingActor(Descriptor, Footprint, OutFailureReason);
 	if (NewBuilding == nullptr)
 	{
 		return nullptr;
@@ -523,7 +520,12 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 	// 建筑网格可以覆盖多个坐标，取距离命中点最近的占用格作为当前面所属格子。
 	if (!bFoundCell)
 	{
-		if (const ACastleBuildingBase* HitBuilding = Cast<ACastleBuildingBase>(HitResult.GetActor()))
+		AActor* HitActor = HitResult.GetActor();
+		while (HitActor != nullptr && !HitActor->IsA<ACastleBuildingBase>())
+		{
+			HitActor = HitActor->GetParentActor();
+		}
+		if (const ACastleBuildingBase* HitBuilding = Cast<ACastleBuildingBase>(HitActor))
 		{
 			float BestDistanceSquared = TNumericLimits<float>::Max();
 			for (const FIntVector& OccupiedCoordinate : HitBuilding->GetOccupiedCoordinates())
@@ -615,6 +617,26 @@ void ACastleBoard::BuildGridCursorTarget(const FIntVector& Cell, const FVector& 
 		BoardTransform.TransformPosition(LocalPlaneCenter),
 		LocalPlaneScale * BoardTransform.GetScale3D());
 	OutTarget.bValid = true;
+}
+
+TArray<FIntVector> ACastleBoard::BuildPlacementFootprint(const FIntVector& Coordinate, int32 Level) const
+{
+	// 与既有合成形状一致：二级横向两格，三级平面四格，四级两层八格。
+	const int32 Width = Level >= 2 && Level <= 4 ? 2 : 1;
+	const int32 Depth = Level >= 3 && Level <= 4 ? 2 : 1;
+	const int32 Height = Level == 4 ? 2 : 1;
+	TArray<FIntVector> Result;
+	for (int32 X = 0; X < Width; ++X)
+	{
+		for (int32 Y = 0; Y < Depth; ++Y)
+		{
+			for (int32 Z = 0; Z < Height; ++Z)
+			{
+				Result.Add(Coordinate + FIntVector(X, Y, Z));
+			}
+		}
+	}
+	return Result;
 }
 
 void ACastleBoard::GetFaceNeighborCoordinates(const FIntVector& Coordinate, TArray<FIntVector>& OutNeighbors) const
@@ -718,9 +740,8 @@ ACastleBuildingBase* ACastleBoard::SpawnBuildingActor(const FCastleBuildingDescr
 {
 	OutFailureReason = FText::GetEmpty();
 
-	if (Descriptor.BuildingClass == nullptr)
+	if (!Descriptor.Validate(OutFailureReason))
 	{
-		OutFailureReason = FText::FromString(TEXT("生成建筑 Actor 时没有提供具体类。"));
 		return nullptr;
 	}
 
@@ -745,7 +766,7 @@ ACastleBuildingBase* ACastleBoard::SpawnBuildingActor(const FCastleBuildingDescr
 
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-	ACastleBuildingBase* NewBuilding = GetWorld()->SpawnActor<ACastleBuildingBase>(Descriptor.BuildingClass, SpawnLocation, FRotator::ZeroRotator, SpawnParameters);
+	ACastleBuildingBase* NewBuilding = GetWorld()->SpawnActor<ACastleBuildingBase>(Descriptor.GetBuildingClass(), FTransform(GetActorQuat(), SpawnLocation, GetActorScale3D()), SpawnParameters);
 	if (NewBuilding == nullptr)
 	{
 		OutFailureReason = FText::FromString(TEXT("World 生成建筑 Actor 失败。"));
@@ -759,8 +780,12 @@ ACastleBuildingBase* ACastleBoard::SpawnBuildingActor(const FCastleBuildingDescr
 		return nullptr;
 	}
 
-	// 占位网格尺寸由棋盘统一配置，合成后的新 Actor 也会在这里显示为完整占用范围。
-	NewBuilding->ConfigurePrototypeVisual(CellSize, LayerHeight);
+	// 模型、占位和标签都由同一资产生成；失败时不提交棋盘占用或消耗卡牌。
+	if (!NewBuilding->ConfigureBuildingVisual(CellSize, LayerHeight, OutFailureReason))
+	{
+		NewBuilding->Destroy();
+		return nullptr;
+	}
 
 	return NewBuilding;
 }
@@ -986,8 +1011,7 @@ ACastleBuildingBase* ACastleBoard::MergeBuildings(ACastleBuildingBase* First, AC
 	}
 
 	FCastleBuildingDescriptor MergedDescriptor;
-	MergedDescriptor.BuildingClass = NextBuildingClass;
-	MergedDescriptor.BuildingType = First->GetBuildingType();
+	MergedDescriptor.Definition = First->GetBuildingDefinition();
 	MergedDescriptor.Color = First->GetBuildingColor();
 	MergedDescriptor.Number = First->GetBuildingNumber();
 	MergedDescriptor.Level = NextLevel;
@@ -1035,54 +1059,44 @@ ACastleBuildingBase* ACastleBoard::MergeBuildings(ACastleBuildingBase* First, AC
 
 bool ACastleBoard::ValidateBuildingDescriptor(const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason) const
 {
+	return Descriptor.Validate(OutFailureReason);
+}
+
+bool ACastleBoard::ValidateBuildingDefinitions(FText& OutFailureReason) const
+{
 	OutFailureReason = FText::GetEmpty();
-
-	if (!Descriptor.HasBuildingClass())
+	if (BuildingDefinitions.IsEmpty())
 	{
-		OutFailureReason = FText::FromString(TEXT("建筑描述没有具体建筑类。"));
+		OutFailureReason = FText::FromString(TEXT("棋盘没有配置可用建筑 Data Asset，无法生成卡牌或商店商品。"));
 		return false;
 	}
-
-	if (!Descriptor.BuildingClass->IsChildOf(ACastleBuildingBase::StaticClass()) || Descriptor.BuildingClass->HasAnyClassFlags(CLASS_Abstract))
+	TSet<const UCastleBuildingDefinition*> SeenDefinitions;
+	for (const UCastleBuildingDefinition* Definition : BuildingDefinitions)
 	{
-		OutFailureReason = FText::FromString(TEXT("建筑描述必须使用非抽象的 ACastleBuildingBase 子类。"));
-		return false;
-	}
-
-	const ACastleBuildingBase* DefaultBuilding = Descriptor.BuildingClass->GetDefaultObject<ACastleBuildingBase>();
-	if (DefaultBuilding == nullptr)
-	{
-		OutFailureReason = FText::FromString(TEXT("建筑类默认对象无效。"));
-		return false;
-	}
-
-	if (DefaultBuilding->GetBuildingType() != Descriptor.BuildingType || DefaultBuilding->GetBuildingLevel() != Descriptor.Level)
-	{
-		OutFailureReason = FText::FromString(TEXT("建筑描述的类别或等级与具体 Actor 类不一致。"));
-		return false;
-	}
-
-	if (Descriptor.Number < 0 || Descriptor.Number > 9)
-	{
-		OutFailureReason = FText::FromString(TEXT("建筑数字必须在 0 到 9 之间。"));
-		return false;
-	}
-
-	if (Descriptor.BuildingType == ECastleBuildingType::Road)
-	{
-		if (Descriptor.Color != ECastleTileColor::Gray || Descriptor.Number != 0 || Descriptor.Level != 1)
+		if (!IsValid(Definition) || SeenDefinitions.Contains(Definition))
 		{
-			OutFailureReason = FText::FromString(TEXT("道路描述必须是灰色 0 号 1 级。"));
+			OutFailureReason = FText::FromString(TEXT("棋盘建筑定义池包含空引用或重复资产。"));
 			return false;
 		}
+		if (!Definition->ValidateConfiguration(OutFailureReason))
+		{
+			return false;
+		}
+		SeenDefinitions.Add(Definition);
 	}
-	else if (Descriptor.Color == ECastleTileColor::Gray || Descriptor.Number == 0)
-	{
-		OutFailureReason = FText::FromString(TEXT("功能建筑描述不能使用灰色或 0 号属性。"));
-		return false;
-	}
-
 	return true;
+}
+
+UCastleBuildingDefinition* ACastleBoard::FindBuildingDefinition(ECastleBuildingType BuildingType) const
+{
+	for (UCastleBuildingDefinition* Definition : BuildingDefinitions)
+	{
+		if (IsValid(Definition) && Definition->BuildingType == BuildingType)
+		{
+			return Definition;
+		}
+	}
+	return nullptr;
 }
 
 bool ACastleBoard::TryGetGroundCellAtPlane(const FIntVector& Coordinate, FCastleGroundCell& OutCell) const
@@ -1097,7 +1111,7 @@ bool ACastleBoard::TryGetGroundCellAtPlane(const FIntVector& Coordinate, FCastle
 
 bool ACastleBoard::HasPlacementMatch(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor) const
 {
-	const bool bIsRoad = Descriptor.BuildingType == ECastleBuildingType::Road;
+	const bool bIsRoad = Descriptor.GetBuildingType() == ECastleBuildingType::Road;
 
 	// 地面只存在于 Z=0 平面，只有在该平面放置时才把目标地面本身作为匹配来源。
 	if (Coordinate.Z == GridOrigin.Z)
@@ -1191,37 +1205,32 @@ void ACastleBoard::InitializePrototypeDeck()
 	const FCastleGroundCell& CannonCell = FunctionalCells[FMath::Min(1, FunctionalCells.Num() - 1)];
 	const FCastleGroundCell& FarmCell = FunctionalCells[FMath::Min(2, FunctionalCells.Num() - 1)];
 
-	FCastleBuildingDescriptor RoadDescriptor;
-	RoadDescriptor.BuildingClass = ACastleRoadBuilding::StaticClass();
-	RoadDescriptor.BuildingType = ECastleBuildingType::Road;
-	RoadDescriptor.Color = ECastleTileColor::Gray;
-	RoadDescriptor.Number = 0;
-	RoadDescriptor.Level = 1;
-
-	auto MakeFunctionalDescriptor = [](TSubclassOf<ACastleBuildingBase> BuildingClass, const FCastleGroundCell& Cell)
+	FText DefinitionReason;
+	if (!ValidateBuildingDefinitions(DefinitionReason))
 	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("开局卡组配置错误：%s"), *DefinitionReason.ToString());
+		return;
+	}
+	const ECastleBuildingType Types[] = { ECastleBuildingType::Road, ECastleBuildingType::ArcherTower,
+		ECastleBuildingType::CannonTower, ECastleBuildingType::Farm };
+	const FCastleGroundCell Cells[] = { FCastleGroundCell(), ArcherCell, CannonCell, FarmCell };
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Types); ++Index)
+	{
+		UCastleBuildingDefinition* Definition = FindBuildingDefinition(Types[Index]);
 		FCastleBuildingDescriptor Descriptor;
-		Descriptor.BuildingClass = BuildingClass;
-		Descriptor.Color = Cell.Color;
-		Descriptor.Number = Cell.Number;
-		const ACastleBuildingBase* DefaultBuilding = BuildingClass->GetDefaultObject<ACastleBuildingBase>();
-		if (DefaultBuilding != nullptr)
+		if (Definition == nullptr || !Definition->CreateDescriptor(1, Cells[Index].Color, Cells[Index].Number, Descriptor, DefinitionReason))
 		{
-			Descriptor.BuildingType = DefaultBuilding->GetBuildingType();
-			Descriptor.Level = DefaultBuilding->GetBuildingLevel();
+			UE_LOG(LogMoving_Castle, Error, TEXT("开局卡组缺少有效的 %d 类建筑定义：%s"), static_cast<int32>(Types[Index]), *DefinitionReason.ToString());
+			PrototypePalette.Reset();
+			return;
 		}
-		return Descriptor;
-	};
-
-	PrototypePalette.Add(RoadDescriptor);
-	PrototypePalette.Add(MakeFunctionalDescriptor(ACastleArcherTowerLevel1::StaticClass(), ArcherCell));
-	PrototypePalette.Add(MakeFunctionalDescriptor(ACastleCannonTowerLevel1::StaticClass(), CannonCell));
-	PrototypePalette.Add(MakeFunctionalDescriptor(ACastleFarmLevel1::StaticClass(), FarmCell));
+		PrototypePalette.Add(Descriptor);
+	}
 
 	// 每种样例卡放两张，箭塔可以直接在相邻地块完成一次 1 级到 2 级的合成。
 	for (int32 PaletteIndex = 0; PaletteIndex < PrototypePalette.Num(); ++PaletteIndex)
 	{
-		const int32 CardCount = PaletteIndex == 0 ? 2 : 2;
+		const int32 CardCount = 2;
 		for (int32 CardIndex = 0; CardIndex < CardCount; ++CardIndex)
 		{
 			int32 AddedIndex = INDEX_NONE;
@@ -1300,7 +1309,7 @@ ACastleBuildingBase* ACastleBoard::PlaceBackpackBuildingAtCursor(const FCastleGr
 	}
 	else
 	{
-		ShowPrototypeMessage(FString::Printf(TEXT("放置成功：%s，坐标 (%d, %d, %d)。"), *PlacedBuilding->GetBuildingDescriptor().BuildingClass->GetName(), TargetCoordinate.X, TargetCoordinate.Y, TargetCoordinate.Z), FColor::Green);
+		ShowPrototypeMessage(FString::Printf(TEXT("放置成功：%s，坐标 (%d, %d, %d)。"), *PlacedBuilding->GetBuildingDefinition()->DisplayName.ToString(), TargetCoordinate.X, TargetCoordinate.Y, TargetCoordinate.Z), FColor::Green);
 	}
 	return PlacedBuilding;
 }
@@ -1316,7 +1325,7 @@ void ACastleBoard::SelectPrototypeSlot(int32 SlotIndex)
 	SelectedPrototypeSlot = SlotIndex;
 	const FCastleBuildingDescriptor& Descriptor = PrototypePalette[SlotIndex];
 	const int32 RemainingCount = FindPrototypeCardIndex(Descriptor) == INDEX_NONE ? 0 : 1;
-	ShowPrototypeMessage(FString::Printf(TEXT("已选择样例槽 %d：类型 %d，颜色 %d，数字 %d，可用卡牌至少 %d 张。"), SlotIndex + 1, static_cast<int32>(Descriptor.BuildingType), static_cast<int32>(Descriptor.Color), Descriptor.Number, RemainingCount), FColor::Cyan);
+	ShowPrototypeMessage(FString::Printf(TEXT("已选择样例槽 %d：类型 %d，颜色 %d，数字 %d，可用卡牌至少 %d 张。"), SlotIndex + 1, static_cast<int32>(Descriptor.GetBuildingType()), static_cast<int32>(Descriptor.Color), Descriptor.Number, RemainingCount), FColor::Cyan);
 }
 
 int32 ACastleBoard::FindPrototypeCardIndex(const FCastleBuildingDescriptor& Descriptor) const
@@ -1330,8 +1339,7 @@ int32 ACastleBoard::FindPrototypeCardIndex(const FCastleBuildingDescriptor& Desc
 	for (int32 Index = 0; Index < Items.Num(); ++Index)
 	{
 		const FCastleBuildingDescriptor& Item = Items[Index];
-		if (Item.BuildingClass == Descriptor.BuildingClass
-			&& Item.BuildingType == Descriptor.BuildingType
+		if (Item.Definition == Descriptor.Definition
 			&& Item.Color == Descriptor.Color
 			&& Item.Number == Descriptor.Number
 			&& Item.Level == Descriptor.Level)
