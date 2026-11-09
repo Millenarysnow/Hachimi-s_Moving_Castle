@@ -1,13 +1,13 @@
-# 连续飞入装配测试组件
+# 连续飞入装配组件
 
-全部效果逻辑位于 `Source/Moving_Castle/Tests/AssemblyFlight/AssemblyFlightComponent.h` 和 `.cpp`，类型为 `UAssemblyFlightComponent`。沿用项目已有模块，只新增测试目录，不接入正式城堡建筑逻辑。蓝图只提供拆好的模型组件，不承担排序、运动或发射调度。
+全部效果逻辑位于 `Source/Moving_Castle/Components/Animation/AssemblyFlightComponent.h` 和 `.cpp`，类型为 `UAssemblyFlightComponent`。组件可用于任何符合条件的 Actor；蓝图只提供拆好的模型组件，不承担排序、运动或发射调度。
 
 `/Game/MovingCastle/TestMap1` 中“房屋自下而上组装特效测试”使用原始 `/Game/test/BP_SketchUpHouse_Assembly`，仅在关卡实例上挂载 `AssemblyFlight` 原生组件。打开该关卡、选中实例按 `F` 聚焦，再选择运行菜单的 **Simulate / 模拟** 即可观察。旧特效蓝图和对应四份 `.dsl` 图表注释源码已移除。
 
 ## 在其他 Actor 上复用
 
 1. 将模型整理为同一个 Actor 自身的多个独立 `StaticMeshComponent`，保持各零件已经位于最终装配位置。
-2. 选中关卡中的 Actor，在 Details 点击 **Add Component**，搜索并添加 **Assembly Flight (Test)**；也可在该 Actor 的蓝图 Components 面板添加这个原生组件，再编译并保存。
+2. 选中关卡中的 Actor，在 Details 点击 **Add Component**，搜索并添加 **Assembly Flight**；也可在该 Actor 的蓝图 Components 面板添加这个原生组件，再编译并保存。
 3. 保持组件 **Auto Play** 勾选。运行菜单选择 **Simulate / 模拟**，零件会从四周沿弧线连续飞入，由下向上归位。停止后再次模拟即可重播，不需要连接 EventGraph。
 4. 需要排除装饰或其他网格时，在参与零件的 **Component Tags** 中添加统一标签（例如 `AssemblyPart`），再将组件的 **Part Component Tag** 填为相同标签。留空时收集所属 Actor 自身所有原本可见的静态网格。
 
@@ -32,6 +32,6 @@
 
 ## 验证
 
-`AssemblyFlightComponentTests.cpp` 包含两个引擎自动化测试：`MovingCastle.Tests.AssemblyFlight.ComponentLifecycle` 验证普通 Actor、网格根、并发飞入、移动、取消恢复、重播与非法参数；`MovingCastle.Tests.AssemblyFlight.ImportedHouse` 使用原始拆件房屋，验证全部 123 件的并发与精确归位。可在 Session Frontend 的 Automation 中搜索 `AssemblyFlight` 并运行。
+`AssemblyFlightComponentAutomationTests.cpp` 包含两个引擎自动化测试：`MovingCastle.Components.Animation.AssemblyFlight.ComponentLifecycle` 验证普通 Actor、网格根、并发飞入、移动、取消恢复、重播与非法参数；`MovingCastle.Components.Animation.AssemblyFlight.ImportedHouse` 使用原始拆件房屋，验证全部 123 件的并发与精确归位。可在 Session Frontend 的 Automation 中搜索 `AssemblyFlight` 并运行。
 
 UE 5.8.2 完整编辑器构建与上述两个测试均通过。真实关卡模拟中第 4 秒已归位 23 件、同时飞行 15 件；约第 12 秒全部 123 件归位，零件变换与碰撞恢复，临时网格为零。验证结果位于 `Saved/Tests/AssemblyFlightReport/` 和 `Saved/Tests/AssemblyFlightPIE.json`。

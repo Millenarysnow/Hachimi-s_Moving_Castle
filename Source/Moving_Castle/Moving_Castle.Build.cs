@@ -26,20 +26,41 @@ public class Moving_Castle : ModuleRules
 
 		PublicIncludePaths.AddRange(new string[] {
 			"Moving_Castle",
-			"Moving_Castle/Castle", // 城堡基础逻辑的公共头文件路径，供生成器、棋盘和建筑类共用。
+			"Moving_Castle/Castle", // 城堡模块根路径，保留旧工程代码的公共头文件兼容性。
+			"Moving_Castle/Gameplay/Characters",
+			"Moving_Castle/Gameplay/Controllers",
+			"Moving_Castle/Gameplay/GameModes",
+			"Moving_Castle/Castle/Actors",
+			"Moving_Castle/Castle/Components",
+			"Moving_Castle/Castle/Data",
+			"Moving_Castle/Castle/GameModes",
+			"Moving_Castle/Castle/Controllers",
+			"Moving_Castle/Castle/UI",
+			"Moving_Castle/Castle/Automation",
+			"Moving_Castle/Components/Animation",
 			"Moving_Castle/Variant_Platforming",
 			"Moving_Castle/Variant_Platforming/Animation",
+			"Moving_Castle/Variant_Platforming/Characters",
+			"Moving_Castle/Variant_Platforming/Controllers",
+			"Moving_Castle/Variant_Platforming/GameModes",
 			"Moving_Castle/Variant_Combat",
 			"Moving_Castle/Variant_Combat/AI",
 			"Moving_Castle/Variant_Combat/Animation",
 			"Moving_Castle/Variant_Combat/Gameplay",
 			"Moving_Castle/Variant_Combat/Interfaces",
 			"Moving_Castle/Variant_Combat/UI",
+			"Moving_Castle/Variant_Combat/Characters",
+			"Moving_Castle/Variant_Combat/Controllers",
+			"Moving_Castle/Variant_Combat/GameModes",
 			"Moving_Castle/Variant_SideScrolling",
 			"Moving_Castle/Variant_SideScrolling/AI",
 			"Moving_Castle/Variant_SideScrolling/Gameplay",
 			"Moving_Castle/Variant_SideScrolling/Interfaces",
-			"Moving_Castle/Variant_SideScrolling/UI"
+			"Moving_Castle/Variant_SideScrolling/UI",
+			"Moving_Castle/Variant_SideScrolling/Camera",
+			"Moving_Castle/Variant_SideScrolling/Characters",
+			"Moving_Castle/Variant_SideScrolling/Controllers",
+			"Moving_Castle/Variant_SideScrolling/GameModes"
 		});
 
 		// Uncomment if you are using Slate UI

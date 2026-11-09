@@ -1,24 +1,24 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 
-#include "Variant_Platforming/PlatformingPlayerController.h"
+#include "Variant_Combat/Controllers/CombatPlayerController.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputMappingContext.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/PlayerStart.h"
-#include "PlatformingCharacter.h"
+#include "CombatCharacter.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "Blueprint/UserWidget.h"
 #include "Moving_Castle.h"
 #include "Widgets/Input/SVirtualJoystick.h"
 
-void APlatformingPlayerController::BeginPlay()
+void ACombatPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 }
 
-void APlatformingPlayerController::SetupInputComponent()
+void ACombatPlayerController::SetupInputComponent()
 {
 	Super::SetupInputComponent();
 
@@ -64,34 +64,31 @@ void APlatformingPlayerController::SetupInputComponent()
 	}
 }
 
-void APlatformingPlayerController::OnPossess(APawn* InPawn)
+void ACombatPlayerController::OnPossess(APawn* InPawn)
 {
 	Super::OnPossess(InPawn);
 
 	// subscribe to the pawn's OnDestroyed delegate
-	InPawn->OnDestroyed.AddDynamic(this, &APlatformingPlayerController::OnPawnDestroyed);
+	InPawn->OnDestroyed.AddDynamic(this, &ACombatPlayerController::OnPawnDestroyed);
 }
 
-void APlatformingPlayerController::OnPawnDestroyed(AActor* DestroyedActor)
+void ACombatPlayerController::SetRespawnTransform(const FTransform& NewRespawn)
 {
-	// find the player start
-	TArray<AActor*> ActorList;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), APlayerStart::StaticClass(), ActorList);
+	// save the new respawn transform
+	RespawnTransform = NewRespawn;
+}
 
-	if (ActorList.Num() > 0)
+void ACombatPlayerController::OnPawnDestroyed(AActor* DestroyedActor)
+{
+	// spawn a new character at the respawn transform
+	if (ACombatCharacter* RespawnedCharacter = GetWorld()->SpawnActor<ACombatCharacter>(CharacterClass, RespawnTransform))
 	{
-		// spawn a character at the player start
-		const FTransform SpawnTransform = ActorList[0]->GetActorTransform();
-
-		if (APlatformingCharacter* RespawnedCharacter = GetWorld()->SpawnActor<APlatformingCharacter>(CharacterClass, SpawnTransform))
-		{
-			// possess the character
-			Possess(RespawnedCharacter);
-		}
+		// possess the character
+		Possess(RespawnedCharacter);
 	}
 }
 
-bool APlatformingPlayerController::ShouldUseTouchControls() const
+bool ACombatPlayerController::ShouldUseTouchControls() const
 {
 	// are we on a mobile platform? Should we force touch?
 	return SVirtualJoystick::ShouldDisplayTouchInterface() || bForceTouchControls;

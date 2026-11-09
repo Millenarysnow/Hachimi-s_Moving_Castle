@@ -11,13 +11,14 @@ class UStaticMeshComponent;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FAssemblyFlightCompleted);
 
 /**
- * 测试用途的通用连续飞入组件。给包含独立 StaticMeshComponent 的 Actor 添加本组件即可播放。
+ * 通用连续飞入组件。给包含独立 StaticMeshComponent 的 Actor 添加本组件即可播放，
+ * 适合建筑装配、道具入场等正式运行时效果。
  *
  * 所有排序、发射调度、弧线运动、中心旋转和收尾都由 C++ 完成。
  * 原零件只临时隐藏并禁用自身碰撞；飞行使用瞬态显示组件，因而可以安全处理网格根组件和嵌套层级。
  * 不处理实例化网格、骨骼网格或物理模拟零件；配置不合法时明确报错，不改用其他显现方式。
  */
-UCLASS(ClassGroup=(Tests), meta=(BlueprintSpawnableComponent, DisplayName="Assembly Flight (Test)"))
+UCLASS(ClassGroup=(Castle), meta=(BlueprintSpawnableComponent, DisplayName="Assembly Flight"))
 class MOVING_CASTLE_API UAssemblyFlightComponent : public UActorComponent
 {
 	GENERATED_BODY()

@@ -83,7 +83,7 @@ namespace AssemblyFlightTests
 
 /** 验证重叠飞行、网格根组件、嵌套层级、所属 Actor 移动和取消恢复，不用自造算法镜像断言。 */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssemblyFlightComponentLifecycleTest,
-	"MovingCastle.Tests.AssemblyFlight.ComponentLifecycle",
+	"MovingCastle.Components.Animation.AssemblyFlight.ComponentLifecycle",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FAssemblyFlightComponentLifecycleTest::RunTest(const FString& Parameters)
@@ -163,7 +163,7 @@ bool FAssemblyFlightComponentLifecycleTest::RunTest(const FString& Parameters)
 
 /** 用真实拆件房屋验证资产独立性，组件不得引用旧特效蓝图才能工作。 */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssemblyFlightRealHouseTest,
-	"MovingCastle.Tests.AssemblyFlight.ImportedHouse",
+	"MovingCastle.Components.Animation.AssemblyFlight.ImportedHouse",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FAssemblyFlightRealHouseTest::RunTest(const FString& Parameters)
