@@ -39,23 +39,13 @@ bool UCastleBuildingDefinition::ValidateConfiguration(FText& OutFailureReason) c
 		SeenLevels.Add(Entry.Level);
 		if (Entry.BuildingClass == nullptr || Entry.BuildingClass->HasAnyClassFlags(CLASS_Abstract))
 		{
-			OutFailureReason = FText::FromString(FString::Printf(TEXT("%s 的 %d 级没有可生成的建筑逻辑类。"), *DisplayName.ToString(), Entry.Level));
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("%s 的 %d 级没有可生成的建筑类。"), *DisplayName.ToString(), Entry.Level));
 			return false;
 		}
 		const ACastleBuildingBase* Defaults = Entry.BuildingClass->GetDefaultObject<ACastleBuildingBase>();
 		if (Defaults->GetBuildingType() != BuildingType || Defaults->GetBuildingLevel() != Entry.Level)
 		{
-			OutFailureReason = FText::FromString(FString::Printf(TEXT("%s 的 %d 级逻辑类与配置的类别或等级不一致。"), *DisplayName.ToString(), Entry.Level));
-			return false;
-		}
-		if (!Entry.StaticMesh.IsNull() && !Entry.ModelActorClass.IsNull())
-		{
-			OutFailureReason = FText::FromString(TEXT("同一级只能配置静态网格或模型 Actor，不能同时配置两者。"));
-			return false;
-		}
-		if (!Entry.ModelTransform.IsValid() || Entry.ModelTransform.GetScale3D().GetMin() <= UE_SMALL_NUMBER)
-		{
-			OutFailureReason = FText::FromString(TEXT("模型变换必须有效，且三个轴的缩放均大于零。"));
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("%s 的 %d 级建筑类与配置的类别或等级不一致。"), *DisplayName.ToString(), Entry.Level));
 			return false;
 		}
 	}

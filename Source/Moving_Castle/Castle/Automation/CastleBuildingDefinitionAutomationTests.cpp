@@ -6,14 +6,14 @@
 
 #include "CastleBackpackComponent.h"
 #include "CastleBuildingTestUtilities.h"
-#include "CastleBuildingPreviewSubsystem.h"
+#include "Components/ChildActorComponent.h"
+#include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
-#include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "Misc/ScopeExit.h"
 
-/** 验证缺等级、冲突模型与非法属性被明确拒绝，空模型仍是合法定义。 */
+/** 验证缺等级与非法逻辑类被明确拒绝，空模型仍是合法定义。 */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleBuildingDefinitionValidationTest, "MovingCastle.Logic.BuildingDefinitionValidation",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -29,9 +29,8 @@ bool FCastleBuildingDefinitionValidationTest::RunTest(const FString& Parameters)
 	Definition->Levels[1].Level = 3;
 	TestFalse(TEXT("重复和跳号等级会被拒绝"), Definition->ValidateConfiguration(Reason));
 	Definition->Levels[1].Level = 2;
-	Definition->Levels[0].StaticMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
-	Definition->Levels[0].ModelActorClass = AActor::StaticClass();
-	TestFalse(TEXT("同一级不能配置两个模型来源"), Definition->ValidateConfiguration(Reason));
+	Definition->Levels[0].BuildingClass = ACastleArcherTowerLevel2::StaticClass();
+	TestFalse(TEXT("等级逻辑类与配置等级不一致时被拒绝"), Definition->ValidateConfiguration(Reason));
 	return true;
 }
 
@@ -52,8 +51,6 @@ bool FCastleBuildingDefinitionPlacementTest::RunTest(const FString& Parameters)
 	ACastleBoard* Board = World->SpawnActor<ACastleBoard>();
 	Board->GridSize = FIntVector(2, 2, 3);
 	UCastleBuildingDefinition* Definition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::ArcherTower);
-	Definition->Levels[0].StaticMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
-	Definition->Levels[0].ModelTransform.SetScale3D(FVector(2.0f));
 	Board->BuildingDefinitions = { Definition };
 	FCastleGroundGenerationResult Ground;
 	for (int32 X = 0; X < 2; ++X)
@@ -73,15 +70,7 @@ bool FCastleBuildingDefinitionPlacementTest::RunTest(const FString& Parameters)
 	Definition->CreateDescriptor(1, ECastleTileColor::Red, 3, Card, Reason);
 	ACastleBuildingBase* First = Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason);
 	if (!TestNotNull(TEXT("一级模型放置成功"), First)) { AddError(Reason.ToString()); return false; }
-	TestFalse(TEXT("配置静态网格时不使用占位"), First->IsUsingPlaceholder());
-	bool bFoundConfiguredMesh = false;
-	TArray<UStaticMeshComponent*> Meshes;
-	First->GetComponents<UStaticMeshComponent>(Meshes);
-	for (const UStaticMeshComponent* Mesh : Meshes)
-	{
-		bFoundConfiguredMesh |= Mesh->GetStaticMesh() == Definition->Levels[0].StaticMesh.Get();
-	}
-	TestTrue(TEXT("实际 Actor 包含定义中配置的模型"), bFoundConfiguredMesh);
+	TestTrue(TEXT("没有模型组件的等级使用统一立方体占位"), First->IsUsingPlaceholder());
 	ACastleBuildingBase* Merged = Board->PlaceBuilding(FIntVector(1, 0, 0), Card, true, Reason);
 	if (!TestNotNull(TEXT("两张一级卡自动合成"), Merged)) { AddError(Reason.ToString()); return false; }
 	TestEqual(TEXT("合成结果为二级"), Merged->GetBuildingLevel(), 2);
@@ -105,6 +94,135 @@ bool FCastleBuildingDefinitionPlacementTest::RunTest(const FString& Parameters)
 	OtherDefinition->CreateDescriptor(1, ECastleTileColor::Red, 3, Card, Reason);
 	ACastleBuildingBase* Other = Board->PlaceBuilding(FIntVector(1, 0, 0), Card, true, Reason);
 	TestTrue(TEXT("不同定义的同类建筑不会误合成"), Original != nullptr && Other != nullptr && Board->GetPlacedBuildingCount() == 2);
+	return true;
+}
+
+/**
+ * 使用正式定义与正式箭塔蓝图验证完整生成链路。
+ * 先保存蓝图直接生成时的组件变换，再与棋盘合成、回收重新放置的结果比较，
+ * 防止未来再次由生成流程覆盖模型作者在蓝图里填写的缩放或局部变换。
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDirectBuildingBlueprintTest, "MovingCastle.Logic.DirectBuildingBlueprint",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleDirectBuildingBlueprintTest::RunTest(const FString& Parameters)
+{
+	UCastleBuildingDefinition* Definition = LoadObject<UCastleBuildingDefinition>(nullptr,
+		TEXT("/Game/MovingCastle/Data/Buildings/DA_ArcherTower.DA_ArcherTower"));
+	if (!TestNotNull(TEXT("加载正式箭塔定义"), Definition)) { return false; }
+	FText Reason;
+	if (!TestTrue(TEXT("正式定义配置有效"), Definition->ValidateConfiguration(Reason))) { AddError(Reason.ToString()); return false; }
+	const FCastleBuildingLevelDefinition* Level2 = Definition->FindLevel(2);
+	if (!TestNotNull(TEXT("定义存在二级"), Level2)) { return false; }
+	UClass* BlueprintClass = LoadClass<ACastleBuildingBase>(nullptr,
+		TEXT("/Game/MovingCastle/Model/Buildings/BP_ArcherTower_lv2.BP_ArcherTower_lv2_C"));
+	if (!TestNotNull(TEXT("加载二级建筑蓝图"), BlueprintClass)) { return false; }
+	TestTrue(TEXT("Data Asset 直接选择二级蓝图"), Level2->BuildingClass == BlueprintClass);
+	TestTrue(TEXT("二级蓝图继承对应 C++ 等级类"), BlueprintClass->IsChildOf(ACastleArcherTowerLevel2::StaticClass()));
+
+	const UWorld::InitializationValues Settings = UWorld::InitializationValues().AllowAudioPlayback(false)
+		.CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(false);
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Settings);
+	if (!TestNotNull(TEXT("创建蓝图回归测试世界"), World)) { return false; }
+	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
+	Context.SetCurrentWorld(World);
+	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
+
+	// 原生 SpawnActor 的结果作为模型作者的配置基线，不把 0.1 等具体美术数值硬编码进测试。
+	ACastleBuildingBase* Reference = World->SpawnActor<ACastleBuildingBase>(BlueprintClass);
+	if (!TestNotNull(TEXT("直接生成蓝图基线 Actor"), Reference)) { return false; }
+	TArray<USceneComponent*> ReferenceComponents;
+	Reference->GetComponents<USceneComponent>(ReferenceComponents);
+	TMap<FName, FTransform> AuthoredTransforms;
+	for (const USceneComponent* Component : ReferenceComponents)
+	{
+		if (Component->CreationMethod == EComponentCreationMethod::SimpleConstructionScript)
+		{
+			AuthoredTransforms.Add(Component->GetFName(), Component->GetRelativeTransform());
+		}
+	}
+	TestTrue(TEXT("蓝图包含直接模型组件"), !AuthoredTransforms.IsEmpty());
+	const FVector AuthoredRootScale = Reference->GetActorScale3D();
+	Reference->Destroy();
+
+	ACastleBoard* Board = World->SpawnActor<ACastleBoard>();
+	Board->GridSize = FIntVector(2, 2, 3);
+	Board->BuildingDefinitions = { Definition };
+	FCastleGroundGenerationResult Ground;
+	for (int32 X = 0; X < 2; ++X)
+	{
+		for (int32 Y = 0; Y < 2; ++Y)
+		{
+			FCastleGroundCell Cell;
+			Cell.Coordinate = FIntVector(X, Y, 0);
+			Cell.Color = ECastleTileColor::Red;
+			Cell.Number = 3;
+			Ground.Cells.Add(Cell);
+		}
+	}
+	if (!TestTrue(TEXT("配置正式蓝图测试地面"), Board->ApplyGroundGenerationResult(Ground, Reason))) { return false; }
+	FCastleBuildingDescriptor Card;
+	Definition->CreateDescriptor(1, ECastleTileColor::Red, 3, Card, Reason);
+	if (!TestNotNull(TEXT("放置第一座一级箭塔"), Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason))) { return false; }
+	ACastleBuildingBase* Merged = Board->PlaceBuilding(FIntVector(1, 0, 0), Card, true, Reason);
+	if (!TestNotNull(TEXT("两座正式蓝图合成为二级"), Merged)) { AddError(Reason.ToString()); return false; }
+
+	const auto CheckDirectBlueprint = [this, &AuthoredTransforms, BlueprintClass, AuthoredRootScale](ACastleBuildingBase* Building)
+	{
+		TestTrue(TEXT("实际建筑自身就是等级蓝图"), Building->GetClass() == BlueprintClass);
+		TestFalse(TEXT("正式蓝图没有使用立方体"), Building->IsUsingPlaceholder());
+		TestTrue(TEXT("原生根缩放未被覆盖"), Building->GetActorScale3D().Equals(AuthoredRootScale));
+		TArray<UChildActorComponent*> ChildActors;
+		Building->GetComponents<UChildActorComponent>(ChildActors);
+		TestEqual(TEXT("建筑不再创建模型 Child Actor"), ChildActors.Num(), 0);
+		TArray<USceneComponent*> Components;
+		Building->GetComponents<USceneComponent>(Components);
+		int32 Compared = 0;
+		for (const USceneComponent* Component : Components)
+		{
+			if (const FTransform* Authored = AuthoredTransforms.Find(Component->GetFName()))
+			{
+				TestTrue(FString::Printf(TEXT("组件 %s 保留蓝图局部变换"), *Component->GetName()),
+					Component->GetRelativeTransform().Equals(*Authored));
+				++Compared;
+			}
+		}
+		TestEqual(TEXT("全部蓝图模型组件得到保留"), Compared, AuthoredTransforms.Num());
+	};
+	CheckDirectBlueprint(Merged);
+	TestTrue(TEXT("二级建筑回收到背包"), Board->RemoveBuildingToBackpack(Merged, Board->PrototypeBackpack, Reason));
+	ACastleBuildingBase* Replaced = Board->PlaceBuildingFromBackpack(FIntVector(0, 0, 0), Board->PrototypeBackpack, 0, false, Reason);
+	if (!TestNotNull(TEXT("背包二级卡重新直接生成蓝图"), Replaced)) { AddError(Reason.ToString()); return false; }
+	CheckDirectBlueprint(Replaced);
+	Board->RemoveBuilding(Replaced, Reason);
+
+	Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason);
+	ACastleBuildingBase* MergedAlongY = Board->PlaceBuilding(FIntVector(0, 1, 0), Card, true, Reason);
+	if (!TestNotNull(TEXT("沿 Y 轴合成仍生成二级蓝图"), MergedAlongY)) { AddError(Reason.ToString()); return false; }
+	CheckDirectBlueprint(MergedAlongY);
+	TestTrue(TEXT("沿 Y 轴时整体旋转 90 度"), MergedAlongY->GetActorRotation().Equals(FRotator(0.0f, 90.0f, 0.0f)));
+	Board->RemoveBuilding(MergedAlongY, Reason);
+
+	// 三级仍按用户确认保留平面四格占位，四级则直接生成自身的八格等级蓝图。
+	Definition->CreateDescriptor(3, ECastleTileColor::Red, 3, Card, Reason);
+	ACastleBuildingBase* Level3Building = Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason);
+	if (!TestNotNull(TEXT("直接放置三级卡"), Level3Building)) { AddError(Reason.ToString()); return false; }
+	TestTrue(TEXT("三级继续使用四格占位"), Level3Building->IsUsingPlaceholder()
+		&& Level3Building->GetOccupiedCoordinates().Num() == 4);
+	Board->RemoveBuilding(Level3Building, Reason);
+	Definition->CreateDescriptor(4, ECastleTileColor::Red, 3, Card, Reason);
+	ACastleBuildingBase* Level4Building = Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason);
+	if (!TestNotNull(TEXT("直接放置四级卡"), Level4Building)) { AddError(Reason.ToString()); return false; }
+	TestTrue(TEXT("四级直接使用定义中的蓝图并占八格"), Level4Building->GetClass() == Definition->FindLevel(4)->BuildingClass
+		&& Level4Building->GetClass()->IsChildOf(ACastleArcherTowerLevel4::StaticClass())
+		&& !Level4Building->IsUsingPlaceholder() && Level4Building->GetOccupiedCoordinates().Num() == 8);
+	TArray<UStaticMeshComponent*> Level4Meshes;
+	Level4Building->GetComponents<UStaticMeshComponent>(Level4Meshes);
+	const int32 Level4PartCount = Level4Meshes.FilterByPredicate([](const UStaticMeshComponent* Component)
+	{
+		return Component->GetName().StartsWith(TEXT("Mesh_")) && Component->GetStaticMesh() != nullptr;
+	}).Num();
+	TestEqual(TEXT("四级蓝图保留 288 个模型零件"), Level4PartCount, 288);
 	return true;
 }
 

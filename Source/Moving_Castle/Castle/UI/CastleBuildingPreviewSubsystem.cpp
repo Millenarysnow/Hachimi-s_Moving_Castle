@@ -2,8 +2,8 @@
 
 #include "CastleBuildingPreviewSubsystem.h"
 
+#include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
-#include "CastleBuildingModelActor.h"
 #include "CastleBoard.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/StaticMeshComponent.h"
@@ -27,6 +27,26 @@ namespace
 	constexpr float PreviewRotationSpeed = 14.0f;
 	constexpr float CaptureInterval = 1.0f / 20.0f;
 	constexpr double VisibilityGraceSeconds = 0.25;
+
+	/** 预览生成完整等级蓝图，并用与棋盘相同的默认占用形状初始化它。 */
+	TArray<FIntVector> BuildPreviewFootprint(int32 Level)
+	{
+		TArray<FIntVector> Coordinates;
+		const int32 Width = Level >= 2 && Level <= 4 ? 2 : 1;
+		const int32 Depth = Level >= 3 && Level <= 4 ? 2 : 1;
+		const int32 Height = Level == 4 ? 2 : 1;
+		for (int32 X = 0; X < Width; ++X)
+		{
+			for (int32 Y = 0; Y < Depth; ++Y)
+			{
+				for (int32 Z = 0; Z < Height; ++Z)
+				{
+					Coordinates.Add(FIntVector(X, Y, Z));
+				}
+			}
+		}
+		return Coordinates;
+	}
 }
 
 UCastleBuildingPreviewSubsystem::UCastleBuildingPreviewSubsystem()
@@ -61,18 +81,20 @@ UTextureRenderTarget2D* UCastleBuildingPreviewSubsystem::GetPreview(const FCastl
 	FActorSpawnParameters Parameters;
 	Parameters.ObjectFlags = RF_Transient;
 	Parameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	Parameters.TransformScaleMethod = ESpawnActorScaleMethod::MultiplyWithRoot;
 	const FVector Position(0.0f, Textures.Num() * 6000.0f, -100000.0f);
-	ACastleBuildingModelActor* Model = GetWorld()->SpawnActor<ACastleBuildingModelActor>(Position, FRotator::ZeroRotator, Parameters);
-	if (Model == nullptr)
+	const TSubclassOf<ACastleBuildingBase> BuildingClass = Descriptor.GetBuildingClass();
+	if (BuildingClass == nullptr)
 	{
-		OutFailureReason = FText::FromString(TEXT("建筑卡片预览无法生成模型载体。"));
+		OutFailureReason = FText::FromString(TEXT("建筑卡片预览没有可生成的等级类。"));
 		return nullptr;
 	}
-	// 预览只需要标准占用形状的外包范围，合成规则本身仍由棋盘执行。
-	FIntVector Dimensions(1, 1, 1);
-	if (Descriptor.Level == 2) { Dimensions = FIntVector(2, 1, 1); }
-	if (Descriptor.Level == 3) { Dimensions = FIntVector(2, 2, 1); }
-	if (Descriptor.Level == 4) { Dimensions = FIntVector(2, 2, 2); }
+	ACastleBuildingBase* Model = GetWorld()->SpawnActor<ACastleBuildingBase>(BuildingClass, Position, FRotator::ZeroRotator, Parameters);
+	if (Model == nullptr)
+	{
+		OutFailureReason = FText::FromString(TEXT("建筑卡片预览无法生成等级建筑 Actor。"));
+		return nullptr;
+	}
 	// 与放置入口读取同一棋盘尺寸，增大单格间距后，占位模型的高宽比例也保持一致。
 	const ACastleBoard* Board = Cast<ACastleBoard>(UGameplayStatics::GetActorOfClass(GetWorld(), ACastleBoard::StaticClass()));
 	if (Board == nullptr)
@@ -81,7 +103,13 @@ UTextureRenderTarget2D* UCastleBuildingPreviewSubsystem::GetPreview(const FCastl
 		OutFailureReason = FText::FromString(TEXT("建筑预览找不到当前棋盘，无法读取网格尺寸。"));
 		return nullptr;
 	}
-	if (!Model->ConfigureModel(Descriptor.Definition, Descriptor.Level, Descriptor.Color, Dimensions, Board->CellSize, Board->LayerHeight, OutFailureReason))
+	if (!Model->InitializeBuilding(Descriptor, BuildPreviewFootprint(Descriptor.Level)))
+	{
+		Model->Destroy();
+		OutFailureReason = FText::FromString(TEXT("建筑卡片预览初始化等级 Actor 失败。"));
+		return nullptr;
+	}
+	if (!Model->ConfigureBuildingVisual(Board->CellSize, Board->LayerHeight, OutFailureReason))
 	{
 		Model->Destroy();
 		return nullptr;
@@ -90,7 +118,7 @@ UTextureRenderTarget2D* UCastleBuildingPreviewSubsystem::GetPreview(const FCastl
 	// UE 的按需着色器编译不会仅因 IsComplete 查询而提交所有首次绘制任务。
 	// 使用引擎为首次绘制提供的接口明确完成材质准备；相同模型的重复卡片走纹理缓存。
 	TArray<UStaticMeshComponent*> ModelMeshes;
-	Model->GetComponents<UStaticMeshComponent>(ModelMeshes, true);
+	Model->GetComponents<UStaticMeshComponent>(ModelMeshes);
 	TSet<UMaterialInterface*> PreparedMaterials;
 	for (UStaticMeshComponent* Component : ModelMeshes)
 	{
@@ -126,7 +154,7 @@ UTextureRenderTarget2D* UCastleBuildingPreviewSubsystem::GetPreview(const FCastl
 	Capture->bCaptureOnMovement = false;
 	Capture->PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
 	Capture->CaptureSource = ESceneCaptureSource::SCS_Normal;
-	Capture->ShowOnlyActorComponents(Model, true);
+	Capture->ShowOnlyActorComponents(Model);
 	// OnRegister 会从类默认对象重建 ShowFlags，因此必须通过持久的设置数组配置。
 	// 只直接修改 ShowFlags 会在注册时丢失，导致位于场景外的预览只剩天空和雾。
 	TArray<FEngineShowFlagsSetting> FlagSettings;
@@ -218,7 +246,7 @@ void UCastleBuildingPreviewSubsystem::Tick(float DeltaTime)
 		if (!Entry.bReady)
 		{
 			TArray<UStaticMeshComponent*> Meshes;
-			Entry.Model->GetComponents<UStaticMeshComponent>(Meshes, true);
+			Entry.Model->GetComponents<UStaticMeshComponent>(Meshes);
 			bool bReady = true;
 			for (const UStaticMeshComponent* Component : Meshes)
 			{
@@ -240,7 +268,7 @@ void UCastleBuildingPreviewSubsystem::Tick(float DeltaTime)
 				continue;
 			}
 			Entry.bReady = true;
-			Entry.Capture->ShowOnlyActorComponents(Entry.Model.Get(), true);
+			Entry.Capture->ShowOnlyActorComponents(Entry.Model.Get());
 		}
 		// 相机绕实际几何中心旋转，整座拆件建筑一起转动，组件局部位置和模型资产均不改变。
 		Entry.RotationDegrees = FMath::Fmod(Entry.RotationDegrees + PreviewRotationSpeed * Elapsed, 360.0f);

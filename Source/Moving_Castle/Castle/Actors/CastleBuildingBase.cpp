@@ -3,9 +3,11 @@
 #include "CastleBuildingBase.h"
 
 #include "CastleBuildingDefinition.h"
+#include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
+#include "Engine/StaticMesh.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Moving_Castle.h"
@@ -13,7 +15,23 @@
 
 ACastleBuildingBase::ACastleBuildingBase()
 {
-	// 模型组件由父类创建；逻辑建筑只补充独立标签，不改变原美术材质。
+	// 建筑逻辑和模型组件现在位于同一个 Actor；VisualRoot 只提供统一的组件根节点。
+	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
+	SetRootComponent(VisualRoot);
+
+	// 只有没有美术模型的等级才显示这个组件，正式模型直接来自等级蓝图自身。
+	PrototypeMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PrototypeMesh"));
+	PrototypeMesh->SetupAttachment(VisualRoot);
+	PrototypeMesh->SetCanEverAffectNavigation(false);
+	PrototypeMesh->SetVisibility(false);
+	PrototypeMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+	PlaceholderCube = Cube.Object;
+	PlaceholderMaterial = Material.Object;
+
+	// 标签只在 ConfigureBuildingVisual 成功后显示，避免生成中间状态被玩家看见。
 	PrototypeLabel = CreateDefaultSubobject<UTextRenderComponent>(TEXT("PrototypeLabel"));
 	PrototypeLabel->SetupAttachment(VisualRoot);
 	PrototypeLabel->SetHorizontalAlignment(EHorizTextAligment::EHTA_Center);
@@ -21,6 +39,7 @@ ACastleBuildingBase::ACastleBuildingBase()
 	PrototypeLabel->SetTextRenderColor(FColor::White);
 	PrototypeLabel->SetWorldSize(52.0f);
 	PrototypeLabel->SetRelativeRotation(FRotator(90.0f, 0.0f, 0.0f));
+	PrototypeLabel->SetVisibility(false);
 
 	PrototypeLabelPlate = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PrototypeLabelPlate"));
 	PrototypeLabelPlate->SetupAttachment(VisualRoot);
@@ -28,6 +47,7 @@ ACastleBuildingBase::ACastleBuildingBase()
 	PrototypeLabelPlate->SetMaterial(0, PlaceholderMaterial);
 	PrototypeLabelPlate->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	PrototypeLabelPlate->SetCanEverAffectNavigation(false);
+	PrototypeLabelPlate->SetVisibility(false);
 }
 
 bool ACastleBuildingBase::InitializeBuilding(const FCastleBuildingDescriptor& Descriptor, const TArray<FIntVector>& InOccupiedCoordinates)
@@ -40,7 +60,7 @@ bool ACastleBuildingBase::InitializeBuilding(const FCastleBuildingDescriptor& De
 	}
 	if (Descriptor.GetBuildingClass() != GetClass() || Descriptor.Level != BuildingLevel || Descriptor.GetBuildingType() != BuildingType)
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("建筑初始化失败：Data Asset 的逻辑类、类别或等级与实际 Actor 不一致。"));
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑初始化失败：Data Asset 的生成类、类别或等级与实际 Actor 不一致。"));
 		return false;
 	}
 	if (InOccupiedCoordinates.Num() != GetExpectedFootprintCellCount(BuildingLevel))
@@ -108,11 +128,13 @@ int32 ACastleBuildingBase::GetExpectedFootprintCellCount(int32 InLevel)
 
 bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLayerHeight, FText& OutFailureReason)
 {
-	if (OccupiedCoordinates.IsEmpty())
+	OutFailureReason = FText::GetEmpty();
+	if (OccupiedCoordinates.IsEmpty() || InCellSize <= 0.0f || InLayerHeight <= 0.0f)
 	{
-		OutFailureReason = FText::FromString(TEXT("建筑尚未初始化占用坐标，无法创建模型。"));
+		OutFailureReason = FText::FromString(TEXT("建筑尚未初始化占用坐标，或棋盘尺寸无效，无法创建模型。"));
 		return false;
 	}
+
 	FIntVector Minimum = OccupiedCoordinates[0];
 	FIntVector Maximum = OccupiedCoordinates[0];
 	for (const FIntVector& Coordinate : OccupiedCoordinates)
@@ -121,17 +143,81 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 		Maximum = Maximum.ComponentMax(Coordinate);
 	}
 	const FIntVector Dimensions = Maximum - Minimum + FIntVector(1, 1, 1);
-	// 排除尚未定位的标签，模型边界只用来决定标签应放到多高。
+
+	// 先隐藏标签和占位网格，再检查蓝图是否直接提供了可见 StaticMeshComponent。
+	// 这样同一个函数同时支持带模型的等级蓝图和没有模型的纯 C++ 等级。
 	PrototypeLabel->SetVisibility(false);
 	PrototypeLabelPlate->SetVisibility(false);
-	if (!ConfigureModel(BuildingDefinition, BuildingLevel, Color, Dimensions, InCellSize, InLayerHeight, OutFailureReason))
+	PrototypeMesh->SetVisibility(false);
+	PrototypeMesh->SetStaticMesh(nullptr);
+
+	TArray<UStaticMeshComponent*> StaticMeshes;
+	GetComponents<UStaticMeshComponent>(StaticMeshes);
+	bool bHasConfiguredModel = false;
+	for (UStaticMeshComponent* Component : StaticMeshes)
 	{
-		return false;
+		if (Component == PrototypeMesh || Component == PrototypeLabelPlate)
+		{
+			continue;
+		}
+		if (Component->GetStaticMesh() != nullptr && Component->IsVisible())
+		{
+			bHasConfiguredModel = true;
+			break;
+		}
 	}
+
+	bUsingPlaceholder = !bHasConfiguredModel;
+	if (bUsingPlaceholder)
+	{
+		if (PlaceholderCube == nullptr || PlaceholderMaterial == nullptr)
+		{
+			OutFailureReason = FText::FromString(TEXT("未配置模型，且引擎占位立方体或基础材质不可用。"));
+			return false;
+		}
+		PrototypeMesh->SetStaticMesh(PlaceholderCube);
+		PrototypeMesh->SetRelativeTransform(FTransform(FQuat::Identity, FVector::ZeroVector, FVector(
+			Dimensions.X * InCellSize * 0.86f / 100.0f,
+			Dimensions.Y * InCellSize * 0.86f / 100.0f,
+			Dimensions.Z * InLayerHeight * 0.72f / 100.0f)));
+		UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(PlaceholderMaterial, this);
+		if (Material == nullptr)
+		{
+			OutFailureReason = FText::FromString(TEXT("建筑占位颜色材质创建失败。"));
+			return false;
+		}
+		const FLinearColor Colors[] = {
+			FLinearColor(0.42f, 0.46f, 0.52f), FLinearColor(0.85f, 0.12f, 0.12f),
+			FLinearColor(0.10f, 0.35f, 0.90f), FLinearColor(0.10f, 0.75f, 0.25f),
+			FLinearColor(0.95f, 0.70f, 0.08f), FLinearColor(0.65f, 0.20f, 0.85f)
+		};
+		const int32 ColorIndex = static_cast<int32>(Color);
+		if (ColorIndex < 0 || ColorIndex >= UE_ARRAY_COUNT(Colors))
+		{
+			OutFailureReason = FText::FromString(TEXT("建筑占位颜色无效。"));
+			return false;
+		}
+		Material->SetVectorParameterValue(TEXT("Color"), Colors[ColorIndex]);
+		PrototypeMesh->SetMaterial(0, Material);
+		PrototypeMesh->SetVisibility(true);
+	}
+
+	// 正式模型和占位模型都提供 Visibility 射线命中，但不阻挡玩家或参与物理模拟。
+	TArray<UPrimitiveComponent*> Primitives;
+	GetComponents<UPrimitiveComponent>(Primitives);
+	for (UPrimitiveComponent* Primitive : Primitives)
+	{
+		Primitive->SetSimulatePhysics(false);
+		Primitive->SetCollisionEnabled(Primitive->IsVisible() ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
+		Primitive->SetCollisionResponseToAllChannels(ECR_Ignore);
+		Primitive->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+		Primitive->SetCanEverAffectNavigation(false);
+	}
+
 	const FBox Bounds = GetVisualBounds();
 	if (!Bounds.IsValid)
 	{
-		OutFailureReason = FText::FromString(TEXT("建筑模型没有可见几何体，无法显示或选中。"));
+		OutFailureReason = FText::FromString(TEXT("建筑没有可见几何体，无法显示或选中。"));
 		return false;
 	}
 	const FBox LocalBounds = Bounds.TransformBy(GetActorTransform().ToInverseMatrixWithScale());
@@ -154,4 +240,44 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 	PrototypeLabel->SetVisibility(true);
 	PrototypeLabelPlate->SetVisibility(true);
 	return true;
+}
+
+FBox ACastleBuildingBase::GetVisualBounds() const
+{
+	FBox Result(ForceInit);
+	TArray<UPrimitiveComponent*> Primitives;
+	GetComponents<UPrimitiveComponent>(Primitives);
+	for (const UPrimitiveComponent* Primitive : Primitives)
+	{
+		// 标签不属于模型几何体，取景和标签高度都不应把文字自身再次计入范围。
+		if (Primitive == PrototypeLabelPlate || Primitive == PrototypeLabel)
+		{
+			continue;
+		}
+		if (Primitive == PrototypeMesh && PrototypeMesh->GetStaticMesh() == nullptr)
+		{
+			continue;
+		}
+		if (Primitive->IsRegistered() && Primitive->IsVisible())
+		{
+			Result += Primitive->Bounds.GetBox();
+		}
+	}
+	return Result;
+}
+
+void ACastleBuildingBase::PrepareForPreview()
+{
+	// 卡片只显示建筑形状，等级与数字由卡片自己的文字控件显示。
+	PrototypeLabel->SetVisibility(false);
+	PrototypeLabelPlate->SetVisibility(false);
+	SetActorEnableCollision(false);
+	TArray<UPrimitiveComponent*> Primitives;
+	GetComponents<UPrimitiveComponent>(Primitives);
+	for (UPrimitiveComponent* Primitive : Primitives)
+	{
+		Primitive->SetVisibleInSceneCaptureOnly(true);
+		Primitive->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Primitive->SetCastShadow(false);
+	}
 }

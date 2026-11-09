@@ -520,12 +520,8 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 	// 建筑网格可以覆盖多个坐标，取距离命中点最近的占用格作为当前面所属格子。
 	if (!bFoundCell)
 	{
-		AActor* HitActor = HitResult.GetActor();
-		while (HitActor != nullptr && !HitActor->IsA<ACastleBuildingBase>())
-		{
-			HitActor = HitActor->GetParentActor();
-		}
-		if (const ACastleBuildingBase* HitBuilding = Cast<ACastleBuildingBase>(HitActor))
+		// 模型组件现在由建筑自身直接拥有，射线命中的 Actor 就是棋盘里的建筑。
+		if (const ACastleBuildingBase* HitBuilding = Cast<ACastleBuildingBase>(HitResult.GetActor()))
 		{
 			float BestDistanceSquared = TNumericLimits<float>::Max();
 			for (const FIntVector& OccupiedCoordinate : HitBuilding->GetOccupiedCoordinates())
@@ -745,9 +741,9 @@ ACastleBuildingBase* ACastleBoard::SpawnBuildingActor(const FCastleBuildingDescr
 		return nullptr;
 	}
 
-	if (OccupiedCoordinates.Num() == 0)
+	if (OccupiedCoordinates.Num() != ACastleBuildingBase::GetExpectedFootprintCellCount(Descriptor.Level))
 	{
-		OutFailureReason = FText::FromString(TEXT("生成建筑 Actor 时没有提供占用坐标。"));
+		OutFailureReason = FText::FromString(TEXT("生成建筑 Actor 时提供的占用格数量与等级不一致。"));
 		return nullptr;
 	}
 
@@ -766,7 +762,16 @@ ACastleBuildingBase* ACastleBoard::SpawnBuildingActor(const FCastleBuildingDescr
 
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-	ACastleBuildingBase* NewBuilding = GetWorld()->SpawnActor<ACastleBuildingBase>(Descriptor.GetBuildingClass(), FTransform(GetActorQuat(), SpawnLocation, GetActorScale3D()), SpawnParameters);
+	// 生成等级蓝图自身，并显式保留它的根缩放；棋盘的缩放在此基础上叠乘。
+	SpawnParameters.TransformScaleMethod = ESpawnActorScaleMethod::MultiplyWithRoot;
+	FQuat SpawnRotation = GetActorQuat();
+	if (Descriptor.Level == 2 && OccupiedCoordinates[0].X == OccupiedCoordinates[1].X)
+	{
+		// 标准二级蓝图沿 X 轴制作，沿 Y 合成时旋转整个建筑，不再依赖模型载体节点。
+		SpawnRotation *= FQuat(FVector::UpVector, HALF_PI);
+	}
+	ACastleBuildingBase* NewBuilding = GetWorld()->SpawnActor<ACastleBuildingBase>(Descriptor.GetBuildingClass(),
+		FTransform(SpawnRotation, SpawnLocation, GetActorScale3D()), SpawnParameters);
 	if (NewBuilding == nullptr)
 	{
 		OutFailureReason = FText::FromString(TEXT("World 生成建筑 Actor 失败。"));

@@ -8,7 +8,7 @@
 #include "CastleBuildingPreviewSubsystem.generated.h"
 
 class AActor;
-class ACastleBuildingModelActor;
+class ACastleBuildingBase;
 class UMaterialInterface;
 class USceneCaptureComponent2D;
 class UTextureRenderTarget2D;
@@ -52,7 +52,7 @@ private:
 	/** 每个共享模型的旋转状态、资源准备状态和最近一次可见使用时间。 */
 	struct FPreviewEntry
 	{
-		TWeakObjectPtr<ACastleBuildingModelActor> Model;
+		TWeakObjectPtr<ACastleBuildingBase> Model;
 		TWeakObjectPtr<USceneCaptureComponent2D> Capture;
 		FVector Center = FVector::ZeroVector;
 		float Distance = 0.0f;

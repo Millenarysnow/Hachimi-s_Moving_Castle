@@ -3,23 +3,30 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "CastleBuildingModelActor.h"
+#include "GameFramework/Actor.h"
 #include "CastleGameplayTypes.h"
 #include "CastleBuildingBase.generated.h"
 
+class UMaterialInterface;
+class USceneComponent;
+class UStaticMesh;
+class UStaticMeshComponent;
+class UTextRenderComponent;
+
 /**
- * 所有可放置房间的共同 Actor 基类。
+ * 所有可放置建筑的共同 Actor 基类。
  *
- * 基类只保存棋盘、背包和合成所需的通用数据，不包含敌人、NPC 或战斗行为。
- * 每个功能建筑族再派生自己的等级类，合成时由棋盘删除旧 Actor 并生成新类。
+ * 这个 Actor 同时承载建筑逻辑和该等级蓝图中的直接模型组件。没有模型组件的
+ * C++ 等级类使用统一立方体占位；带模型的等级蓝图直接继承对应 C++ 类。
+ * 不再通过独立模型载体或 Child Actor 转发模型和变换。
  */
 UCLASS(Abstract, Blueprintable)
-class MOVING_CASTLE_API ACastleBuildingBase : public ACastleBuildingModelActor
+class MOVING_CASTLE_API ACastleBuildingBase : public AActor
 {
 	GENERATED_BODY()
 
 public:
-	/** 构造函数只设置通用的默认属性，不依赖 World 或棋盘。 */
+	/** 创建逻辑根节点、占位网格和通用建筑标签。 */
 	ACastleBuildingBase();
 
 	/**
@@ -73,11 +80,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
 	UCastleBuildingDefinition* GetBuildingDefinition() const { return BuildingDefinition; }
 
-	/**
-	 * 从 Data Asset 读取当前等级模型，并把卡牌标签放到实际模型上方。
-	 * 只允许未配置模型的等级使用立方体；配置错误返回失败，棋盘保留原卡牌/建筑。
-	 */
+	/** 根据当前 Actor 自身的模型组件或空模型状态配置视觉与标签。 */
 	bool ConfigureBuildingVisual(float InCellSize, float InLayerHeight, FText& OutFailureReason);
+
+	/** 返回当前 Actor 直接拥有的可见模型包围盒，供标签和卡片预览取景使用。 */
+	FBox GetVisualBounds() const;
+
+	/** 预览模式下只允许 SceneCapture 看见模型，且关闭碰撞和阴影。 */
+	void PrepareForPreview();
+
+	/** 没有蓝图模型组件时是否正在使用统一立方体占位。 */
+	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
+	bool IsUsingPlaceholder() const { return bUsingPlaceholder; }
 
 	/** 判断当前建筑是否属于道路。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
@@ -103,6 +117,25 @@ public:
 	static int32 GetExpectedFootprintCellCount(int32 InLevel);
 
 protected:
+	/** 所有模型组件和通用标签的公共根节点。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "建筑模型")
+	TObjectPtr<USceneComponent> VisualRoot;
+
+	/** 无模型等级使用的引擎立方体；有模型时保持隐藏。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "建筑模型")
+	TObjectPtr<UStaticMeshComponent> PrototypeMesh;
+
+	/** 占位立方体与标签底牌共用的引擎基础资源。 */
+	UPROPERTY()
+	TObjectPtr<UStaticMesh> PlaceholderCube;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInterface> PlaceholderMaterial;
+
+	/** 当前是否没有检测到蓝图提供的可见模型组件。 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "建筑模型")
+	bool bUsingPlaceholder = true;
+
 	/** 当前建筑的共享定义；初始化后始终随回收和合成描述一起传递。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "建筑")
 	TObjectPtr<UCastleBuildingDefinition> BuildingDefinition;

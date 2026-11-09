@@ -16,7 +16,7 @@ public:
 	/** 设置道路类别和固定的 1 级属性。 */
 	ACastleRoadBuilding();
 };
-/** 箭塔建筑族的抽象基类，等级子类只定义 C++ 逻辑类型，模型与升级映射来自 Data Asset。 */
+/** 箭塔建筑族的抽象基类；等级蓝图直接继承对应 C++ 等级类，生成映射由 Data Asset 配置。 */
 UCLASS(Abstract, Blueprintable)
 class MOVING_CASTLE_API ACastleArcherTowerBuilding : public ACastleBuildingBase
 {
@@ -78,7 +78,7 @@ public:
 	ACastleArcherTowerLevel5();
 };
 
-/** 炮塔建筑族的抽象基类，等级子类只定义 C++ 逻辑类型，模型与升级映射来自 Data Asset。 */
+/** 炮塔建筑族的抽象基类；等级蓝图直接继承对应 C++ 等级类，生成映射由 Data Asset 配置。 */
 UCLASS(Abstract, Blueprintable)
 class MOVING_CASTLE_API ACastleCannonTowerBuilding : public ACastleBuildingBase
 {
@@ -140,7 +140,7 @@ public:
 	ACastleCannonTowerLevel5();
 };
 
-/** 农田建筑族的抽象基类，等级子类只定义 C++ 逻辑类型，模型与升级映射来自 Data Asset。 */
+/** 农田建筑族的抽象基类；等级蓝图直接继承对应 C++ 等级类，生成映射由 Data Asset 配置。 */
 UCLASS(Abstract, Blueprintable)
 class MOVING_CASTLE_API ACastleFarmBuilding : public ACastleBuildingBase
 {

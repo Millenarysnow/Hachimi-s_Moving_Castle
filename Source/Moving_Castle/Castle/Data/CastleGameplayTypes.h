@@ -217,7 +217,7 @@ struct MOVING_CASTLE_API FCastleBuildingDescriptor
 	/** 判断资产和对应等级是否存在，供空槽位和卡片显示快速查询。 */
 	bool HasDefinition() const;
 
-	/** 获取此等级的实际 C++ 逻辑类；无效描述返回空类，由调用入口报告错误。 */
+	/** 获取此等级直接生成的建筑类（C++ 或其等级蓝图）；无效描述由调用入口报告错误。 */
 	TSubclassOf<ACastleBuildingBase> GetBuildingClass() const;
 
 	/** 读取已绑定资产的类别；调用者必须先校验描述，不提供替代类别。 */
