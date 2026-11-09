@@ -76,6 +76,11 @@ bool FCastleRealBuildingMergeTest::RunTest(const FString& Parameters)
 	UBuildingMergeComponent* Merge = Result->BuildingMerge;
 	TestTrue(TEXT("合并自动启动原生组件"), Merge->bIsPlaying && Reason.IsEmpty());
 	TestTrue(TEXT("使用大量真实旧网格而非立方体或粒子"), Merge->SourcePartCount == SourceCount && SourceCount >= 100);
+	TestEqual(TEXT("跨导入资产的零件全部建立对应"), Merge->ReusedPartCount, SourceCount);
+	TestEqual(TEXT("只让新放置建筑的零件飞入"), Merge->IncomingPartCount, SourceCount / 2);
+	TestEqual(TEXT("原有建筑的零件走向变化后的位置"), Merge->MovedPartCount, SourceCount / 2);
+	TestEqual(TEXT("没有把可复用件误判成新增"), Merge->AddedPartCount, 0);
+	TestEqual(TEXT("没有把可复用件误判成移除"), Merge->RemovedPartCount, 0);
 	TestFalse(TEXT("旧建筑已经被规则销毁"), IsValid(First));
 	TestEqual(TEXT("逻辑只保留一个二级建筑"), Board->GetPlacedBuildingCount(), 1);
 	TestEqual(TEXT("仍占两格"), Board->GetOccupiedRoomCellCount(), 2);
@@ -135,7 +140,7 @@ bool FCastleChainBuildingMergeTest::RunTest(const FString& Parameters)
 	Result = Board->PlaceBuilding(FIntVector(1, 1, 0), Card, true, Reason);
 	if (!TestNotNull(TEXT("进行中的建筑可继续参与合并"), Result)) { AddError(Reason.ToString()); return false; }
 	TestTrue(TEXT("交接动画成功且没有表现错误"), Result->BuildingMerge->bIsPlaying && Reason.IsEmpty());
-	TestEqual(TEXT("抓取当前画面中的四件输入网格"), Result->BuildingMerge->SourcePartCount, 4);
+	TestEqual(TEXT("抓取全部可见件及等待飞入件，不因连续操作漏件"), Result->BuildingMerge->SourcePartCount, 4);
 	TestEqual(TEXT("交接后仍只保留一个最终建筑"), Board->GetPlacedBuildingCount(), 1);
 	Result->BuildingMerge->TickComponent(10.0f, LEVELTICK_All, nullptr);
 	TestFalse(TEXT("交接后正常完成"), Result->BuildingMerge->bIsPlaying);

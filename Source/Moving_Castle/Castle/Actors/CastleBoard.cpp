@@ -845,6 +845,19 @@ ACastleBuildingBase* ACastleBoard::TryMergePlacedBuilding(ACastleBuildingBase* B
 
 	if (bHasMerged)
 	{
+		UBuildingMergeComponent* Transition = CurrentBuilding->BuildingMerge;
+		Transition->PartCatalog = CurrentBuilding->GetBuildingDefinition()->PartCatalog;
+		Transition->IncomingSourceActor = Building;
+		Transition->bUseSharedChangeOrigin = true;
+		Transition->ChangeOrigin = bUseSharedVisualChangeOrigin ? VisualChangeOrigin : Building->GetActorLocation();
+		// 新放置的零件从旧邻居的外侧飞来，原有结构只从当前位置走向新位置。
+		FVector PreviousCenter = FVector::ZeroVector;
+		for (int32 Index = 1; Index < MergeSources.Num(); ++Index)
+		{
+			PreviousCenter += MergeSources[Index]->GetActorLocation();
+		}
+		PreviousCenter /= MergeSources.Num() - 1;
+		Transition->ArrivalDirection = Building->GetActorLocation() - PreviousCenter;
 		if (GetWorld()->IsGameWorld() && !CurrentBuilding->BuildingMerge->StartMerge(MergeSources))
 		{
 			// 规则替换已经完成，表现错误明确传回并由组件输出 Error，不能静默改播其他效果。

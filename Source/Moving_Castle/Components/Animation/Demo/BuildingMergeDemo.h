@@ -33,6 +33,10 @@ public:
 	UPROPERTY(EditAnywhere, Category="Merge Demo")
 	bool bLoop = true;
 
+	/** 两组相邻的不同数字建筑同时改变，共用同一传播原点；关闭后只演示单组升级。 */
+	UPROPERTY(EditAnywhere, Category="Merge Demo")
+	bool bShowAdjacentChanges = true;
+
 	/** 相机属于演示 Actor，Play 时自动取景；停止运行后不改变关卡编辑视口。 */
 	UPROPERTY(VisibleAnywhere, Category="Merge Demo")
 	TObjectPtr<UCameraComponent> DemoCamera;
@@ -49,6 +53,9 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<ACastleBuildingBase> CurrentBuilding;
+
+	UPROPERTY(Transient)
+	TObjectPtr<ACastleBuildingBase> AdjacentBuilding;
 
 	double PhaseTime = 0.0;
 	bool bMerging = false;

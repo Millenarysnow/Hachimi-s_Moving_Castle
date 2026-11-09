@@ -100,10 +100,10 @@ bool FBuildingMergeLifecycleTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("普通 Actor 挂载即能合并"), Merge->StartMerge({ First, Second }));
 	TestEqual(TEXT("源零件数准确"), Merge->SourcePartCount, 24);
 	TestEqual(TEXT("目标不重复抓取刚创建的源副本"), Merge->TargetPartCount, 18);
-	TestEqual(TEXT("每件都有独立副本"), CountVisuals(Result), 42);
+	TestEqual(TEXT("只为实际变化件创建副本"), CountVisuals(Result), Merge->MovedPartCount + Merge->IncomingPartCount + Merge->RemovedPartCount);
 	TestTrue(TEXT("源隐藏且关闭碰撞"), First->IsHidden() && !First->GetActorEnableCollision());
 	TestEqual(TEXT("结果碰撞在动画中仍然有效"), Originals[0]->GetCollisionEnabled(), ECollisionEnabled::QueryOnly);
-	Merge->TickComponent(0.8f, LEVELTICK_All, nullptr);
+	Merge->TickComponent(0.2f, LEVELTICK_All, nullptr);
 	TArray<UStaticMeshComponent*> AllMeshes;
 	Result->GetComponents<UStaticMeshComponent>(AllMeshes);
 	int32 VisibleCopies = 0;
@@ -140,7 +140,7 @@ bool FBuildingMergeLifecycleTest::RunTest(const FString& Parameters)
 	First->Destroy();
 	Second->Destroy();
 	Result->SetActorTransform(FTransform(FRotator(0.0, 67.0, 0.0), FVector(1100.0, -300.0, 200.0)));
-	Merge->TickComponent(1.8f, LEVELTICK_All, nullptr);
+	Merge->TickComponent(0.45f, LEVELTICK_All, nullptr);
 	TestTrue(TEXT("源已销毁仍能重组"), Merge->bIsPlaying && CountVisuals(Result) > 0);
 	Merge->TickComponent(10.0f, LEVELTICK_All, nullptr);
 	TestFalse(TEXT("大时间步也能正常结束"), Merge->bIsPlaying);
@@ -184,6 +184,100 @@ bool FBuildingMergeValidationTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("失败没有隐藏源"), First->IsHidden());
 	TestTrue(TEXT("失败没有隐藏结果"), Result->FindComponentByClass<UStaticMeshComponent>()->IsVisible());
 	TestEqual(TEXT("失败清理已创建的副本"), CountVisuals(Result), 0);
+	return true;
+}
+
+/** 同一波相邻变化中，不变的零件保持原位，远处变化等待传播，不各自打散建筑。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildingMergeLocalWaveTest,
+	"MovingCastle.Components.Animation.BuildingMerge.LocalWaveAndKeep",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingMergeLocalWaveTest::RunTest(const FString& Parameters)
+{
+	using namespace BuildingMergeTests;
+	FScopedWorld Scope;
+	TArray<UBuildingMergeComponent*> Waves;
+	TArray<UStaticMeshComponent*> MovingVisuals;
+	for (int32 Row = 0; Row < 2; ++Row)
+	{
+		const double Y = Row * 700.0;
+		AActor* Previous = MakeParts(Scope.World, FVector(0.0, Y, 0.0), 2);
+		TArray<UStaticMeshComponent*> PreviousMeshes;
+		Previous->GetComponents<UStaticMeshComponent>(PreviousMeshes);
+		for (UStaticMeshComponent* Mesh : PreviousMeshes)
+		{
+			if (Mesh != Previous->GetRootComponent()) { Mesh->SetRelativeLocation(FVector(300.0, 0.0, 0.0)); }
+		}
+		AActor* Result = MakeParts(Scope.World, FVector(0.0, Y, 0.0), 2);
+		TArray<UStaticMeshComponent*> OriginalMeshes;
+		Result->GetComponents<UStaticMeshComponent>(OriginalMeshes);
+		UStaticMeshComponent* Keep = CastChecked<UStaticMeshComponent>(Result->GetRootComponent());
+		for (UStaticMeshComponent* Mesh : OriginalMeshes)
+		{
+			if (Mesh != Keep) { Mesh->SetRelativeLocation(FVector(380.0, 0.0, 0.0)); }
+		}
+		UBuildingMergeComponent* Merge = AddMerge(Result);
+		Merge->bUseSharedChangeOrigin = true;
+		Merge->ChangeOrigin = FVector::ZeroVector;
+		Merge->PropagationSpeed = 1000.0;
+		TestTrue(TEXT("单座邻接变化也可从共享原点启动"), Merge->StartChange({ Previous }));
+		TestEqual(TEXT("一件始终原位保留"), Merge->UnchangedPartCount, 1);
+		TestEqual(TEXT("只有一件发生短距离移动"), Merge->MovedPartCount, 1);
+		TestEqual(TEXT("不为原位件创建飞行副本"), CountVisuals(Result), 1);
+		TestTrue(TEXT("原位件从第一帧即可见"), Keep->IsVisible());
+		TArray<UStaticMeshComponent*> Meshes;
+		Result->GetComponents<UStaticMeshComponent>(Meshes);
+		for (UStaticMeshComponent* Mesh : Meshes)
+		{
+			if (Mesh->HasAnyFlags(RF_Transient)) { MovingVisuals.Add(Mesh); }
+		}
+		Waves.Add(Merge);
+	}
+	if (!TestEqual(TEXT("两处都各有一个变化件"), MovingVisuals.Num(), 2)) { return false; }
+	for (UBuildingMergeComponent* Wave : Waves) { Wave->TickComponent(0.5f, LEVELTICK_All, nullptr); }
+	TestTrue(TEXT("近处零件已开始向新位置移动"), MovingVisuals[0]->Bounds.Origin.X > 300.1);
+	TestTrue(TEXT("远处等待同一波传播，仍在原位置"), FMath::IsNearlyEqual(MovingVisuals[1]->Bounds.Origin.X, 300.0, 0.01));
+	TestTrue(TEXT("移动没有绕到独立汇聚中心"), MovingVisuals[0]->Bounds.Origin.X < 380.0);
+	for (UBuildingMergeComponent* Wave : Waves) { Wave->TickComponent(5.0f, LEVELTICK_All, nullptr); }
+	TestFalse(TEXT("近处完成"), Waves[0]->bIsPlaying);
+	TestFalse(TEXT("远处完成"), Waves[1]->bIsPlaying);
+	return true;
+}
+
+/** 下一次操作发生在第一轮飞入前，仍须带走全部输入零件，不能只扫描当前可见网格。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildingMergePendingHandoffTest,
+	"MovingCastle.Components.Animation.BuildingMerge.PendingArrivalHandoff",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingMergePendingHandoffTest::RunTest(const FString& Parameters)
+{
+	using namespace BuildingMergeTests;
+	FScopedWorld Scope;
+	AActor* Incoming = MakeParts(Scope.World, FVector::ZeroVector, 2);
+	AActor* Existing = MakeParts(Scope.World, FVector(400.0, 0.0, 0.0), 2);
+	AActor* Intermediate = MakeParts(Scope.World, FVector::ZeroVector, 4);
+	UBuildingMergeComponent* First = AddMerge(Intermediate);
+	First->IncomingSourceActor = Incoming;
+	First->bUseSharedChangeOrigin = true;
+	First->ChangeOrigin = FVector(5000.0, 0.0, 0.0);
+	First->PropagationSpeed = 1000.0;
+	TestTrue(TEXT("第一轮已有四件对应"), First->StartMerge({Incoming, Existing}));
+	TestEqual(TEXT("两件等待飞入"), First->IncomingPartCount, 2);
+	First->TickComponent(0.1f, LEVELTICK_All, nullptr);
+	AActor* Additional = MakeParts(Scope.World, FVector(1000.0, 0.0, 0.0), 1);
+	AActor* Result = MakeParts(Scope.World, FVector::ZeroVector, 5);
+	UBuildingMergeComponent* Second = AddMerge(Result);
+	Second->bUseSharedChangeOrigin = true;
+	Second->ChangeOrigin = First->ChangeOrigin;
+	Second->PropagationSpeed = First->PropagationSpeed;
+	TestTrue(TEXT("第一轮未飞入时也能接续变化"), Second->StartMerge({Intermediate, Additional}));
+	TestEqual(TEXT("全部五件输入都被捕获，包含不可见等待件"), Second->SourcePartCount, 5);
+	TestEqual(TEXT("五件均有对应而非凭空新增"), Second->ReusedPartCount, 5);
+	TestEqual(TEXT("原有两件继续等待飞入"), Second->IncomingPartCount, 2);
+	Intermediate->Destroy();
+	Second->TickComponent(10.0f, LEVELTICK_All, nullptr);
+	TestEqual(TEXT("交接后五件全部归位"), Second->CompletedPartCount, 5);
+	TestEqual(TEXT("交接完成清理副本"), CountVisuals(Result), 0);
 	return true;
 }
 

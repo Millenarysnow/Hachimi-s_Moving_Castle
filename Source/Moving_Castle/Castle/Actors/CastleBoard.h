@@ -61,6 +61,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "0.0", Units = "cm"))
 	float WorldBaseHeight = 235.0f;
 
+	/** 一次操作会影响多处建筑时，调用方可为这些变化指定同一个世界空间传播原点。 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="棋盘|变化表现")
+	bool bUseSharedVisualChangeOrigin = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="棋盘|变化表现", meta=(EditCondition="bUseSharedVisualChangeOrigin"))
+	FVector VisualChangeOrigin = FVector::ZeroVector;
+
 	/** 可用建筑定义，也是商店商品池与开局测试卡组的唯一配置入口。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|建筑定义")
 	TArray<TObjectPtr<UCastleBuildingDefinition>> BuildingDefinitions;

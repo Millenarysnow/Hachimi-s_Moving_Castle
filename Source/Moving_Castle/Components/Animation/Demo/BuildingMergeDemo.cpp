@@ -45,17 +45,20 @@ void ABuildingMergeDemo::BeginPlay()
 		return;
 	}
 	DemoBoard->bGenerateGroundOnBeginPlay = false;
-	DemoBoard->GridSize = FIntVector(2, 1, 1);
+	DemoBoard->GridSize = FIntVector(2, bShowAdjacentChanges ? 2 : 1, 1);
 	DemoBoard->BuildingDefinitions = { BuildingDefinition };
 	DemoBoard->FinishSpawning(GetActorTransform());
 	FCastleGroundGenerationResult Ground;
 	for (int32 X = 0; X < 2; ++X)
 	{
-		FCastleGroundCell Cell;
-		Cell.Coordinate = FIntVector(X, 0, 0);
-		Cell.Color = ECastleTileColor::Red;
-		Cell.Number = 3;
-		Ground.Cells.Add(Cell);
+		for (int32 Y = 0; Y < DemoBoard->GridSize.Y; ++Y)
+		{
+			FCastleGroundCell Cell;
+			Cell.Coordinate = FIntVector(X, Y, 0);
+			Cell.Color = ECastleTileColor::Red;
+			Cell.Number = 3 + Y;
+			Ground.Cells.Add(Cell);
+		}
 	}
 	if (!DemoBoard->ApplyGroundGenerationResult(Ground, Reason))
 	{
@@ -69,6 +72,7 @@ void ABuildingMergeDemo::BeginPlay()
 
 	// 根据实际模型而非写死建筑尺寸取景；相邻两座一级建筑及松散零件都留有画面空间。
 	FBox Bounds = CurrentBuilding->GetVisualBounds();
+	if (AdjacentBuilding) { Bounds += AdjacentBuilding->GetVisualBounds(); }
 	Bounds += Bounds.ShiftBy(DemoBoard->GetGridWorldLocation(FIntVector(1, 0, 0))
 		- DemoBoard->GetGridWorldLocation(FIntVector(0, 0, 0)));
 	const FVector Center = Bounds.GetCenter();
@@ -94,7 +98,7 @@ void ABuildingMergeDemo::BeginPlay()
 		bLoop = false;
 		IFileManager::Get().MakeDirectory(*(FPaths::ProjectSavedDir() / TEXT("Tests/BuildingMergeVisual")), true);
 	}
-	UE_LOG(LogBuildingMergeDemo, Display, TEXT("合并演示已开始：稍后自动将两座真实一级建筑合成为二级，普通运行会循环播放。"));
+	UE_LOG(LogBuildingMergeDemo, Display, TEXT("局部变化演示已开始：已有件短移，新放置件飞入；相邻区域共用传播原点。"));
 }
 
 bool ABuildingMergeDemo::PlaceFirstBuilding()
@@ -111,6 +115,16 @@ bool ABuildingMergeDemo::PlaceFirstBuilding()
 	{
 		StopWithError(Reason.ToString());
 		return false;
+	}
+	if (bShowAdjacentChanges)
+	{
+		Card.Number = 4;
+		AdjacentBuilding = DemoBoard->PlaceBuilding(FIntVector(0, 1, 0), Card, false, Reason);
+		if (!AdjacentBuilding)
+		{
+			StopWithError(Reason.ToString());
+			return false;
+		}
 	}
 	PhaseTime = 0.0;
 	bMerging = false;
@@ -130,11 +144,24 @@ void ABuildingMergeDemo::Tick(const float DeltaSeconds)
 			StopWithError(Reason.ToString());
 			return;
 		}
+		// 两个展示变化共用一个操作原点；数字不同使它们保持为两个相邻结果，便于观察联动。
+		DemoBoard->bUseSharedVisualChangeOrigin = true;
+		DemoBoard->VisualChangeOrigin = DemoBoard->GetGridWorldLocation(FIntVector(1, 0, 0));
 		CurrentBuilding = DemoBoard->PlaceBuilding(FIntVector(1, 0, 0), Card, true, Reason);
 		if (!CurrentBuilding || !Reason.IsEmpty() || !CurrentBuilding->BuildingMerge->bIsPlaying)
 		{
 			StopWithError(FString::Printf(TEXT("真实合并流程未启动动画。%s"), *Reason.ToString()));
 			return;
+		}
+		if (bShowAdjacentChanges)
+		{
+			Card.Number = 4;
+			AdjacentBuilding = DemoBoard->PlaceBuilding(FIntVector(1, 1, 0), Card, true, Reason);
+			if (!AdjacentBuilding || !Reason.IsEmpty() || !AdjacentBuilding->BuildingMerge->bIsPlaying)
+			{
+				StopWithError(FString::Printf(TEXT("相邻变化未能启动。%s"), *Reason.ToString()));
+				return;
+			}
 		}
 		bMerging = true;
 		PhaseTime = 0.0;
@@ -144,22 +171,24 @@ void ABuildingMergeDemo::Tick(const float DeltaSeconds)
 		return;
 	}
 
+	const double ShowcaseDuration = FMath::Max(CurrentBuilding->BuildingMerge->TotalDuration,
+		AdjacentBuilding ? AdjacentBuilding->BuildingMerge->TotalDuration : 0.0);
 	if (bCaptureFrames)
 	{
 		// 固定 25 个观察时刻，保留原建筑、拆散、汇聚、展开和最终模型，供视觉复核与 GIF 使用。
-		if (CaptureFrameIndex <= 24 && PhaseTime >= CaptureFrameIndex * CurrentBuilding->BuildingMerge->Duration / 24.0)
+		if (CaptureFrameIndex <= 24 && PhaseTime >= CaptureFrameIndex * ShowcaseDuration / 24.0)
 		{
 			const FString Filename = FPaths::ProjectSavedDir() / TEXT("Tests/BuildingMergeVisual")
 				/ FString::Printf(TEXT("Frame_%02d.png"), CaptureFrameIndex++);
 			FScreenshotRequest::RequestScreenshot(Filename, false, false);
 		}
-		if (PhaseTime >= CurrentBuilding->BuildingMerge->Duration + 1.2 && CaptureFrameIndex > 24)
+		if (PhaseTime >= ShowcaseDuration + 1.2 && CaptureFrameIndex > 24)
 		{
 			UE_LOG(LogBuildingMergeDemo, Display, TEXT("合并视觉验收已完成：25 张截图已请求，结束验收进程。"));
 			FPlatformMisc::RequestExit(false);
 		}
 	}
-	else if (PhaseTime >= CurrentBuilding->BuildingMerge->Duration + 2.0)
+	else if (PhaseTime >= ShowcaseDuration + 2.0)
 	{
 		if (!bLoop)
 		{
@@ -168,6 +197,11 @@ void ABuildingMergeDemo::Tick(const float DeltaSeconds)
 		}
 		FText Reason;
 		if (!DemoBoard->RemoveBuilding(CurrentBuilding, Reason))
+		{
+			StopWithError(Reason.ToString());
+			return;
+		}
+		if (AdjacentBuilding && !DemoBoard->RemoveBuilding(AdjacentBuilding, Reason))
 		{
 			StopWithError(Reason.ToString());
 			return;

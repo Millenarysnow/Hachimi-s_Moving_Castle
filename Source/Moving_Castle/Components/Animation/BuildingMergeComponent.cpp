@@ -7,12 +7,14 @@
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "Matching/BuildingPartCatalog.h"
+#include "Matching/BuildingPartMatcher.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogBuildingMerge, Log, All);
 
 namespace BuildingMergeMotion
 {
-	/** 零速起止让大量零件的交错运动保持连贯，卡顿跨帧也直接求出正确位置。 */
+	/** 零速起止用于短距离结构调整，不产生整栋弹跳或围绕公共中心旋转。 */
 	double Smooth(const double Value)
 	{
 		const double U = FMath::Clamp(Value, 0.0, 1.0);
@@ -33,83 +35,268 @@ void UBuildingMergeComponent::BeginPlay()
 	if (bAutoPlay)
 	{
 		TArray<AActor*> Sources;
-		for (AActor* Source : SourceActors)
-		{
-			Sources.Add(Source);
-		}
-		StartMerge(Sources);
+		for (AActor* Source : SourceActors) { Sources.Add(Source); }
+		StartChange(Sources);
 	}
 }
 
-bool UBuildingMergeComponent::CaptureActor(AActor* Actor, const bool bTarget,
-	const FTransform& OwnerTransform, FBox& Bounds, FString& Error)
+bool UBuildingMergeComponent::CaptureActor(AActor* Actor, TArray<FPartSnapshot>& OutParts, FString& Error) const
 {
-	// 两套动画不能同时隐藏相同原件；明确指出冲突，避免漏掉已被飞入组件隐藏的零件。
 	if (const UAssemblyFlightComponent* Flight = Actor->FindComponentByClass<UAssemblyFlightComponent>(); Flight && Flight->bIsPlaying)
 	{
-		Error = FString::Printf(TEXT("%s 正在播放 Assembly Flight，请先完成或停止装配动画。"), *Actor->GetName());
+		Error = FString::Printf(TEXT("%s 正在播放 Assembly Flight，请先完成或停止该动画。"), *Actor->GetName());
 		return false;
 	}
 	TArray<UStaticMeshComponent*> Meshes;
 	Actor->GetComponents<UStaticMeshComponent>(Meshes, false);
-	const int32 PreviousCount = Parts.Num();
+	const UBuildingMergeComponent* PreviousTransition = Actor->FindComponentByClass<UBuildingMergeComponent>();
+	if (PreviousTransition == this || !PreviousTransition || !PreviousTransition->bIsPlaying)
+	{
+		PreviousTransition = nullptr;
+	}
+	Meshes.Sort([](const UStaticMeshComponent& A, const UStaticMeshComponent& B) { return A.GetName() < B.GetName(); });
+	const int32 BeginIndex = OutParts.Num();
+	double BaseHeight = TNumericLimits<double>::Max();
 	for (UStaticMeshComponent* Mesh : Meshes)
 	{
-		if (Visuals.Contains(Mesh) || !Mesh->IsVisible() || Mesh->bHiddenInGame
+		const FMergePart* PendingPart = PreviousTransition
+			? PreviousTransition->Parts.FindByPredicate([Mesh](const FMergePart& Part)
+			{
+				return Part.Visual.Get() == Mesh && !Part.bFinished && Part.Motion == EPartMotion::Arrive;
+			}) : nullptr;
+		const bool bPendingArrival = PendingPart && PreviousTransition->ElapsedTime < PendingPart->Delay;
+		if ((!Mesh->IsVisible() && !bPendingArrival) || Mesh->bHiddenInGame
 			|| (!ExcludedComponentTag.IsNone() && Mesh->ComponentHasTag(ExcludedComponentTag)))
 		{
 			continue;
 		}
 		if (!Mesh->IsRegistered() || !Mesh->GetStaticMesh() || Mesh->IsA<UInstancedStaticMeshComponent>()
 			|| Mesh->IsSimulatingPhysics() || !Mesh->GetComponentTransform().IsValid()
-			|| Mesh->GetComponentScale().GetAbsMin() <= UE_SMALL_NUMBER || !Mesh->Bounds.GetBox().IsValid)
+			|| Mesh->GetComponentScale().GetAbsMin() <= UE_SMALL_NUMBER || !Mesh->Bounds.GetBox().IsValid
+			|| Mesh->GetStaticMesh()->GetBoundingBox().GetSize().GetMax() <= UE_SMALL_NUMBER)
 		{
-			Error = FString::Printf(TEXT("%s.%s 不是有效的独立静态网格零件；不支持 ISM/HISM、物理模拟或零缩放。"),
+			Error = FString::Printf(TEXT("%s.%s 不是有效的独立静态网格；不支持 ISM/HISM、物理模拟或零缩放。"),
 				*Actor->GetName(), *Mesh->GetName());
 			return false;
 		}
-
-		FMergePart& Part = Parts.AddDefaulted_GetRef();
-		Part.bTarget = bTarget;
-		Part.Target = bTarget ? Mesh : nullptr;
-		Part.InitialRelative = Mesh->GetComponentTransform().GetRelativeTransform(OwnerTransform);
-		Part.MeshCenter = Mesh->GetComponentTransform().InverseTransformPosition(Mesh->Bounds.Origin);
-		Part.StartCenter = OwnerTransform.InverseTransformPosition(Mesh->Bounds.Origin);
-		// 顶层旧件先松开、底层新件先咬合；每件只错开少量时间，仍能看到整群零件同时运动。
-		Part.Order = Mesh->Bounds.Origin.Z;
-		Bounds += Mesh->Bounds.GetBox();
-
-		UStaticMeshComponent* Visual = NewObject<UStaticMeshComponent>(GetOwner(), NAME_None, RF_Transient);
-		Visuals.Add(Visual);
-		Part.Visual = Visual;
-		Visual->SetMobility(EComponentMobility::Movable);
-		Visual->SetStaticMesh(Mesh->GetStaticMesh());
-		for (int32 Index = 0; Index < Mesh->GetNumMaterials(); ++Index)
+		FPartSnapshot& Part = OutParts.AddDefaulted_GetRef();
+		Part.Mesh = Mesh;
+		Part.WorldTransform = bPendingArrival
+			? PendingPart->InitialRelative * Actor->GetActorTransform() : Mesh->GetComponentTransform();
+		const FBoxSphereBounds CapturedBounds = bPendingArrival
+			? Mesh->GetStaticMesh()->GetBounds().TransformBy(Part.WorldTransform) : Mesh->Bounds;
+		Part.Center = CapturedBounds.Origin;
+		Part.Radius = CapturedBounds.SphereRadius;
+		Part.LocalCenter = Part.WorldTransform.InverseTransformPosition(Part.Center);
+		Part.LocalSize = Mesh->GetStaticMesh()->GetBoundingBox().GetSize();
+		Part.bIncoming = Actor == IncomingSourceActor;
+		Part.bPendingArrival = bPendingArrival;
+		Part.RemainingDelay = bPendingArrival ? PendingPart->Delay - PreviousTransition->ElapsedTime : 0.0;
+		BaseHeight = FMath::Min(BaseHeight, CapturedBounds.GetBox().Min.Z);
+		const FBuildingPartGeometry* Geometry = PartCatalog ? PartCatalog->FindGeometry(Mesh->GetStaticMesh()) : nullptr;
+		if (Geometry && Geometry->GeometryId.IsEmpty())
 		{
-			Visual->SetMaterial(Index, Mesh->GetMaterial(Index));
+			Error = FString::Printf(TEXT("%s 的目录几何身份为空，请重建目录。"), *Mesh->GetName());
+			return false;
 		}
-		Visual->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		Visual->SetGenerateOverlapEvents(false);
-		Visual->SetCanEverAffectNavigation(false);
-		Visual->SetCastShadow(Mesh->CastShadow);
-		Visual->SetReceivesDecals(Mesh->bReceivesDecals);
-		Visual->SetVisibility(false, false);
-		Visual->RegisterComponent();
-		if (!Visual->IsRegistered())
+		Part.ShapeIdentity = Geometry ? TEXT("Geometry:") + Geometry->GeometryId
+			: TEXT("Asset:") + Mesh->GetStaticMesh()->GetPathName();
+
+		// 明确身份优先，适合几何接近但有不同用途的门框/窗框；重复身份仍按最小移动分配。
+		FString ExplicitIdentity;
+		for (const FName Tag : Mesh->ComponentTags)
 		{
-			Error = TEXT("无法注册合并动画的临时零件。");
+			const FString Text = Tag.ToString();
+			if (Text.StartsWith(TEXT("MergeIdentity=")))
+			{
+				if (!ExplicitIdentity.IsEmpty() || Text.Len() == 14)
+				{
+					Error = FString::Printf(TEXT("%s 的 MergeIdentity 标签为空或重复。"), *Mesh->GetName());
+					return false;
+				}
+				ExplicitIdentity = Text.Mid(14);
+			}
+		}
+		if (!ExplicitIdentity.IsEmpty())
+		{
+			Part.Identity = TEXT("Role:") + ExplicitIdentity;
+		}
+		else
+		{
+			// 没有跨资产几何证据时只承认同一资产，不通过组件序号或包围盒猜测设计身份。
+			Part.Identity = Part.ShapeIdentity;
+		}
+	}
+	if (BeginIndex == OutParts.Num())
+	{
+		Error = FString::Printf(TEXT("%s 没有可见的独立静态网格零件。"), *Actor->GetName());
+		return false;
+	}
+	for (int32 Index = BeginIndex; Index < OutParts.Num(); ++Index) { OutParts[Index].BaseHeight = BaseHeight; }
+	return true;
+}
+
+bool UBuildingMergeComponent::CreateVisual(FMergePart& Part, UStaticMeshComponent* Template)
+{
+	UStaticMeshComponent* Visual = NewObject<UStaticMeshComponent>(GetOwner(), NAME_None, RF_Transient);
+	Visuals.Add(Visual);
+	Part.Visual = Visual;
+	Visual->SetMobility(EComponentMobility::Movable);
+	Visual->SetStaticMesh(Template->GetStaticMesh());
+	// 复制身份标签，让下一次变化能从当前飞行姿态接续，而不是重新出现完整的中间建筑。
+	Visual->ComponentTags = Template->ComponentTags;
+	for (int32 Index = 0; Index < Template->GetNumMaterials(); ++Index)
+	{
+		Visual->SetMaterial(Index, Template->GetMaterial(Index));
+	}
+	Visual->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Visual->SetGenerateOverlapEvents(false);
+	Visual->SetCanEverAffectNavigation(false);
+	Visual->SetCastShadow(Template->CastShadow);
+	Visual->SetReceivesDecals(Template->bReceivesDecals);
+	Visual->SetVisibility(false, false);
+	Visual->RegisterComponent();
+	return Visual->IsRegistered();
+}
+
+bool UBuildingMergeComponent::BuildPlan(const TArray<FPartSnapshot>& Sources,
+	const TArray<FPartSnapshot>& Targets, const FVector& Origin, FString& Error)
+{
+	TArray<FBuildingPartMatchPoint> SourcePoints;
+	TArray<FBuildingPartMatchPoint> TargetPoints;
+	for (const FPartSnapshot& Part : Sources)
+	{
+		SourcePoints.Add({Part.Identity, Part.Center, Part.WorldTransform.GetRotation(), Part.Radius});
+	}
+	for (const FPartSnapshot& Part : Targets)
+	{
+		TargetPoints.Add({Part.Identity, Part.Center, Part.WorldTransform.GetRotation(), Part.Radius});
+	}
+	const TArray<int32> Correspondence = BuildingPartMatcher::Match(SourcePoints, TargetPoints);
+	TSet<int32> UsedSources;
+	const FTransform OwnerTransform = GetOwner()->GetActorTransform();
+	const FVector Direction = ArrivalDirection.GetSafeNormal();
+	UpOwnerSpace = OwnerTransform.GetRotation().UnrotateVector(FVector::UpVector);
+
+	for (int32 Index = 0; Index < Targets.Num(); ++Index)
+	{
+		const FPartSnapshot& Target = Targets[Index];
+		const int32 SourceIndex = Correspondence[Index];
+		const FPartSnapshot* Source = SourceIndex == INDEX_NONE ? nullptr : &Sources[SourceIndex];
+		FMergePart& Part = Parts.AddDefaulted_GetRef();
+		Part.Target = Target.Mesh;
+		Part.MeshCenter = Target.LocalCenter;
+		Part.TargetMeshCenter = Target.LocalCenter;
+		Part.Delay = FVector::Distance(Origin, Target.Center) / PropagationSpeed;
+		FVector StartCenter = Target.Center;
+		FQuat StartRotation = Target.WorldTransform.GetRotation();
+		FVector StartScale = Target.WorldTransform.GetScale3D();
+		UStaticMeshComponent* VisualTemplate = Target.Mesh;
+		if (Source)
+		{
+			UsedSources.Add(SourceIndex);
+			++ReusedPartCount;
+			StartCenter = Source->Center;
+			StartRotation = Source->WorldTransform.GetRotation();
+			// 真正沿用旧网格飞到新位置；只在归位时换成目标原件。导入单位通过尺寸比例换算。
+			Part.MeshCenter = Source->LocalCenter;
+			Part.TargetUnitRatio = Target.LocalSize.GetMax() / Source->LocalSize.GetMax();
+			VisualTemplate = Source->Mesh;
+			StartScale = Source->WorldTransform.GetScale3D();
+			bool bSameMaterials = Source->Mesh->GetNumMaterials() == Target.Mesh->GetNumMaterials();
+			for (int32 Material = 0; bSameMaterials && Material < Target.Mesh->GetNumMaterials(); ++Material)
+			{
+				bSameMaterials = Source->Mesh->GetMaterial(Material) == Target.Mesh->GetMaterial(Material);
+			}
+			const bool bSamePose = FVector::Distance(StartCenter, Target.Center) <= KeepPositionTolerance
+				&& StartRotation.AngularDistance(Target.WorldTransform.GetRotation()) <= FMath::DegreesToRadians(0.2)
+				&& (Source->LocalSize * StartScale).Equals(Target.LocalSize * Target.WorldTransform.GetScale3D(), KeepPositionTolerance)
+				&& Source->ShapeIdentity == Target.ShapeIdentity && bSameMaterials;
+			if (!Source->bIncoming && !Source->bPendingArrival && bSamePose)
+			{
+				Part.Motion = EPartMotion::Keep;
+				Part.bFinished = true;
+				++UnchangedPartCount;
+				++CompletedPartCount;
+				continue;
+			}
+			Part.Motion = Source->bIncoming || Source->bPendingArrival ? EPartMotion::Arrive : EPartMotion::Move;
+		}
+		else
+		{
+			Part.Motion = EPartMotion::Arrive;
+			++AddedPartCount;
+		}
+		if (Part.Motion == EPartMotion::Arrive)
+		{
+			++IncomingPartCount;
+			if (Source && Source->bPendingArrival)
+			{
+				// 接续上轮尚未出现的零件，沿用原来的起飞姿态及剩余等待，不再次向外偏移。
+				Part.Delay = FMath::Max(Part.Delay, Source->RemainingDelay);
+			}
+			else
+			{
+				StartCenter += Direction * FlightDistance;
+				const double BaseHeight = Source ? Source->BaseHeight : Target.BaseHeight;
+				StartCenter.Z = BaseHeight + Target.Mesh->Bounds.BoxExtent.Z + 30.0;
+				const double Angle = Index * 2.399963229728653;
+				StartCenter += FVector(-Direction.Y, Direction.X, 0.0) * FMath::Sin(Angle) * 35.0;
+				StartRotation = (FRotator(12.0 * FMath::Cos(Angle), 9.0 * FMath::Sin(Angle), 8.0 * FMath::Sin(Angle)).Quaternion() * StartRotation).GetNormalized();
+			}
+			Part.PlayDuration = Duration;
+			Part.ArcHeight = LiftHeight;
+			// 屋顶稍晚于底部发射；真实距离传播仍共用操作原点，不按各栋建筑分别起一轮。
+			if (!Source || !Source->bPendingArrival)
+			{
+				Part.Delay += FMath::Clamp((Target.Center.Z - Target.BaseHeight) / 1000.0, 0.0, 1.0) * Duration * 0.18;
+			}
+		}
+		else
+		{
+			++MovedPartCount;
+			Part.PlayDuration = Duration * 0.55;
+			Part.ArcHeight = FMath::Min(LiftHeight, FVector::Distance(StartCenter, Target.Center) * 0.18);
+		}
+		const FVector StartPivot = StartCenter - StartRotation.RotateVector(StartScale * Part.MeshCenter);
+		Part.InitialRelative = FTransform(StartRotation, StartPivot, StartScale).GetRelativeTransform(OwnerTransform);
+		TotalDuration = FMath::Max(TotalDuration, Part.Delay + Part.PlayDuration);
+		if (!CreateVisual(Part, VisualTemplate))
+		{
+			Error = TEXT("无法创建局部变化的网格副本。");
 			return false;
 		}
 	}
-	if (Parts.Num() == PreviousCount)
+	for (int32 Index = 0; Index < Sources.Num(); ++Index)
 	{
-		Error = FString::Printf(TEXT("%s 没有可参与合并的可见独立静态网格，请检查模型及排除标签。"), *Actor->GetName());
-		return false;
+		if (UsedSources.Contains(Index)) { continue; }
+		const FPartSnapshot& Source = Sources[Index];
+		FMergePart& Part = Parts.AddDefaulted_GetRef();
+		Part.Motion = EPartMotion::Depart;
+		Part.MeshCenter = Source.LocalCenter;
+		Part.InitialRelative = Source.WorldTransform.GetRelativeTransform(OwnerTransform);
+		Part.EndCenter = OwnerTransform.InverseTransformPosition(Source.Center + Direction * FlightDistance * 0.25 + FVector::UpVector * LiftHeight * 0.4);
+		Part.Delay = FVector::Distance(Origin, Source.Center) / PropagationSpeed;
+		Part.PlayDuration = Duration * 0.5;
+		Part.ArcHeight = LiftHeight * 0.25;
+		++RemovedPartCount;
+		TotalDuration = FMath::Max(TotalDuration, Part.Delay + Part.PlayDuration);
+		if (!CreateVisual(Part, Source.Mesh))
+		{
+			Error = TEXT("无法创建移除零件的网格副本。");
+			return false;
+		}
 	}
 	return true;
 }
 
 bool UBuildingMergeComponent::StartMerge(const TArray<AActor*>& Sources)
+{
+	if (Sources.Num() < 2) { return FailMerge(TEXT("合并至少需要两个源 Actor。")); }
+	return StartChange(Sources);
+}
+
+bool UBuildingMergeComponent::StartChange(const TArray<AActor*>& Sources)
 {
 	ResetMerge();
 	LastError.Reset();
@@ -120,185 +307,115 @@ bool UBuildingMergeComponent::StartMerge(const TArray<AActor*>& Sources)
 		return FailMerge(TEXT("合并结果必须是游戏世界中可见且变换有效的 Actor。"));
 	}
 	if (!FMath::IsFinite(Duration) || Duration < 0.1 || !FMath::IsFinite(LiftHeight) || LiftHeight < 0.0
-		|| !FMath::IsFinite(SeparationRatio) || SeparationRatio < 0.0 || SeparationRatio > 0.5
-		|| !FMath::IsFinite(SwirlAngle) || SwirlAngle < 0.0 || SwirlAngle > 360.0)
+		|| !FMath::IsFinite(FlightDistance) || FlightDistance < 0.0 || ArrivalDirection.ContainsNaN() || ArrivalDirection.IsNearlyZero()
+		|| !FMath::IsFinite(KeepPositionTolerance) || KeepPositionTolerance < 0.0
+		|| !FMath::IsFinite(PropagationSpeed) || PropagationSpeed <= 0.0
+		|| (bUseSharedChangeOrigin && ChangeOrigin.ContainsNaN()))
 	{
-		return FailMerge(TEXT("时长须为至少 0.1 秒的有限数；抬升须非负，拆散幅度须为 0..0.5，旋转角须为 0..360。"));
+		return FailMerge(TEXT("动画时长、传播速度须为有限正数；尺寸/容差须非负，来向须为有限非零向量。"));
 	}
-	if (Sources.Num() < 2)
-	{
-		return FailMerge(TEXT("合并至少需要两个源 Actor。"));
-	}
+	if (Sources.IsEmpty()) { return FailMerge(TEXT("局部变化至少需要一个源 Actor。")); }
 	TSet<AActor*> UniqueSources;
-	for (AActor* Source : Sources)
-	{
-		if (!IsValid(Source) || Source == Owner || Source->GetWorld() != GetWorld() || Source->IsHidden()
-			|| UniqueSources.Contains(Source))
-		{
-			return FailMerge(TEXT("源 Actor 必须有效、可见、与结果处于同一世界，且不能重复或包含结果自身。"));
-		}
-		UniqueSources.Add(Source);
-	}
-
-	const FTransform OwnerTransform = Owner->GetActorTransform();
-	FBox Bounds(ForceInit);
+	TArray<FPartSnapshot> SourceParts;
+	TArray<FPartSnapshot> TargetParts;
 	FString Error;
 	for (AActor* Source : Sources)
 	{
-		if (!CaptureActor(Source, false, OwnerTransform, Bounds, Error))
+		if (!IsValid(Source) || Source == Owner || Source->GetWorld() != GetWorld() || Source->IsHidden() || UniqueSources.Contains(Source))
 		{
-			return FailMerge(Error);
+			return FailMerge(TEXT("来源必须有效、可见、在同一世界且不重复，不能包含结果自身。"));
 		}
+		UniqueSources.Add(Source);
+		if (!CaptureActor(Source, SourceParts, Error)) { return FailMerge(Error); }
 	}
-	SourcePartCount = Parts.Num();
-	if (!CaptureActor(Owner, true, OwnerTransform, Bounds, Error))
+	if (IncomingSourceActor && !UniqueSources.Contains(IncomingSourceActor))
 	{
-		return FailMerge(Error);
+		return FailMerge(TEXT("Incoming Source Actor 必须属于本轮有效来源。"));
 	}
-	TargetPartCount = Parts.Num() - SourcePartCount;
-	ActiveDuration = Duration;
-	ActiveSwirlAngle = FMath::DegreesToRadians(SwirlAngle);
-	const FVector WorldCore = Bounds.GetCenter();
-	CoreCenter = OwnerTransform.InverseTransformPosition(WorldCore);
-	LiftOffset = OwnerTransform.InverseTransformVector(FVector(0.0, 0.0, LiftHeight));
-	// 记录起播时竖直轴相对 Actor 的方向，后续俯仰/横滚也要带着旋流整体转动。
-	SwirlAxisOwnerSpace = OwnerTransform.GetRotation().UnrotateVector(FVector::UpVector);
-	const double Radius = Bounds.GetExtent().Size2D();
+	if (!CaptureActor(Owner, TargetParts, Error)) { return FailMerge(Error); }
+	SourcePartCount = SourceParts.Num();
+	TargetPartCount = TargetParts.Num();
+	const FVector Origin = bUseSharedChangeOrigin ? ChangeOrigin
+		: (IncomingSourceActor ? IncomingSourceActor->GetActorLocation() : Owner->GetActorLocation());
+	if (!BuildPlan(SourceParts, TargetParts, Origin, Error)) { return FailMerge(Error); }
 
-	// 所有几何位置都转换到结果 Actor 空间；城堡整体移动、转向或缩放时路径随之运动。
-	for (int32 Index = 0; Index < Parts.Num(); ++Index)
-	{
-		FMergePart& Part = Parts[Index];
-		const double Height = FMath::Clamp((Part.Order - Bounds.Min.Z) / FMath::Max(Bounds.GetSize().Z, 1.0), 0.0, 1.0);
-		const double Angle = Index * 2.399963229728653;
-		const FVector Radial(FMath::Cos(Angle), FMath::Sin(Angle), 0.0);
-		Part.Tilt = FRotator(25.0 * FMath::Cos(Angle), 42.0 * FMath::Sin(Angle), 18.0 * FMath::Sin(Angle * 2.0)).Quaternion();
-		if (Part.bTarget)
-		{
-			Part.Delay = ActiveDuration * (0.42 + Height * 0.18);
-			Part.ScatterCenter = CoreCenter + OwnerTransform.InverseTransformVector(
-				Radial * Radius * 0.075 + FVector(0.0, 0.0, (Height - 0.5) * LiftHeight * 0.5));
-		}
-		else
-		{
-			Part.Delay = ActiveDuration * (0.05 + (1.0 - Height) * 0.10);
-			const FVector WorldCenter = OwnerTransform.TransformPosition(Part.StartCenter);
-			FVector Outward = WorldCenter - WorldCore;
-			Outward.Z = 0.0;
-			Outward = Outward.GetSafeNormal();
-			Part.ScatterCenter = Part.StartCenter + OwnerTransform.InverseTransformVector(
-				Outward * Radius * SeparationRatio + Radial * Radius * SeparationRatio * 0.35)
-				+ LiftOffset * (0.65 + 0.35 * Height);
-		}
-	}
-
-	// 全部副本创建成功后才修改原件。结果碰撞保持有效，合并中仍能被选中、回收或继续升级。
+	// 所有计划和副本就绪后才提交显隐。结果碰撞始终有效，不阻断相邻放置、回收或再次升级。
 	TArray<UPrimitiveComponent*> Primitives;
 	Owner->GetComponents<UPrimitiveComponent>(Primitives, false);
 	for (UPrimitiveComponent* Primitive : Primitives)
 	{
 		if (!Visuals.Contains(Cast<UStaticMeshComponent>(Primitive)))
 		{
-			TargetStates.Add({ Primitive, Primitive->IsVisible() });
+			TargetStates.Add({Primitive, Primitive->IsVisible()});
 			Primitive->SetVisibility(false, false);
 		}
 	}
 	for (AActor* Source : Sources)
 	{
-		SourceStates.Add({ Source, Source->IsHidden(), Source->GetActorEnableCollision() });
+		SourceStates.Add({Source, Source->IsHidden(), Source->GetActorEnableCollision()});
 		Source->SetActorHiddenInGame(true);
 		Source->SetActorEnableCollision(false);
 	}
 	bCaptured = true;
-	bIsPlaying = true;
-	SetComponentTickEnabled(true);
 	for (FMergePart& Part : Parts)
 	{
-		UpdatePart(Part);
+		if (Part.Motion == EPartMotion::Keep) { Part.Target->SetVisibility(true, false); }
+		else { UpdatePart(Part); }
 	}
-	const FString Message = FString::Printf(TEXT("零件合并开始：%d 件旧零件 → %d 件新零件，%.1f 秒。"), SourcePartCount, TargetPartCount, ActiveDuration);
+	bIsPlaying = true;
+	SetComponentTickEnabled(true);
+	const FString Message = FString::Printf(TEXT("局部变化：复用 %d（原位 %d、移动 %d），飞入 %d，新增 %d，移除 %d。"),
+		ReusedPartCount, UnchangedPartCount, MovedPartCount, IncomingPartCount, AddedPartCount, RemovedPartCount);
 	UE_LOG(LogBuildingMerge, Display, TEXT("%s [%s]"), *Message, *Owner->GetName());
 	ShowStatus(Message, FColor::Cyan);
+	if (TotalDuration <= 0.0) { CompleteMerge(); }
 	return true;
 }
 
 void UBuildingMergeComponent::UpdatePart(FMergePart& Part)
 {
-	if (Part.bFinished)
+	if (Part.bFinished) { return; }
+	const FTransform OwnerTransform = GetOwner()->GetActorTransform();
+	const FTransform Start = Part.InitialRelative * OwnerTransform;
+	const double Age = ElapsedTime - Part.Delay;
+	const double U = FMath::Clamp(Age / Part.PlayDuration, 0.0, 1.0);
+	if (Age < 0.0 && Part.Motion == EPartMotion::Arrive)
 	{
+		Part.Visual->SetVisibility(false, false);
 		return;
 	}
-	const FTransform OwnerTransform = GetOwner()->GetActorTransform();
-	FTransform Anchor = Part.InitialRelative * OwnerTransform;
-	if (Part.bTarget)
+	if (U >= 1.0)
 	{
-		Anchor = Part.Target->GetComponentTransform();
-	}
-	const double Age = ElapsedTime - Part.Delay;
-	FVector Center;
-	FQuat Rotation;
-	double Scale = 1.0;
-	if (Part.bTarget)
-	{
-		if (Age < 0.0)
+		if (Part.Target.IsValid())
 		{
-			Part.Visual->SetVisibility(false, false);
-			return;
-		}
-		const double U = FMath::Clamp(Age / (ActiveDuration * 0.40), 0.0, 1.0);
-		if (U >= 1.0)
-		{
-			// 精确收尾使用原组件，任何弹性运动误差都不会写回正式建筑。
-			const FPrimitiveState* State = TargetStates.FindByPredicate([&Part](const FPrimitiveState& Item)
-			{
-				return Item.Primitive == Part.Target;
-			});
-			check(State);
-			Part.Target->SetVisibility(State->bVisible, false);
-			Part.Visual->DestroyComponent();
-			Part.bFinished = true;
+			Part.Target->SetVisibility(true, false);
 			++CompletedPartCount;
-			return;
 		}
-		const double Eased = BuildingMergeMotion::Smooth(U);
-		const FVector Goal = Anchor.TransformPosition(Part.MeshCenter);
-		const FVector Start = OwnerTransform.TransformPosition(Part.ScatterCenter);
-		const FVector Offset = Goal - Start;
-		const FVector Up = OwnerTransform.GetRotation().RotateVector(SwirlAxisOwnerSpace);
-		const FVector Tangent = FVector::CrossProduct(Up, Offset) * 0.18;
-		Center = FMath::Lerp(Start, Goal, Eased) + (Tangent + OwnerTransform.TransformVector(LiftOffset) * 0.35) * FMath::Sin(UE_PI * U);
-		const FQuat Tilt = OwnerTransform.GetRotation() * Part.Tilt * OwnerTransform.GetRotation().Inverse();
-		Rotation = FQuat::Slerp(Tilt * Anchor.GetRotation(), Anchor.GetRotation(), Eased).GetNormalized();
-		// 每件独立轻微过冲并回弹，像榫卯咬合；不是对整栋建筑做统一缩放。
-		Scale = FMath::Lerp(0.12, 1.0, Eased) + 0.045 * FMath::Sin(UE_PI * U) * FMath::Sin(UE_PI * U * 2.0);
+		Part.Visual->DestroyComponent();
+		Part.bFinished = true;
+		return;
+	}
+	const double Eased = BuildingMergeMotion::Smooth(U);
+	const FVector StartCenter = Start.TransformPosition(Part.MeshCenter);
+	FVector Goal = OwnerTransform.TransformPosition(Part.EndCenter);
+	FQuat Rotation = Start.GetRotation();
+	FVector Scale = Start.GetScale3D();
+	if (Part.Target.IsValid())
+	{
+		const FTransform Target = Part.Target->GetComponentTransform();
+		Goal = Target.TransformPosition(Part.TargetMeshCenter);
+		Rotation = FQuat::Slerp(Start.GetRotation(), Target.GetRotation(), Eased).GetNormalized();
+		Scale = FMath::Lerp(Start.GetScale3D(), Target.GetScale3D() * Part.TargetUnitRatio, Eased);
 	}
 	else
 	{
-		const double Detach = BuildingMergeMotion::Smooth(Age / (ActiveDuration * 0.18));
-		const double U = FMath::Clamp((Age - ActiveDuration * 0.18) / (ActiveDuration * 0.23), 0.0, 1.0);
-		if (U >= 1.0)
-		{
-			Part.Visual->DestroyComponent();
-			Part.bFinished = true;
-			return;
-		}
-		const FVector Detached = FMath::Lerp(Part.StartCenter, Part.ScatterCenter, Detach);
-		const double Eased = BuildingMergeMotion::Smooth(U);
-		const FQuat Swirl(OwnerTransform.GetRotation().RotateVector(SwirlAxisOwnerSpace), ActiveSwirlAngle * Eased);
-		const FVector WorldCore = OwnerTransform.TransformPosition(CoreCenter);
-		const FVector Radial = OwnerTransform.TransformVector(Detached - CoreCenter);
-		Center = WorldCore + Swirl.RotateVector(Radial) * (1.0 - Eased)
-			+ OwnerTransform.TransformVector(LiftOffset) * FMath::Sin(UE_PI * U) * 0.35;
-		const FQuat Tilt = OwnerTransform.GetRotation() * Part.Tilt * OwnerTransform.GetRotation().Inverse();
-		Rotation = (Swirl * FQuat::Slerp(FQuat::Identity, Tilt, Detach) * Anchor.GetRotation()).GetNormalized();
-		Scale = 1.0 - BuildingMergeMotion::Smooth((U - 0.45) / 0.55) * 0.98;
+		// 只有真正多余的旧件离场；保持附近的保留件可见，不抽走整栋建筑。
+		Scale *= 1.0 - BuildingMergeMotion::Smooth((U - 0.4) / 0.6) * 0.98;
 	}
-
-	// 平移减去旋转缩放后的几何中心偏移，确保共享原点的屋檐、墙板也绕自身中心运动。
-	const FVector VisualScale = Anchor.GetScale3D() * Scale;
-	const FVector PivotOffset = Rotation.RotateVector(VisualScale * Part.MeshCenter);
-	Part.Visual->SetWorldTransform(FTransform(Rotation, Center - PivotOffset, VisualScale),
-		false, nullptr, ETeleportType::TeleportPhysics);
+	const FVector Up = OwnerTransform.GetRotation().RotateVector(UpOwnerSpace);
+	const FVector Center = FMath::Lerp(StartCenter, Goal, Eased) + Up * Part.ArcHeight * FMath::Sin(UE_PI * U);
+	const FVector Pivot = Center - Rotation.RotateVector(Scale * Part.MeshCenter);
+	Part.Visual->SetWorldTransform(FTransform(Rotation, Pivot, Scale), false, nullptr, ETeleportType::TeleportPhysics);
 	Part.Visual->SetVisibility(true, false);
 }
 
@@ -306,10 +423,7 @@ void UBuildingMergeComponent::TickComponent(const float DeltaTime, const ELevelT
 	FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-	if (!bIsPlaying)
-	{
-		return;
-	}
+	if (!bIsPlaying) { return; }
 	if (!FMath::IsFinite(DeltaTime) || DeltaTime < 0.0f || !GetOwner()->GetActorTransform().IsValid()
 		|| GetOwner()->GetActorScale3D().GetAbsMin() <= UE_SMALL_NUMBER)
 	{
@@ -319,27 +433,21 @@ void UBuildingMergeComponent::TickComponent(const float DeltaTime, const ELevelT
 	ElapsedTime += DeltaTime;
 	for (FMergePart& Part : Parts)
 	{
-		if (Part.bTarget && !Part.Target.IsValid())
+		if (Part.Motion != EPartMotion::Depart && !Part.Target.IsValid())
 		{
-			FailMerge(TEXT("合并期间目标网格被外部销毁，已取消动画并恢复仍存在的原件。"));
+			FailMerge(TEXT("目标零件被外部销毁，已取消变化并恢复仍存在的原件。"));
 			return;
 		}
 		UpdatePart(Part);
 	}
-	if (ElapsedTime >= ActiveDuration)
-	{
-		CompleteMerge();
-	}
+	if (ElapsedTime >= TotalDuration) { CompleteMerge(); }
 }
 
 void UBuildingMergeComponent::RestoreTarget()
 {
 	for (const FPrimitiveState& State : TargetStates)
 	{
-		if (UPrimitiveComponent* Primitive = State.Primitive.Get())
-		{
-			Primitive->SetVisibility(State.bVisible, false);
-		}
+		if (UPrimitiveComponent* Primitive = State.Primitive.Get()) { Primitive->SetVisibility(State.bVisible, false); }
 	}
 }
 
@@ -347,10 +455,7 @@ void UBuildingMergeComponent::DestroyVisuals()
 {
 	for (UStaticMeshComponent* Visual : Visuals)
 	{
-		if (IsValid(Visual))
-		{
-			Visual->DestroyComponent();
-		}
+		if (IsValid(Visual)) { Visual->DestroyComponent(); }
 	}
 	Visuals.Reset();
 }
@@ -362,8 +467,9 @@ void UBuildingMergeComponent::CompleteMerge()
 	bIsPlaying = false;
 	SetComponentTickEnabled(false);
 	CompletedPartCount = TargetPartCount;
-	UE_LOG(LogBuildingMerge, Display, TEXT("零件合并完成：%d 件新零件全部归位。[%s]"), TargetPartCount, *GetOwner()->GetName());
-	ShowStatus(TEXT("合并完成：新建筑零件全部归位。"), FColor::Green);
+	UE_LOG(LogBuildingMerge, Display, TEXT("局部变化完成：%d 件归位，%d 件始终原位保留。[%s]"),
+		TargetPartCount, UnchangedPartCount, *GetOwner()->GetName());
+	ShowStatus(TEXT("局部变化完成：新建筑零件全部归位。"), FColor::Green);
 	OnMergeCompleted.Broadcast();
 }
 
@@ -388,8 +494,9 @@ void UBuildingMergeComponent::ResetMerge()
 	TargetStates.Reset();
 	SourceStates.Reset();
 	bCaptured = false;
-	SourcePartCount = TargetPartCount = CompletedPartCount = 0;
-	ElapsedTime = 0.0;
+	SourcePartCount = TargetPartCount = ReusedPartCount = UnchangedPartCount = MovedPartCount = IncomingPartCount = 0;
+	AddedPartCount = RemovedPartCount = CompletedPartCount = 0;
+	ElapsedTime = TotalDuration = 0.0;
 }
 
 bool UBuildingMergeComponent::FailMerge(const FString& Error)
