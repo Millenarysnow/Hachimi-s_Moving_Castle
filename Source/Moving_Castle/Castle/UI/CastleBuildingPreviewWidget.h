@@ -8,7 +8,9 @@
 #include "Styling/SlateBrush.h"
 #include "CastleBuildingPreviewWidget.generated.h"
 
-/** 背包和商店共用的建筑模型预览；只绘制缓存纹理，不自行生成虚构模型或修改卡牌。 */
+class UMaterialInstanceDynamic;
+
+/** 背包和商店共用的缓慢旋转描边预览；形状读取实际模型，颜色读取当前卡牌。 */
 UCLASS()
 class MOVING_CASTLE_API UCastleBuildingPreviewWidget : public UUserWidget
 {
@@ -28,6 +30,9 @@ public:
 	bool HasPreviewDescriptor() const { return bHasDescriptor; }
 
 protected:
+	/** 仅可见卡片请求更新共享旋转纹理；原来每秒 14 度的旋转速度保持不变。 */
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+
 	/** 纹理以正方形居中绘制，避免卡片的竖向布局拉伸建筑比例。 */
 	virtual int32 NativePaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
 		const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements,
@@ -37,7 +42,11 @@ private:
 	UPROPERTY(Transient)
 	FCastleBuildingDescriptor Descriptor;
 
-	/** Slate Brush 持有缓存纹理，背包重排时不重新捕获相同模型。 */
+	/** 每张卡片独立应用颜色，底层法线纹理与同定义、同等级的卡片共用。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> PreviewMaterial;
+
+	/** Slate 只绘制带柔光的轮廓，模型内部和周围背景均透明。 */
 	UPROPERTY(Transient)
 	FSlateBrush PreviewBrush;
 

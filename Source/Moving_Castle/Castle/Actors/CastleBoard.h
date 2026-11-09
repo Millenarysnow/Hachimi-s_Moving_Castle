@@ -41,10 +41,11 @@ public:
 
 	/**
 	 * 相邻 X/Y 网格中心之间的距离（厘米），地面、建筑占位和格面指示器共用此值。
-	 * 一级箭塔主体的平面模块为 500×500 厘米；屋檐等外伸装饰不计入单格尺寸。
+	 * 一级箭塔主体保持原来的 500×500 厘米；中心间距扩大到 700 厘米，
+	 * 为伸出主体的屋檐和相邻建筑留出空间，不通过缩放正式模型改变建筑大小。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "1.0", Units = "cm"))
-	float CellSize = 500.0f;
+	float CellSize = 700.0f;
 
 	/** 相邻垂直层的距离（厘米）；与箭塔每层 500 厘米的主体拼接模块保持一致。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "1.0", Units = "cm"))
