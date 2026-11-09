@@ -56,6 +56,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Building Merge|Feedback")
 	bool bShowStatusOnScreen = true;
 
+	/** 播放期间为真；空闲与完成状态关闭组件 Tick。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Building Merge|Runtime")
 	bool bIsPlaying = false;
 
@@ -63,12 +64,15 @@ public:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Building Merge|Runtime")
 	int32 SourcePartCount = 0;
 
+	/** 新建筑参与重组的独立网格数量。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Building Merge|Runtime")
 	int32 TargetPartCount = 0;
 
+	/** 已经恢复为原模型组件的新零件数。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Building Merge|Runtime")
 	int32 CompletedPartCount = 0;
 
+	/** 受游戏时间与所属 Actor 时间缩放影响的播放秒数。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="Building Merge|Runtime")
 	double ElapsedTime = 0.0;
 
@@ -135,6 +139,7 @@ private:
 
 	FVector CoreCenter = FVector::ZeroVector;
 	FVector LiftOffset = FVector::ZeroVector;
+	FVector SwirlAxisOwnerSpace = FVector::UpVector;
 	double ActiveDuration = 0.0;
 	double ActiveSwirlAngle = 0.0;
 	bool bCaptured = false;

@@ -112,6 +112,24 @@ bool FBuildingMergeLifecycleTest::RunTest(const FString& Parameters)
 		VisibleCopies += Mesh->HasAnyFlags(RF_Transient) && Mesh->IsVisible() ? 1 : 0;
 	}
 	TestTrue(TEXT("拆件阶段同时呈现多个真实网格"), VisibleCopies >= 12);
+
+	// 保持时间不变，只转动和移动所属 Actor，零件整条轨迹也应做同样的刚体变换。
+	// 此断言覆盖俯仰与横滚，能发现错误地绕固定世界竖轴旋转的情况。
+	TMap<UStaticMeshComponent*, FTransform> BeforeMove;
+	for (UStaticMeshComponent* Mesh : AllMeshes)
+	{
+		if (Mesh->HasAnyFlags(RF_Transient) && Mesh->IsVisible())
+		{
+			BeforeMove.Add(Mesh, Mesh->GetComponentTransform().GetRelativeTransform(Result->GetActorTransform()));
+		}
+	}
+	Result->SetActorTransform(FTransform(FRotator(17.0, 67.0, 9.0), FVector(1100.0, -300.0, 200.0)));
+	Merge->TickComponent(0.0f, LEVELTICK_All, nullptr);
+	for (const auto& Pair : BeforeMove)
+	{
+		TestTrue(TEXT("轨迹随 Actor 的俯仰横滚整体移动"), Pair.Key->GetComponentTransform()
+			.Equals(Pair.Value * Result->GetActorTransform(), 0.001));
+	}
 	Merge->ResetMerge();
 	TestFalse(TEXT("取消恢复旧建筑可见"), First->IsHidden());
 	TestTrue(TEXT("取消恢复旧建筑碰撞"), First->GetActorEnableCollision());

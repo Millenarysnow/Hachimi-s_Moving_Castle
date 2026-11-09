@@ -161,6 +161,8 @@ bool UBuildingMergeComponent::StartMerge(const TArray<AActor*>& Sources)
 	const FVector WorldCore = Bounds.GetCenter();
 	CoreCenter = OwnerTransform.InverseTransformPosition(WorldCore);
 	LiftOffset = OwnerTransform.InverseTransformVector(FVector(0.0, 0.0, LiftHeight));
+	// 记录起播时竖直轴相对 Actor 的方向，后续俯仰/横滚也要带着旋流整体转动。
+	SwirlAxisOwnerSpace = OwnerTransform.GetRotation().UnrotateVector(FVector::UpVector);
 	const double Radius = Bounds.GetExtent().Size2D();
 
 	// 所有几何位置都转换到结果 Actor 空间；城堡整体移动、转向或缩放时路径随之运动。
@@ -251,7 +253,8 @@ void UBuildingMergeComponent::UpdatePart(FMergePart& Part)
 			{
 				return Item.Primitive == Part.Target;
 			});
-			Part.Target->SetVisibility(State && State->bVisible, false);
+			check(State);
+			Part.Target->SetVisibility(State->bVisible, false);
 			Part.Visual->DestroyComponent();
 			Part.bFinished = true;
 			++CompletedPartCount;
@@ -261,7 +264,8 @@ void UBuildingMergeComponent::UpdatePart(FMergePart& Part)
 		const FVector Goal = Anchor.TransformPosition(Part.MeshCenter);
 		const FVector Start = OwnerTransform.TransformPosition(Part.ScatterCenter);
 		const FVector Offset = Goal - Start;
-		const FVector Tangent = FVector::CrossProduct(FVector::UpVector, Offset) * 0.18;
+		const FVector Up = OwnerTransform.GetRotation().RotateVector(SwirlAxisOwnerSpace);
+		const FVector Tangent = FVector::CrossProduct(Up, Offset) * 0.18;
 		Center = FMath::Lerp(Start, Goal, Eased) + (Tangent + OwnerTransform.TransformVector(LiftOffset) * 0.35) * FMath::Sin(UE_PI * U);
 		const FQuat Tilt = OwnerTransform.GetRotation() * Part.Tilt * OwnerTransform.GetRotation().Inverse();
 		Rotation = FQuat::Slerp(Tilt * Anchor.GetRotation(), Anchor.GetRotation(), Eased).GetNormalized();
@@ -280,7 +284,7 @@ void UBuildingMergeComponent::UpdatePart(FMergePart& Part)
 		}
 		const FVector Detached = FMath::Lerp(Part.StartCenter, Part.ScatterCenter, Detach);
 		const double Eased = BuildingMergeMotion::Smooth(U);
-		const FQuat Swirl(FVector::UpVector, ActiveSwirlAngle * Eased);
+		const FQuat Swirl(OwnerTransform.GetRotation().RotateVector(SwirlAxisOwnerSpace), ActiveSwirlAngle * Eased);
 		const FVector WorldCore = OwnerTransform.TransformPosition(CoreCenter);
 		const FVector Radial = OwnerTransform.TransformVector(Detached - CoreCenter);
 		Center = WorldCore + Swirl.RotateVector(Radial) * (1.0 - Eased)
