@@ -7,6 +7,8 @@
 #include "CastleGameplayTypes.h"
 #include "CastleBuildingDefinition.generated.h"
 
+class UBuildingPartCatalog;
+
 /**
  * 同一种建筑的一级配置。
  *
@@ -50,6 +52,10 @@ public:
 	/** 一份资产配置该建筑的所有等级；道路只配置一级。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "建筑", meta = (TitleProperty = "Level"))
 	TArray<FCastleBuildingLevelDefinition> Levels;
+
+	/** 各等级使用不同导入资产时，通过离线几何目录建立可复用零件关系。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="建筑|变化动画")
+	TObjectPtr<UBuildingPartCatalog> PartCatalog;
 
 	/** 查找准确等级，不把缺失等级替换为其他等级或其他建筑。 */
 	const FCastleBuildingLevelDefinition* FindLevel(int32 InLevel) const;
