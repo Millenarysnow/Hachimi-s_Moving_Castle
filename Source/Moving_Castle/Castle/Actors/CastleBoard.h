@@ -39,22 +39,26 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸")
 	FIntVector GridOrigin = FIntVector::ZeroValue;
 
-	/** 相邻 X/Y 网格中心之间的世界距离，当前仅用于逻辑 Actor 的世界定位。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "1.0"))
-	float CellSize = 200.0f;
+	/**
+	 * 相邻 X/Y 网格中心之间的距离（厘米），地面、建筑占位和格面指示器共用此值。
+	 * 一级箭塔主体的平面模块为 500×500 厘米；屋檐等外伸装饰不计入单格尺寸。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "1.0", Units = "cm"))
+	float CellSize = 500.0f;
 
-	/** 相邻垂直层的世界高度，当前仅用于逻辑 Actor 的世界定位。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "1.0"))
-	float LayerHeight = 200.0f;
+	/** 相邻垂直层的距离（厘米）；与箭塔每层 500 厘米的主体拼接模块保持一致。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "1.0", Units = "cm"))
+	float LayerHeight = 500.0f;
 
 	/**
 	 * 棋盘第一层建筑中心相对于棋盘 Actor 原点的高度。
 	 *
-	 * 测试地图保留了 UE 模板地板，原型棋盘需要抬到地板上方才能同时看见并
-	 * 点击运行时创建的地面格；后续替换正式场景时仍可在实例上调整这个值。
+	 * 地面薄片中心位于 WorldBaseHeight - LayerHeight×0.45，因此层高扩大到
+	 * 500 厘米时将本值同步设为 235，使地面中心仍在棋盘原点上方 10 厘米，
+	 * 避免被场景地板遮挡。正式场景仍可在实例上调整首层建筑的基准高度。
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "0.0"))
-	float WorldBaseHeight = 100.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "0.0", Units = "cm"))
+	float WorldBaseHeight = 235.0f;
 
 	/** 地面生成策略类，可替换为固定模板或其他自定义策略。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|地面")

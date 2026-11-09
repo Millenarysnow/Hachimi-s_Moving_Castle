@@ -1460,7 +1460,8 @@ void ACastleBoard::RebuildGroundVisualization()
 			NumberLabel->SetHorizontalAlignment(EHorizTextAligment::EHTA_Center);
 			NumberLabel->SetVerticalAlignment(EVerticalTextAligment::EVRTA_TextCenter);
 			NumberLabel->SetTextRenderColor(FColor::White);
-			NumberLabel->SetWorldSize(64.0f);
+			// 数字高度保持为单格间距的 32%，与地块和底牌一起放大，避免新尺寸下文字过小。
+			NumberLabel->SetWorldSize(CellSize * 0.32f);
 			NumberLabel->SetXScale(1.15f);
 			NumberLabel->SetYScale(1.15f);
 			NumberLabel->SetText(FText::FromString(FString::Printf(TEXT("%d"), Cell.Number)));
@@ -1476,7 +1477,8 @@ void ACastleBoard::RebuildGroundVisualization()
 		GroundVisuals.Add(Cell.Coordinate, TileComponent);
 	}
 
-	UE_LOG(LogMoving_Castle, Log, TEXT("棋盘已创建 %d 个地面占位组件，世界基准高度为 %.1f。"), GroundVisuals.Num(), WorldBaseHeight);
+	UE_LOG(LogMoving_Castle, Log, TEXT("棋盘已创建 %d 个地面占位组件，单格间距 %.1f 厘米，层高 %.1f 厘米，世界基准高度 %.1f 厘米。"),
+		GroundVisuals.Num(), CellSize, LayerHeight, WorldBaseHeight);
 }
 
 FLinearColor ACastleBoard::GetPrototypeColor(ECastleTileColor Color)
