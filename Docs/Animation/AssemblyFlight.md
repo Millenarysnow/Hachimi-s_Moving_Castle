@@ -2,7 +2,7 @@
 
 全部效果逻辑位于 `Source/Moving_Castle/Components/Animation/AssemblyFlightComponent.h` 和 `.cpp`，类型为 `UAssemblyFlightComponent`。组件可用于任何符合条件的 Actor；蓝图只提供拆好的模型组件，不承担排序、运动或发射调度。
 
-`/Game/MovingCastle/TestMap1` 中“房屋自下而上组装特效测试”使用原始 `/Game/test/BP_SketchUpHouse_Assembly`，仅在关卡实例上挂载 `AssemblyFlight` 原生组件。打开该关卡、选中实例按 `F` 聚焦，再选择运行菜单的 **Simulate / 模拟** 即可观察。旧特效蓝图和对应四份 `.dsl` 图表注释源码已移除。
+拆件房屋示例位于 `/Game/MovingCastle/Model/Buildings/SketchUpHouse/BP_SketchUpHouse_Assembly`。可以将它放入关卡，给实例挂载 `Assembly Flight` 原生组件，再选择运行菜单的 **Simulate / 模拟** 观察效果。
 
 ## 在其他 Actor 上复用
 
@@ -34,4 +34,4 @@
 
 `AssemblyFlightComponentAutomationTests.cpp` 包含两个引擎自动化测试：`MovingCastle.Components.Animation.AssemblyFlight.ComponentLifecycle` 验证普通 Actor、网格根、并发飞入、移动、取消恢复、重播与非法参数；`MovingCastle.Components.Animation.AssemblyFlight.ImportedHouse` 使用原始拆件房屋，验证全部 123 件的并发与精确归位。可在 Session Frontend 的 Automation 中搜索 `AssemblyFlight` 并运行。
 
-UE 5.8.2 完整编辑器构建与上述两个测试均通过。真实关卡模拟中第 4 秒已归位 23 件、同时飞行 15 件；约第 12 秒全部 123 件归位，零件变换与碰撞恢复，临时网格为零。验证结果位于 `Saved/Tests/AssemblyFlightReport/` 和 `Saved/Tests/AssemblyFlightPIE.json`。
+UE 5.8.2 编辑器构建与上述两个测试均通过。既往真实关卡模拟中第 4 秒已归位 23 件、同时飞行 15 件；约第 12 秒全部 123 件归位，零件变换与碰撞恢复，临时网格为零。最近一次目录迁移后的自动化结果位于 `Saved/Tests/ReorganizationFinalReport/`。

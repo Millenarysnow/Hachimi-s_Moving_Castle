@@ -170,7 +170,7 @@ bool FAssemblyFlightRealHouseTest::RunTest(const FString& Parameters)
 {
 	using namespace AssemblyFlightTests;
 	FScopedWorld Scope;
-	UClass* HouseClass = LoadClass<AActor>(nullptr, TEXT("/Game/test/BP_SketchUpHouse_Assembly.BP_SketchUpHouse_Assembly_C"));
+	UClass* HouseClass = LoadClass<AActor>(nullptr, TEXT("/Game/MovingCastle/Model/Buildings/SketchUpHouse/BP_SketchUpHouse_Assembly.BP_SketchUpHouse_Assembly_C"));
 	if (!TestNotNull(TEXT("原始拆件房屋蓝图应存在"), HouseClass))
 	{
 		return false;
