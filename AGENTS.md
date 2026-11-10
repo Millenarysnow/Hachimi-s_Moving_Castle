@@ -1,7 +1,9 @@
 # 交互
+   
+- 不允许使用 codex 自身的 Computer Use。
+- 若要使用类似工具，可以用 Cua Driver。先加载对应 skill，再根据 skill 指引使用 mcp。
+- 大部分操作无需使用 Cua 的鼠标点击，而可以使用引擎操作代替。
 
-非必要不允许使用 Computer Use，这个限定不包括截图。    
-大部分操作无需使用 Computer Use 的鼠标点击，而可以使用引擎操作代替。
 
 # 文档位置
 
