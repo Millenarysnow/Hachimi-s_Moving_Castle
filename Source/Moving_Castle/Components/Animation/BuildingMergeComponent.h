@@ -7,9 +7,13 @@
 class UBuildingPartCatalog;
 class UPrimitiveComponent;
 class UStaticMeshComponent;
+class UBuildingMergeComponent;
 
 /** 变化完成、原件恢复且全部临时显示网格清理后广播。 */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FBuildingMergeCompleted);
+
+/** 与飞入组件保持一致：包含取消/销毁的结束通知，保证导航暂停一定被正确释放。 */
+DECLARE_MULTICAST_DELEGATE_TwoParams(FBuildingMergeFinishedNative, UBuildingMergeComponent*, bool);
 
 /**
  * 局部零件变化组件：保留件不动，变化件从原位置移到新位置，新增件沿弧线飞入。
@@ -110,6 +114,9 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category="Building Merge|Playback")
 	FBuildingMergeCompleted OnMergeCompleted;
+
+	/** 原有成功完成事件继续供蓝图使用，此通知额外覆盖 Reset 与 EndPlay。 */
+	FBuildingMergeFinishedNative OnMergeFinishedNative;
 
 	/** 在旧 Actor 销毁前启动；至少两个有效来源。完整建立计划后才隐藏来源。 */
 	UFUNCTION(BlueprintCallable, Category="Building Merge|Playback")

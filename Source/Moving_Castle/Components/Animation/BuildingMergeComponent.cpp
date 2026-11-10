@@ -1,6 +1,7 @@
 #include "BuildingMergeComponent.h"
 
 #include "AssemblyFlightComponent.h"
+#include "CastleNavigationSubsystem.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -142,6 +143,11 @@ bool UBuildingMergeComponent::CreateVisual(FMergePart& Part, UStaticMeshComponen
 	Visuals.Add(Visual);
 	Part.Visual = Visual;
 	Visual->SetMobility(EComponentMobility::Movable);
+	// 必须先设定临时显示件的原有碰撞/导航属性，再赋网格。UE 5.8 的 SetStaticMesh
+	// 会通知导航更新；反过来会在尚未注册的组件上留下旧位置的几何记录。
+	Visual->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Visual->SetGenerateOverlapEvents(false);
+	Visual->SetCanEverAffectNavigation(false);
 	Visual->SetStaticMesh(Template->GetStaticMesh());
 	// 复制身份标签，让下一次变化能从当前飞行姿态接续，而不是重新出现完整的中间建筑。
 	Visual->ComponentTags = Template->ComponentTags;
@@ -149,9 +155,6 @@ bool UBuildingMergeComponent::CreateVisual(FMergePart& Part, UStaticMeshComponen
 	{
 		Visual->SetMaterial(Index, Template->GetMaterial(Index));
 	}
-	Visual->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	Visual->SetGenerateOverlapEvents(false);
-	Visual->SetCanEverAffectNavigation(false);
 	Visual->SetCastShadow(Template->CastShadow);
 	Visual->SetReceivesDecals(Template->bReceivesDecals);
 	Visual->SetVisibility(false, false);
@@ -338,6 +341,11 @@ bool UBuildingMergeComponent::StartChange(const TArray<AActor*>& Sources)
 	const FVector Origin = bUseSharedChangeOrigin ? ChangeOrigin
 		: (IncomingSourceActor ? IncomingSourceActor->GetActorLocation() : Owner->GetActorLocation());
 	if (!BuildPlan(SourceParts, TargetParts, Origin, Error)) { return FailMerge(Error); }
+	// 新旧建筑在完整重组结束后才提交导航；不改变现有模型、碰撞或动画行为。
+	if (UCastleNavigationSubsystem* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>())
+	{
+		Navigation->ObserveMerge(this);
+	}
 
 	// 所有计划和副本就绪后才提交显隐。结果碰撞始终有效，不阻断相邻放置、回收或再次升级。
 	TArray<UPrimitiveComponent*> Primitives;
@@ -471,10 +479,12 @@ void UBuildingMergeComponent::CompleteMerge()
 		TargetPartCount, UnchangedPartCount, *GetOwner()->GetName());
 	ShowStatus(TEXT("局部变化完成：新建筑零件全部归位。"), FColor::Green);
 	OnMergeCompleted.Broadcast();
+	OnMergeFinishedNative.Broadcast(this, true);
 }
 
 void UBuildingMergeComponent::ResetMerge()
 {
+	const bool bWasPlaying = bIsPlaying;
 	bIsPlaying = false;
 	SetComponentTickEnabled(false);
 	if (bCaptured)
@@ -497,6 +507,7 @@ void UBuildingMergeComponent::ResetMerge()
 	SourcePartCount = TargetPartCount = ReusedPartCount = UnchangedPartCount = MovedPartCount = IncomingPartCount = 0;
 	AddedPartCount = RemovedPartCount = CompletedPartCount = 0;
 	ElapsedTime = TotalDuration = 0.0;
+	if (bWasPlaying) { OnMergeFinishedNative.Broadcast(this, false); }
 }
 
 bool UBuildingMergeComponent::FailMerge(const FString& Error)

@@ -15,6 +15,7 @@ public class Moving_Castle : ModuleRules
 			"InputCore",
 			"EnhancedInput",
 			"AIModule",
+			"NavigationSystem",
 			"StateTreeModule",
 			"GameplayStateTreeModule",
 			"MassEntity",
@@ -41,6 +42,7 @@ public class Moving_Castle : ModuleRules
 		PublicIncludePaths.AddRange(new string[] {
 			"Moving_Castle",
 			"Moving_Castle/Units/Mass",
+			"Moving_Castle/Units/Navigation",
 			"Moving_Castle/Castle", // 城堡模块根路径，保留旧工程代码的公共头文件兼容性。
 			"Moving_Castle/Gameplay/Characters",
 			"Moving_Castle/Gameplay/Controllers",

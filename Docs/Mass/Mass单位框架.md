@@ -76,7 +76,7 @@ Mass Velocity → CastleMassAnimationProcessor → FMassRepresentationAnimationF
 
 ## 当前实现边界
 
-- 移动提供三维目标和持续速度，符合飞行敌人的基础需求。NPC 尚未接入房间通路、NavMesh、地面吸附或局部避让；`MoveUnitsTo` 会直达目标，不能直接当作寻路使用。
+- 移动提供三维目标和持续速度，符合飞行敌人的基础需求。已另建全局 NavMesh 更新与共享寻路服务，见 [NPC共享导航](../Navigation/NPC共享导航.md)；Mass NPC 尚未接入路线跟随、地面吸附或局部避让，`MoveUnitsTo` 仍会直达目标，不能直接当作寻路使用。
 - 子弹有直线/重力弹道、上一帧位置、半径、阵营、伤害和自动过期。尚未执行命中检测或自动造成伤害；后续在运动后添加批量空间查询/连续线段检测 Processor，并通过目标健康 Fragment 结算。
 - 生命归零立即进入回收流程；未加入死亡动画、攻击动作、StateTree、布娃娃、网络同步和持久化。后续可增加动画状态 Fragment 或对少量近处交互单位使用 Actor 表示。
 - 当前基础资产使用相同模型作为框架示例。动画播放采用 GPU 骨骼序列，不执行逐单位 AnimBlueprint、Root Motion 位移或 AnimNotify 游戏逻辑；战斗事件应由 Mass 模拟驱动。

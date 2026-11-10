@@ -1,4 +1,5 @@
 #include "AssemblyFlightComponent.h"
+#include "CastleNavigationSubsystem.h"
 
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -159,6 +160,11 @@ bool UAssemblyFlightComponent::StartAssembly()
 
 	ActiveFlightDuration = FlightDuration;
 	TotalPartCount = Parts.Num();
+	// 复用整轮结束通知控制导航；逐件恢复碰撞期间只同步变化，不重建 NavMesh。
+	if (UCastleNavigationSubsystem* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>())
+	{
+		Navigation->ObserveAssembly(this);
+	}
 	bHasCapturedState = true;
 	for (FFlightPart& Part : Parts)
 	{

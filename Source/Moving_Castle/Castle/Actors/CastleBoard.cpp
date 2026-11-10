@@ -8,6 +8,7 @@
 #include "BuildingMergeComponent.h"
 #include "AssemblyFlightComponent.h"
 #include "CastleGroundGenerator.h"
+#include "CastleNavigationSubsystem.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
@@ -229,6 +230,7 @@ bool ACastleBoard::ApplyGroundGenerationResult(const FCastleGroundGenerationResu
 	}
 
 	// 所有检查完成后才替换旧数组，保证错误结果不会留下半份地面。
+	const FScopedCastleNavigationChange NavigationChange(GetWorld(), this);
 	GeneratedGroundCells = Result.Cells;
 	RebuildGroundVisualization();
 	return true;
@@ -311,6 +313,8 @@ ACastleBuildingBase* ACastleBoard::PlaceBuilding(const FIntVector& Coordinate, c
 	}
 
 	const TArray<FIntVector> Footprint = BuildPlacementFootprint(Coordinate, Descriptor.Level);
+	// 在生成带碰撞的 Actor 之前暂停导航；动画观察继续持有暂停直到原有结束信号到达。
+	const FScopedCastleNavigationChange NavigationChange(GetWorld(), this);
 	ACastleBuildingBase* NewBuilding = SpawnBuildingActor(Descriptor, Footprint, OutFailureReason);
 	if (NewBuilding == nullptr)
 	{
@@ -434,6 +438,7 @@ void ACastleBoard::ForgetPlacement(ACastleBuildingBase* Building)
 
 void ACastleBoard::HandleBuildingDestroyed(AActor* Actor)
 {
+	const FScopedCastleNavigationChange NavigationChange(GetWorld(), this);
 	ACastleBuildingBase* Building = CastChecked<ACastleBuildingBase>(Actor);
 	ForgetPlacement(Building);
 	// 也覆盖关卡代码直接 Destroy 的中途取消；合并路径已先注销，不能删除新结果的坐标。
@@ -515,6 +520,7 @@ bool ACastleBoard::RemoveBuilding(ACastleBuildingBase* Building, FText& OutFailu
 		return false;
 	}
 
+	const FScopedCastleNavigationChange NavigationChange(GetWorld(), this);
 	if (!UnregisterBuilding(Building, OutFailureReason))
 	{
 		return false;
@@ -931,6 +937,8 @@ ACastleBuildingBase* ACastleBoard::TryMergePlacedBuilding(ACastleBuildingBase* B
 		return nullptr;
 	}
 
+	// 连续升级的中间 Actor 不触发生成，最后一次重组的结束信号统一释放导航。
+	const FScopedCastleNavigationChange NavigationChange(GetWorld(), this);
 	ACastleBuildingBase* CurrentBuilding = Building;
 	// 一次放置可能连续升级。先完成全部逻辑替换，再用真正参与的原建筑播放一次重组。
 	// 原建筑暂时保留到抓取完成；中间等级只更新索引，不会闪现或反复播多轮动画。
