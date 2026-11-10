@@ -12,3 +12,5 @@
 !/.codex/config.toml
 
 !/*.uproject
+
+!AGENTS.md
