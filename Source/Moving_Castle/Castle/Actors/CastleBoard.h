@@ -8,6 +8,7 @@
 #include "CastleBoard.generated.h"
 
 class ACastleBuildingBase;
+class UAssemblyFlightComponent;
 class UCastleBackpackComponent;
 class UCastleGroundGenerator;
 class UMaterialInterface;
@@ -156,7 +157,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
 	bool CanPlaceBuilding(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason) const;
 
-	/** 在棋盘上生成一座建筑，成功后可选择自动执行合成替换。 */
+	/** 生成并占用格子，游戏中先播放 Assembly Flight；返回新放置 Actor，完成后才可能被合并结果替换。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|棋盘")
 	ACastleBuildingBase* PlaceBuilding(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, bool bTryMerge, FText& OutFailureReason);
 
@@ -220,6 +221,8 @@ protected:
 
 	/** 根据 bGenerateGroundOnBeginPlay 决定是否在运行开始时生成地面。 */
 	virtual void BeginPlay() override;
+	/** 清理播放回调和等待请求，退出关卡时不再触发升级。 */
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	/** 生成原型背包和四个数字键样例卡，卡牌属性来自本次实际生成的地面。 */
 	void InitializePrototypeDeck();
@@ -266,7 +269,23 @@ protected:
 	ACastleBuildingBase* SpawnBuildingActor(const FCastleBuildingDescriptor& Descriptor, const TArray<FIntVector>& OccupiedCoordinates, FText& OutFailureReason);
 
 	/** 尝试对新放置的建筑连续执行可行的两两合成。 */
-	ACastleBuildingBase* TryMergePlacedBuilding(ACastleBuildingBase* Building, FText& OutFailureReason);
+	ACastleBuildingBase* TryMergePlacedBuilding(ACastleBuildingBase* Building, const FVector& ChangeOrigin, FText& OutFailureReason);
+
+	/** 放置完成前保存这次操作的合并意图和传播原点，避免后续放置改写前一次的上下文。 */
+	struct FPendingPlacement
+	{
+		bool bTryMerge = false;
+		FVector Origin = FVector::ZeroVector;
+	};
+	TMap<TWeakObjectPtr<ACastleBuildingBase>, FPendingPlacement> PendingPlacements;
+	/** 已完成但邻居仍未完成的请求在之后的完成事件中重新检查，不使用轮询定时器。 */
+	TMap<TWeakObjectPtr<ACastleBuildingBase>, FVector> ReadyMergeRequests;
+
+	void HandlePlacementFinished(UAssemblyFlightComponent* Flight, bool bCompleted);
+	void ResolveReadyMerges();
+	void ForgetPlacement(ACastleBuildingBase* Building);
+	UFUNCTION()
+	void HandleBuildingDestroyed(AActor* Actor);
 
 	/** 查找可以和当前建筑合成的相邻建筑。 */
 	ACastleBuildingBase* FindMergePartner(ACastleBuildingBase* Building) const;

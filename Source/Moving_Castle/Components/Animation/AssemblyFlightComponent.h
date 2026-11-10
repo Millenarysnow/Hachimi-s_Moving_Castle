@@ -6,9 +6,13 @@
 #include "AssemblyFlightComponent.generated.h"
 
 class UStaticMeshComponent;
+class UAssemblyFlightComponent;
 
 /** 组装完成事件；正式游戏可按需绑定，组件自身不引用任何城堡、商店或房屋蓝图。 */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FAssemblyFlightCompleted);
+
+/** 原生玩法订阅具体组件的播放结果；成功为 true，取消/失败为 false，失败原因读取 LastError。 */
+DECLARE_MULTICAST_DELEGATE_TwoParams(FAssemblyFlightFinishedNative, UAssemblyFlightComponent*, bool);
 
 /**
  * 通用连续飞入组件。给包含独立 StaticMeshComponent 的 Actor 添加本组件即可播放，
@@ -54,6 +58,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Assembly Flight|Selection")
 	FName PartComponentTag = NAME_None;
 
+	/** 排除标签底牌等辅助网格；留空时维持通用组件原本的选择规则。 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Assembly Flight|Selection")
+	FName ExcludedComponentTag = NAME_None;
+
 	/** 可关闭屏幕文字；开始、完成和失败始终记录到 LogAssemblyFlight，便于验收定位。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Assembly Flight|Feedback")
 	bool bShowStatusOnScreen = true;
@@ -85,6 +93,9 @@ public:
 	/** 全部零件落定并恢复原状态后广播。 */
 	UPROPERTY(BlueprintAssignable, Category="Assembly Flight|Playback")
 	FAssemblyFlightCompleted OnAssemblyCompleted;
+
+	/** 包含取消/失败的原生结束通知，便于棋盘清理延迟合并；不改变现有蓝图完成事件。 */
+	FAssemblyFlightFinishedNative OnAssemblyFinishedNative;
 
 	/** 开始或重播。必须在游戏世界调用；先完整校验，校验失败不隐藏任何零件。 */
 	UFUNCTION(BlueprintCallable, Category="Assembly Flight|Playback")

@@ -5,6 +5,7 @@
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
@@ -70,9 +71,27 @@ void ABuildingMergeDemo::BeginPlay()
 		return;
 	}
 
-	// 根据实际模型而非写死建筑尺寸取景；相邻两座一级建筑及松散零件都留有画面空间。
-	FBox Bounds = CurrentBuilding->GetVisualBounds();
-	if (AdjacentBuilding) { Bounds += AdjacentBuilding->GetVisualBounds(); }
+	// 放置动画已隐藏原零件；取各网格仍保留的真实 Bounds，不能从“当前可见”几何计算空包围盒。
+	FBox Bounds(ForceInit);
+	const auto AddBuildingBounds = [&Bounds](const ACastleBuildingBase* Building)
+	{
+		TArray<UStaticMeshComponent*> Meshes;
+		Building->GetComponents<UStaticMeshComponent>(Meshes, false);
+		for (const UStaticMeshComponent* Mesh : Meshes)
+		{
+			if (Mesh->GetStaticMesh() && !Mesh->ComponentHasTag(TEXT("MergeExclude")))
+			{
+				Bounds += Mesh->Bounds.GetBox();
+			}
+		}
+	};
+	AddBuildingBounds(CurrentBuilding);
+	if (AdjacentBuilding) { AddBuildingBounds(AdjacentBuilding); }
+	if (!Bounds.IsValid)
+	{
+		StopWithError(TEXT("无法从放置建筑的静态网格计算演示相机范围。"));
+		return;
+	}
 	Bounds += Bounds.ShiftBy(DemoBoard->GetGridWorldLocation(FIntVector(1, 0, 0))
 		- DemoBoard->GetGridWorldLocation(FIntVector(0, 0, 0)));
 	const FVector Center = Bounds.GetCenter();
@@ -127,7 +146,62 @@ bool ABuildingMergeDemo::PlaceFirstBuilding()
 		}
 	}
 	PhaseTime = 0.0;
-	bMerging = false;
+	Phase = EDemoPhase::WaitingForInitialFlights;
+	return true;
+}
+
+bool ABuildingMergeDemo::AreInitialFlightsComplete() const
+{
+	return IsValid(CurrentBuilding) && CurrentBuilding->bHasCompletedPlacement
+		&& (!bShowAdjacentChanges || (IsValid(AdjacentBuilding) && AdjacentBuilding->bHasCompletedPlacement));
+}
+
+bool ABuildingMergeDemo::PlaceMergeCards()
+{
+	FCastleBuildingDescriptor Card;
+	FText Reason;
+	if (!BuildingDefinition->CreateDescriptor(1, ECastleTileColor::Red, 3, Card, Reason))
+	{
+		StopWithError(Reason.ToString());
+		return false;
+	}
+	DemoBoard->bUseSharedVisualChangeOrigin = true;
+	DemoBoard->VisualChangeOrigin = DemoBoard->GetGridWorldLocation(FIntVector(1, 0, 0));
+	if (!DemoBoard->PlaceBuilding(FIntVector(1, 0, 0), Card, true, Reason))
+	{
+		StopWithError(Reason.ToString());
+		return false;
+	}
+	if (bShowAdjacentChanges)
+	{
+		Card.Number = 4;
+		if (!DemoBoard->PlaceBuilding(FIntVector(1, 1, 0), Card, true, Reason))
+		{
+			StopWithError(Reason.ToString());
+			return false;
+		}
+	}
+	return true;
+}
+
+bool ABuildingMergeDemo::AreMergedBuildingsReady(double& OutAnimationDuration) const
+{
+	OutAnimationDuration = 0.0;
+	const TArray<ACastleBuildingBase*> Buildings = DemoBoard->GetPlacedBuildings();
+	const int32 ExpectedCount = bShowAdjacentChanges ? 2 : 1;
+	if (Buildings.Num() != ExpectedCount)
+	{
+		return false;
+	}
+	for (const ACastleBuildingBase* Building : Buildings)
+	{
+		if (Building->GetBuildingLevel() != 2 || !Building->bHasCompletedPlacement
+			|| Building->BuildingMerge->TotalDuration <= 0.0)
+		{
+			return false;
+		}
+		OutAnimationDuration = FMath::Max(OutAnimationDuration, Building->BuildingMerge->TotalDuration);
+	}
 	return true;
 }
 
@@ -135,44 +209,48 @@ void ABuildingMergeDemo::Tick(const float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 	PhaseTime += DeltaSeconds;
-	if (!bMerging && PhaseTime >= StartDelay)
+	if (Phase == EDemoPhase::WaitingForInitialFlights)
 	{
-		FCastleBuildingDescriptor Card;
-		FText Reason;
-		if (!BuildingDefinition->CreateDescriptor(1, ECastleTileColor::Red, 3, Card, Reason))
+		if (AreInitialFlightsComplete())
 		{
-			StopWithError(Reason.ToString());
-			return;
+			// 开场停留从初始房屋真正落位后开始计时，确保能看见原始形态。
+			Phase = EDemoPhase::ShowingInitialBuildings;
+			PhaseTime = 0.0;
 		}
-		// 两个展示变化共用一个操作原点；数字不同使它们保持为两个相邻结果，便于观察联动。
-		DemoBoard->bUseSharedVisualChangeOrigin = true;
-		DemoBoard->VisualChangeOrigin = DemoBoard->GetGridWorldLocation(FIntVector(1, 0, 0));
-		CurrentBuilding = DemoBoard->PlaceBuilding(FIntVector(1, 0, 0), Card, true, Reason);
-		if (!CurrentBuilding || !Reason.IsEmpty() || !CurrentBuilding->BuildingMerge->bIsPlaying)
-		{
-			StopWithError(FString::Printf(TEXT("真实合并流程未启动动画。%s"), *Reason.ToString()));
-			return;
-		}
-		if (bShowAdjacentChanges)
-		{
-			Card.Number = 4;
-			AdjacentBuilding = DemoBoard->PlaceBuilding(FIntVector(1, 1, 0), Card, true, Reason);
-			if (!AdjacentBuilding || !Reason.IsEmpty() || !AdjacentBuilding->BuildingMerge->bIsPlaying)
-			{
-				StopWithError(FString::Printf(TEXT("相邻变化未能启动。%s"), *Reason.ToString()));
-				return;
-			}
-		}
-		bMerging = true;
-		PhaseTime = 0.0;
+		return;
 	}
-	if (!bMerging)
+	if (Phase == EDemoPhase::ShowingInitialBuildings)
 	{
+		if (PhaseTime >= StartDelay && PlaceMergeCards())
+		{
+			Phase = EDemoPhase::WaitingForMergeFlights;
+			PhaseTime = 0.0;
+		}
+		return;
+	}
+	if (Phase == EDemoPhase::WaitingForMergeFlights)
+	{
+		double ReadyDuration = 0.0;
+		if (AreMergedBuildingsReady(ReadyDuration))
+		{
+			// 在局部合并动画刚启动时就开始取帧，而不是等到二级建筑已经全部归位。
+			Phase = EDemoPhase::ShowingMergedBuildings;
+			PhaseTime = 0.0;
+			CaptureFrameIndex = 0;
+		}
+		else if (PhaseTime > 60.0)
+		{
+			StopWithError(TEXT("放置飞入后未能完成预期合并，请检查放置完成回调。"));
+		}
 		return;
 	}
 
-	const double ShowcaseDuration = FMath::Max(CurrentBuilding->BuildingMerge->TotalDuration,
-		AdjacentBuilding ? AdjacentBuilding->BuildingMerge->TotalDuration : 0.0);
+	double ShowcaseDuration = 0.0;
+	if (!AreMergedBuildingsReady(ShowcaseDuration))
+	{
+		StopWithError(TEXT("合并演示期间结果建筑被意外替换或回收。"));
+		return;
+	}
 	if (bCaptureFrames)
 	{
 		// 固定 25 个观察时刻，保留原建筑、拆散、汇聚、展开和最终模型，供视觉复核与 GIF 使用。
@@ -184,7 +262,7 @@ void ABuildingMergeDemo::Tick(const float DeltaSeconds)
 		}
 		if (PhaseTime >= ShowcaseDuration + 1.2 && CaptureFrameIndex > 24)
 		{
-			UE_LOG(LogBuildingMergeDemo, Display, TEXT("合并视觉验收已完成：25 张截图已请求，结束验收进程。"));
+			UE_LOG(LogBuildingMergeDemo, Display, TEXT("放置飞入及局部合并视觉验收已完成：25 张截图已请求，结束验收进程。"));
 			FPlatformMisc::RequestExit(false);
 		}
 	}
@@ -196,16 +274,16 @@ void ABuildingMergeDemo::Tick(const float DeltaSeconds)
 			return;
 		}
 		FText Reason;
-		if (!DemoBoard->RemoveBuilding(CurrentBuilding, Reason))
+		for (ACastleBuildingBase* Building : DemoBoard->GetPlacedBuildings())
 		{
-			StopWithError(Reason.ToString());
-			return;
+			if (!DemoBoard->RemoveBuilding(Building, Reason))
+			{
+				StopWithError(Reason.ToString());
+				return;
+			}
 		}
-		if (AdjacentBuilding && !DemoBoard->RemoveBuilding(AdjacentBuilding, Reason))
-		{
-			StopWithError(Reason.ToString());
-			return;
-		}
+		CurrentBuilding = nullptr;
+		AdjacentBuilding = nullptr;
 		PlaceFirstBuilding();
 	}
 }

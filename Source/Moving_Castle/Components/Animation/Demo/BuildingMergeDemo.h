@@ -48,6 +48,14 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	enum class EDemoPhase : uint8
+	{
+		WaitingForInitialFlights,
+		ShowingInitialBuildings,
+		WaitingForMergeFlights,
+		ShowingMergedBuildings
+	};
+
 	UPROPERTY(Transient)
 	TObjectPtr<ACastleBoard> DemoBoard;
 
@@ -58,10 +66,13 @@ private:
 	TObjectPtr<ACastleBuildingBase> AdjacentBuilding;
 
 	double PhaseTime = 0.0;
-	bool bMerging = false;
+	EDemoPhase Phase = EDemoPhase::WaitingForInitialFlights;
 	bool bCaptureFrames = false;
 	int32 CaptureFrameIndex = 0;
 
 	bool PlaceFirstBuilding();
+	bool PlaceMergeCards();
+	bool AreInitialFlightsComplete() const;
+	bool AreMergedBuildingsReady(double& OutAnimationDuration) const;
 	void StopWithError(const FString& Message);
 };

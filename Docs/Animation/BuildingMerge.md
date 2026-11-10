@@ -4,7 +4,7 @@
 
 - 对应后位置、朝向和尺寸都没有变化的零件继续留在原地。
 - 对应成功但位置发生变化的旧零件，沿短弧移动到结果位置。
-- 新放置建筑中被复用的零件，从放置方向飞入结果位置。
+- 棋盘中新放置的建筑先完成 Assembly Flight，再把已落位的零件作为合并来源；通用组件单独使用时仍可通过 Incoming Source Actor 指定飞入来源。
 - 结果中新出现、旧建筑没有对应的零件从放置方向飞入。
 - 旧建筑中没有结果对应的多余零件向外离场并缩小消失。
 
@@ -12,13 +12,13 @@
 
 ## 直接观察
 
-打开 /Game/MovingCastle/Maps/BuildingMergeDemo，点击 **Play**。演示会先显示两组相邻的一级箭塔。约两秒后同时放置两座相邻的一级箭塔：
+打开 /Game/MovingCastle/Maps/BuildingMergeDemo，点击 **Play**。两组一级箭塔先用原有 Assembly Flight 逐件飞入并落稳；停留约两秒后，再放下两座相邻的一级箭塔。新放的两座也先完成自己的飞入动画，随后才各自触发合并：
 
 - 下方一组升级为二级，数字为 3。
 - 上方一组升级为二级，数字为 4。
 - 两组变化共用同一个变化原点。
 - 离原点近的变化先开始，远处变化按真实厘米距离稍后开始。
-- 原地不变的零件不会被抽走；发生变化的旧零件短距离移动，新放置的零件从外侧飞入。
+- 放置阶段先逐件飞入；合并阶段保留原地不变的零件，让发生变化的对应件短距离移动。
 
 演示 Actor 原生协调两次相邻放置，共用同一变化原点，用于检视多处同时变化时的表现。现有游戏仍按原合成规则运行；将来一次放置引起全局 PCG 结构更新时，需要把各处结果接入这一共享原点，当前没有新增该玩法规则。
 
@@ -66,18 +66,18 @@ UBuildingMergeComponent 提供两种入口：
 
 ## 建筑合并中的接入
 
-CastleBoard::TryMergePlacedBuilding 仍先完成逻辑占用索引和等级替换，然后在旧 Actor 销毁前建立局部变化计划：
+CastleBoard 先按原规则生成、占用新格子，并立即为新建筑播放 Assembly Flight。放置期间旧等级 Actor 和所有格子索引均保持不变，因此玩家和棋盘可以继续使用已有建筑；参与合并的各座建筑必须全部完成飞入。棋盘保留每个放置请求的合并意图和传播原点，最后一个参与建筑落稳时才调用 `TryMergePlacedBuilding`，完成等级替换并在旧 Actor 销毁前建立局部变化计划：
 
 - 结果建筑从所属 CastleBuildingDefinition.PartCatalog 读取几何目录。
-- 新放置的建筑标记为 IncomingSourceActor，其对应零件按飞入处理。
-- 其他旧建筑的对应零件只做短距离移动或保持原位。
+- 所有参与的建筑已经完成 Assembly Flight；合并变化不让刚放下的零件重复飞入。
+- 不变零件继续留在原位；确实变化的对应件只做短距离移动。
 - 计划建立并创建全部临时网格成功后才隐藏来源。
 - 逻辑替换完成后统一销毁旧 Actor，避免中间等级闪现。
 - 动画完成后恢复结果 Actor 的正式组件，清理所有瞬态网格并停止 Tick。
 
 连续升级会把真正参与的旧建筑一起纳入一次计划；中间等级 Actor 只用于更新逻辑索引，不参与表现快照。后续变化消费仍在播放的结果建筑时，新的计划抓取当前显示姿态，并纳入尚未飞入的等待件，保存其起飞姿态和剩余等待；旧动画随旧 Actor 清理，避免连续操作漏件。
 
-原有 Assembly Flight 仍用于单建筑首次放置。若同一 Actor 正在播放飞入，局部变化组件会拒绝启动并输出明确错误，避免两套动画同时改写同一组零件。
+原有 Assembly Flight 负责每次游戏中的新放置，按高度和发射间隔逐件入场；等级标签在全部零件落稳后才显示。只有 Assembly Flight 的成功完成事件会标记建筑可合并。取消、删除和播放失败都会丢弃延迟合并请求；棋盘不会用局部合并动画绕过尚未完成的放置飞入。编辑器非游戏世界中的建筑摆放不自动播片。
 
 ## 复用配置
 
@@ -93,7 +93,7 @@ CastleBoard::TryMergePlacedBuilding 仍先完成逻辑占用索引和等级替�
 
 ## 验证
 
-Win64 Development Editor 构建通过。自动化组 MovingCastle 的 20 项测试全部通过，包含：
+Win64 Development Editor 构建通过。自动化组 MovingCastle 的 22 项测试全部通过，新增放置阶段和等待完成后再合并的回归，包含：
 
 - 原有 AssemblyFlight 生命周期和真实拆件房屋。
 - 真实箭塔跨资产几何目录和一级到二级的 114 件对应。
@@ -101,8 +101,10 @@ Win64 Development Editor 构建通过。自动化组 MovingCastle 的 20 项测�
 - 局部变化中原位保留、短距离移动、飞入和多余件离场。
 - 共享传播原点和远处变化等待。
 - 连续升级、动画中继续合并、等待飞入期间再次合并、回收和失败清理。
+- 新建筑先逐件飞入、飞入完成前不升级、完成后再执行局部合并，以及不同完成顺序下保留待合并请求。
+- 取消/失败的放置飞入不会触发合并。
 - 原有建筑定义、背包、商店和放置逻辑。
 
-报告位于 Saved/Tests/BuildingChangeRegressionFinal/。新增或修改网格后运行 Tools/BuildBuildingPartCatalog.py；它会在重建和一级至二级的覆盖验证通过后保存目录，并绑定 DA_ArcherTower.PartCatalog。脚本仅保存该目录与箭塔定义，不修改等级蓝图或源网格。
+本次放置飞入与延迟合并的报告位于 Saved/Tests/PlacementFlightRegressionFinal/。新增或修改网格后运行 Tools/BuildBuildingPartCatalog.py；它会在重建和一级至二级的覆盖验证通过后保存目录，并绑定 DA_ArcherTower.PartCatalog。脚本仅保存该目录与箭塔定义，不修改等级蓝图或源网格。
 
-演示截图仍可用 -MergeDemoCapture 生成到 Saved/Tests/BuildingMergeVisual/；普通 Play 不带这个参数即可循环查看。Tools/MakeBuildingMergePreview.py 会整理为 BuildingChangePreview.gif，动图放慢播放以便观察零件移动。
+演示截图仍可用 -MergeDemoCapture 生成到 Saved/Tests/BuildingMergeVisual/；自动截图聚焦在飞入完成后的局部合并阶段。普通 Play 不带这个参数即可循环查看。Tools/MakeBuildingMergePreview.py 会整理为 BuildingChangePreview.gif，动图放慢播放以便观察零件移动。

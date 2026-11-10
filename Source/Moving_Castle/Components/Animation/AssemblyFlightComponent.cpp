@@ -60,6 +60,10 @@ bool UAssemblyFlightComponent::CaptureParts(FString& OutError)
 
 	for (UStaticMeshComponent* Mesh : Meshes)
 	{
+		if (!ExcludedComponentTag.IsNone() && Mesh->ComponentHasTag(ExcludedComponentTag))
+		{
+			continue;
+		}
 		if (!PartComponentTag.IsNone() && !Mesh->ComponentHasTag(PartComponentTag))
 		{
 			continue;
@@ -283,6 +287,8 @@ void UAssemblyFlightComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 		UE_LOG(LogAssemblyFlight, Display, TEXT("%s [%s]"), *Message, *GetOwner()->GetName());
 		ShowStatus(Message, FColor::Green);
 		OnAssemblyCompleted.Broadcast();
+		// 这是函数最后一次访问自身状态的操作；棋盘的完成回调可以同步合并并销毁所属 Actor。
+		OnAssemblyFinishedNative.Broadcast(this, true);
 	}
 }
 
@@ -300,6 +306,7 @@ void UAssemblyFlightComponent::RestoreCapturedState()
 
 void UAssemblyFlightComponent::ResetAssembly()
 {
+	const bool bWasPlaying = bIsPlaying;
 	SetComponentTickEnabled(false);
 	bIsPlaying = false;
 	RestoreCapturedState();
@@ -309,15 +316,20 @@ void UAssemblyFlightComponent::ResetAssembly()
 	CompletedPartCount = 0;
 	FlyingPartCount = 0;
 	ElapsedTime = 0.0;
+	if (bWasPlaying)
+	{
+		// 取消不冒充完成：棋盘收到 false 后丢弃本次延迟合并，不能提前升级。
+		OnAssemblyFinishedNative.Broadcast(this, false);
+	}
 }
 
 bool UAssemblyFlightComponent::FailAssembly(const FString& Error)
 {
 	// 这是明确中止后的状态恢复，不尝试另一种视觉逻辑；日志和 Details 都保留失败原因。
-	ResetAssembly();
 	LastError = Error;
 	UE_LOG(LogAssemblyFlight, Error, TEXT("连续飞入失败 [%s]：%s"), *GetNameSafe(GetOwner()), *Error);
 	ShowStatus(FString::Printf(TEXT("连续飞入失败：%s"), *Error), FColor::Red);
+	ResetAssembly();
 	return false;
 }
 

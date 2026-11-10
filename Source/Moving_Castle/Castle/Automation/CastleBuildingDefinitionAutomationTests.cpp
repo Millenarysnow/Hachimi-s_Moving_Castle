@@ -70,9 +70,15 @@ bool FCastleBuildingDefinitionPlacementTest::RunTest(const FString& Parameters)
 	Definition->CreateDescriptor(1, ECastleTileColor::Red, 3, Card, Reason);
 	ACastleBuildingBase* First = Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason);
 	if (!TestNotNull(TEXT("一级模型放置成功"), First)) { AddError(Reason.ToString()); return false; }
+	TestFalse(TEXT("首次放置先播放原有飞入"), First->bHasCompletedPlacement);
+	TestTrue(TEXT("原有放置飞入完整完成"), CastleBuildingTests::CompletePlacement(First));
 	TestTrue(TEXT("没有模型组件的等级使用统一立方体占位"), First->IsUsingPlaceholder());
 	ACastleBuildingBase* Merged = Board->PlaceBuilding(FIntVector(1, 0, 0), Card, true, Reason);
-	if (!TestNotNull(TEXT("两张一级卡自动合成"), Merged)) { AddError(Reason.ToString()); return false; }
+	if (!TestNotNull(TEXT("第二张一级卡先放入棋盘"), Merged)) { AddError(Reason.ToString()); return false; }
+	TestEqual(TEXT("第二座建筑飞入期间仍保持一级"), Board->GetPlacedBuildingCount(), 2);
+	CastleBuildingTests::CompletePlacement(Merged);
+	Merged = CastleBuildingTests::FindPlacedLevel(Board, 2);
+	if (!TestNotNull(TEXT("飞入完成后两张一级卡自动合成"), Merged)) { return false; }
 	TestEqual(TEXT("合成结果为二级"), Merged->GetBuildingLevel(), 2);
 	TestTrue(TEXT("升级后仍引用同一建筑定义"), Merged->GetBuildingDefinition() == Definition);
 	TestTrue(TEXT("二级没有配置模型时使用立方体"), Merged->IsUsingPlaceholder());
@@ -84,15 +90,18 @@ bool FCastleBuildingDefinitionPlacementTest::RunTest(const FString& Parameters)
 		&& Recovered.Level == 2 && Recovered.Color == Card.Color && Recovered.Number == Card.Number);
 	ACastleBuildingBase* Replaced = Board->PlaceBuildingFromBackpack(FIntVector(0, 0, 0), Board->PrototypeBackpack, 0, false, Reason);
 	if (!TestNotNull(TEXT("升级卡回收后可按等级占用范围重新放置"), Replaced)) { AddError(Reason.ToString()); return false; }
+	TestTrue(TEXT("重新放置仍播放原有 Assembly Flight"), CastleBuildingTests::CompletePlacement(Replaced));
 	TestEqual(TEXT("二级卡重新放置仍占两格"), Replaced->GetOccupiedCoordinates().Num(), 2);
 	TestTrue(TEXT("重新放置仍引用同一定义"), Replaced->GetBuildingDefinition() == Definition);
 	Board->RemoveBuilding(Replaced, Reason);
 
 	// 同类逻辑类、颜色和数字相同，但不同资产定义的建筑不能混合升级。
 	ACastleBuildingBase* Original = Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason);
+	CastleBuildingTests::CompletePlacement(Original);
 	UCastleBuildingDefinition* OtherDefinition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::ArcherTower);
 	OtherDefinition->CreateDescriptor(1, ECastleTileColor::Red, 3, Card, Reason);
 	ACastleBuildingBase* Other = Board->PlaceBuilding(FIntVector(1, 0, 0), Card, true, Reason);
+	CastleBuildingTests::CompletePlacement(Other);
 	TestTrue(TEXT("不同定义的同类建筑不会误合成"), Original != nullptr && Other != nullptr && Board->GetPlacedBuildingCount() == 2);
 	return true;
 }
@@ -163,9 +172,14 @@ bool FCastleDirectBuildingBlueprintTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("配置正式蓝图测试地面"), Board->ApplyGroundGenerationResult(Ground, Reason))) { return false; }
 	FCastleBuildingDescriptor Card;
 	Definition->CreateDescriptor(1, ECastleTileColor::Red, 3, Card, Reason);
-	if (!TestNotNull(TEXT("放置第一座一级箭塔"), Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason))) { return false; }
+	ACastleBuildingBase* FirstPlacement = Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason);
+	if (!TestNotNull(TEXT("放置第一座一级箭塔"), FirstPlacement)) { return false; }
+	if (!CastleBuildingTests::CompletePlacement(FirstPlacement)) { AddError(TEXT("第一座箭塔飞入失败。")); return false; }
 	ACastleBuildingBase* Merged = Board->PlaceBuilding(FIntVector(1, 0, 0), Card, true, Reason);
-	if (!TestNotNull(TEXT("两座正式蓝图合成为二级"), Merged)) { AddError(Reason.ToString()); return false; }
+	if (!TestNotNull(TEXT("第二座正式蓝图先进入棋盘"), Merged)) { AddError(Reason.ToString()); return false; }
+	CastleBuildingTests::CompletePlacement(Merged);
+	Merged = CastleBuildingTests::FindPlacedLevel(Board, 2);
+	if (!TestNotNull(TEXT("两座正式蓝图在飞入完成后合成为二级"), Merged)) { AddError(Reason.ToString()); return false; }
 
 	const auto CheckDirectBlueprint = [this, &AuthoredTransforms, BlueprintClass, AuthoredRootScale](ACastleBuildingBase* Building)
 	{
@@ -193,12 +207,17 @@ bool FCastleDirectBuildingBlueprintTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("二级建筑回收到背包"), Board->RemoveBuildingToBackpack(Merged, Board->PrototypeBackpack, Reason));
 	ACastleBuildingBase* Replaced = Board->PlaceBuildingFromBackpack(FIntVector(0, 0, 0), Board->PrototypeBackpack, 0, false, Reason);
 	if (!TestNotNull(TEXT("背包二级卡重新直接生成蓝图"), Replaced)) { AddError(Reason.ToString()); return false; }
+	CastleBuildingTests::CompletePlacement(Replaced);
 	CheckDirectBlueprint(Replaced);
 	Board->RemoveBuilding(Replaced, Reason);
 
-	Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason);
+	FirstPlacement = Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason);
+	CastleBuildingTests::CompletePlacement(FirstPlacement);
 	ACastleBuildingBase* MergedAlongY = Board->PlaceBuilding(FIntVector(0, 1, 0), Card, true, Reason);
-	if (!TestNotNull(TEXT("沿 Y 轴合成仍生成二级蓝图"), MergedAlongY)) { AddError(Reason.ToString()); return false; }
+	if (!TestNotNull(TEXT("沿 Y 放置后启动飞入"), MergedAlongY)) { AddError(Reason.ToString()); return false; }
+	CastleBuildingTests::CompletePlacement(MergedAlongY);
+	MergedAlongY = CastleBuildingTests::FindPlacedLevel(Board, 2);
+	if (!TestNotNull(TEXT("沿 Y 飞入完成后仍生成二级蓝图"), MergedAlongY)) { AddError(Reason.ToString()); return false; }
 	CheckDirectBlueprint(MergedAlongY);
 	TestTrue(TEXT("沿 Y 轴时整体旋转 90 度"), MergedAlongY->GetActorRotation().Equals(FRotator(0.0f, 90.0f, 0.0f)));
 	Board->RemoveBuilding(MergedAlongY, Reason);
@@ -207,12 +226,14 @@ bool FCastleDirectBuildingBlueprintTest::RunTest(const FString& Parameters)
 	Definition->CreateDescriptor(3, ECastleTileColor::Red, 3, Card, Reason);
 	ACastleBuildingBase* Level3Building = Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason);
 	if (!TestNotNull(TEXT("直接放置三级卡"), Level3Building)) { AddError(Reason.ToString()); return false; }
+	CastleBuildingTests::CompletePlacement(Level3Building);
 	TestTrue(TEXT("三级继续使用四格占位"), Level3Building->IsUsingPlaceholder()
 		&& Level3Building->GetOccupiedCoordinates().Num() == 4);
 	Board->RemoveBuilding(Level3Building, Reason);
 	Definition->CreateDescriptor(4, ECastleTileColor::Red, 3, Card, Reason);
 	ACastleBuildingBase* Level4Building = Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason);
 	if (!TestNotNull(TEXT("直接放置四级卡"), Level4Building)) { AddError(Reason.ToString()); return false; }
+	CastleBuildingTests::CompletePlacement(Level4Building);
 	TestTrue(TEXT("四级直接使用定义中的蓝图并占八格"), Level4Building->GetClass() == Definition->FindLevel(4)->BuildingClass
 		&& Level4Building->GetClass()->IsChildOf(ACastleArcherTowerLevel4::StaticClass())
 		&& !Level4Building->IsUsingPlaceholder() && Level4Building->GetOccupiedCoordinates().Num() == 8);

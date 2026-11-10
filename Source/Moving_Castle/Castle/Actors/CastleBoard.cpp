@@ -6,6 +6,7 @@
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
 #include "BuildingMergeComponent.h"
+#include "AssemblyFlightComponent.h"
 #include "CastleGroundGenerator.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -322,13 +323,139 @@ ACastleBuildingBase* ACastleBoard::PlaceBuilding(const FIntVector& Coordinate, c
 		return nullptr;
 	}
 
+	if (GetWorld()->IsGameWorld())
+	{
+		// 格子立即占用，背包可立即扣除；视觉和实际等级替换严格等待原有飞入组件完成。
+		// 每次放置都播放，即便调用者本次不希望自动合并，也不能跳过首次入场。
+		NewBuilding->SetPlacementComplete(false);
+		FPendingPlacement Request;
+		Request.bTryMerge = bTryMerge;
+		Request.Origin = bUseSharedVisualChangeOrigin ? VisualChangeOrigin : NewBuilding->GetActorLocation();
+		PendingPlacements.Add(NewBuilding, Request);
+		NewBuilding->AssemblyFlight->OnAssemblyFinishedNative.AddUObject(this, &ACastleBoard::HandlePlacementFinished);
+		if (!NewBuilding->AssemblyFlight->StartAssembly())
+		{
+			// 起播前校验失败视为本次放置失败，移除占用并让背包入口恢复卡牌，不改为瞬间出现。
+			OutFailureReason = FText::FromString(NewBuilding->AssemblyFlight->LastError);
+			ForgetPlacement(NewBuilding);
+			FText UnregisterReason;
+			if (!UnregisterBuilding(NewBuilding, UnregisterReason))
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("飞入起播失败后的占用清理失败：%s"), *UnregisterReason.ToString());
+			}
+			NewBuilding->Destroy();
+			return nullptr;
+		}
+		return NewBuilding;
+	}
+
+	// 编辑器世界只支持摆放/规则编辑，不执行游戏动画；实际游戏入口始终走上述完成事件。
 	if (!bTryMerge)
 	{
 		return NewBuilding;
 	}
 
 	// 合成失败不会撤销已经合法放置的建筑；只有在替换流程确实出错时记录原因。
-	return TryMergePlacedBuilding(NewBuilding, OutFailureReason);
+	return TryMergePlacedBuilding(NewBuilding, bUseSharedVisualChangeOrigin ? VisualChangeOrigin : NewBuilding->GetActorLocation(), OutFailureReason);
+}
+
+void ACastleBoard::HandlePlacementFinished(UAssemblyFlightComponent* Flight, const bool bCompleted)
+{
+	ACastleBuildingBase* Building = Cast<ACastleBuildingBase>(Flight->GetOwner());
+	const FPendingPlacement* Found = PendingPlacements.Find(Building);
+	if (!Found) { return; }
+	const FPendingPlacement Request = *Found;
+	ForgetPlacement(Building);
+	if (!bCompleted)
+	{
+		// Reset/失败只清理请求，不将不完整建筑标成可合并。重新放置即可重新进入完整流程。
+		const FString Detail = Flight->LastError.IsEmpty() ? TEXT("放置飞入已取消。") : Flight->LastError;
+		UE_LOG(LogMoving_Castle, Warning, TEXT("放置中止，不触发合并 [%s]：%s"), *GetNameSafe(Building), *Detail);
+		ShowPrototypeMessage(Detail, FColor::Yellow);
+		return;
+	}
+	if (!IsValid(Building) || Building->GetOccupiedCoordinates().IsEmpty()
+		|| GetBuildingAt(Building->GetOccupiedCoordinates()[0]) != Building)
+	{
+		return;
+	}
+	Building->SetPlacementComplete(true);
+	UE_LOG(LogMoving_Castle, Display, TEXT("放置飞入完成，开始检查合并 [%s]。"), *Building->GetName());
+	if (Request.bTryMerge) { ReadyMergeRequests.Add(Building, Request.Origin); }
+	ResolveReadyMerges();
+}
+
+void ACastleBoard::ResolveReadyMerges()
+{
+	// 完成顺序可以与放置顺序不同。所有仍有效的自动合并请求重新检查，双方都就绪才允许升级。
+	TArray<TWeakObjectPtr<ACastleBuildingBase>> Requests;
+	ReadyMergeRequests.GenerateKeyArray(Requests);
+	Requests.Sort([](const TWeakObjectPtr<ACastleBuildingBase>& A, const TWeakObjectPtr<ACastleBuildingBase>& B)
+	{
+		return A.GetEvenIfUnreachable()->GetUniqueID() < B.GetEvenIfUnreachable()->GetUniqueID();
+	});
+	for (const TWeakObjectPtr<ACastleBuildingBase>& Request : Requests)
+	{
+		ACastleBuildingBase* Building = Request.Get();
+		const FVector* Origin = ReadyMergeRequests.Find(Request);
+		if (!IsValid(Building) || !Origin)
+		{
+			ReadyMergeRequests.Remove(Request);
+			continue;
+		}
+		FText Reason;
+		const FVector CapturedOrigin = *Origin;
+		ACastleBuildingBase* Result = TryMergePlacedBuilding(Building, CapturedOrigin, Reason);
+		if (!Reason.IsEmpty())
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("放置完成后的合并失败：%s"), *Reason.ToString());
+			ShowPrototypeMessage(Reason.ToString(), FColor::Red);
+		}
+		else if (Result != Building)
+		{
+			ShowPrototypeMessage(FString::Printf(TEXT("合成完成：Lv%d，占用 %d 格。"), Result->GetBuildingLevel(), Result->GetOccupiedCoordinates().Num()), FColor::Green);
+			// 若更高等级邻居仍在放置，保留这次操作上下文，等待它完成后可继续升级。
+			if (Result->CanMergeToNextLevel()) { ReadyMergeRequests.Add(Result, CapturedOrigin); }
+		}
+		else if (!Building->CanMergeToNextLevel())
+		{
+			ReadyMergeRequests.Remove(Request);
+		}
+	}
+}
+
+void ACastleBoard::ForgetPlacement(ACastleBuildingBase* Building)
+{
+	if (!Building) { return; }
+	Building->AssemblyFlight->OnAssemblyFinishedNative.RemoveAll(this);
+	PendingPlacements.Remove(Building);
+	ReadyMergeRequests.Remove(Building);
+}
+
+void ACastleBoard::HandleBuildingDestroyed(AActor* Actor)
+{
+	ACastleBuildingBase* Building = CastChecked<ACastleBuildingBase>(Actor);
+	ForgetPlacement(Building);
+	// 也覆盖关卡代码直接 Destroy 的中途取消；合并路径已先注销，不能删除新结果的坐标。
+	for (const FIntVector& Coordinate : Building->GetOccupiedCoordinates())
+	{
+		if (GetBuildingAt(Coordinate) == Building) { BuildingByCoordinate.Remove(Coordinate); }
+	}
+}
+
+void ACastleBoard::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	for (const auto& Pair : BuildingByCoordinate)
+	{
+		if (ACastleBuildingBase* Building = Pair.Value.Get(); IsValid(Building))
+		{
+			Building->AssemblyFlight->OnAssemblyFinishedNative.RemoveAll(this);
+			Building->OnDestroyed.RemoveDynamic(this, &ACastleBoard::HandleBuildingDestroyed);
+		}
+	}
+	PendingPlacements.Reset();
+	ReadyMergeRequests.Reset();
+	Super::EndPlay(EndPlayReason);
 }
 
 ACastleBuildingBase* ACastleBoard::PlaceBuildingFromBackpack(const FIntVector& Coordinate, UCastleBackpackComponent* Backpack, int32 BackpackIndex, bool bTryMerge, FText& OutFailureReason)
@@ -701,6 +828,7 @@ bool ACastleBoard::RegisterBuilding(ACastleBuildingBase* Building, FText& OutFai
 	{
 		BuildingByCoordinate.Add(Coordinate, Building);
 	}
+	Building->OnDestroyed.AddUniqueDynamic(this, &ACastleBoard::HandleBuildingDestroyed);
 
 	return true;
 }
@@ -796,9 +924,9 @@ ACastleBuildingBase* ACastleBoard::SpawnBuildingActor(const FCastleBuildingDescr
 	return NewBuilding;
 }
 
-ACastleBuildingBase* ACastleBoard::TryMergePlacedBuilding(ACastleBuildingBase* Building, FText& OutFailureReason)
+ACastleBuildingBase* ACastleBoard::TryMergePlacedBuilding(ACastleBuildingBase* Building, const FVector& ChangeOrigin, FText& OutFailureReason)
 {
-	if (Building == nullptr)
+	if (Building == nullptr || !Building->bHasCompletedPlacement)
 	{
 		return nullptr;
 	}
@@ -847,10 +975,11 @@ ACastleBuildingBase* ACastleBoard::TryMergePlacedBuilding(ACastleBuildingBase* B
 	{
 		UBuildingMergeComponent* Transition = CurrentBuilding->BuildingMerge;
 		Transition->PartCatalog = CurrentBuilding->GetBuildingDefinition()->PartCatalog;
-		Transition->IncomingSourceActor = Building;
+		// 双方已经完整飞入，合并只表现从现有位置到新位置的局部调整，不再让新建筑飞第二遍。
+		Transition->IncomingSourceActor = nullptr;
 		Transition->bUseSharedChangeOrigin = true;
-		Transition->ChangeOrigin = bUseSharedVisualChangeOrigin ? VisualChangeOrigin : Building->GetActorLocation();
-		// 新放置的零件从旧邻居的外侧飞来，原有结构只从当前位置走向新位置。
+		Transition->ChangeOrigin = ChangeOrigin;
+		// 放置飞入已完成；合并阶段沿新旧格子方向做局部变化，不再重复播放场外飞入。
 		FVector PreviousCenter = FVector::ZeroVector;
 		for (int32 Index = 1; Index < MergeSources.Num(); ++Index)
 		{
@@ -873,7 +1002,7 @@ ACastleBuildingBase* ACastleBoard::TryMergePlacedBuilding(ACastleBuildingBase* B
 
 ACastleBuildingBase* ACastleBoard::FindMergePartner(ACastleBuildingBase* Building) const
 {
-	if (Building == nullptr || !Building->CanMergeToNextLevel())
+	if (Building == nullptr || !Building->bHasCompletedPlacement || !Building->CanMergeToNextLevel())
 	{
 		return nullptr;
 	}
@@ -897,7 +1026,7 @@ ACastleBuildingBase* ACastleBoard::FindMergePartner(ACastleBuildingBase* Buildin
 	for (ACastleBuildingBase* Candidate : Candidates)
 	{
 		TArray<FIntVector> MergedFootprint;
-		if (Building->CanMergeWith(Candidate) && BuildMergedFootprint(Building, Candidate, MergedFootprint))
+		if (Candidate->bHasCompletedPlacement && Building->CanMergeWith(Candidate) && BuildMergedFootprint(Building, Candidate, MergedFootprint))
 		{
 			return Candidate;
 		}

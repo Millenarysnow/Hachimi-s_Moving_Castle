@@ -4,6 +4,7 @@
 
 #include "CastleBuildingDefinition.h"
 #include "BuildingMergeComponent.h"
+#include "AssemblyFlightComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -20,6 +21,10 @@ ACastleBuildingBase::ACastleBuildingBase()
 	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
 	SetRootComponent(VisualRoot);
 	BuildingMerge = CreateDefaultSubobject<UBuildingMergeComponent>(TEXT("BuildingMerge"));
+	AssemblyFlight = CreateDefaultSubobject<UAssemblyFlightComponent>(TEXT("AssemblyFlight"));
+	// 所有建筑共享原有连续飞入实现；只有棋盘放置流程有权起播，避免预览/升级模型误播。
+	AssemblyFlight->bAutoPlay = false;
+	AssemblyFlight->ExcludedComponentTag = TEXT("MergeExclude");
 
 	// 只有没有美术模型的等级才显示这个组件，正式模型直接来自等级蓝图自身。
 	PrototypeMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PrototypeMesh"));
@@ -52,6 +57,13 @@ ACastleBuildingBase::ACastleBuildingBase()
 	PrototypeLabelPlate->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	PrototypeLabelPlate->SetCanEverAffectNavigation(false);
 	PrototypeLabelPlate->SetVisibility(false);
+}
+
+void ACastleBuildingBase::SetPlacementComplete(const bool bComplete)
+{
+	bHasCompletedPlacement = bComplete;
+	PrototypeLabel->SetVisibility(bComplete, false);
+	PrototypeLabelPlate->SetVisibility(bComplete, false);
 }
 
 bool ACastleBuildingBase::InitializeBuilding(const FCastleBuildingDescriptor& Descriptor, const TArray<FIntVector>& InOccupiedCoordinates)

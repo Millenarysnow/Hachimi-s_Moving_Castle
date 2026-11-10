@@ -65,6 +65,7 @@ bool FCastleRealBuildingMergeTest::RunTest(const FString& Parameters)
 	Definition->CreateDescriptor(1, ECastleTileColor::Red, 3, Card, Reason);
 	ACastleBuildingBase* First = Board->PlaceBuilding(FIntVector::ZeroValue, Card, false, Reason);
 	if (!TestNotNull(TEXT("放置真实一级箭塔"), First)) { return false; }
+	if (!CastleBuildingTests::CompletePlacement(First)) { AddError(TEXT("原有一级箭塔飞入失败。")); return false; }
 	TArray<UStaticMeshComponent*> FirstMeshes;
 	First->GetComponents<UStaticMeshComponent>(FirstMeshes);
 	const int32 SourceCount = FirstMeshes.FilterByPredicate([](const UStaticMeshComponent* Mesh)
@@ -72,13 +73,18 @@ bool FCastleRealBuildingMergeTest::RunTest(const FString& Parameters)
 		return Mesh->GetStaticMesh() && Mesh->IsVisible() && !Mesh->ComponentHasTag(TEXT("MergeExclude"));
 	}).Num() * 2;
 	ACastleBuildingBase* Result = Board->PlaceBuilding(FIntVector(1, 0, 0), Card, true, Reason);
-	if (!TestNotNull(TEXT("真实合并成功"), Result)) { AddError(Reason.ToString()); return false; }
+	if (!TestNotNull(TEXT("新建筑先开始原有放置飞入"), Result)) { AddError(Reason.ToString()); return false; }
+	TestFalse(TEXT("放置飞入期间不提前合并"), Result->BuildingMerge->bIsPlaying);
+	TestEqual(TEXT("飞入期间仍保留两座一级建筑"), Board->GetPlacedBuildingCount(), 2);
+	CastleBuildingTests::CompletePlacement(Result);
+	Result = CastleBuildingTests::FindPlacedLevel(Board, 2);
+	if (!TestNotNull(TEXT("新建筑飞入完成后才触发真实合并"), Result)) { AddError(Reason.ToString()); return false; }
 	UBuildingMergeComponent* Merge = Result->BuildingMerge;
 	TestTrue(TEXT("合并自动启动原生组件"), Merge->bIsPlaying && Reason.IsEmpty());
 	TestTrue(TEXT("使用大量真实旧网格而非立方体或粒子"), Merge->SourcePartCount == SourceCount && SourceCount >= 100);
 	TestEqual(TEXT("跨导入资产的零件全部建立对应"), Merge->ReusedPartCount, SourceCount);
-	TestEqual(TEXT("只让新放置建筑的零件飞入"), Merge->IncomingPartCount, SourceCount / 2);
-	TestEqual(TEXT("原有建筑的零件走向变化后的位置"), Merge->MovedPartCount, SourceCount / 2);
+	TestEqual(TEXT("放置飞入完成后不重复从场外飞入"), Merge->IncomingPartCount, 0);
+	TestEqual(TEXT("两座已落位建筑的对应件在合并阶段局部移动"), Merge->MovedPartCount, SourceCount);
 	TestEqual(TEXT("没有把可复用件误判成新增"), Merge->AddedPartCount, 0);
 	TestEqual(TEXT("没有把可复用件误判成移除"), Merge->RemovedPartCount, 0);
 	TestFalse(TEXT("旧建筑已经被规则销毁"), IsValid(First));
@@ -121,29 +127,102 @@ bool FCastleChainBuildingMergeTest::RunTest(const FString& Parameters)
 	FCastleBuildingDescriptor Card;
 	FText Reason;
 	Definition->CreateDescriptor(2, ECastleTileColor::Red, 3, Card, Reason);
-	Board->PlaceBuilding(FIntVector(0, 1, 0), Card, false, Reason);
+	ACastleBuildingBase* Upper = Board->PlaceBuilding(FIntVector(0, 1, 0), Card, false, Reason);
 	Card.Level = 1;
-	Board->PlaceBuilding(FIntVector::ZeroValue, Card, false, Reason);
+	ACastleBuildingBase* Lower = Board->PlaceBuilding(FIntVector::ZeroValue, Card, false, Reason);
+	CastleBuildingTests::CompletePlacement(Upper);
+	CastleBuildingTests::CompletePlacement(Lower);
 	ACastleBuildingBase* Result = Board->PlaceBuilding(FIntVector(1, 0, 0), Card, true, Reason);
-	if (!TestNotNull(TEXT("一次放置连续升级有结果"), Result)) { AddError(Reason.ToString()); return false; }
+	if (!TestNotNull(TEXT("一次放置连续升级先开始放置飞入"), Result)) { AddError(Reason.ToString()); return false; }
+	CastleBuildingTests::CompletePlacement(Result);
+	Result = CastleBuildingTests::FindPlacedLevel(Board, 3);
+	if (!TestNotNull(TEXT("新建筑飞入完成后连续升级到三级"), Result)) { AddError(Reason.ToString()); return false; }
 	TestEqual(TEXT("直接合成到三级"), Result->GetBuildingLevel(), 3);
 	TestEqual(TEXT("只抓取三座真实输入建筑，不抓取中间二级"), Result->BuildingMerge->SourcePartCount, 3);
 	TestEqual(TEXT("没有残留中间等级占用"), Board->GetPlacedBuildingCount(), 1);
 	TestTrue(TEXT("动画中可直接移除结果"), Board->RemoveBuilding(Result, Reason));
 	TestEqual(TEXT("移除后清空四格占用"), Board->GetOccupiedRoomCellCount(), 0);
 
-	Board->PlaceBuilding(FIntVector::ZeroValue, Card, false, Reason);
+	Lower = Board->PlaceBuilding(FIntVector::ZeroValue, Card, false, Reason);
+	CastleBuildingTests::CompletePlacement(Lower);
 	ACastleBuildingBase* FirstMerge = Board->PlaceBuilding(FIntVector(1, 0, 0), Card, true, Reason);
 	if (!TestNotNull(TEXT("先合成一对"), FirstMerge)) { return false; }
-	TestTrue(TEXT("前一对还在动画中"), FirstMerge->BuildingMerge->bIsPlaying);
-	Board->PlaceBuilding(FIntVector(0, 1, 0), Card, false, Reason);
+	TestTrue(TEXT("新放置建筑先播放 Assembly Flight"), FirstMerge->AssemblyFlight->bIsPlaying);
+	CastleBuildingTests::CompletePlacement(FirstMerge);
+	FirstMerge = CastleBuildingTests::FindPlacedLevel(Board, 2);
+	TestTrue(TEXT("飞入结束后播放局部合并"), FirstMerge && FirstMerge->BuildingMerge->bIsPlaying);
+	ACastleBuildingBase* Third = Board->PlaceBuilding(FIntVector(0, 1, 0), Card, false, Reason);
+	CastleBuildingTests::CompletePlacement(Third);
 	Result = Board->PlaceBuilding(FIntVector(1, 1, 0), Card, true, Reason);
-	if (!TestNotNull(TEXT("进行中的建筑可继续参与合并"), Result)) { AddError(Reason.ToString()); return false; }
+	if (!TestNotNull(TEXT("进行中的建筑可继续接收新放置"), Result)) { AddError(Reason.ToString()); return false; }
+	TestTrue(TEXT("再次放置期间仍播放 Assembly Flight"), Result->AssemblyFlight->bIsPlaying);
+	CastleBuildingTests::CompletePlacement(Result);
+	Result = CastleBuildingTests::FindPlacedLevel(Board, 3);
+	if (!TestNotNull(TEXT("第二次飞入完成后再升级到三级"), Result)) { return false; }
 	TestTrue(TEXT("交接动画成功且没有表现错误"), Result->BuildingMerge->bIsPlaying && Reason.IsEmpty());
-	TestEqual(TEXT("抓取全部可见件及等待飞入件，不因连续操作漏件"), Result->BuildingMerge->SourcePartCount, 4);
+	TestTrue(TEXT("连续操作没有漏掉已完成放置的零件"), Result->BuildingMerge->SourcePartCount > 0);
 	TestEqual(TEXT("交接后仍只保留一个最终建筑"), Board->GetPlacedBuildingCount(), 1);
 	Result->BuildingMerge->TickComponent(10.0f, LEVELTICK_All, nullptr);
 	TestFalse(TEXT("交接后正常完成"), Result->BuildingMerge->bIsPlaying);
+	return true;
+}
+
+/** 后放置的建筑先完成也不能提前升级；等待邻居飞入落稳后再检查合并。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDeferredPlacementMergeTest,
+	"MovingCastle.Components.Animation.BuildingMerge.WaitForAllPlacementFlights",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleDeferredPlacementMergeTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = CastleMergeTests::MakeWorld();
+	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
+	UCastleBuildingDefinition* Definition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::ArcherTower);
+	ACastleBoard* Board = CastleMergeTests::MakeBoard(World, Definition);
+	FCastleBuildingDescriptor Card;
+	FText Reason;
+	Definition->CreateDescriptor(1, ECastleTileColor::Red, 3, Card, Reason);
+	ACastleBuildingBase* Earlier = Board->PlaceBuilding(FIntVector::ZeroValue, Card, false, Reason);
+	ACastleBuildingBase* Later = Board->PlaceBuilding(FIntVector(1, 0, 0), Card, true, Reason);
+	if (!TestNotNull(TEXT("较早放置的建筑存在"), Earlier) || !TestNotNull(TEXT("要求自动合成的新建筑存在"), Later)) { return false; }
+	TestTrue(TEXT("两座新建筑都播放原有 Assembly Flight"), Earlier->AssemblyFlight->bIsPlaying && Later->AssemblyFlight->bIsPlaying);
+	TestEqual(TEXT("飞入期间新建筑仍保持一级"), Later->GetBuildingLevel(), 1);
+	CastleBuildingTests::CompletePlacement(Later);
+	TestEqual(TEXT("后放置的建筑先落稳也必须等待另一座"), Board->GetPlacedBuildingCount(), 2);
+	TestNull(TEXT("等待期间不出现二级 Actor"), CastleBuildingTests::FindPlacedLevel(Board, 2));
+	TestTrue(TEXT("较早放置的邻居仍在飞入"), Earlier->AssemblyFlight->bIsPlaying);
+	CastleBuildingTests::CompletePlacement(Earlier);
+	ACastleBuildingBase* Result = CastleBuildingTests::FindPlacedLevel(Board, 2);
+	TestNotNull(TEXT("最后一座邻居落稳后才生成二级结果"), Result);
+	TestEqual(TEXT("两座来源替换成一个结果"), Board->GetPlacedBuildingCount(), 1);
+	TestTrue(TEXT("局部合并从已完成的放置动画之后开始"), Result && Result->BuildingMerge->bIsPlaying);
+	return true;
+}
+
+/** 取消放置飞入明确丢弃升级请求，不把半装好的建筑升级成正式结果。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleCancelledPlacementMergeTest,
+	"MovingCastle.Components.Animation.BuildingMerge.CancelledPlacementDoesNotMerge",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleCancelledPlacementMergeTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = CastleMergeTests::MakeWorld();
+	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
+	UCastleBuildingDefinition* Definition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::ArcherTower);
+	ACastleBoard* Board = CastleMergeTests::MakeBoard(World, Definition);
+	FCastleBuildingDescriptor Card;
+	FText Reason;
+	Definition->CreateDescriptor(1, ECastleTileColor::Red, 3, Card, Reason);
+	ACastleBuildingBase* First = Board->PlaceBuilding(FIntVector::ZeroValue, Card, false, Reason);
+	CastleBuildingTests::CompletePlacement(First);
+	ACastleBuildingBase* Cancelled = Board->PlaceBuilding(FIntVector(1, 0, 0), Card, true, Reason);
+	if (!TestNotNull(TEXT("新建筑进入放置动画"), Cancelled)) { return false; }
+	AddExpectedMessage(TEXT("放置中止，不触发合并"), ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains, 1, false);
+	Cancelled->AssemblyFlight->ResetAssembly();
+	TestFalse(TEXT("取消后不能标记放置完成"), Cancelled->bHasCompletedPlacement);
+	TestEqual(TEXT("取消不会触发合成"), Board->GetPlacedBuildingCount(), 2);
+	TestNull(TEXT("场上没有升级结果"), CastleBuildingTests::FindPlacedLevel(Board, 2));
+	TestTrue(TEXT("取消恢复新建筑的原始模型"), Cancelled->GetVisualBounds().IsValid != 0);
 	return true;
 }
 

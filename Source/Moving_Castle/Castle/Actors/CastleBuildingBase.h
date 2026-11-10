@@ -13,6 +13,7 @@ class UStaticMesh;
 class UStaticMeshComponent;
 class UTextRenderComponent;
 class UBuildingMergeComponent;
+class UAssemblyFlightComponent;
 
 /**
  * 所有可放置建筑的共同 Actor 基类。
@@ -33,6 +34,17 @@ public:
 	/** 所有建筑原生携带的零件合并组件；仅在棋盘合并时启动，卡片预览和普通放置不播放。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="建筑|动画")
 	TObjectPtr<UBuildingMergeComponent> BuildingMerge;
+
+	/** 实际放置由棋盘在模型配置完后启动；预览、合并结果和关卡编辑不会自动飞入。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="建筑|动画")
+	TObjectPtr<UAssemblyFlightComponent> AssemblyFlight;
+
+	/** 未完成放置或播放中止的建筑不能参与合并；合并结果不再重复播放放置动画。 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="建筑|动画")
+	bool bHasCompletedPlacement = true;
+
+	/** 棋盘切换放置状态，并让标签只在建筑完整组装后出现。 */
+	void SetPlacementComplete(bool bComplete);
 
 	/**
 	 * 用背包描述和占用格子初始化一个新建筑。
