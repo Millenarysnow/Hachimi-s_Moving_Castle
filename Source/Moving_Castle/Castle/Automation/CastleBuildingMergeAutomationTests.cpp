@@ -6,6 +6,7 @@
 #include "CastleBuildingDefinition.h"
 #include "CastleBuildingTestUtilities.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
@@ -70,7 +71,9 @@ bool FCastleRealBuildingMergeTest::RunTest(const FString& Parameters)
 	First->GetComponents<UStaticMeshComponent>(FirstMeshes);
 	const int32 SourceCount = FirstMeshes.FilterByPredicate([](const UStaticMeshComponent* Mesh)
 	{
-		return Mesh->GetStaticMesh() && Mesh->IsVisible() && !Mesh->ComponentHasTag(TEXT("MergeExclude"));
+		// 功能分支的导航楼板不是美术零件，验收基数不能因新增可见功能 Cube 而增长。
+		return Mesh->GetStaticMesh() && Mesh->IsVisible() && !Mesh->ComponentHasTag(TEXT("MergeExclude"))
+			&& !UBuildingGameplayRootComponent::IsInGameplayHierarchy(Mesh);
 	}).Num() * 2;
 	ACastleBuildingBase* Result = Board->PlaceBuilding(FIntVector(1, 0, 0), Card, true, Reason);
 	if (!TestNotNull(TEXT("新建筑先开始原有放置飞入"), Result)) { AddError(Reason.ToString()); return false; }
@@ -96,7 +99,8 @@ bool FCastleRealBuildingMergeTest::RunTest(const FString& Parameters)
 	TMap<UStaticMeshComponent*, FTransform> Authored;
 	for (UStaticMeshComponent* Mesh : Meshes)
 	{
-		if (Mesh->GetStaticMesh() && !Mesh->HasAnyFlags(RF_Transient) && !Mesh->ComponentHasTag(TEXT("MergeExclude")))
+		if (Mesh->GetStaticMesh() && !Mesh->HasAnyFlags(RF_Transient) && !Mesh->ComponentHasTag(TEXT("MergeExclude"))
+			&& !UBuildingGameplayRootComponent::IsInGameplayHierarchy(Mesh))
 		{
 			Authored.Add(Mesh, Mesh->GetRelativeTransform());
 		}

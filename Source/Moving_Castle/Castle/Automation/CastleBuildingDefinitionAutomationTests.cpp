@@ -123,10 +123,10 @@ bool FCastleDirectBuildingBlueprintTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("正式定义配置有效"), Definition->ValidateConfiguration(Reason))) { AddError(Reason.ToString()); return false; }
 	const FCastleBuildingLevelDefinition* Level2 = Definition->FindLevel(2);
 	if (!TestNotNull(TEXT("定义存在二级"), Level2)) { return false; }
-	UClass* BlueprintClass = LoadClass<ACastleBuildingBase>(nullptr,
-		TEXT("/Game/MovingCastle/Model/Buildings/BP_ArcherTower_lv2.BP_ArcherTower_lv2_C"));
+	// 从正式等级定义取得蓝图，资产移动到 BP 目录后仍验证真实生成类，不依赖旧导入目录。
+	UClass* BlueprintClass = Level2->BuildingClass.Get();
 	if (!TestNotNull(TEXT("加载二级建筑蓝图"), BlueprintClass)) { return false; }
-	TestTrue(TEXT("Data Asset 直接选择二级蓝图"), Level2->BuildingClass == BlueprintClass);
+	TestTrue(TEXT("Data Asset 直接选择二级蓝图"), BlueprintClass->HasAnyClassFlags(CLASS_CompiledFromBlueprint));
 	TestTrue(TEXT("二级蓝图继承对应 C++ 等级类"), BlueprintClass->IsChildOf(ACastleArcherTowerLevel2::StaticClass()));
 
 	const UWorld::InitializationValues Settings = UWorld::InitializationValues().AllowAudioPlayback(false)

@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Actor.h"
+#include "BuildingNavigationActor.h"
 #include "CastleGameplayTypes.h"
 #include "CastleBuildingBase.generated.h"
 
@@ -24,7 +24,7 @@ class UBuildingGameplayRootComponent;
  * 不再通过独立模型载体或 Child Actor 转发模型和变换。
  */
 UCLASS(Abstract, Blueprintable)
-class MOVING_CASTLE_API ACastleBuildingBase : public AActor
+class MOVING_CASTLE_API ACastleBuildingBase : public ABuildingNavigationActor
 {
 	GENERATED_BODY()
 
@@ -35,6 +35,7 @@ public:
 	/**
 	 * 放置隐藏碰撞、导航表面和触发区域的公共父节点；所有深度的后代均不参与两种建筑动画。
 	 * 初始化模型时保留这些组件的碰撞和导航配置，功能组件也不参与模型检测和预览取景。
+	 * 分支外所有组件均由原生 Actor 导航接口拒绝，直接摆入关卡和运行时新增组件也遵循此规则。
 	 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="建筑|功能组件")
 	TObjectPtr<UBuildingGameplayRootComponent> GameplayRoot;

@@ -3,6 +3,7 @@
 #include "Components/Building/BuildingGameplayRootComponent.h"
 
 #include "AssemblyFlightComponent.h"
+#include "BuildingNavigationActor.h"
 #include "BuildingMergeComponent.h"
 #include "CastleBuildingTestUtilities.h"
 #include "Components/BoxComponent.h"
@@ -11,6 +12,7 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
+#include "NavModifierComponent.h"
 
 namespace BuildingGameplayTests
 {
@@ -283,6 +285,65 @@ bool FBuildingGameplayConfigurationTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("预览保留功能组件导航设置"), Snapshot.Component->CanEverAffectNavigation(), Snapshot.bNavigation);
 	}
 	TestTrue(TEXT("预览不关闭 Actor 总碰撞"), Building->GetActorEnableCollision());
+	return true;
+}
+
+/** 验证所有建筑族共用引擎导航过滤，而非依赖棋盘初始化或美术网格的碰撞预设。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildingGameplayNavigationBoundaryTest,
+	"MovingCastle.Components.Building.GameplayRoot.NavigationBoundary",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingGameplayNavigationBoundaryTest::RunTest(const FString& Parameters)
+{
+	using namespace BuildingGameplayTests;
+	FScopedWorld Scope;
+	UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (!TestNotNull(TEXT("加载引擎方块"), Cube)) { return false; }
+
+	// 主塔使用无业务状态的建筑模型基类；道路和三个功能建筑族的所有等级均须继承同一边界。
+	const TArray<UClass*> Classes = {
+		ABuildingNavigationActor::StaticClass(), ACastleRoadBuilding::StaticClass(),
+		ACastleArcherTowerLevel1::StaticClass(), ACastleArcherTowerLevel2::StaticClass(),
+		ACastleArcherTowerLevel3::StaticClass(), ACastleArcherTowerLevel4::StaticClass(), ACastleArcherTowerLevel5::StaticClass(),
+		ACastleCannonTowerLevel1::StaticClass(), ACastleCannonTowerLevel2::StaticClass(),
+		ACastleCannonTowerLevel3::StaticClass(), ACastleCannonTowerLevel4::StaticClass(), ACastleCannonTowerLevel5::StaticClass(),
+		ACastleFarmLevel1::StaticClass(), ACastleFarmLevel2::StaticClass(), ACastleFarmLevel3::StaticClass(),
+		ACastleFarmLevel4::StaticClass(), ACastleFarmLevel5::StaticClass()
+	};
+	for (UClass* Class : Classes)
+	{
+		ABuildingNavigationActor* Building = Scope.World->SpawnActor<ABuildingNavigationActor>(Class);
+		if (!TestNotNull(Class->GetName() + TEXT(" 可生成"), Building)) { return false; }
+		if (!Building->GetRootComponent()) { AddComponent<USceneComponent>(Building, TEXT("ModelRoot"), nullptr); }
+		ACastleBuildingBase* PlacedBuilding = Cast<ACastleBuildingBase>(Building);
+		FGameplayBranch Branch(Building, Cube, PlacedBuilding ? PlacedBuilding->GameplayRoot.Get() : nullptr);
+		UStaticMeshComponent* Visual = AddVisual(Building, Cube);
+		Visual->SetCollisionProfileName(TEXT("BlockAll"));
+		Visual->SetCanEverAffectNavigation(true);
+		TestTrue(TEXT("分支外网格自身允许导航，确保过滤来自建筑而非碰撞开关"), Visual->IsNavigationRelevant());
+		TestFalse(Class->GetName() + TEXT(" 直接生成且未初始化时拒绝美术组件"), Building->IsComponentRelevantForNavigation(Visual));
+
+		// 非 Scene 的导航修改器无法挂在 GameplayRoot 下，也必须被这条统一规则排除。
+		UNavModifierComponent* Modifier = NewObject<UNavModifierComponent>(Building);
+		Building->AddInstanceComponent(Modifier);
+		Modifier->RegisterComponent();
+		TestFalse(TEXT("无功能父级链的导航修改器不参与"), Building->IsComponentRelevantForNavigation(Modifier));
+		TestFalse(TEXT("空组件不参与"), Building->IsComponentRelevantForNavigation(nullptr));
+		Branch.Root->Rename(TEXT("RenamedGameplayGroup"));
+		for (const FPrimitiveSnapshot& Snapshot : Branch.Snapshots)
+		{
+			TestTrue(TEXT("功能分支的多级、隐藏和触发组件保留导航资格"), Building->IsComponentRelevantForNavigation(Snapshot.Component));
+		}
+		Branch.Verify(*this);
+
+		// 运行时重新挂接必须按当前层级立即重新判断，不永久修改功能件的作者开关。
+		Visual->AttachToComponent(Branch.Root, FAttachmentTransformRules::KeepRelativeTransform);
+		TestTrue(TEXT("网格移入功能分支后获得资格"), Building->IsComponentRelevantForNavigation(Visual));
+		Visual->AttachToComponent(Building->GetRootComponent(), FAttachmentTransformRules::KeepRelativeTransform);
+		TestFalse(TEXT("网格移出功能分支后失去资格"), Building->IsComponentRelevantForNavigation(Visual));
+		TestTrue(TEXT("导航边界不强制改写组件自身开关"), Visual->CanEverAffectNavigation());
+		Building->Destroy();
+	}
 	return true;
 }
 

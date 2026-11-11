@@ -7,7 +7,8 @@
 /**
  * 建筑功能组件的分组根节点。隐藏地板、简化楼梯、碰撞盒和触发区域应挂在本节点下面。
  * 本节点及其任意深度的后代都不属于建筑美术零件；动画、取景和离线零件收集共用此边界。
- * 只声明组件用途，不自动隐藏、禁用碰撞或开启导航，具体设置仍由各功能组件的作者决定。
+ * BuildingNavigationActor 派生建筑仅允许本分支参与导航；具体碰撞和导航开关仍由组件作者决定。
+ * 本节点不会自动隐藏、禁用碰撞或开启导航；普通 Actor 单独添加本节点只获得动画排除边界。
  */
 UCLASS(ClassGroup=(Castle), BlueprintType, meta=(BlueprintSpawnableComponent, DisplayName="Building Gameplay Root"))
 class MOVING_CASTLE_API UBuildingGameplayRootComponent : public USceneComponent
