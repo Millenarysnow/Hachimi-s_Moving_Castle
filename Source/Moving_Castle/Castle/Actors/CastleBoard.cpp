@@ -182,7 +182,12 @@ bool ACastleBoard::SpawnMainTower(FText& OutFailureReason)
 		return false;
 	}
 
-	const FTransform TowerTransform(GetActorQuat(), GetGridWorldLocation(GetBoardCenterCoordinate()), GetActorScale3D());
+	// 主塔与普通建筑共用“占用范围底面中心”锚点：中心格只有一个占用单元，
+	// 因此先取该格的中心，再沿棋盘局部 Z 下降半个层高得到底面中心。
+	// 使用棋盘变换转换偏移，保证旋转和缩放棋盘时主塔仍与其他建筑保持同一落格规则。
+	const FVector TowerBottomCenter = GetGridWorldLocation(GetBoardCenterCoordinate())
+		+ GetActorTransform().TransformVector(FVector(0.0f, 0.0f, -LayerHeight * 0.5f));
+	const FTransform TowerTransform(GetActorQuat(), TowerBottomCenter, GetActorScale3D());
 	AActor* TowerActor = GetWorld()->SpawnActorDeferred<AActor>(MainTowerClass, TowerTransform, this, nullptr,
 		ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	if (TowerActor == nullptr)

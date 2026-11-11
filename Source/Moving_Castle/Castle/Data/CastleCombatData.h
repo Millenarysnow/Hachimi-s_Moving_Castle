@@ -43,10 +43,10 @@ public:
 
 	/** 敌人圆环内半径和外半径，单位为厘米。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "战斗|敌人", meta = (ClampMin = "0.0", Units = "cm"))
-	float EnemySpawnInnerRadius = 3000.0f;
+	float EnemySpawnInnerRadius = 1200.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "战斗|敌人", meta = (ClampMin = "0.0", Units = "cm"))
-	float EnemySpawnOuterRadius = 4500.0f;
+	float EnemySpawnOuterRadius = 1800.0f;
 
 	/** 敌人相对主塔目标点的额外飞行高度。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "战斗|敌人", meta = (Units = "cm"))

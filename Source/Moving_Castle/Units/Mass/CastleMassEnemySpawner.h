@@ -22,11 +22,11 @@ public:
 
 	/** 圆环内半径，单位为厘米。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mass|敌人", meta = (ClampMin = "0.0", Units = "cm"))
-	float InnerRadius = 3000.0f;
+	float InnerRadius = 1200.0f;
 
 	/** 圆环外半径，单位为厘米，必须大于 InnerRadius。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mass|敌人", meta = (ClampMin = "0.0", Units = "cm"))
-	float OuterRadius = 4500.0f;
+	float OuterRadius = 1800.0f;
 
 	/** 生成点相对主塔敌人目标点的高度偏移。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mass|敌人", meta = (Units = "cm"))
