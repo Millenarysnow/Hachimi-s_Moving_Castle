@@ -9,11 +9,15 @@
 #include "BuildingMergeComponent.h"
 #include "AssemblyFlightComponent.h"
 #include "CastleGroundGenerator.h"
+#include "CastleCombatData.h"
+#include "CastleMainTowerComponent.h"
+#include "CastleMassEnemySpawner.h"
 #include "CastleNavigationSubsystem.h"
 #include "Components/SceneComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Moving_Castle.h"
+#include "UObject/ConstructorHelpers.h"
 
 namespace
 {
@@ -90,11 +94,23 @@ ACastleBoard::ACastleBoard()
 	PrototypeBackpack = CreateDefaultSubobject<UCastleBackpackComponent>(TEXT("PrototypeBackpack"));
 
 	GroundGeneratorClass = UCastleRandomGroundGenerator::StaticClass();
+
+	static ConstructorHelpers::FClassFinder<AActor> MainTowerBlueprint(
+		TEXT("/Game/MovingCastle/BP/BP_MainTower"));
+	MainTowerClass = MainTowerBlueprint.Class;
 }
 
 void ACastleBoard::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// 运行时再解析默认战斗 Data Asset，避免 CDO 构造早于资产注册时产生无意义的加载警告；
+	// 关卡实例仍可直接覆盖 CombatData，缺失资产会在 SpawnMainTower 中明确报错。
+	if (CombatData == nullptr)
+	{
+		CombatData = LoadObject<UCastleCombatDataAsset>(nullptr,
+			TEXT("/Game/MovingCastle/Data/DA_CastleCombat.DA_CastleCombat"));
+	}
 
 	if (bGenerateGroundOnBeginPlay)
 	{
@@ -109,6 +125,156 @@ void ACastleBoard::BeginPlay()
 	{
 		InitializePrototypeDeck();
 	}
+
+	if (bSpawnMainTowerOnBeginPlay)
+	{
+		FText FailureReason;
+		if (!SpawnMainTower(FailureReason))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 BeginPlay 生成主塔失败：%s"), *FailureReason.ToString());
+			return;
+		}
+	}
+
+	if (bSpawnInitialEnemiesOnBeginPlay)
+	{
+		FText FailureReason;
+		if (!SpawnInitialEnemies(FailureReason))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 BeginPlay 生成初始敌人失败：%s"), *FailureReason.ToString());
+		}
+	}
+}
+
+FIntVector ACastleBoard::GetBoardCenterCoordinate() const
+{
+	return GridOrigin + FIntVector(
+		FMath::Max(0, (GridSize.X - 1) / 2),
+		FMath::Max(0, (GridSize.Y - 1) / 2),
+		0);
+}
+
+bool ACastleBoard::SpawnMainTower(FText& OutFailureReason)
+{
+	OutFailureReason = FText::GetEmpty();
+	if (IsValid(MainTowerActor))
+	{
+		OutFailureReason = FText::FromString(TEXT("棋盘已经生成过主塔，不能重复生成。"));
+		return false;
+	}
+	if (!IsValid(CombatData))
+	{
+		OutFailureReason = FText::FromString(TEXT("棋盘没有配置战斗 Data Asset。"));
+		return false;
+	}
+	if (!CombatData->ValidateConfiguration(OutFailureReason))
+	{
+		return false;
+	}
+	if (MainTowerClass == nullptr || GetWorld() == nullptr)
+	{
+		OutFailureReason = FText::FromString(TEXT("棋盘没有配置有效的主塔 Actor 类或 World。"));
+		return false;
+	}
+	if (!IsCoordinateWithinBoard(GetBoardCenterCoordinate()))
+	{
+		OutFailureReason = FText::FromString(TEXT("棋盘中心坐标超出棋盘范围。"));
+		return false;
+	}
+
+	const FTransform TowerTransform(GetActorQuat(), GetGridWorldLocation(GetBoardCenterCoordinate()), GetActorScale3D());
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = this;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	AActor* TowerActor = GetWorld()->SpawnActorDeferred<AActor>(MainTowerClass, TowerTransform, this, nullptr,
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	if (TowerActor == nullptr)
+	{
+		OutFailureReason = FText::FromString(TEXT("World 延迟生成主塔 Actor 失败。"));
+		return false;
+	}
+
+	UCastleMainTowerComponent* TowerComponent = NewObject<UCastleMainTowerComponent>(TowerActor, TEXT("MainTowerHealth"));
+	if (TowerComponent == nullptr)
+	{
+		TowerActor->Destroy();
+		OutFailureReason = FText::FromString(TEXT("创建主塔生命组件失败。"));
+		return false;
+	}
+	TowerActor->AddInstanceComponent(TowerComponent);
+	TowerComponent->MaxHealth = CombatData->MainTowerMaxHealth;
+	TowerComponent->TargetHeightOffset = CombatData->MainTowerTargetHeightOffset;
+	if (!TowerComponent->InitializeHealth())
+	{
+		TowerActor->Destroy();
+		OutFailureReason = FText::FromString(TEXT("主塔生命组件初始化失败。"));
+		return false;
+	}
+	TowerComponent->RegisterComponent();
+	TowerActor->FinishSpawning(TowerTransform);
+
+	UCastleMainTowerSubsystem* TowerSubsystem = GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>();
+	if (TowerSubsystem == nullptr || TowerSubsystem->GetRegisteredMainTower() != TowerComponent)
+	{
+		TowerActor->Destroy();
+		OutFailureReason = FText::FromString(TEXT("主塔生成后没有成功注册到当前 World。"));
+		return false;
+	}
+
+	MainTowerActor = TowerActor;
+	UE_LOG(LogMoving_Castle, Display, TEXT("主塔已在棋盘中心格 (%d, %d, %d) 生成，生命 %.1f。"),
+		GetBoardCenterCoordinate().X, GetBoardCenterCoordinate().Y, GetBoardCenterCoordinate().Z,
+		CombatData->MainTowerMaxHealth);
+	return true;
+}
+
+bool ACastleBoard::SpawnInitialEnemies(FText& OutFailureReason)
+{
+	OutFailureReason = FText::GetEmpty();
+	if (!IsValid(CombatData) || !CombatData->ValidateConfiguration(OutFailureReason))
+	{
+		return false;
+	}
+	if (!IsValid(MainTowerActor))
+	{
+		OutFailureReason = FText::FromString(TEXT("生成初始敌人前必须先生成主塔。"));
+		return false;
+	}
+	if (IsValid(InitialEnemySpawner))
+	{
+		OutFailureReason = FText::FromString(TEXT("棋盘已经生成过初始敌人批次，不能重复生成。"));
+		return false;
+	}
+
+	const FTransform SpawnerTransform(GetActorQuat(), GetActorLocation(), GetActorScale3D());
+	ACastleMassEnemySpawner* Spawner = GetWorld()->SpawnActorDeferred<ACastleMassEnemySpawner>(
+		ACastleMassEnemySpawner::StaticClass(), SpawnerTransform, this, nullptr,
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	if (Spawner == nullptr)
+	{
+		OutFailureReason = FText::FromString(TEXT("World 延迟生成 Mass 敌人生成器失败。"));
+		return false;
+	}
+	Spawner->Configuration = CombatData->EnemyConfiguration;
+	Spawner->Count = CombatData->InitialEnemyCount;
+	Spawner->InnerRadius = CombatData->EnemySpawnInnerRadius;
+	Spawner->OuterRadius = CombatData->EnemySpawnOuterRadius;
+	Spawner->HeightOffset = CombatData->EnemySpawnHeightOffset;
+	Spawner->RandomSeed = CombatData->EnemySpawnSeed;
+	Spawner->bSpawnOnBeginPlay = true;
+	Spawner->FinishSpawning(SpawnerTransform);
+
+	if (Spawner->SpawnedUnits.Num() != CombatData->InitialEnemyCount)
+	{
+		Spawner->Destroy();
+		OutFailureReason = FText::FromString(TEXT("Mass 敌人生成器 BeginPlay 没有生成完整的初始批次。"));
+		return false;
+	}
+
+	InitialEnemySpawner = Spawner;
+	UE_LOG(LogMoving_Castle, Display, TEXT("已生成 %d 个主塔初始敌人，圆环范围 %.1f~%.1f cm。"),
+		Spawner->SpawnedUnits.Num(), Spawner->InnerRadius, Spawner->OuterRadius);
+	return true;
 }
 
 bool ACastleBoard::GenerateGround(FText& OutFailureReason)

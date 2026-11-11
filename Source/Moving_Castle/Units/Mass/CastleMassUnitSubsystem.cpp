@@ -256,5 +256,10 @@ bool UCastleMassUnitSubsystem::GetUnitSnapshot(const FCastleMassUnitHandle& Unit
 		OutSnapshot.PatrolLeg = Patrol->Leg;
 		OutSnapshot.CompletedPatrolLaps = Patrol->CompletedLaps;
 	}
+	if (const auto* Enemy = Manager->GetFragmentDataPtr<FCastleMassEnemyFragment>(Unit.Entity))
+	{
+		OutSnapshot.bInAttackRange = Enemy->bInAttackRange;
+		OutSnapshot.AttackCount = Enemy->AttackCount;
+	}
 	return true;
 }

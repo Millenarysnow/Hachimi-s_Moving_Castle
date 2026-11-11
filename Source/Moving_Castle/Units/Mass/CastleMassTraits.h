@@ -43,8 +43,24 @@ class MOVING_CASTLE_API UCastleMassEnemyTrait : public UCastleMassUnitTrait
 	GENERATED_BODY()
 public:
 	UCastleMassEnemyTrait();
+
+	/** 敌人每次攻击主塔造成的伤害；原型基础敌人默认为 0。 */
+	UPROPERTY(EditAnywhere, Category="敌人|攻击", meta=(ClampMin="0.0"))
+	float AttackDamage = 0.0f;
+
+	/** 同一敌人两次攻击之间的间隔，单位为秒。 */
+	UPROPERTY(EditAnywhere, Category="敌人|攻击", meta=(ClampMin="0.01", Units="s"))
+	float AttackInterval = 1.0f;
+
+	/** 敌人停止移动并开始攻击的主塔距离，单位为厘米。 */
+	UPROPERTY(EditAnywhere, Category="敌人|攻击", meta=(ClampMin="0.0", Units="cm"))
+	float AttackRange = 150.0f;
+
 protected:
 	virtual ECastleMassUnitKind GetKind() const override { return ECastleMassUnitKind::Enemy; }
+	virtual void BuildTemplate(FMassEntityTemplateBuildContext& BuildContext, const UWorld& World) const override;
+	virtual bool ValidateTemplate(const FMassEntityTemplateBuildContext& BuildContext, const UWorld& World,
+		FAdditionalTraitRequirements& OutTraitRequirements) const override;
 };
 
 UCLASS(meta=(DisplayName="Castle Mass NPC 基类"))

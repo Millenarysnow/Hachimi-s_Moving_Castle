@@ -9,9 +9,12 @@
 
 class ACastleBuildingBase;
 class ACastleGroundTileActor;
+class ACastleMassEnemySpawner;
 class UAssemblyFlightComponent;
 class UCastleBackpackComponent;
+class UCastleCombatDataAsset;
 class UCastleGroundGenerator;
+class UCastleMainTowerComponent;
 class USceneComponent;
 
 /**
@@ -94,6 +97,30 @@ public:
 	/** BeginPlay 时自动生成地面，关闭后可以由关卡蓝图手动调用 GenerateGround。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|地面")
 	bool bGenerateGroundOnBeginPlay = true;
+
+	/** 主塔和开局敌人共用的战斗配置 Data Asset。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "战斗|配置")
+	TObjectPtr<UCastleCombatDataAsset> CombatData;
+
+	/** 自动生成的主塔模型类；默认指向 Content/MovingCastle/BP/BP_MainTower。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "战斗|主塔")
+	TSubclassOf<AActor> MainTowerClass;
+
+	/** BeginPlay 时是否在棋盘中心生成主塔。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "战斗|主塔")
+	bool bSpawnMainTowerOnBeginPlay = true;
+
+	/** BeginPlay 时是否在主塔周围生成战斗配置中的初始敌人。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "战斗|敌人")
+	bool bSpawnInitialEnemiesOnBeginPlay = true;
+
+	/** 自动生成的主塔 Actor，供调试和后续 UI 读取。 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "战斗|主塔")
+	TObjectPtr<AActor> MainTowerActor;
+
+	/** 自动生成的敌人批次管理器。 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "战斗|敌人")
+	TObjectPtr<ACastleMassEnemySpawner> InitialEnemySpawner;
 
 	/** 原型背包会自动装入道路、箭塔、炮塔和农田样例卡牌。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "棋盘|原型操作")
@@ -188,6 +215,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
 	FVector GetGridWorldLocation(const FIntVector& Coordinate) const;
 
+	/** 返回棋盘平面中心格；偶数尺寸取中心左下侧的确定格，保证每局可复现。 */
+	UFUNCTION(BlueprintPure, Category = "移动城堡|战斗")
+	FIntVector GetBoardCenterCoordinate() const;
+
 	/**
 	 * 将一条世界空间射线解析为当前吸附的格子和格面。
 	 *
@@ -228,6 +259,12 @@ protected:
 
 	/** 在屏幕上显示当前原型操作结果和失败原因。 */
 	void ShowPrototypeMessage(const FString& Message, const FColor& Color = FColor::White) const;
+
+	/** 在中心格生成主塔模型并挂载 C++ 生命组件。 */
+	bool SpawnMainTower(FText& OutFailureReason);
+
+	/** 读取战斗配置并延迟生成初始敌人圆环。 */
+	bool SpawnInitialEnemies(FText& OutFailureReason);
 
 	/** 已经通过校验并被棋盘接收的地面结果。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "棋盘|地面")

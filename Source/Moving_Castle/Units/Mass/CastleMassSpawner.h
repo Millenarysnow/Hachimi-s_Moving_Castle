@@ -45,10 +45,10 @@ public:
 	TArray<FCastleMassUnitHandle> SpawnedUnits;
 
 	UFUNCTION(BlueprintCallable, Category="移动城堡|Mass")
-	bool SpawnUnits();
+	virtual bool SpawnUnits();
 
 	UFUNCTION(BlueprintCallable, Category="移动城堡|Mass")
-	void DespawnUnits();
+	virtual void DespawnUnits();
 
 protected:
 	virtual void BeginPlay() override;
