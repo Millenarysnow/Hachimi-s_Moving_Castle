@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "BuildingMergeComponent.h"
+#include "Components/Animation/Matching/BuildingPartCatalog.h"
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
@@ -48,7 +49,7 @@ namespace CastleMergeTests
 	}
 }
 
-/** 真实拆件模型：旧建筑已经销毁，114 件输入零件仍能汇聚，并精确恢复作者模型。 */
+/** 新版真实拆件模型：两座各 68 件的一级塔复用全部 136 件，新增 4 件形成 140 件二级塔。 */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleRealBuildingMergeTest,
 	"MovingCastle.Components.Animation.BuildingMerge.RealBuilding",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -58,6 +59,7 @@ bool FCastleRealBuildingMergeTest::RunTest(const FString& Parameters)
 	UCastleBuildingDefinition* Definition = LoadObject<UCastleBuildingDefinition>(nullptr,
 		TEXT("/Game/MovingCastle/Data/Buildings/DA_ArcherTower.DA_ArcherTower"));
 	if (!TestNotNull(TEXT("正式箭塔定义存在"), Definition)) { return false; }
+	if (!TestNotNull(TEXT("正式箭塔零件目录存在"), Definition->PartCatalog.Get())) { return false; }
 	UWorld* World = CastleMergeTests::MakeWorld();
 	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
 	ACastleBoard* Board = CastleMergeTests::MakeBoard(World, Definition);
@@ -85,10 +87,12 @@ bool FCastleRealBuildingMergeTest::RunTest(const FString& Parameters)
 	UBuildingMergeComponent* Merge = Result->BuildingMerge;
 	TestTrue(TEXT("合并自动启动原生组件"), Merge->bIsPlaying && Reason.IsEmpty());
 	TestTrue(TEXT("使用大量真实旧网格而非立方体或粒子"), Merge->SourcePartCount == SourceCount && SourceCount >= 100);
+	TestEqual(TEXT("两座新版一级塔共提供 136 个模型零件"), SourceCount, 136);
 	TestEqual(TEXT("跨导入资产的零件全部建立对应"), Merge->ReusedPartCount, SourceCount);
-	TestEqual(TEXT("放置飞入完成后不重复从场外飞入"), Merge->IncomingPartCount, 0);
+	TestEqual(TEXT("只有新版二级模型增加的 4 个零件从场外飞入"), Merge->IncomingPartCount, 4);
 	TestEqual(TEXT("两座已落位建筑的对应件在合并阶段局部移动"), Merge->MovedPartCount, SourceCount);
-	TestEqual(TEXT("没有把可复用件误判成新增"), Merge->AddedPartCount, 0);
+	TestEqual(TEXT("新版二级模型在全部复用件之外增加 4 个零件"), Merge->AddedPartCount, 4);
+	TestEqual(TEXT("新版二级塔包含 140 个独立模型零件"), Merge->TargetPartCount, 140);
 	TestEqual(TEXT("没有把可复用件误判成移除"), Merge->RemovedPartCount, 0);
 	TestFalse(TEXT("旧建筑已经被规则销毁"), IsValid(First));
 	TestEqual(TEXT("逻辑只保留一个二级建筑"), Board->GetPlacedBuildingCount(), 1);
@@ -99,7 +103,9 @@ bool FCastleRealBuildingMergeTest::RunTest(const FString& Parameters)
 	TMap<UStaticMeshComponent*, FTransform> Authored;
 	for (UStaticMeshComponent* Mesh : Meshes)
 	{
-		if (Mesh->GetStaticMesh() && !Mesh->HasAnyFlags(RF_Transient) && !Mesh->ComponentHasTag(TEXT("MergeExclude"))
+		// 动画期间正式美术件会隐藏；用已登记的几何目录辨认这些原件，不能把本就隐藏的辅助 Cube 计入。
+		if (Mesh->GetStaticMesh() && Definition->PartCatalog->FindGeometry(Mesh->GetStaticMesh())
+			&& !Mesh->HasAnyFlags(RF_Transient) && !Mesh->ComponentHasTag(TEXT("MergeExclude"))
 			&& !UBuildingGameplayRootComponent::IsInGameplayHierarchy(Mesh))
 		{
 			Authored.Add(Mesh, Mesh->GetRelativeTransform());

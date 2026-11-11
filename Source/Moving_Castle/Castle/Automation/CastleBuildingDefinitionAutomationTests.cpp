@@ -9,6 +9,7 @@
 #include "Components/ChildActorComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Misc/ScopeExit.h"
@@ -241,9 +242,11 @@ bool FCastleDirectBuildingBlueprintTest::RunTest(const FString& Parameters)
 	Level4Building->GetComponents<UStaticMeshComponent>(Level4Meshes);
 	const int32 Level4PartCount = Level4Meshes.FilterByPredicate([](const UStaticMeshComponent* Component)
 	{
-		return Component->GetName().StartsWith(TEXT("Mesh_")) && Component->GetStaticMesh() != nullptr;
+		// 以新版资源的精确目录识别美术零件，组件可编辑名称和隐藏功能网格不应影响计数。
+		return Component->GetStaticMesh() != nullptr && Component->GetStaticMesh()->GetPathName().StartsWith(
+			TEXT("/Game/MovingCastle/Model/Buildings/PrototypeUpgrade/ArcherTowerLV4/"));
 	}).Num();
-	TestEqual(TEXT("四级蓝图保留 288 个模型零件"), Level4PartCount, 288);
+	TestEqual(TEXT("四级蓝图保留新版的 324 个模型零件"), Level4PartCount, 324);
 	return true;
 }
 

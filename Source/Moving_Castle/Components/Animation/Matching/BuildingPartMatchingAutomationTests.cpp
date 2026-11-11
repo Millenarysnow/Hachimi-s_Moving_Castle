@@ -30,7 +30,7 @@ bool FBuildingPartOptimalMatchTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-/** 真实导入件单位相差十倍、资产不同，几何身份仍须一致，立柱与屋体则不能混淆。 */
+/** 新版模型已统一厘米单位；不同等级的同形立柱须共用几何身份，其他结构仍不能混淆。 */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildingPartCatalogUnitsTest,
 	"MovingCastle.Components.Animation.BuildingMerge.CatalogEquivalence",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -40,19 +40,19 @@ bool FBuildingPartCatalogUnitsTest::RunTest(const FString& Parameters)
 	UBuildingPartCatalog* Catalog = LoadObject<UBuildingPartCatalog>(nullptr,
 		TEXT("/Game/MovingCastle/Data/Animation/DA_BuildingPartCatalog.DA_BuildingPartCatalog"));
 	UStaticMesh* First = LoadObject<UStaticMesh>(nullptr,
-		TEXT("/Game/MovingCastle/Model/Buildings/SM_箭塔LV1_Mesh2.SM_箭塔LV1_Mesh2"));
+		TEXT("/Game/MovingCastle/Model/Buildings/PrototypeUpgrade/ArcherTowerLV1/Mesh_ncl_1.Mesh_ncl_1"));
 	UStaticMesh* Second = LoadObject<UStaticMesh>(nullptr,
-		TEXT("/Game/MovingCastle/Model/Buildings/SM_箭塔LV2_Mesh2.SM_箭塔LV2_Mesh2"));
+		TEXT("/Game/MovingCastle/Model/Buildings/PrototypeUpgrade/ArcherTowerLV2/Mesh_ncl_1.Mesh_ncl_1"));
 	UStaticMesh* Other = LoadObject<UStaticMesh>(nullptr,
-		TEXT("/Game/MovingCastle/Model/Buildings/SM_箭塔LV1_Mesh1.SM_箭塔LV1_Mesh1"));
+		TEXT("/Game/MovingCastle/Model/Buildings/PrototypeUpgrade/ArcherTowerLV1/Mesh.Mesh"));
 	if (!TestNotNull(TEXT("离线目录存在"), Catalog) || !First || !Second || !Other) { return false; }
 	const FBuildingPartGeometry* A = Catalog->FindGeometry(First);
 	const FBuildingPartGeometry* B = Catalog->FindGeometry(Second);
 	const FBuildingPartGeometry* C = Catalog->FindGeometry(Other);
 	if (!TestNotNull(TEXT("一级立柱已登记"), A) || !TestNotNull(TEXT("二级立柱已登记"), B)
 		|| !TestNotNull(TEXT("其他形状已登记"), C)) { return false; }
-	TestTrue(TEXT("不同文件、不同单位仍是同一形状"), A->GeometryId == B->GeometryId);
-	TestTrue(TEXT("确实处理十倍导入单位差异"), (A->LocalSize * 10.0).Equals(B->LocalSize, 0.05));
+	TestTrue(TEXT("不同等级文件中的同形零件具有相同几何身份"), A->GeometryId == B->GeometryId);
+	TestTrue(TEXT("新版不同等级的同形零件已统一为厘米尺寸"), A->LocalSize.Equals(B->LocalSize, 0.05));
 	TestTrue(TEXT("不同结构形状不能互换"), A->GeometryId != C->GeometryId);
 	return true;
 }

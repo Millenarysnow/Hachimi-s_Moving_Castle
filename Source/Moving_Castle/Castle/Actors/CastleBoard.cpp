@@ -860,12 +860,21 @@ ACastleBuildingBase* ACastleBoard::SpawnBuildingActor(const FCastleBuildingDescr
 		return nullptr;
 	}
 
-	FVector SpawnLocation = FVector::ZeroVector;
+	// 建筑以整个占用范围的底面中心为原点；多层建筑仍以最低格为基准，不能取各层高度的平均值。
+	FIntVector Minimum = OccupiedCoordinates[0];
+	FIntVector Maximum = OccupiedCoordinates[0];
 	for (const FIntVector& Coordinate : OccupiedCoordinates)
 	{
-		SpawnLocation += GetGridWorldLocation(Coordinate);
+		Minimum = Minimum.ComponentMin(Coordinate);
+		Maximum = Maximum.ComponentMax(Coordinate);
 	}
-	SpawnLocation /= static_cast<float>(OccupiedCoordinates.Num());
+	// X/Y 位于占格范围中点，Z 从最低格中心下降半个层高；偏移跟随棋盘的旋转与缩放。
+	const FVector LocalBottomCenterOffset(
+		(Maximum.X - Minimum.X) * CellSize * 0.5f,
+		(Maximum.Y - Minimum.Y) * CellSize * 0.5f,
+		-LayerHeight * 0.5f);
+	const FVector SpawnLocation = GetGridWorldLocation(Minimum)
+		+ GetActorTransform().TransformVector(LocalBottomCenterOffset);
 
 	if (GetWorld() == nullptr)
 	{
