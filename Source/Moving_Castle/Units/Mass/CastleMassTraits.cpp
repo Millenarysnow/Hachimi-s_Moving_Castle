@@ -3,6 +3,7 @@
 #include "Animation/AnimSequenceTransformProviderData.h"
 #include "Animation/Skeleton.h"
 #include "CastleMassFragments.h"
+#include "Mass/CastleMassPatrolFragments.h"
 #include "MassActorSubsystem.h"
 #include "MassCommonFragments.h"
 #include "MassEntityTemplateRegistry.h"
@@ -42,6 +43,7 @@ void UCastleMassUnitTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildC
 	case ECastleMassUnitKind::NPC:
 		BuildContext.AddTag<FCastleMassNPCTag>();
 		BuildContext.AddTag<FCastleMassHumanoidTag>();
+		BuildContext.AddFragment<FCastleMassPatrolFragment>();
 		break;
 	case ECastleMassUnitKind::Projectile:
 		BuildContext.AddTag<FCastleMassProjectileTag>();

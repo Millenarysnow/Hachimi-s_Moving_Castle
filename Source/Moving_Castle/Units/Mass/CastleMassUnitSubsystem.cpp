@@ -9,6 +9,7 @@
 #include "MassEntitySubsystem.h"
 #include "MassMovementFragments.h"
 #include "MassSpawnerSubsystem.h"
+#include "Mass/CastleMassPatrolFragments.h"
 
 bool UCastleMassUnitSubsystem::DoesSupportWorldType(EWorldType::Type WorldType) const
 {
@@ -123,10 +124,45 @@ bool UCastleMassUnitSubsystem::MoveUnitsTo(const TArray<FCastleMassUnitHandle>& 
 			if (!Manager.IsEntityActive(Handle)) { continue; }
 			const auto* Unit = Manager.GetFragmentDataPtr<FCastleMassUnitFragment>(Handle);
 			if (!Unit || Unit->Kind == ECastleMassUnitKind::Projectile) { continue; }
+			// 显式移动命令解除巡逻，保证同一实体同一帧只有一个移动系统负责位移。
+			if (auto* Patrol = Manager.GetFragmentDataPtr<FCastleMassPatrolFragment>(Handle)) { Patrol->bEnabled = false; }
 			auto& Target = Manager.GetFragmentDataChecked<FCastleMassMoveTargetFragment>(Handle);
 			Target.Target = Destination;
 			Target.bHasTarget = true;
 			Target.DesiredVelocity = FVector::ZeroVector;
+		}
+	});
+	return true;
+}
+
+bool UCastleMassUnitSubsystem::FollowSharedPatrolRoute(const TArray<FCastleMassUnitHandle>& Units, FText& OutFailureReason)
+{
+	OutFailureReason = FText::GetEmpty();
+	TArray<FMassEntityHandle> Handles;
+	FMassEntityManager* Manager = GetManager();
+	if (!CollectHandles(Units, Handles) || Manager->IsProcessing())
+	{
+		OutFailureReason = FText::FromString(TEXT("请在 Mass 处理外提交本世界的非空 NPC 批次。"));
+		return false;
+	}
+	for (const FMassEntityHandle Handle : Handles)
+	{
+		if (!Manager->IsEntityActive(Handle) || !Manager->GetFragmentDataPtr<FCastleMassPatrolFragment>(Handle))
+		{
+			OutFailureReason = FText::FromString(TEXT("共享巡逻只能接收存活的 Castle Mass NPC；整批操作已拒绝。"));
+			return false;
+		}
+	}
+	Manager->Defer().PushCommand<FMassDeferredSetCommand>([Handles = MoveTemp(Handles)](FMassEntityManager& EntityManager)
+	{
+		for (const FMassEntityHandle Handle : Handles)
+		{
+			if (!EntityManager.IsEntityActive(Handle)) { continue; }
+			auto& Patrol = EntityManager.GetFragmentDataChecked<FCastleMassPatrolFragment>(Handle);
+			Patrol = FCastleMassPatrolFragment();
+			Patrol.bEnabled = true;
+			EntityManager.GetFragmentDataChecked<FCastleMassMoveTargetFragment>(Handle) = FCastleMassMoveTargetFragment();
+			EntityManager.GetFragmentDataChecked<FMassVelocityFragment>(Handle).Value = FVector::ZeroVector;
 		}
 	});
 	return true;
@@ -141,6 +177,7 @@ bool UCastleMassUnitSubsystem::SetUnitsVelocity(const TArray<FCastleMassUnitHand
 		for (const FMassEntityHandle Handle : Handles)
 		{
 			if (!Manager.IsEntityActive(Handle) || !Manager.GetFragmentDataPtr<FCastleMassUnitFragment>(Handle)) { continue; }
+			if (auto* Patrol = Manager.GetFragmentDataPtr<FCastleMassPatrolFragment>(Handle)) { Patrol->bEnabled = false; }
 			auto& Target = Manager.GetFragmentDataChecked<FCastleMassMoveTargetFragment>(Handle);
 			Target.bHasTarget = false;
 			Target.DesiredVelocity = Velocity;
@@ -162,6 +199,7 @@ bool UCastleMassUnitSubsystem::StopUnits(const TArray<FCastleMassUnitHandle>& Un
 		for (const FMassEntityHandle Handle : Handles)
 		{
 			if (!Manager.IsEntityActive(Handle) || !Manager.GetFragmentDataPtr<FCastleMassUnitFragment>(Handle)) { continue; }
+			if (auto* Patrol = Manager.GetFragmentDataPtr<FCastleMassPatrolFragment>(Handle)) { Patrol->bEnabled = false; }
 			Manager.GetFragmentDataChecked<FCastleMassMoveTargetFragment>(Handle) = FCastleMassMoveTargetFragment();
 			Manager.GetFragmentDataChecked<FMassVelocityFragment>(Handle).Value = FVector::ZeroVector;
 		}
@@ -211,5 +249,12 @@ bool UCastleMassUnitSubsystem::GetUnitSnapshot(const FCastleMassUnitHandle& Unit
 	OutSnapshot.Transform = Manager->GetFragmentDataChecked<FTransformFragment>(Unit.Entity).GetTransform();
 	OutSnapshot.Velocity = Manager->GetFragmentDataChecked<FMassVelocityFragment>(Unit.Entity).Value;
 	OutSnapshot.bHasMoveTarget = Manager->GetFragmentDataChecked<FCastleMassMoveTargetFragment>(Unit.Entity).bHasTarget;
+	if (const auto* Patrol = Manager->GetFragmentDataPtr<FCastleMassPatrolFragment>(Unit.Entity))
+	{
+		OutSnapshot.bFollowingSharedRoute = Patrol->bEnabled;
+		OutSnapshot.bPatrolBlocked = Patrol->bBlocked;
+		OutSnapshot.PatrolLeg = Patrol->Leg;
+		OutSnapshot.CompletedPatrolLaps = Patrol->CompletedLaps;
+	}
 	return true;
 }

@@ -37,6 +37,37 @@ struct MOVING_CASTLE_API FCastleSharedNavigationPath
 
 	UPROPERTY(BlueprintReadOnly, Category="共享路线")
 	bool bValid = false;
+
+	/** 玩家修改路径点时递增；仅重建 NavMesh 不改变它，用于保留单位当前目标路段。 */
+	UPROPERTY(BlueprintReadOnly, Category="共享路线")
+	int32 RouteRevision = 0;
+
+	/** 循环巡逻与旧的单段调试请求共用发布机制，只有循环路线可由 Mass 巡逻器消费。 */
+	UPROPERTY(BlueprintReadOnly, Category="共享路线")
+	bool bClosedLoop = false;
+
+	/** 投影后的玩家路径点，顺序就是 1→2→…→N→1，不能用求解器的转折点代替。 */
+	UPROPERTY(BlueprintReadOnly, Category="共享路线")
+	TArray<FVector> Waypoints;
+
+	/** 整条闭环一次性生成的贴 NavMesh 采样；所有实体共享，运行时不再逐实体投影或寻路。 */
+	UPROPERTY(BlueprintReadOnly, Category="共享路线")
+	TArray<FVector> PatrolPoints;
+
+	/** 与 PatrolPoints 一一对应的累计距离，可二分定位，支持一帧跨多个转折或整圈。 */
+	TArray<double> PatrolDistances;
+
+	/** 每个玩家路径点在闭环中的累计距离，最后额外存整圈长度，明确保留 N→1 路段。 */
+	TArray<double> WaypointDistances;
+
+	/** 只读数值运算，可由 Mass 工作线程调用；Distance 已由调用方限制到 [0, Length]。 */
+	void SamplePatrol(double Distance, FVector& OutLocation, FVector& OutDirection) const;
+
+	/** 只在路线发布后定位一次，不进行 NavMesh 查询。范围可限制到原目标路段以免跳过路径点。 */
+	bool FindClosestPatrolDistance(FVector Location, int32 Leg, double& OutDistance, double& OutSeparation) const;
+
+	/** 返回距离所在的玩家路段；不将采样点或转折点当作玩家路径点。 */
+	int32 FindPatrolLeg(double Distance) const;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FCastleSharedPathChanged);
@@ -65,6 +96,17 @@ public:
 	/** 设置唯一共享路线的起终点；相同请求复用缓存，NavMesh 更新后自动集中重算。 */
 	UFUNCTION(BlueprintCallable, Category="移动城堡|NPC导航")
 	bool RequestSharedPath(FVector Start, FVector Goal, FText& OutFailureReason);
+
+	/** 一次接收整组路径点，集中算完所有相邻最短路和 N→1 后才原子发布；单点表示原地待命。 */
+	UFUNCTION(BlueprintCallable, Category="移动城堡|NPC导航")
+	bool RequestSharedPatrolRoute(const TArray<FVector>& Waypoints, FText& OutFailureReason);
+
+	/** 清除全局巡逻请求并立即失效；NPC 停止，不沿旧快照继续走。 */
+	UFUNCTION(BlueprintCallable, Category="移动城堡|NPC导航")
+	void ClearSharedRoute();
+
+	/** 获取玩家原始设置的世界坐标，供编辑入口继续修改；不触发任何查询。 */
+	const TArray<FVector>& GetRequestedWaypoints() const { return RequestedWaypoints; }
 
 	/** 蓝图返回副本；C++ 大量单位应使用 AcquireSharedPath 共享同一个快照。 */
 	UFUNCTION(BlueprintPure, Category="移动城堡|NPC导航")
@@ -99,6 +141,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="导航查询")
 	FVector ProjectionExtent = FVector(80.0, 80.0, 100.0);
 
+	/** 仅在整条路线重算时采样。步长越小越能贴合台阶，内存与集中预处理开销也越大。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="导航查询", meta=(ClampMin="1.0", Units="cm"))
+	double PatrolSampleSpacing = 20.0;
+
 	/** 变更使路线失效或新路线发布时通知界面；不得在每个 NPC 上绑定此事件再单独寻路。 */
 	UPROPERTY(BlueprintAssignable, Category="移动城堡|NPC导航")
 	FCastleSharedPathChanged OnSharedPathChanged;
@@ -120,8 +166,9 @@ private:
 	uint64 CommitFrame = 0;
 	uint64 LastChangeFrame = 0;
 	double BuildStartTime = 0.0;
-	FVector RequestedStart = FVector::ZeroVector;
-	FVector RequestedGoal = FVector::ZeroVector;
+	TArray<FVector> RequestedWaypoints;
+	bool bRequestedClosedLoop = false;
+	int32 RouteRevision = 0;
 	int32 PathRevision = 0;
 	mutable FRWLock PathLock;
 	TSharedPtr<const FCastleSharedNavigationPath, ESPMode::ThreadSafe> PublishedPath;
@@ -131,6 +178,7 @@ private:
 	void InvalidatePath();
 	void PublishPath(FCastleSharedNavigationPath&& Path);
 	void CalculateSharedPath();
+	bool RequestRoute(const TArray<FVector>& Waypoints, bool bClosedLoop, FText& OutFailureReason);
 	void FailNavigation(const FText& Reason);
 	void HandleAssemblyFinished(UAssemblyFlightComponent* Flight, bool bCompleted);
 	void HandleMergeFinished(UBuildingMergeComponent* Merge, bool bCompleted);
