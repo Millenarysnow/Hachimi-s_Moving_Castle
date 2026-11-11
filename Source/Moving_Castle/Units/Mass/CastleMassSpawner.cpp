@@ -6,6 +6,8 @@
 #include "Components/SceneComponent.h"
 #include "Engine/World.h"
 #include "MassEntityConfigAsset.h"
+#include "MassEntitySubsystem.h"
+#include "Mass/CastleMassPatrolFragments.h"
 #include "Moving_Castle.h"
 
 ACastleMassSpawner::ACastleMassSpawner()
@@ -66,11 +68,20 @@ bool ACastleMassSpawner::SpawnUnits()
 		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 批量生成失败：%s"), *Failure.ToString());
 		return false;
 	}
-	if (bFollowSharedPatrolRoute && !Units->FollowSharedPatrolRoute(SpawnedUnits, Failure))
+	if (bFollowSharedPatrolRoute)
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 启用共享巡逻失败：%s"), *Failure.ToString());
-		DespawnUnits();
-		return false;
+		// SpawnUnits 已确认处于 Mass 安全边界。直接写入生成时已知的精确进度，不能再以最近点
+		// 反推路段：楼梯去返路线可能重叠，最近点会把返程 NPC 错当成去程并破坏均匀分布。
+		auto& Manager = GetWorld()->GetSubsystem<UMassEntitySubsystem>()->GetMutableEntityManager();
+		for (int32 Index = 0; Index < SpawnedUnits.Num(); ++Index)
+		{
+			auto& Patrol = Manager.GetFragmentDataChecked<FCastleMassPatrolFragment>(SpawnedUnits[Index].Entity);
+			Patrol.bEnabled = true;
+			Patrol.PathRevision = Path->PathRevision;
+			Patrol.RouteRevision = Path->RouteRevision;
+			Patrol.Distance = Path->Length * Index / Count;
+			Patrol.Leg = Path->FindPatrolLeg(Patrol.Distance);
+		}
 	}
 	if (bStartMoving)
 	{

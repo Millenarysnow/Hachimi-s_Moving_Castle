@@ -77,12 +77,16 @@ void UCastleMassPatrolProcessor::Execute(FMassEntityManager& EntityManager, FMas
 				Patrol.Speed = 0.0;
 				continue;
 			}
-			const double PreviousSpeed = Patrol.Speed;
+			const double PreviousSpeed = FMath::Min(Patrol.Speed, static_cast<double>(Settings.MaxSpeed));
 			Patrol.Speed = Settings.Acceleration > 0.0f
 				? FMath::Min(static_cast<double>(Settings.MaxSpeed), Patrol.Speed + Settings.Acceleration * DeltaTime)
 				: Settings.MaxSpeed;
 			// 标量进度在拐角处也严格沿折线走，不把速度向量平滑成穿墙的弧线。
-			const double Travel = Settings.Acceleration > 0.0f ? (PreviousSpeed + Patrol.Speed) * 0.5 * DeltaTime : Patrol.Speed * DeltaTime;
+			const double AcceleratingTime = Settings.Acceleration > 0.0f
+				? FMath::Min(DeltaTime, (Settings.MaxSpeed - PreviousSpeed) / Settings.Acceleration) : 0.0;
+			// 大时间步内可能先达到限速再匀速，按两部分积分，不能把整帧都当成加速区间。
+			const double Travel = PreviousSpeed * AcceleratingTime + 0.5 * Settings.Acceleration * AcceleratingTime * AcceleratingTime
+				+ Patrol.Speed * (DeltaTime - AcceleratingTime);
 			if (Path->Length > UE_DOUBLE_SMALL_NUMBER)
 			{
 				const double Total = Patrol.Distance + Travel;
