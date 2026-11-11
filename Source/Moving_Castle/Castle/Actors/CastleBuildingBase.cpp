@@ -198,10 +198,12 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 			return false;
 		}
 		PrototypeMesh->SetStaticMesh(PlaceholderCube);
-		PrototypeMesh->SetRelativeTransform(FTransform(FQuat::Identity, FVector::ZeroVector, FVector(
-			Dimensions.X * InCellSize * 0.86f / 100.0f,
-			Dimensions.Y * InCellSize * 0.86f / 100.0f,
-			Dimensions.Z * InLayerHeight * 0.72f / 100.0f)));
+		const FVector PlaceholderSize(Dimensions.X * InCellSize * 0.86f,
+			Dimensions.Y * InCellSize * 0.86f, Dimensions.Z * InLayerHeight * 0.72f);
+		// 引擎立方体的原点在几何中心；上移自身半高，让占位模型底面与建筑底部锚点重合。
+		// 正式蓝图模型保持作者配置的全部局部变换，不通过分组偏移适配新锚点。
+		PrototypeMesh->SetRelativeTransform(FTransform(FQuat::Identity,
+			FVector(0.0f, 0.0f, PlaceholderSize.Z * 0.5f), PlaceholderSize / 100.0f));
 		UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(PlaceholderMaterial, this);
 		if (Material == nullptr)
 		{

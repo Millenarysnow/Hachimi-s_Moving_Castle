@@ -51,7 +51,8 @@ public:
 	float LayerHeight = 500.0f;
 
 	/**
-	 * 棋盘第一层建筑中心相对于棋盘 Actor 原点的高度。
+	 * 棋盘第一层网格中心相对于棋盘 Actor 原点的高度。
+	 * 建筑 Actor 位于占用范围的底面中心，因此首层建筑原点还要沿棋盘局部 Z 下降半个层高。
 	 *
 	 * 地面薄片中心位于 WorldBaseHeight - LayerHeight×0.45，因此层高扩大到
 	 * 500 厘米时将本值同步设为 235，使地面中心仍在棋盘原点上方 10 厘米，
@@ -251,7 +252,7 @@ protected:
 	/** 从棋盘索引移除建筑的所有坐标，但不销毁 Actor。 */
 	bool UnregisterBuilding(ACastleBuildingBase* Building, FText& OutFailureReason);
 
-	/** 生成并初始化一个建筑 Actor，尚未写入棋盘占用索引。 */
+	/** 在占用范围的底面中心生成并初始化建筑 Actor，尚未写入棋盘占用索引。 */
 	ACastleBuildingBase* SpawnBuildingActor(const FCastleBuildingDescriptor& Descriptor, const TArray<FIntVector>& OccupiedCoordinates, FText& OutFailureReason);
 
 	/** 尝试对新放置的建筑连续执行可行的两两合成。 */
