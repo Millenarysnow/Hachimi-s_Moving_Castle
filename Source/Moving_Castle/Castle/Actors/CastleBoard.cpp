@@ -1621,7 +1621,7 @@ bool ACastleBoard::HasGameplayNavigationGeometryOnGround(const ACastleBuildingBa
 		}
 
 		const FBox ComponentBounds = Primitive->Bounds.GetBox();
-		// 只把靠近当前地面的功能几何视为该格楼板；高层建筑不会误关掉首层地面。
+		// 只把同格、Pawn 可走且高度落在 Recast 爬阶带内的薄型功能几何视为地板覆盖。
 		if (ComponentBounds.Max.Z > GroundTop + LowSpanHeight
 			|| ComponentBounds.GetSize().Z > LowSpanHeight
 			|| ComponentBounds.Max.X < GroundBounds.Min.X || ComponentBounds.Min.X > GroundBounds.Max.X

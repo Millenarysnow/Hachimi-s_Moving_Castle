@@ -226,7 +226,8 @@ protected:
 	 * 根据指定坐标当前是否有建筑，刷新地面格的导航资格。
 	 *
 	 * 建筑功能分支在地面格上提供楼板时，不能让 Recast 同时看到相距几厘米的
-	 * 两个可行走表面；否则最大台阶过滤会把上层楼板当成低悬障碍而丢弃。
+	 * 两个表面；Recast 的 walkableClimb 会影响相邻高度 span 的可行走性处理，
+	 * 当前间距和 Agent 参数组合下，上层薄楼板顶面无法保留。
 	 * 这里只切换棋盘地面组件，建筑自身仍严格由 GameplayRoot 导出导航几何。
 	 */
 	void RefreshGroundNavigationForCoordinates(const TArray<FIntVector>& Coordinates);
