@@ -200,12 +200,12 @@ bool FCastleBoardGroundActorAutomationTest::RunTest(const FString& Parameters)
 			Board->WorldBaseHeight - Board->LayerHeight * 0.45f);
 		const FVector ExpectedLocation = BoardTransform.TransformPosition(LocalCenter);
 		TestTrue(TEXT("独立 Actor 使用棋盘完整变换定位"), Tile->GetActorLocation().Equals(ExpectedLocation, 0.01f));
-		TestEqual(TEXT("格子地块只使用查询碰撞"), Tile->GetTileMeshComponent()->GetCollisionEnabled(), ECollisionEnabled::QueryOnly);
+		TestEqual(TEXT("格子地块只使用射线查询碰撞"), Tile->GetTileMeshComponent()->GetCollisionEnabled(), ECollisionEnabled::QueryOnly);
 		TestEqual(TEXT("格子地块保留 Visibility 射线阻挡"),
 			Tile->GetTileMeshComponent()->GetCollisionResponseToChannel(ECC_Visibility), ECR_Block);
-		TestTrue(TEXT("实际格子地面参与导航"), Tile->GetTileMeshComponent()->CanEverAffectNavigation());
-		TestEqual(TEXT("实际格子地面阻挡 Pawn 导航碰撞"),
-			Tile->GetTileMeshComponent()->GetCollisionResponseToChannel(ECC_Pawn), ECR_Block);
+		TestEqual(TEXT("格子地块不响应 Pawn 碰撞"),
+			Tile->GetTileMeshComponent()->GetCollisionResponseToChannel(ECC_Pawn), ECR_Ignore);
+		TestFalse(TEXT("棋盘格始终不参与导航网格"), Tile->GetTileMeshComponent()->CanEverAffectNavigation());
 		TestEqual(TEXT("数字底牌没有碰撞"), Tile->GetNumberPlateComponent()->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
 		TestFalse(TEXT("数字底牌不参与导航"), Tile->GetNumberPlateComponent()->CanEverAffectNavigation());
 	}

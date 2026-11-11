@@ -19,7 +19,7 @@ namespace BuildingBlueprintNavigationTests
 	 * 通过正式 Data Asset、棋盘放置和原有飞入流程验证真实蓝图楼板。
 	 *
 	 * 该测试不手工创建替代组件，也不直接修改 NavMesh 参数，确保覆盖作者实际
-	 * 调整后的 BP_ArcherTower_lv1 以及地面覆盖策略的运行时顺序。
+	 * 调整后的 BP_ArcherTower_lv1，并验证棋盘地块不会被建筑楼板状态切换为导航面。
 	 */
 	class FPlacementCommand : public IAutomationLatentCommand
 	{
@@ -128,7 +128,7 @@ namespace BuildingBlueprintNavigationTests
 				Test->TestTrue(TEXT("GameplayRoot 楼板保持导航资格"), Building->IsComponentRelevantForNavigation(Cube));
 				Test->TestTrue(TEXT("GameplayRoot 楼板允许影响导航"), Cube->CanEverAffectNavigation());
 				Test->TestFalse(TEXT("分支外美术组件不参与导航"), VisualComponent->CanEverAffectNavigation());
-				Test->TestFalse(TEXT("楼板覆盖期间停用数厘米下方的重复地面导航"), GroundMesh->CanEverAffectNavigation());
+				Test->TestFalse(TEXT("建筑楼板可导航时棋盘格仍不参与导航"), GroundMesh->CanEverAffectNavigation());
 				Test->TestEqual(TEXT("放置动画完成只重建一次"), Navigation->RefreshCount, InitialRefreshCount + 1);
 				Test->AddInfo(FString::Printf(TEXT("楼板顶面 %s 投影到 %s；导航刷新=%d。"), *CubeTop.ToString(), *Projected.Location.ToString(), Navigation->RefreshCount));
 
@@ -144,8 +144,8 @@ namespace BuildingBlueprintNavigationTests
 				FNavLocation GroundProjection;
 				const bool bGroundProjected = System->ProjectPointToNavigation(
 					FVector(CubeTop.X, CubeTop.Y, 20.0), GroundProjection, FVector(10.0, 10.0, 5.0));
-				Test->TestTrue(TEXT("移除建筑后原地面导航恢复"), bGroundProjected);
-				Test->TestTrue(TEXT("移除建筑后地面组件恢复导航资格"), GroundMesh->CanEverAffectNavigation());
+				Test->TestFalse(TEXT("移除建筑后不会让棋盘地块提供导航面"), bGroundProjected);
+				Test->TestFalse(TEXT("移除建筑后棋盘格仍不参与导航"), GroundMesh->CanEverAffectNavigation());
 				Test->TestEqual(TEXT("移除建筑只再重建一次"), Navigation->RefreshCount, InitialRefreshCount + 2);
 				Test->AddInfo(FString::Printf(TEXT("建筑移除后地面投影=%s，导航刷新=%d。"), *GroundProjection.Location.ToString(), Navigation->RefreshCount));
 				return true;

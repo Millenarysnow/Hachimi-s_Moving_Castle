@@ -10,14 +10,10 @@
 #include "AssemblyFlightComponent.h"
 #include "CastleGroundGenerator.h"
 #include "CastleNavigationSubsystem.h"
-#include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
-#include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Moving_Castle.h"
-#include "NavigationSystem.h"
-#include "NavMesh/RecastNavMesh.h"
 
 namespace
 {
@@ -428,7 +424,6 @@ void ACastleBoard::HandleBuildingDestroyed(AActor* Actor)
 	{
 		if (GetBuildingAt(Coordinate) == Building) { BuildingByCoordinate.Remove(Coordinate); }
 	}
-	RefreshGroundNavigationForCoordinates(Building->GetOccupiedCoordinates());
 }
 
 void ACastleBoard::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -820,8 +815,6 @@ bool ACastleBoard::RegisterBuilding(ACastleBuildingBase* Building, FText& OutFai
 		BuildingByCoordinate.Add(Coordinate, Building);
 	}
 	Building->OnDestroyed.AddUniqueDynamic(this, &ACastleBoard::HandleBuildingDestroyed);
-	RefreshGroundNavigationForCoordinates(OccupiedCoordinates);
-
 	return true;
 }
 
@@ -849,8 +842,6 @@ bool ACastleBoard::UnregisterBuilding(ACastleBuildingBase* Building, FText& OutF
 	{
 		BuildingByCoordinate.Remove(Coordinate);
 	}
-	RefreshGroundNavigationForCoordinates(OccupiedCoordinates);
-
 	return true;
 }
 
@@ -1568,11 +1559,6 @@ bool ACastleBoard::RebuildGroundVisualization(const TArray<FCastleGroundCell>& C
 
 	DestroyGroundTileActors();
 	GroundTiles = MoveTemp(NewGroundTiles);
-	for (const TPair<FIntVector, TObjectPtr<ACastleBuildingBase>>& Pair : BuildingByCoordinate)
-	{
-		const TArray<FIntVector> Coordinates = {Pair.Key};
-		RefreshGroundNavigationForCoordinates(Coordinates);
-	}
 	UE_LOG(LogMoving_Castle, Log, TEXT("棋盘管理器已创建 %d 个独立地面格 Actor，单格间距 %.1f 厘米，层高 %.1f 厘米。"),
 		GroundTiles.Num(), CellSize, LayerHeight);
 	return true;
@@ -1588,82 +1574,6 @@ void ACastleBoard::DestroyGroundTileActors()
 		}
 	}
 	GroundTiles.Reset();
-}
-
-bool ACastleBoard::HasGameplayNavigationGeometryOnGround(const ACastleBuildingBase& Building, const ACastleGroundTileActor& GroundTile) const
-{
-	const UStaticMeshComponent* TileMesh = GroundTile.GetTileMeshComponent();
-	if (TileMesh == nullptr)
-	{
-		return false;
-	}
-
-	const FBox GroundBounds = TileMesh->Bounds.GetBox();
-	const float GroundTop = GroundBounds.Max.Z;
-	const UNavigationSystemV1* Navigation = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
-	const ARecastNavMesh* NavData = Navigation ? Cast<ARecastNavMesh>(Navigation->GetDefaultNavDataInstance()) : nullptr;
-	if (NavData == nullptr)
-	{
-		return false;
-	}
-	const float LowSpanHeight = NavData->GetAgentMaxStepHeight(ENavigationDataResolution::Default)
-		+ NavData->GetCellHeight(ENavigationDataResolution::Default);
-	TArray<UPrimitiveComponent*> Primitives;
-	Building.GetComponents<UPrimitiveComponent>(Primitives);
-	for (UPrimitiveComponent* Primitive : Primitives)
-	{
-		if (Primitive == nullptr || !Primitive->CanEverAffectNavigation()
-			|| Primitive->GetCollisionEnabled() == ECollisionEnabled::NoCollision
-			|| Primitive->GetCollisionResponseToChannel(ECC_Pawn) != ECR_Block
-			|| !Building.IsComponentRelevantForNavigation(Primitive))
-		{
-			continue;
-		}
-
-		const FBox ComponentBounds = Primitive->Bounds.GetBox();
-		// 只把同格、Pawn 可走且高度落在 Recast 爬阶带内的薄型功能几何视为地板覆盖。
-		if (ComponentBounds.Max.Z > GroundTop + LowSpanHeight
-			|| ComponentBounds.GetSize().Z > LowSpanHeight
-			|| ComponentBounds.Max.X < GroundBounds.Min.X || ComponentBounds.Min.X > GroundBounds.Max.X
-			|| ComponentBounds.Max.Y < GroundBounds.Min.Y || ComponentBounds.Min.Y > GroundBounds.Max.Y)
-		{
-			continue;
-		}
-
-		return true;
-	}
-
-	return false;
-}
-
-void ACastleBoard::RefreshGroundNavigationForCoordinates(const TArray<FIntVector>& Coordinates)
-{
-	for (const FIntVector& Coordinate : Coordinates)
-	{
-		if (Coordinate.Z != GridOrigin.Z)
-		{
-			continue;
-		}
-
-		const TObjectPtr<ACastleGroundTileActor>* GroundTileEntry = GroundTiles.Find(Coordinate);
-		if (GroundTileEntry == nullptr || !IsValid(GroundTileEntry->Get()))
-		{
-			continue;
-		}
-
-		ACastleGroundTileActor* GroundTile = GroundTileEntry->Get();
-		UStaticMeshComponent* TileMesh = GroundTile->GetTileMeshComponent();
-		if (TileMesh == nullptr)
-		{
-			continue;
-		}
-
-		ACastleBuildingBase* Building = GetBuildingAt(Coordinate);
-		const bool bBuildingOwnsGroundNavigation = Building != nullptr
-			&& HasGameplayNavigationGeometryOnGround(*Building, *GroundTile);
-		// 建筑楼板覆盖当前格时，使用建筑功能几何作为唯一底面；没有楼板时恢复普通地面。
-		TileMesh->SetCanEverAffectNavigation(!bBuildingOwnsGroundNavigation);
-	}
 }
 
 void ACastleBoard::ShowPrototypeMessage(const FString& Message, const FColor& Color) const

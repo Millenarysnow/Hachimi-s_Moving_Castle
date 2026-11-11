@@ -101,9 +101,10 @@ bool ACastleGroundTileActor::InitializeGroundCell(const FCastleGroundCell& InGro
 	TileMesh->SetStaticMesh(PrototypeCubeMesh);
 	TileMesh->SetMaterial(0, TileMaterial);
 	TileMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-	TileMesh->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
-	// 此时 Actor 位置、网格、碰撞和包围盒均已完成，导航只会收到最终地块几何。
-	TileMesh->SetCanEverAffectNavigation(true);
+	// 地块只保留中心射线格面检测，其余对象通道都忽略；棋盘地面不属于单位导航表面。
+	TileMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
+	TileMesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+	TileMesh->SetCanEverAffectNavigation(false);
 	TileMesh->SetVisibility(true, true);
 
 	// 底牌位于薄地块上方；尺寸和间距都沿用棋盘现有的局部坐标单位。
