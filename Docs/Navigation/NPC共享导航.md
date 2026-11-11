@@ -23,7 +23,7 @@
 - 导航直接读取建筑实际碰撞。楼板、楼梯应有正确的可行走碰撞并阻挡 Pawn；通路宽度、净高、台阶高度需满足 Recast Agent 的半径、高度和最大台阶设置。仅扩大 Bounds 不会修正建筑碰撞。
 - 所有建筑由 C++ `BuildingNavigationActor` 过滤导航资格，只读取 `Building Gameplay Root` 功能分支；外部美术组件即便勾选允许影响导航也不参与生成。棋盘建筑统一继承，主塔模型使用同一父类。功能分支仍保留各组件自身的导航和碰撞开关，不会将触发盒强制变成导航表面。详见 [GameplayRoot 配置与验收](../Animation/GameplayRoot.md)。
 - 当前服务使用默认的一种导航 Agent，默认半径 35 cm，与 NPC 基础配置一致。不同尺寸 NPC 或专用跳跃/攀爬行为需要后续扩展。
-- 默认/高精度水平采样使用 **5 cm**，以支持 GameplayRoot 下 100×100 cm 的功能楼板。原默认 19 cm（以及实测的 10 cm）在扣除 Agent 半径和体素边缘后会把这种小顶面完全过滤，即便碰撞与刷新时机均正确也看不到绿色网格。低精度仍为 38 cm，仅供显式选择低精度的区域使用；更细采样会增加单次构建的计算与内存开销。
+- 默认/高精度水平采样使用 **5 cm**，以支持 GameplayRoot 下 100×100 cm 的功能楼板。原默认 19 cm（以及实测的 10 cm）在扣除 Agent 半径和体素边缘后会把这种小顶面完全过滤。若底层楼板与棋盘地块只相隔几厘米，Recast 会按 Agent 最大台阶高度合并这两个表面；棋盘会在有相应 GameplayRoot 可行走楼板时暂时关闭该格地面的导航输入，移除/替换建筑后再恢复。触发器、分支外美术和高层组件不会触发此覆盖。低精度仍为 38 cm，仅供显式选择低精度的区域使用；更细采样会增加单次构建的计算与内存开销。
 - 已有 Recast Actor 如果显式覆盖了项目默认值，也应同步 `Nav Mesh Resolution Params`：索引 1（Default）和 2（High）的 `Cell Size` 均为 5；`Cell Height=10`、`Agent Max Step Height=35`。本次重启后已确认 `TestMap1` 自动继承 5 cm 配置，无需重存关卡资产。只有被 Bounds 覆盖、具备可行走碰撞且净空足够的表面才会生成导航，挂到 GameplayRoot 并不意味着触发盒也自动变成可行走楼板。
 
 ### 100 cm Cube 的复现与验收
@@ -88,6 +88,7 @@ if (Path && Path->bValid)
 
 - Editor 自动化：`MovingCastle.Navigation.InputValidation`，验证缺少导航时明确拒绝，不创建虚假路径或后台轮询。
 - 真实 Game 世界自动化：打开演示地图后运行 `MovingCastle.NavigationDemo.SharedPath`，验证真实飞入/合并、楼梯高度、绕行方向切换、1000 次相同请求复用、旧快照不变、取消释放构建锁、稳定后停止 Tick、失败后恢复，以及正式棋盘放置→合并→移除的刷新配对。
+- 一级箭塔实际蓝图回归：运行 `MovingCastle.NavigationGameplay.BlueprintPlacement`，验证调整后 `GameplayRoot/Cube` 顶面、动画完成后的单次刷新、分支外美术过滤，以及移除建筑后地面导航恢复。
 - 运行时测试输出截图到 `Saved/Navigation/InitialPath.png` 和 `Saved/Navigation/SharedPath.png`。
 
 `CreateNavigationDemo.py` 可在 UE Python 命令行创建演示地图并配置现有 `TestMap1` 的导航范围。已有演示地图会保留；已有多个 Bounds 时明确拒绝，不会自动删除场景 Actor。
