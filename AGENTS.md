@@ -9,6 +9,8 @@
 
 - 文档都放在在名为 `Docs/` 的文件夹中。    
 - 项目总策划案为 `F:\Ue5 Project\Moving_Castle\Docs\总策划案.md`。
+- NPC 寻路、共享巡逻、NavMesh 更新或 Mass 跟随相关工作，先阅读长期技术文档 [`Docs/Navigation/NPC共享导航技术设计.md`](Docs/Navigation/NPC共享导航技术设计.md)，修改相关行为时同步维护。
+- 导航关卡配置与直接验收入口见 [`Docs/Navigation/NPC共享导航.md`](Docs/Navigation/NPC共享导航.md)。
 
 # 代码要求
 

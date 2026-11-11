@@ -1,5 +1,7 @@
 # NPC 共享导航（UE 5.8）
 
+本文是关卡配置、操作与验收入口。长期维护、接口契约、计算/发布时序、Mass 进度、线程边界和排障方法见 [NPC 共享导航技术设计](NPC共享导航技术设计.md)；后续 agent 修改此系统前应先阅读该文档。
+
 全局 NavMesh 更新调度、玩家路径点和 Mass NPC 循环巡逻已接通。玩家设置 1～N 个点后，C++ 一次算完 **1→2、2→3、…、N→1 的全部最短路**，再发布一份完整、不可变的共享快照；不会等 NPC 到点再求下一段。所有 NPC 只保存各自距离、当前路段和圈数，不保存自己的路径。路线来自建筑最终实际碰撞，包含楼板、楼梯与合并几何，不记录六面关系。
 
 ## 直接验收
@@ -30,16 +32,17 @@
 
 - 关卡使用一个覆盖整个可建造范围的 `NavMeshBoundsVolume`，高度必须包含所有可行走楼层。
 - Recast 的 `Runtime Generation` 使用 **Dynamic**，这是运行时增加楼板/楼梯所需的底层能力。实际生成受导航构建锁控制，飞入与合并期间不会持续生成。
-- 新关卡的默认模式已写入 `DefaultEngine.ini`。已经保存过的 Recast Actor 需要检查自己的实例值；两个示例地图已经设置。
+- 新关卡的默认模式已写入 `DefaultEngine.ini`。已经保存过的 Recast Actor 需要检查自己的实例值；现有演示地图已配置。
 - 导航直接读取建筑实际碰撞。楼板、楼梯应有正确的可行走碰撞并阻挡 Pawn；通路宽度、净高、台阶高度需满足 Recast Agent 的半径、高度和最大台阶设置。仅扩大 Bounds 不会修正建筑碰撞。
 - 所有建筑由 C++ `BuildingNavigationActor` 过滤导航资格，只读取 `Building Gameplay Root` 功能分支；外部美术组件即便勾选允许影响导航也不参与生成。棋盘建筑统一继承，主塔模型使用同一父类。功能分支仍保留各组件自身的导航和碰撞开关，不会将触发盒强制变成导航表面。详见 [GameplayRoot 配置与验收](../Animation/GameplayRoot.md)。
 - 当前服务使用默认的一种导航 Agent，默认半径 35 cm，与 NPC 基础配置一致。不同尺寸 NPC 或专用跳跃/攀爬行为需要后续扩展。
-- 默认/高精度水平采样使用 **5 cm**，以支持 GameplayRoot 下 100×100 cm 的功能楼板。原默认 19 cm（以及实测的 10 cm）在扣除 Agent 半径和体素边缘后会把这种小顶面完全过滤。若底层楼板与棋盘地块只相隔几厘米，Recast 的 `walkableClimb`（由 `Agent Max Step Height` 与 `Cell Height` 换算）会参与相邻高度 span 的可行走性过滤；当前表面间距与 Agent 设置组合下，实测结果是不保留上层薄板顶面。棋盘会在有相应 GameplayRoot 可行走楼板时暂时关闭该格地面的导航输入，移除/替换建筑后再恢复。触发器、分支外美术和高层组件不会触发此覆盖。低精度仍为 38 cm，仅供显式选择低精度的区域使用；更细采样会增加单次构建的计算与内存开销。
-- 已有 Recast Actor 如果显式覆盖了项目默认值，也应同步 `Nav Mesh Resolution Params`：索引 1（Default）和 2（High）的 `Cell Size` 均为 5；`Cell Height=10`、`Agent Max Step Height=35`。本次重启后已确认 `TestMap1` 自动继承 5 cm 配置，无需重存关卡资产。只有被 Bounds 覆盖、具备可行走碰撞且净空足够的表面才会生成导航，挂到 GameplayRoot 并不意味着触发盒也自动变成可行走楼板。
+- 默认/高精度 NavMesh 水平体素使用 **5 cm**，以支持 GameplayRoot 下 100×100 cm 的功能楼板。更粗的体素与 Agent 半径侵蚀可能把这种小顶面过滤掉。低精度仍为 38 cm，仅供显式选择低精度的区域使用；更细体素会增加单次构建的计算与内存开销。此设置与共享路线的 20 cm 表面采样间距不同。
+- **棋盘显示地块始终不参与单位导航**：它只提供 Visibility 射线查询，不阻挡 Pawn，也不会在移除建筑后恢复为导航面。可行走表面需要由真实的功能楼板、楼梯等提供；能放置草稿点不代表该位置可导航。
+- 已有 Recast Actor 如果显式覆盖了项目默认值，也应同步 `Nav Mesh Resolution Params`：索引 1（Default）和 2（High）的 `Cell Size` 均为 5；`Cell Height=10`、`Agent Max Step Height=35`。只有被 Bounds 覆盖、具备可行走碰撞且净空足够的表面才会生成导航，挂到 GameplayRoot 并不意味着触发盒也自动变成可行走楼板。
 
 ### 100 cm Cube 的复现与验收
 
-`TestMap1` 中用卡牌正常放置 `BP_ArcherTower_lv1`，其 `GameplayRoot/Cube` 保持引擎默认 100×100×100 cm、阻挡 Pawn、允许影响导航。运行时在控制台输入 `show Navigation`，等飞入动画全部结束，Cube 顶面应出现小块绿色网格；Actor 原点位于 Z=235 cm 时顶面为 Z=285 cm，受 10 cm 垂直采样影响，导航查询结果约为 Z=290 cm。
+`TestMap1` 中用卡牌正常放置 `BP_ArcherTower_lv1`，其 `GameplayRoot/Cube` 保持有效可行走碰撞、阻挡 Pawn、允许影响导航。运行时在控制台输入 `show Navigation`，等飞入动画全部结束，功能 Cube 顶面应出现小块绿色网格。顶面以当前蓝图的实际组件 Bounds 为准，不能把曾用过的 Actor 原点或旧高度写死为判断依据；10 cm 的垂直体素可能使导航高度与实际顶面存在误差。
 
 输出日志筛选 `NPC 导航`，单次放置只应在飞入结束后增加一轮开始/完成日志；等待数秒不应继续刷新。两座相同建筑触发自动合并时，须等飞入和合并整轮结束才刷新；合并结果的可行走表面由结果等级自身的 GameplayRoot 碰撞提供，不继承被销毁旧建筑的 Cube。
 
@@ -68,13 +71,13 @@
 | `RequestSharedPath(Start, Goal, Failure)` | 设置全世界唯一一条路线的起终点；相同起终点复用已接收的请求。返回 true 表示请求被接收，构建期间可能尚无结果。 |
 | `RequestSharedPatrolRoute(Waypoints, Failure)` | 提交完整有序点列并替换全局请求，一次求解整个闭环；同一组点复用已接收请求。一个点有效，零个点拒绝。 |
 | `ClearSharedRoute()` | 清除请求并立即发布失效快照，所有巡逻 NPC 停止。 |
-| `AcquireSharedPath()` | C++ 获取同一个线程安全、只读共享快照；供后续 Mass Processor 每批取得一次。 |
+| `AcquireSharedPath()` | C++ 获取同一个线程安全、只读共享快照；当前 Mass Processor 每轮取得一次供整批实体消费。 |
 | `GetSharedPath()` | 蓝图/少量调试读取副本，不适合逐 NPC 高频调用。 |
 | `OnSharedPathChanged` | 当前路线失效或新结果发布的事件；不要在每个 NPC 上收到事件后再次寻路。 |
 | `IsNavigationReady()` | 本轮变化与网格构建均已完成。 |
 | `LastFailure` | 异步构建或集中寻路失败的具体原因。 |
 
-路径先在有限 `ProjectionExtent` 内投影起终点，再调用一次 UE 完整路径查询；拒绝部分路径。使用默认导航过滤器，计算 NavMesh 上的最小代价路径。默认区域等价时按距离选择路线；添加有额外代价的 NavArea 后，结果按对应区域代价选择。
+先在有限 `ProjectionExtent` 内投影全部路径点；巡逻闭环一次集中求解 N 个相邻路段（含 N→1），旧单段接口只查询一次，均拒绝部分路径。返回 true 仅代表请求被接收，还需检查最新快照的 `bValid/bClosedLoop` 与 `LastFailure`。使用默认导航过滤器，默认区域等价时按距离选择；添加有额外代价的 NavArea 后按区域代价选择。
 
 快照保存世界坐标转折点、引擎点标记、长度与版本，不保存会随 Tile 重建失效的多边形引用。巡逻快照还保存玩家路径点、每段距离边界和沿最短路走廊预采样的表面高度（默认水平间距 20 cm）；台阶采样也只计算一份。`PathRevision` 每次发布（包括失效）递增；`RouteRevision` 仅点列变化时递增。`bValid=false` 表示必须暂停。旧快照不被原地修改，但持有旧快照不代表旧路线仍可行走。
 
@@ -91,9 +94,9 @@ if (!Navigation->RequestSharedPatrolRoute(PlayerWaypoints, Failure))
     return;
 }
 
-// 后续 Mass Processor 每轮读取一次，整批 NPC 共享；各实体只保存自己的进度。
+// Mass Processor 每轮读取一次，整批 NPC 共享；各实体只保存自己的进度。
 const auto Path = Navigation->AcquireSharedPath();
-if (Path && Path->bValid)
+if (Path && Path->bValid && Path->bClosedLoop)
 {
     // PatrolPoints/PatrolDistances 是整条闭环的共享贴地数据，各 NPC 只保存自己的距离。
 }
@@ -107,7 +110,7 @@ if (Path && Path->bValid)
 - 真实 Game 世界自动化：在原导航演示地图运行 `MovingCastle.Patrol.SharedLoop`（启动参数 `-NavigationDemoAutomation`），验证全部路段原子发布、1024 个 NPC 跨转折/跨圈不新增查询、共享高度采样、NavMesh 失效暂停/恢复、单点/空点列/重合点校验与失败不发布半条路线。
 - 可见运行与玩家输入自动化：在新 `L_MassPatrolDemo` 运行 `MovingCastle.PatrolDemo.Runtime`，验证 32 个实际骨骼 NPC、四段完整路线仅四次查询，以及真实输入栈的编辑/撤回/取消/清空/左键放点/Enter 提交。截图写入 `Saved/Navigation/MassPatrol.png`。
 - 真实 Game 世界自动化：打开演示地图后运行 `MovingCastle.NavigationDemo.SharedPath`，验证真实飞入/合并、楼梯高度、绕行方向切换、1000 次相同请求复用、旧快照不变、取消释放构建锁、稳定后停止 Tick、失败后恢复，以及正式棋盘放置→合并→移除的刷新配对。
-- 一级箭塔实际蓝图回归：运行 `MovingCastle.NavigationGameplay.BlueprintPlacement`，验证调整后 `GameplayRoot/Cube` 顶面、动画完成后的单次刷新、分支外美术过滤，以及移除建筑后地面导航恢复。
+- 一级箭塔实际蓝图回归：运行 `MovingCastle.NavigationGameplay.BlueprintPlacement`，验证当前 `GameplayRoot/Cube` 顶面、动画完成后的单次刷新、分支外美术过滤，以及放置和移除建筑后棋盘地块始终不提供导航。
 - 运行时测试输出截图到 `Saved/Navigation/InitialPath.png` 和 `Saved/Navigation/SharedPath.png`。
 
 `CreateNavigationDemo.py` 可在 UE Python 命令行创建演示地图并配置现有 `TestMap1` 的导航范围。已有演示地图会保留；已有多个 Bounds 时明确拒绝，不会自动删除场景 Actor。
