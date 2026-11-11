@@ -8,13 +8,11 @@
 #include "CastleBoard.generated.h"
 
 class ACastleBuildingBase;
+class ACastleGroundTileActor;
 class UAssemblyFlightComponent;
 class UCastleBackpackComponent;
 class UCastleGroundGenerator;
-class UMaterialInterface;
 class USceneComponent;
-class UStaticMesh;
-class UStaticMeshComponent;
 
 /**
  * 逻辑棋盘 Actor。
@@ -199,25 +197,13 @@ public:
 	bool TryResolveGridCursorTarget(const FVector& RayStart, const FVector& RayEnd, FCastleGridCursorTarget& OutTarget) const;
 
 protected:
-	/** 仅用于挂载地面占位组件和背包组件的根节点。 */
+	/** 管理器自己的根节点，为棋盘坐标提供 Actor 变换空间。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
 	TObjectPtr<USceneComponent> SceneRoot;
 
-	/** UE 自带 BasicShapes/Cube，占位地面和建筑都使用该网格。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
-	TObjectPtr<UStaticMesh> PrototypeCubeMesh;
-
-	/** UE 自带基础材质，运行时为每个地面格子创建动态颜色实例。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
-	TObjectPtr<UMaterialInterface> PrototypeMaterial;
-
-	/** 每个地面坐标对应的可点击占位组件。 */
+	/** 管理器只保存格子 Actor 索引；每个格子的数据、碰撞和表现由自身 Actor 承载。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "占位可视化")
-	TMap<FIntVector, TObjectPtr<UStaticMeshComponent>> GroundVisuals;
-
-	/** 地面数字牌和数字文本等辅助组件，重建地面时必须一并销毁，避免重复显示。 */
-	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "占位可视化")
-	TArray<TObjectPtr<USceneComponent>> GroundAuxiliaryVisuals;
+	TMap<FIntVector, TObjectPtr<ACastleGroundTileActor>> GroundTiles;
 
 	/** 根据 bGenerateGroundOnBeginPlay 决定是否在运行开始时生成地面。 */
 	virtual void BeginPlay() override;
@@ -230,14 +216,14 @@ protected:
 	/** 查找背包中与当前样例卡牌完全匹配的第一张卡牌。 */
 	int32 FindPrototypeCardIndex(const FCastleBuildingDescriptor& Descriptor) const;
 
-	/** 将已接收的地面结果生成成可点击的彩色立方体占位格。 */
-	void RebuildGroundVisualization();
+	/** 批量生成独立格子 Actor；只有整批成功后才替换现有棋盘格。 */
+	bool RebuildGroundVisualization(const TArray<FCastleGroundCell>& Cells, FText& OutFailureReason);
+
+	/** 销毁本管理器生成的全部地面格 Actor，并清空坐标索引。 */
+	void DestroyGroundTileActors();
 
 	/** 根据命中信息生成一个完整的网格指针结果。 */
 	void BuildGridCursorTarget(const FIntVector& Cell, const FVector& LocalImpactPoint, const FVector& LocalNormal, FCastleGridCursorTarget& OutTarget) const;
-
-	/** 返回颜色对应的占位显示颜色。 */
-	static FLinearColor GetPrototypeColor(ECastleTileColor Color);
 
 	/** 在屏幕上显示当前原型操作结果和失败原因。 */
 	void ShowPrototypeMessage(const FString& Message, const FColor& Color = FColor::White) const;

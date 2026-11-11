@@ -101,7 +101,10 @@ bool FBuildingMergeLifecycleTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("源零件数准确"), Merge->SourcePartCount, 24);
 	TestEqual(TEXT("目标不重复抓取刚创建的源副本"), Merge->TargetPartCount, 18);
 	TestEqual(TEXT("只为实际变化件创建副本"), CountVisuals(Result), Merge->MovedPartCount + Merge->IncomingPartCount + Merge->RemovedPartCount);
-	TestTrue(TEXT("源隐藏且关闭碰撞"), First->IsHidden() && !First->GetActorEnableCollision());
+	TestTrue(TEXT("来源 Actor 总碰撞保持开启"), !First->IsHidden() && First->GetActorEnableCollision());
+	UStaticMeshComponent* FirstVisual = CastChecked<UStaticMeshComponent>(First->GetRootComponent());
+	TestTrue(TEXT("动画只隐藏并关闭被采集的美术零件"), !FirstVisual->IsVisible()
+		&& FirstVisual->GetCollisionEnabled() == ECollisionEnabled::NoCollision);
 	TestEqual(TEXT("结果碰撞在动画中仍然有效"), Originals[0]->GetCollisionEnabled(), ECollisionEnabled::QueryOnly);
 	Merge->TickComponent(0.2f, LEVELTICK_All, nullptr);
 	TArray<UStaticMeshComponent*> AllMeshes;
@@ -131,8 +134,8 @@ bool FBuildingMergeLifecycleTest::RunTest(const FString& Parameters)
 			.Equals(Pair.Value * Result->GetActorTransform(), 0.001));
 	}
 	Merge->ResetMerge();
-	TestFalse(TEXT("取消恢复旧建筑可见"), First->IsHidden());
-	TestTrue(TEXT("取消恢复旧建筑碰撞"), First->GetActorEnableCollision());
+	TestFalse(TEXT("取消后来源 Actor 仍可见"), First->IsHidden());
+	TestTrue(TEXT("取消后来源 Actor 总碰撞仍开启"), First->GetActorEnableCollision());
 	TestEqual(TEXT("取消清理全部副本"), CountVisuals(Result), 0);
 	TestTrue(TEXT("取消后可以重播"), Merge->StartMerge({ First, Second }));
 

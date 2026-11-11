@@ -368,9 +368,20 @@ bool UBuildingMergeComponent::StartChange(const TArray<AActor*>& Sources)
 	}
 	for (AActor* Source : Sources)
 	{
-		SourceStates.Add({Source, Source->IsHidden(), Source->GetActorEnableCollision()});
-		Source->SetActorHiddenInGame(true);
-		Source->SetActorEnableCollision(false);
+		TArray<UPrimitiveComponent*> SourcePrimitives;
+		Source->GetComponents<UPrimitiveComponent>(SourcePrimitives, false);
+		for (UPrimitiveComponent* Primitive : SourcePrimitives)
+		{
+			// GameplayRoot 下的楼板、楼梯和触发器不参与表现，也不能失去碰撞。
+			if (UBuildingGameplayRootComponent::IsInGameplayHierarchy(Primitive))
+			{
+				continue;
+			}
+			SourceStates.Add({Primitive, Primitive->IsVisible(), Primitive->bHiddenInGame != 0, Primitive->GetCollisionEnabled()});
+			Primitive->SetVisibility(false, false);
+			Primitive->SetHiddenInGame(true, false);
+			Primitive->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		}
 	}
 	bCaptured = true;
 	for (FMergePart& Part : Parts)
@@ -500,10 +511,11 @@ void UBuildingMergeComponent::ResetMerge()
 		RestoreTarget();
 		for (const FSourceState& State : SourceStates)
 		{
-			if (AActor* Actor = State.Actor.Get())
+			if (UPrimitiveComponent* Primitive = State.Primitive.Get())
 			{
-				Actor->SetActorHiddenInGame(State.bHidden);
-				Actor->SetActorEnableCollision(State.bCollision);
+				Primitive->SetVisibility(State.bVisible, false);
+				Primitive->SetHiddenInGame(State.bHiddenInGame, false);
+				Primitive->SetCollisionEnabled(State.Collision);
 			}
 		}
 	}

@@ -9,6 +9,41 @@
 #include "CastleBuildings.h"
 #include "CastleBuildingTestUtilities.h"
 #include "CastleGroundGenerator.h"
+#include "CastleGroundTileActor.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
+#include "EngineUtils.h"
+
+namespace
+{
+	/** 为 Actor 级棋盘格测试建立独立游戏 World，避免改动用户关卡。 */
+	struct FScopedGroundActorWorld
+	{
+		UWorld* World = nullptr;
+
+		FScopedGroundActorWorld()
+		{
+			const UWorld::InitializationValues Values = UWorld::InitializationValues()
+				.AllowAudioPlayback(false).CreatePhysicsScene(true).CreateNavigation(false)
+				.CreateAISystem(false).ShouldSimulatePhysics(false).SetTransactional(false);
+			World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Values);
+			if (World != nullptr)
+			{
+				GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+			}
+		}
+
+		~FScopedGroundActorWorld()
+		{
+			if (World != nullptr)
+			{
+				World->DestroyWorld(false);
+				GEngine->DestroyWorldContext(World);
+			}
+		}
+	};
+}
 
 /**
  * 验证随机地面生成器的确定性、道路起始格和无效请求拒绝逻辑。
@@ -100,6 +135,80 @@ bool FCastleBoardGroundResultAutomationTest::RunTest(const FString& Parameters)
 	DuplicateResult.Cells[1].Coordinate = DuplicateResult.Cells[0].Coordinate;
 	TestFalse(TEXT("重复坐标的地面结果应被拒绝"), Board->ApplyGroundGenerationResult(DuplicateResult, FailureReason));
 
+	return true;
+}
+
+/** 验证管理器仅维护格子 Actor 索引，格子视觉、数据和碰撞由独立 Actor 持有。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCastleBoardGroundActorAutomationTest,
+	"MovingCastle.Logic.BoardGroundActors",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleBoardGroundActorAutomationTest::RunTest(const FString& Parameters)
+{
+	FScopedGroundActorWorld Scope;
+	if (!TestNotNull(TEXT("创建独立测试 World"), Scope.World)) { return false; }
+
+	const FTransform BoardTransform(FRotator(0.0f, 37.0f, 0.0f), FVector(120.0f, -80.0f, 250.0f), FVector(1.25f));
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	ACastleBoard* Board = Scope.World->SpawnActor<ACastleBoard>(ACastleBoard::StaticClass(), BoardTransform, SpawnParameters);
+	if (!TestNotNull(TEXT("在 World 中生成棋盘管理器"), Board)) { return false; }
+	Board->GridSize = FIntVector(2, 2, 1);
+
+	FCastleGroundGenerationResult Ground;
+	for (int32 Y = 0; Y < 2; ++Y)
+	{
+		for (int32 X = 0; X < 2; ++X)
+		{
+			FCastleGroundCell& Cell = Ground.Cells.AddDefaulted_GetRef();
+			Cell.Coordinate = FIntVector(X, Y, 0);
+			Cell.Color = X == 0 && Y == 0 ? ECastleTileColor::Gray : ECastleTileColor::Red;
+			Cell.Number = X == 0 && Y == 0 ? 0 : 1;
+		}
+	}
+	FText FailureReason;
+	if (!TestTrue(TEXT("应用四格生成结果"), Board->ApplyGroundGenerationResult(Ground, FailureReason)))
+	{
+		AddError(FailureReason.ToString());
+		return false;
+	}
+
+	TArray<UStaticMeshComponent*> ManagerMeshes;
+	Board->GetComponents<UStaticMeshComponent>(ManagerMeshes);
+	TestEqual(TEXT("管理器不再直接拥有地面 Static Mesh 组件"), ManagerMeshes.Num(), 0);
+
+	TArray<ACastleGroundTileActor*> TileActors;
+	for (TActorIterator<ACastleGroundTileActor> It(Scope.World); It; ++It)
+	{
+		if (It->GetOwner() == Board)
+		{
+			TileActors.Add(*It);
+		}
+	}
+	if (!TestEqual(TEXT("每个格子都生成独立 Actor"), TileActors.Num(), 4)) { return false; }
+
+	TSet<FIntVector> SeenCoordinates;
+	for (ACastleGroundTileActor* Tile : TileActors)
+	{
+		TestTrue(TEXT("格子 Actor 有棋盘 Owner 但没有附着到管理器"), Tile->GetOwner() == Board && Tile->GetAttachParentActor() == nullptr);
+		const FCastleGroundCell Cell = Tile->GetGroundCell();
+		TestFalse(TEXT("每个坐标只对应一个格子 Actor"), SeenCoordinates.Contains(Cell.Coordinate));
+		SeenCoordinates.Add(Cell.Coordinate);
+
+		const FVector LocalCenter(Cell.Coordinate.X * Board->CellSize, Cell.Coordinate.Y * Board->CellSize,
+			Board->WorldBaseHeight - Board->LayerHeight * 0.45f);
+		const FVector ExpectedLocation = BoardTransform.TransformPosition(LocalCenter);
+		TestTrue(TEXT("独立 Actor 使用棋盘完整变换定位"), Tile->GetActorLocation().Equals(ExpectedLocation, 0.01f));
+		TestEqual(TEXT("格子地块只使用查询碰撞"), Tile->GetTileMeshComponent()->GetCollisionEnabled(), ECollisionEnabled::QueryOnly);
+		TestEqual(TEXT("格子地块保留 Visibility 射线阻挡"),
+			Tile->GetTileMeshComponent()->GetCollisionResponseToChannel(ECC_Visibility), ECR_Block);
+		TestTrue(TEXT("实际格子地面参与导航"), Tile->GetTileMeshComponent()->CanEverAffectNavigation());
+		TestEqual(TEXT("实际格子地面阻挡 Pawn 导航碰撞"),
+			Tile->GetTileMeshComponent()->GetCollisionResponseToChannel(ECC_Pawn), ECR_Block);
+		TestEqual(TEXT("数字底牌没有碰撞"), Tile->GetNumberPlateComponent()->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
+		TestFalse(TEXT("数字底牌不参与导航"), Tile->GetNumberPlateComponent()->CanEverAffectNavigation());
+	}
 	return true;
 }
 

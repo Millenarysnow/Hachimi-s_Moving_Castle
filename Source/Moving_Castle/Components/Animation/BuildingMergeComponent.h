@@ -181,9 +181,10 @@ private:
 	};
 	struct FSourceState
 	{
-		TWeakObjectPtr<AActor> Actor;
-		bool bHidden = false;
-		bool bCollision = false;
+		TWeakObjectPtr<UPrimitiveComponent> Primitive;
+		bool bVisible = false;
+		bool bHiddenInGame = false;
+		ECollisionEnabled::Type Collision = ECollisionEnabled::NoCollision;
 	};
 
 	TArray<FMergePart> Parts;

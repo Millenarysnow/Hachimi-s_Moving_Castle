@@ -5,20 +5,15 @@
 #include "CastleBackpackComponent.h"
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
+#include "CastleGroundTileActor.h"
 #include "BuildingMergeComponent.h"
 #include "AssemblyFlightComponent.h"
 #include "CastleGroundGenerator.h"
 #include "CastleNavigationSubsystem.h"
 #include "Components/SceneComponent.h"
-#include "Components/StaticMeshComponent.h"
-#include "Components/TextRenderComponent.h"
 #include "Engine/Engine.h"
-#include "Engine/StaticMesh.h"
 #include "Engine/World.h"
-#include "Materials/MaterialInstanceDynamic.h"
-#include "Materials/MaterialInterface.h"
 #include "Moving_Castle.h"
-#include "UObject/ConstructorHelpers.h"
 
 namespace
 {
@@ -87,32 +82,12 @@ namespace
 
 ACastleBoard::ACastleBoard()
 {
-	// 棋盘逻辑不需要 Tick；占位地面通过组件注册生成，不依赖 PCG 或正式模型。
+	// 棋盘管理器不需要 Tick；地面格由独立 Actor 承载，不依赖 PCG 或正式模型。
 	PrimaryActorTick.bCanEverTick = false;
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
 	PrototypeBackpack = CreateDefaultSubobject<UCastleBackpackComponent>(TEXT("PrototypeBackpack"));
-
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMeshFinder(TEXT("/Engine/BasicShapes/Cube.Cube"));
-	if (CubeMeshFinder.Succeeded())
-	{
-		PrototypeCubeMesh = CubeMeshFinder.Object;
-	}
-	else
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘占位可视化初始化失败：找不到 UE BasicShapes/Cube。"));
-	}
-
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BasicMaterialFinder(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-	if (BasicMaterialFinder.Succeeded())
-	{
-		PrototypeMaterial = BasicMaterialFinder.Object;
-	}
-	else
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘占位可视化初始化失败：找不到 UE BasicShapeMaterial。"));
-	}
 
 	GroundGeneratorClass = UCastleRandomGroundGenerator::StaticClass();
 }
@@ -229,10 +204,13 @@ bool ACastleBoard::ApplyGroundGenerationResult(const FCastleGroundGenerationResu
 		}
 	}
 
-	// 所有检查完成后才替换旧数组，保证错误结果不会留下半份地面。
+	// 数据和 Actor 都准备完成后才提交新地面，失败时保留原棋盘状态。
 	const FScopedCastleNavigationChange NavigationChange(GetWorld(), this);
+	if (!RebuildGroundVisualization(Result.Cells, OutFailureReason))
+	{
+		return false;
+	}
 	GeneratedGroundCells = Result.Cells;
-	RebuildGroundVisualization();
 	return true;
 }
 
@@ -460,6 +438,7 @@ void ACastleBoard::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	}
 	PendingPlacements.Reset();
 	ReadyMergeRequests.Reset();
+	DestroyGroundTileActors();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -640,14 +619,15 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 	bool bFoundCell = false;
 	bool bHitGroundTile = false;
 
-	for (const TPair<FIntVector, TObjectPtr<UStaticMeshComponent>>& Pair : GroundVisuals)
+	if (const ACastleGroundTileActor* HitGroundTile = Cast<ACastleGroundTileActor>(HitResult.GetActor()))
 	{
-		if (Pair.Value != nullptr && Pair.Value.Get() == HitResult.GetComponent())
+		const TObjectPtr<ACastleGroundTileActor>* RegisteredTile = GroundTiles.Find(HitGroundTile->GetGroundCell().Coordinate);
+		if (RegisteredTile != nullptr && RegisteredTile->Get() == HitGroundTile
+			&& HitResult.GetComponent() == HitGroundTile->GetTileMeshComponent())
 		{
-			HitCell = Pair.Key;
+			HitCell = HitGroundTile->GetGroundCell().Coordinate;
 			bFoundCell = true;
 			bHitGroundTile = true;
-			break;
 		}
 	}
 
@@ -1529,161 +1509,73 @@ int32 ACastleBoard::FindPrototypeCardIndex(const FCastleBuildingDescriptor& Desc
 	return INDEX_NONE;
 }
 
-void ACastleBoard::RebuildGroundVisualization()
+bool ACastleBoard::RebuildGroundVisualization(const TArray<FCastleGroundCell>& Cells, FText& OutFailureReason)
 {
-	for (const TObjectPtr<USceneComponent>& AuxiliaryComponent : GroundAuxiliaryVisuals)
-	{
-		if (AuxiliaryComponent != nullptr)
-		{
-			AuxiliaryComponent->DestroyComponent();
-		}
-	}
-	GroundAuxiliaryVisuals.Reset();
-
-	for (const TPair<FIntVector, TObjectPtr<UStaticMeshComponent>>& Pair : GroundVisuals)
-	{
-		if (Pair.Value != nullptr)
-		{
-			Pair.Value->DestroyComponent();
-		}
-	}
-	GroundVisuals.Reset();
-
+	OutFailureReason = FText::GetEmpty();
 	if (GetWorld() == nullptr)
 	{
-		// 自动化测试可以在没有 World 的 UObject 上验证地面数据，此时不创建组件。
-		return;
+		// 纯数据自动化测试允许没有 World；生成数据仍可由棋盘单独校验和接收。
+		return true;
 	}
 
-	if (SceneRoot == nullptr || PrototypeCubeMesh == nullptr || PrototypeMaterial == nullptr)
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘地面可视化创建失败：占位资源或根组件为空。"));
-		return;
-	}
-
-	for (const FCastleGroundCell& Cell : GeneratedGroundCells)
+	TMap<FIntVector, TObjectPtr<ACastleGroundTileActor>> NewGroundTiles;
+	TArray<TObjectPtr<ACastleGroundTileActor>> SpawnedTiles;
+	const FTransform BoardTransform = GetActorTransform();
+	for (const FCastleGroundCell& Cell : Cells)
 	{
 		const FIntVector RelativeCoordinate = Cell.Coordinate - GridOrigin;
-		const FName TileName(*FString::Printf(TEXT("GroundTile_%d_%d_%d"), Cell.Coordinate.X, Cell.Coordinate.Y, Cell.Coordinate.Z));
-		UStaticMeshComponent* TileComponent = NewObject<UStaticMeshComponent>(this, TileName);
-		if (TileComponent == nullptr)
-		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘地面可视化创建失败：无法创建地面组件。"));
-			return;
-		}
-
-		// 运行时创建的组件必须加入 Actor 的实例组件列表，再注册到当前 World，
-		// 否则在 PIE/World Partition 中可能只存在于内存而没有渲染状态。
-		AddInstanceComponent(TileComponent);
-		TileComponent->SetupAttachment(SceneRoot);
-		TileComponent->SetStaticMesh(PrototypeCubeMesh);
-		TileComponent->SetMobility(EComponentMobility::Movable);
-		TileComponent->SetRelativeLocation(FVector(
+		const FVector LocalTileCenter(
 			static_cast<float>(RelativeCoordinate.X) * CellSize,
 			static_cast<float>(RelativeCoordinate.Y) * CellSize,
-			WorldBaseHeight + static_cast<float>(RelativeCoordinate.Z) * LayerHeight - LayerHeight * 0.45f));
-		TileComponent->SetRelativeScale3D(FVector(CellSize / 100.0f * 0.92f, CellSize / 100.0f * 0.92f, 0.12f));
-		TileComponent->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-		TileComponent->SetCollisionResponseToAllChannels(ECR_Ignore);
-		TileComponent->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
-		TileComponent->SetVisibility(true, true);
-
-		UMaterialInstanceDynamic* TileMaterial = UMaterialInstanceDynamic::Create(PrototypeMaterial, TileComponent);
-		if (TileMaterial != nullptr)
+			WorldBaseHeight + static_cast<float>(RelativeCoordinate.Z) * LayerHeight - LayerHeight * 0.45f);
+		const FTransform TileTransform(BoardTransform.GetRotation(), BoardTransform.TransformPosition(LocalTileCenter), BoardTransform.GetScale3D());
+		FActorSpawnParameters SpawnParameters;
+		SpawnParameters.Owner = this;
+		SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		ACastleGroundTileActor* TileActor = GetWorld()->SpawnActor<ACastleGroundTileActor>(
+			ACastleGroundTileActor::StaticClass(), TileTransform, SpawnParameters);
+		if (TileActor == nullptr)
 		{
-			TileMaterial->SetVectorParameterValue(TEXT("Color"), GetPrototypeColor(Cell.Color));
-			TileComponent->SetMaterial(0, TileMaterial);
-		}
-
-		TileComponent->RegisterComponentWithWorld(GetWorld());
-
-		// BasicShapes/Cube 原始边长为 100，地面薄片的实际半厚度为 6 个单位。
-		// 数字牌只抬到地块顶面上方，不能再使用完整 LayerHeight 计算高度。
-		const float TileCenterHeight = WorldBaseHeight
-			+ static_cast<float>(RelativeCoordinate.Z) * LayerHeight
-			- LayerHeight * 0.45f;
-		const float TileHalfHeight = 100.0f * 0.12f * 0.5f;
-		const float NumberPlateHalfHeight = 100.0f * 0.035f * 0.5f;
-		const float NumberVisualClearance = 1.0f;
-		const float NumberPlateCenterHeight = TileCenterHeight + TileHalfHeight + NumberPlateHalfHeight + NumberVisualClearance;
-
-		// 数字牌使用深色小方块做底，给白色数字提供稳定的高对比背景，避免
-		// 红、蓝、绿色地面上的黑色文字在远处与材质颜色混在一起。
-		const FName PlateName(*FString::Printf(TEXT("GroundNumberPlate_%d_%d_%d"), Cell.Coordinate.X, Cell.Coordinate.Y, Cell.Coordinate.Z));
-		UStaticMeshComponent* NumberPlate = NewObject<UStaticMeshComponent>(this, PlateName);
-		if (NumberPlate != nullptr)
-		{
-			AddInstanceComponent(NumberPlate);
-			NumberPlate->SetupAttachment(SceneRoot);
-			NumberPlate->SetStaticMesh(PrototypeCubeMesh);
-			NumberPlate->SetMobility(EComponentMobility::Movable);
-			NumberPlate->SetRelativeLocation(FVector(
-				static_cast<float>(RelativeCoordinate.X) * CellSize,
-				static_cast<float>(RelativeCoordinate.Y) * CellSize,
-				NumberPlateCenterHeight));
-			NumberPlate->SetRelativeScale3D(FVector(CellSize / 100.0f * 0.62f, CellSize / 100.0f * 0.62f, 0.035f));
-			NumberPlate->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-			NumberPlate->SetVisibility(true, true);
-
-			UMaterialInstanceDynamic* PlateMaterial = UMaterialInstanceDynamic::Create(PrototypeMaterial, NumberPlate);
-			if (PlateMaterial != nullptr)
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("棋盘格 Actor 生成失败，坐标 (%d, %d, %d)。"),
+				Cell.Coordinate.X, Cell.Coordinate.Y, Cell.Coordinate.Z));
+			for (ACastleGroundTileActor* SpawnedTile : SpawnedTiles)
 			{
-				PlateMaterial->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.015f, 0.015f, 0.02f, 1.0f));
-				NumberPlate->SetMaterial(0, PlateMaterial);
+				if (IsValid(SpawnedTile)) { SpawnedTile->Destroy(); }
 			}
-
-			NumberPlate->RegisterComponentWithWorld(GetWorld());
-			GroundAuxiliaryVisuals.Add(NumberPlate);
+			return false;
 		}
 
-		const FName LabelName(*FString::Printf(TEXT("GroundLabel_%d_%d_%d"), Cell.Coordinate.X, Cell.Coordinate.Y, Cell.Coordinate.Z));
-		UTextRenderComponent* NumberLabel = NewObject<UTextRenderComponent>(this, LabelName);
-		if (NumberLabel != nullptr)
+		SpawnedTiles.Add(TileActor);
+		if (!TileActor->InitializeGroundCell(Cell, CellSize, LayerHeight))
 		{
-			AddInstanceComponent(NumberLabel);
-			// 文本直接挂到棋盘根节点，避免继承地面薄片的 Z 缩放而被压进网格内部。
-			NumberLabel->SetupAttachment(SceneRoot);
-			NumberLabel->SetHorizontalAlignment(EHorizTextAligment::EHTA_Center);
-			NumberLabel->SetVerticalAlignment(EVerticalTextAligment::EVRTA_TextCenter);
-			NumberLabel->SetTextRenderColor(FColor::White);
-			// 数字高度保持为单格间距的 32%，与地块和底牌一起放大，避免新尺寸下文字过小。
-			NumberLabel->SetWorldSize(CellSize * 0.32f);
-			NumberLabel->SetXScale(1.15f);
-			NumberLabel->SetYScale(1.15f);
-			NumberLabel->SetText(FText::FromString(FString::Printf(TEXT("%d"), Cell.Number)));
-			NumberLabel->SetRelativeRotation(FRotator(90.0f, 0.0f, 0.0f));
-			NumberLabel->SetRelativeLocation(FVector(
-				static_cast<float>(RelativeCoordinate.X) * CellSize,
-				static_cast<float>(RelativeCoordinate.Y) * CellSize,
-				NumberPlateCenterHeight + NumberPlateHalfHeight + 0.5f));
-			NumberLabel->RegisterComponentWithWorld(GetWorld());
-			GroundAuxiliaryVisuals.Add(NumberLabel);
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("棋盘格 Actor 初始化失败，坐标 (%d, %d, %d)。"),
+				Cell.Coordinate.X, Cell.Coordinate.Y, Cell.Coordinate.Z));
+			for (ACastleGroundTileActor* SpawnedTile : SpawnedTiles)
+			{
+				if (IsValid(SpawnedTile)) { SpawnedTile->Destroy(); }
+			}
+			return false;
 		}
-
-		GroundVisuals.Add(Cell.Coordinate, TileComponent);
+		NewGroundTiles.Add(Cell.Coordinate, TileActor);
 	}
 
-	UE_LOG(LogMoving_Castle, Log, TEXT("棋盘已创建 %d 个地面占位组件，单格间距 %.1f 厘米，层高 %.1f 厘米，世界基准高度 %.1f 厘米。"),
-		GroundVisuals.Num(), CellSize, LayerHeight, WorldBaseHeight);
+	DestroyGroundTileActors();
+	GroundTiles = MoveTemp(NewGroundTiles);
+	UE_LOG(LogMoving_Castle, Log, TEXT("棋盘管理器已创建 %d 个独立地面格 Actor，单格间距 %.1f 厘米，层高 %.1f 厘米。"),
+		GroundTiles.Num(), CellSize, LayerHeight);
+	return true;
 }
 
-FLinearColor ACastleBoard::GetPrototypeColor(ECastleTileColor Color)
+void ACastleBoard::DestroyGroundTileActors()
 {
-	switch (Color)
+	for (const TPair<FIntVector, TObjectPtr<ACastleGroundTileActor>>& Pair : GroundTiles)
 	{
-	case ECastleTileColor::Red:
-		return FLinearColor(0.75f, 0.08f, 0.08f, 1.0f);
-	case ECastleTileColor::Blue:
-		return FLinearColor(0.06f, 0.25f, 0.80f, 1.0f);
-	case ECastleTileColor::Green:
-		return FLinearColor(0.05f, 0.58f, 0.18f, 1.0f);
-	case ECastleTileColor::Yellow:
-		return FLinearColor(0.90f, 0.60f, 0.04f, 1.0f);
-	case ECastleTileColor::Purple:
-		return FLinearColor(0.48f, 0.12f, 0.72f, 1.0f);
-	default:
-		return FLinearColor(0.30f, 0.30f, 0.34f, 1.0f);
+		if (ACastleGroundTileActor* Tile = Pair.Value.Get(); IsValid(Tile))
+		{
+			Tile->Destroy();
+		}
 	}
+	GroundTiles.Reset();
 }
 
 void ACastleBoard::ShowPrototypeMessage(const FString& Message, const FColor& Color) const

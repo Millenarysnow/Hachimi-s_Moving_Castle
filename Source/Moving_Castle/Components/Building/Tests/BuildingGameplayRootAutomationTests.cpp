@@ -220,9 +220,15 @@ bool FBuildingGameplayMergeTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("新旧建筑功能分支不阻止合并"), Merge->StartMerge({ First, Second }))) { return false; }
 	TestEqual(TEXT("来源只收集两件美术网格"), Merge->SourcePartCount, 2);
 	TestEqual(TEXT("结果只收集一件美术网格"), Merge->TargetPartCount, 1);
+	TestTrue(TEXT("合并动画不隐藏来源 Actor 或关闭 Actor 总碰撞"), !First->IsHidden() && First->GetActorEnableCollision()
+		&& !Second->IsHidden() && Second->GetActorEnableCollision());
 	ResultBranch.Verify(*this);
+	FirstBranch.Verify(*this);
+	SecondBranch.Verify(*this);
 	Merge->TickComponent(0.2f, LEVELTICK_All, nullptr);
 	ResultBranch.Verify(*this);
+	FirstBranch.Verify(*this);
+	SecondBranch.Verify(*this);
 	Merge->ResetMerge();
 	FirstBranch.Verify(*this);
 	SecondBranch.Verify(*this);
@@ -232,6 +238,8 @@ bool FBuildingGameplayMergeTest::RunTest(const FString& Parameters)
 	Merge->TickComponent(10.0f, LEVELTICK_All, nullptr);
 	TestFalse(TEXT("正常合并完成"), Merge->bIsPlaying);
 	ResultBranch.Verify(*this);
+	FirstBranch.Verify(*this);
+	SecondBranch.Verify(*this);
 	return true;
 }
 
@@ -271,9 +279,10 @@ bool FBuildingGameplayConfigurationTest::RunTest(const FString& Parameters)
 	for (const FPrimitiveSnapshot& Snapshot : Branch.Snapshots)
 	{
 		TestFalse(TEXT("卡片预览不显示功能几何"), Snapshot.Component->IsVisible());
-		TestEqual(TEXT("预览实例关闭功能碰撞"), Snapshot.Component->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
-		TestFalse(TEXT("预览实例不提供导航几何"), Snapshot.Component->CanEverAffectNavigation());
+		TestEqual(TEXT("预览保留功能组件碰撞"), Snapshot.Component->GetCollisionEnabled(), Snapshot.Collision);
+		TestEqual(TEXT("预览保留功能组件导航设置"), Snapshot.Component->CanEverAffectNavigation(), Snapshot.bNavigation);
 	}
+	TestTrue(TEXT("预览不关闭 Actor 总碰撞"), Building->GetActorEnableCollision());
 	return true;
 }
 

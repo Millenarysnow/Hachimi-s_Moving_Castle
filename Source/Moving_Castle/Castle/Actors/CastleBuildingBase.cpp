@@ -56,10 +56,11 @@ ACastleBuildingBase::ACastleBuildingBase()
 	// 数字牌是界面辅助物，合并时随旧 Actor 消失，不把它误当成屋顶零件卷入建筑。
 	PrototypeLabelPlate->ComponentTags.Add(TEXT("MergeExclude"));
 	PrototypeLabelPlate->SetupAttachment(VisualRoot);
-	PrototypeLabelPlate->SetStaticMesh(PlaceholderCube);
-	PrototypeLabelPlate->SetMaterial(0, PlaceholderMaterial);
+	// 标签底牌不参与碰撞或导航；先设置资格，再赋网格，避免创建期导航更新。
 	PrototypeLabelPlate->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	PrototypeLabelPlate->SetCanEverAffectNavigation(false);
+	PrototypeLabelPlate->SetStaticMesh(PlaceholderCube);
+	PrototypeLabelPlate->SetMaterial(0, PlaceholderMaterial);
 	PrototypeLabelPlate->SetVisibility(false);
 }
 
@@ -301,17 +302,14 @@ void ACastleBuildingBase::PrepareForPreview()
 	// 卡片只显示建筑形状，等级与数字由卡片自己的文字控件显示。
 	PrototypeLabel->SetVisibility(false);
 	PrototypeLabelPlate->SetVisibility(false);
-	SetActorEnableCollision(false);
 	TArray<UPrimitiveComponent*> Primitives;
 	GetComponents<UPrimitiveComponent>(Primitives);
 	for (UPrimitiveComponent* Primitive : Primitives)
 	{
 		if (UBuildingGameplayRootComponent::IsInGameplayHierarchy(Primitive))
 		{
-			// 预览使用独立 Actor：功能几何不进入卡片，也不向真实关卡提供碰撞或导航。
+			// 预览不展示功能几何，但完整保留功能分支作者配置的碰撞与导航属性。
 			Primitive->SetVisibility(false, false);
-			Primitive->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-			Primitive->SetCanEverAffectNavigation(false);
 			continue;
 		}
 		Primitive->SetVisibleInSceneCaptureOnly(true);
