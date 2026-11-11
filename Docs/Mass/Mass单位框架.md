@@ -8,6 +8,8 @@
 
 也可以在自己的关卡放置一个 `CastleMassSpawner`，指定 Configuration、Count、Columns、Spacing。每个生成器管理一整批实体，自身不 Tick。`bStartMoving` 可让人形沿 `LocalMovementDirection` 按配置速度移动。默认以脚底为实体原点。
 
+NPC 共享巡逻已接通：给生成器配置 NPC 并勾选 **Follow Shared Patrol Route**、关闭 **Start Moving**，它会等整条 1→2→…→N→1 路线统一算好，再沿路线生成整批实体。所有 NPC 共用一份路径和台阶采样，只有距离、路段和圈数独立。可直接运行 `/Game/MovingCastle/Maps/L_MassPatrolDemo`；玩家路径点编辑与 NavMesh 更新说明见 [NPC 共享导航](../Navigation/NPC共享导航.md)。
+
 | 类别 | 配置基类 | 行为基类 | 已配置资产 |
 | --- | --- | --- | --- |
 | 敌人 | `UCastleMassEnemyConfig` | `UCastleMassEnemyTrait` | `DA_MassEnemyBase` |
@@ -30,6 +32,7 @@
 
 - `SpawnUnits`：传入配置和一组世界变换，返回一组值类型句柄。先校验整批，再一次创建；子弹初速度为生成旋转的 +X × 配置速度。
 - `MoveUnitsTo`：一批人形直达世界目标点，带加速、减速、到达停止及防越界钳制。支持三维移动。
+- `FollowSharedPatrolRoute`：整批 NPC 沿已发布的全局完整闭环移动，不触发寻路；推荐沿路线生成，已有单位需要在路线附近。直接移动、设速度和停止命令会解除这些单位的巡逻。
 - `SetUnitsVelocity`：人形设置持续期望速度，受 MaxSpeed 限制；子弹直接设置弹道速度。
 - `StopUnits`：清除目标和速度。带重力的子弹随后仍会继续下落。
 - `DamageUnits` / `DespawnUnits`：降低生命或标记死亡，生命周期 Processor 统一回收。

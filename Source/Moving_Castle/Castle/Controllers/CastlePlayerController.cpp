@@ -14,6 +14,7 @@
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
 #include "Moving_Castle.h"
+#include "Interaction/CastlePatrolRoute.h"
 
 ACastlePlayerController::ACastlePlayerController()
 {
@@ -40,6 +41,11 @@ void ACastlePlayerController::BeginPlay()
 	FInputModeGameOnly InputMode;
 	InputMode.SetConsumeCaptureMouseDown(true);
 	SetInputMode(InputMode);
+	// 已配置关卡保留其路线 Actor；普通建造关卡自动提供一个空的玩家路径点编辑入口。
+	if (!UGameplayStatics::GetActorOfClass(GetWorld(), ACastlePatrolRoute::StaticClass()))
+	{
+		GetWorld()->SpawnActor<ACastlePatrolRoute>();
+	}
 
 	FindActiveBoard();
 	SpawnGridCursor();

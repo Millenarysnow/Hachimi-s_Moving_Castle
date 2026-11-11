@@ -10,6 +10,7 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/Pawn.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Moving_Castle.h"
@@ -96,14 +97,32 @@ void ACastleNavigationDemo::BeginPlay()
 		if (!Flight->StartAssembly()) { StopWithError(Flight->LastError); return; }
 	}
 	FText Failure;
-	if (!GetWorld()->GetSubsystem<UCastleNavigationSubsystem>()->RequestSharedPath(
+	if (bRunPathDemonstration && !GetWorld()->GetSubsystem<UCastleNavigationSubsystem>()->RequestSharedPath(
 		GetActorTransform().TransformPosition(FVector(-1200.0, 0.0, 5.0)),
 		GetActorTransform().TransformPosition(FVector(2000.0, 0.0, 605.0)), Failure))
 	{
 		StopWithError(Failure.ToString());
 		return;
 	}
-	if (APlayerController* Controller = GetWorld()->GetFirstPlayerController()) { Controller->SetViewTarget(this); }
+	if (bUseFixedCamera)
+	{
+		if (APlayerController* Controller = GetWorld()->GetFirstPlayerController()) { Controller->SetViewTarget(this); }
+	}
+	else if (APlayerController* Controller = GetWorld()->GetFirstPlayerController())
+	{
+		if (APawn* Pawn = Controller->GetPawn())
+		{
+			// 新巡逻演示保留默认 Pawn 的飞行输入，只添加同曝光/视野的相机，让 NPC 和台阶清晰可见。
+			UCameraComponent* FlyingCamera = NewObject<UCameraComponent>(Pawn, TEXT("PatrolDemoFlyingCamera"));
+			FlyingCamera->SetupAttachment(Pawn->GetRootComponent());
+			FlyingCamera->bUsePawnControlRotation = true;
+			FlyingCamera->SetFieldOfView(DemoCamera->FieldOfView);
+			FlyingCamera->PostProcessSettings = DemoCamera->PostProcessSettings;
+			Pawn->AddInstanceComponent(FlyingCamera);
+			FlyingCamera->RegisterComponent();
+			Controller->SetViewTarget(Pawn);
+		}
+	}
 }
 
 bool ACastleNavigationDemo::StartMerge()
@@ -129,6 +148,7 @@ bool ACastleNavigationDemo::StartMerge()
 void ACastleNavigationDemo::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (!bRunPathDemonstration) { return; }
 	UCastleNavigationSubsystem* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
 	const auto Path = Navigation->AcquireSharedPath();
 	if (Phase >= 0 && !Navigation->LastFailure.IsEmpty() && Navigation->ActiveChangeCount == 0

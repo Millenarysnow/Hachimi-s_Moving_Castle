@@ -1,10 +1,21 @@
 # NPC 共享导航（UE 5.8）
 
-这一阶段实现全局 NavMesh 的更新调度与一份共享路径的集中求解。路径由建筑最终的实际碰撞生成，包含楼板、楼梯与合并后的几何；不记录建筑六面关系。玩家路径点、1→N→1 循环路线及 Mass NPC 跟随 Processor 尚未接入，现有 `MoveUnitsTo` 仍是直线移动。
+全局 NavMesh 更新调度、玩家路径点和 Mass NPC 循环巡逻已接通。玩家设置 1～N 个点后，C++ 一次算完 **1→2、2→3、…、N→1 的全部最短路**，再发布一份完整、不可变的共享快照；不会等 NPC 到点再求下一段。所有 NPC 只保存各自距离、当前路段和圈数，不保存自己的路径。路线来自建筑最终实际碰撞，包含楼板、楼梯与合并几何，不记录六面关系。
 
 ## 直接验收
 
-打开 `/Game/MovingCastle/Maps/L_NPCNavigationDemo` 并点击 Play：
+打开 `/Game/MovingCastle/Maps/L_MassPatrolDemo` 并点击 Play：
+
+1. 墙体飞入完成、NavMesh 构建结束后，出现绿色完整闭环、编号 1～4 和 32 个实际 Mass 骨骼实例 NPC；NPC 绕墙、上下楼梯并按 1→2→3→4→1 持续循环。画面显示 `Path queries=4`、`Refresh=1`。
+2. 用 WASD 与鼠标移动飞行相机。等 NPC 走过路径点甚至完成整圈，`Path queries` 都不应增长。
+3. 按 **P** 编辑，画面显示橙色草稿点；瞄准楼板/地面顶面后左键加点，**Backspace** 删除末点，**Enter** 一次提交整条新路线，**P** 取消草稿。编辑过程中不执行寻路，原路线继续工作。**Delete** 清空已发布路线并停止 NPC。
+4. 单独一个路径点是原地待命，不查询“自己到自己”的路径。任一点没有 NavMesh、任一段不可达或包含尚未实现的特殊 NavLink 动作，画面和日志都会给出错误，整条路线无效，NPC 停止。
+
+`TestMap1` 的城堡控制器自动提供同一套 P/左键/Enter 操作。先放置路径点，再打开控制台执行 **`CastleSpawnPatrolNPCs 32`**，即可沿完整路线生成 32 个 NPC；也可以先执行命令，生成器会等整条路线就绪。重复该命令会替换它上次生成的批次。建造左键只在巡逻编辑模式下被截获，商店打开时自动退出巡逻草稿模式。
+
+在其他关卡可放置一个 **CastlePatrolRoute**：在 `Local Waypoints` 数组按顺序增加元素并拖动三维手柄，或运行时用上述输入编辑。每个世界只能有一个此 Actor。再放置 **CastleMassSpawner**，配置 `/Game/MovingCastle/Mass/DA_MassNPCBase`、数量，并勾选 **Follow Shared Patrol Route**、关闭 **Start Moving**；生成器等完整闭环就绪后，沿整圈均匀生成。普通网格生成位置不用于巡逻模式。
+
+现有单段导航刷新演示仍独立保留。打开 `/Game/MovingCastle/Maps/L_NPCNavigationDemo` 并点击 Play：
 
 1. 两段墙体同时播放原有飞入组件，屏幕 `Animations` 大于 0，`Refresh` 保持 0。
 2. 全部归位后，出现绿色共享路径和黄色转折点，路径绕过墙体并沿楼梯抵达上层。此时 `Refresh=1`、`Path queries=1`。
@@ -13,7 +24,7 @@
 
 输出日志搜索 `NPC 导航` 或 `NPC 共享路线` 可查看每轮构建与寻路次数。配置错误、无法投影或不可达会报告原因，不会用旧路径或部分路径冒充成功。演示仅画路径，不生成 NPC。
 
-`/Game/MovingCastle/TestMap1` 也已添加覆盖现有棋盘的一个全局 `NavMeshBoundsVolume`。原有放置、合并、回收和直接销毁建筑均已接入刷新调度；该地图目前没有设置 NPC 路线起终点，因此只更新网格。
+`/Game/MovingCastle/TestMap1` 已有覆盖现有棋盘的全局 `NavMeshBoundsVolume`。原有放置、合并、回收和直接销毁建筑均已接入刷新调度；未设置路径点时只更新网格。
 
 ## NavMesh 配置
 
@@ -40,7 +51,7 @@
 2. 原有 `UAssemblyFlightComponent` 与 `UBuildingMergeComponent` 起播时登记自己，直接消费完成通知。合并增加了与飞入一致的原生结束通知，覆盖完成、Reset 和 EndPlay。
 3. 同一来源可嵌套，多座建筑可并发。每个开始必须与一个结束配对；结束本身只排队。最后一个结束后的下一帧才提交，让“飞入结束→立即自动合并”的原有回调完整执行。
 4. 将最终几何同步到导航八叉树，解锁，并为默认导航数据提交一次全局重建。当前每轮采用全局重建，范围和几何复杂度决定构建开销；没有实现局部 Tile 调度。
-5. 等待引擎的脏区队列和异步生成任务全部完成，递增 `NavigationRevision`；有路线请求时只统一重算一次。
+5. 等待引擎的脏区队列和异步生成任务全部完成，递增 `NavigationRevision`；有巡逻请求时一次求解整组相邻路段与闭合段，全部成功后统一发布。NPC 在失效期间停速，不发起单独重算。
 
 稳定场景不 Tick 导航子系统，也不逐帧扫描建筑或动画。已有异步构建期间若再次开始建造，会取消旧构建，等待新一轮变化结束后再提交，避免发布过时结果。
 
@@ -55,6 +66,8 @@
 | 接口 | 用途 |
 | --- | --- |
 | `RequestSharedPath(Start, Goal, Failure)` | 设置全世界唯一一条路线的起终点；相同起终点复用已接收的请求。返回 true 表示请求被接收，构建期间可能尚无结果。 |
+| `RequestSharedPatrolRoute(Waypoints, Failure)` | 提交完整有序点列并替换全局请求，一次求解整个闭环；同一组点复用已接收请求。一个点有效，零个点拒绝。 |
+| `ClearSharedRoute()` | 清除请求并立即发布失效快照，所有巡逻 NPC 停止。 |
 | `AcquireSharedPath()` | C++ 获取同一个线程安全、只读共享快照；供后续 Mass Processor 每批取得一次。 |
 | `GetSharedPath()` | 蓝图/少量调试读取副本，不适合逐 NPC 高频调用。 |
 | `OnSharedPathChanged` | 当前路线失效或新结果发布的事件；不要在每个 NPC 上收到事件后再次寻路。 |
@@ -63,12 +76,16 @@
 
 路径先在有限 `ProjectionExtent` 内投影起终点，再调用一次 UE 完整路径查询；拒绝部分路径。使用默认导航过滤器，计算 NavMesh 上的最小代价路径。默认区域等价时按距离选择路线；添加有额外代价的 NavArea 后，结果按对应区域代价选择。
 
-快照保存世界坐标转折点、引擎点标记、长度与版本，不保存会随 Tile 重建失效的多边形引用。转折点之间不是逐台阶贴地采样，后续跟随器需处理地面高度与特殊连接；演示以绿色前景折线显示计划路线。每次发布（包括失效）均递增 `PathRevision`；`bValid=false` 表示消费者必须暂停使用路线。旧快照内容不会被原地修改，但持有旧快照不代表旧路线仍可行走。
+快照保存世界坐标转折点、引擎点标记、长度与版本，不保存会随 Tile 重建失效的多边形引用。巡逻快照还保存玩家路径点、每段距离边界和沿最短路走廊预采样的表面高度（默认水平间距 20 cm）；台阶采样也只计算一份。`PathRevision` 每次发布（包括失效）递增；`RouteRevision` 仅点列变化时递增。`bValid=false` 表示必须暂停。旧快照不被原地修改，但持有旧快照不代表旧路线仍可行走。
+
+`CastleMassPatrolProcessor` 每轮只取一次快照，再按 Chunk 并行计算所有 NPC 的距离、位置、朝向与速度。跨转折和大帧间隔依旧沿共享折线采样，跨越 N→1 时统计完整圈数；速度驱动原有批量待机/行走动画。`MoveUnitsTo`、`SetUnitsVelocity`、`StopUnits` 显式解除被操作单位的巡逻，避免两套 Processor 同时移动它。
+
+此阶段是共享路线上的行走，不包含各 NPC 从任意出生点独立寻路接入、单位间避让、跳跃、传送或门交互。推荐使用沿共享路线生成。已有单位可通过 `FollowSharedPatrolRoute` 加入；它必须位于路线附近（50 cm 内，吸附到对应采样折线）。NavMesh 重建保留原路段，防止去返路重叠时跳段；若新路线已偏离单位超过 50 cm，该单位明确停止并汇总警告，不能自动传送或直线穿墙接入。重新调整点列覆盖单位，或通过上述验收命令沿新路线重新生成即可。
 
 ```cpp
 UCastleNavigationSubsystem* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
 FText Failure;
-if (!Navigation->RequestSharedPath(StartLocation, GoalLocation, Failure))
+if (!Navigation->RequestSharedPatrolRoute(PlayerWaypoints, Failure))
 {
     // 同步校验失败：在界面显示 Failure，或向上层返回错误。
     return;
@@ -78,20 +95,24 @@ if (!Navigation->RequestSharedPath(StartLocation, GoalLocation, Failure))
 const auto Path = Navigation->AcquireSharedPath();
 if (Path && Path->bValid)
 {
-    // Path->Points 是路线转折点；单位跟随与台阶贴地移动在后续阶段实现。
+    // PatrolPoints/PatrolDistances 是整条闭环的共享贴地数据，各 NPC 只保存自己的距离。
 }
 ```
 
-该服务目前没有路径请求队列或每 NPC 路径缓存。新的一组起终点会替换全局唯一请求，地图变化后会按这组起终点自动重算。
+该服务没有每 NPC 路径缓存或寻路队列。新点列替换全局唯一请求，地图变化后统一重算整条闭环。N≥2 时完整计算一轮需要 N 次原生最短路查询，与 NPC 数量、到点次数、圈数无关；这是一个完整批次，发布只有一次。默认 NavArea 代价相同时选择最短距离；自定义区域代价会改变最小代价路线的含义。
 
 ## 验证与资产脚本
 
 - Editor 自动化：`MovingCastle.Navigation.InputValidation`，验证缺少导航时明确拒绝，不创建虚假路径或后台轮询。
+- 真实 Game 世界自动化：在原导航演示地图运行 `MovingCastle.Patrol.SharedLoop`（启动参数 `-NavigationDemoAutomation`），验证全部路段原子发布、1024 个 NPC 跨转折/跨圈不新增查询、共享高度采样、NavMesh 失效暂停/恢复、单点/空点列/重合点校验与失败不发布半条路线。
+- 可见运行与玩家输入自动化：在新 `L_MassPatrolDemo` 运行 `MovingCastle.PatrolDemo.Runtime`，验证 32 个实际骨骼 NPC、四段完整路线仅四次查询，以及真实输入栈的编辑/撤回/取消/清空/左键放点/Enter 提交。截图写入 `Saved/Navigation/MassPatrol.png`。
 - 真实 Game 世界自动化：打开演示地图后运行 `MovingCastle.NavigationDemo.SharedPath`，验证真实飞入/合并、楼梯高度、绕行方向切换、1000 次相同请求复用、旧快照不变、取消释放构建锁、稳定后停止 Tick、失败后恢复，以及正式棋盘放置→合并→移除的刷新配对。
 - 一级箭塔实际蓝图回归：运行 `MovingCastle.NavigationGameplay.BlueprintPlacement`，验证调整后 `GameplayRoot/Cube` 顶面、动画完成后的单次刷新、分支外美术过滤，以及移除建筑后地面导航恢复。
 - 运行时测试输出截图到 `Saved/Navigation/InitialPath.png` 和 `Saved/Navigation/SharedPath.png`。
 
 `CreateNavigationDemo.py` 可在 UE Python 命令行创建演示地图并配置现有 `TestMap1` 的导航范围。已有演示地图会保留；已有多个 Bounds 时明确拒绝，不会自动删除场景 Actor。
+
+`CreateMassPatrolDemo.py` 创建新增的可见 NPC 闭环演示；已有地图保留，不修改其他关卡或基础 NPC 美术资产。
 
 ```powershell
 & 'E:/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe' `

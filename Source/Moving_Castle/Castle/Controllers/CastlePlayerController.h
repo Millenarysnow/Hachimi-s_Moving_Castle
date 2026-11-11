@@ -11,6 +11,7 @@ class ACastleBoard;
 class ACastleGridCursor;
 class UCastleEconomyComponent;
 class UCastleShopComponent;
+class ACastleMassSpawner;
 
 /**
  * 移动城堡的自有玩家控制器。
@@ -60,6 +61,10 @@ public:
 	/** 测试控制台命令：CastleSpendGold 100，用于直接验证扣款和余额不足。 */
 	UFUNCTION(Exec)
 	void CastleSpendGold(int32 Amount);
+
+	/** 验收命令：CastleSpawnPatrolNPCs 32，沿完整共享路线生成一批可见 NPC；重复执行替换上一批。 */
+	UFUNCTION(Exec)
+	void CastleSpawnPatrolNPCs(int32 Count = 32);
 
 protected:
 	/** 隐藏鼠标、锁定输入并创建指示器。 */
@@ -136,4 +141,8 @@ protected:
 
 	/** 防止棋盘尚未生成时每帧重复刷屏。 */
 	bool bLoggedMissingBoard = false;
+
+	/** 仅由验收命令创建的那一批，避免重复命令不断累积测试单位。 */
+	UPROPERTY(Transient)
+	TObjectPtr<ACastleMassSpawner> PatrolPreviewSpawner;
 };
