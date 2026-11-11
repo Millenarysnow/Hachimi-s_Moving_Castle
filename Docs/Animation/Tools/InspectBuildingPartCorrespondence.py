@@ -23,6 +23,9 @@ for name, x in [("lv1_left", 0), ("lv1_right", 700), ("lv2", 350), ("lv4", 350)]
     assert actor, "无法建立只读分析实例。"
     parts = []
     for component in actor.get_components_by_class(unreal.StaticMeshComponent):
+        # 功能组件不会参与合并匹配，离线对照也必须先排除任意深度的功能分支。
+        if unreal.BuildingGameplayRootComponent.is_in_gameplay_hierarchy(component):
+            continue
         mesh = component.get_editor_property("static_mesh")
         if not mesh or not component.is_visible() or component.component_has_tag("MergeExclude"):
             continue

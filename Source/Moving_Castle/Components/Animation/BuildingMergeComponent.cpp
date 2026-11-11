@@ -2,6 +2,7 @@
 
 #include "AssemblyFlightComponent.h"
 #include "CastleNavigationSubsystem.h"
+#include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -60,6 +61,11 @@ bool UBuildingMergeComponent::CaptureActor(AActor* Actor, TArray<FPartSnapshot>&
 	double BaseHeight = TNumericLimits<double>::Max();
 	for (UStaticMeshComponent* Mesh : Meshes)
 	{
+		// 新旧建筑均先排除完整功能分支，不把简化地板、楼梯等当成待匹配的美术零件。
+		if (UBuildingGameplayRootComponent::IsInGameplayHierarchy(Mesh))
+		{
+			continue;
+		}
 		const FMergePart* PendingPart = PreviousTransition
 			? PreviousTransition->Parts.FindByPredicate([Mesh](const FMergePart& Part)
 			{
@@ -352,7 +358,9 @@ bool UBuildingMergeComponent::StartChange(const TArray<AActor*>& Sources)
 	Owner->GetComponents<UPrimitiveComponent>(Primitives, false);
 	for (UPrimitiveComponent* Primitive : Primitives)
 	{
-		if (!Visuals.Contains(Cast<UStaticMeshComponent>(Primitive)))
+		// 只接管结果建筑的表现显隐，功能分支无需隐藏或在完成/取消时恢复。
+		if (!UBuildingGameplayRootComponent::IsInGameplayHierarchy(Primitive)
+			&& !Visuals.Contains(Cast<UStaticMeshComponent>(Primitive)))
 		{
 			TargetStates.Add({Primitive, Primitive->IsVisible()});
 			Primitive->SetVisibility(false, false);

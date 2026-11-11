@@ -11,6 +11,8 @@
 3. 保持组件 **Auto Play** 勾选。运行菜单选择 **Simulate / 模拟**，零件会从四周沿弧线连续飞入，由下向上归位。停止后再次模拟即可重播，不需要连接 EventGraph。
 4. 需要排除装饰或其他网格时，在参与零件的 **Component Tags** 中添加统一标签（例如 `AssemblyPart`），再将组件的 **Part Component Tag** 填为相同标签。留空时收集所属 Actor 自身所有原本可见的静态网格。
 
+建筑的隐藏碰撞、导航表面和触发区域应放在 `GameplayRoot` 下，任意深度的后代自动排除，参与标签也不会让其飞入。普通 Actor 可添加 `Building Gameplay Root` 场景组件获得同一功能，详见 [GameplayRoot 配置与验收](GameplayRoot.md)。
+
 | 参数 | 默认值 | 效果 |
 | --- | --- | --- |
 | Flight Duration | 1.2 秒 | 单件飞行时长 |

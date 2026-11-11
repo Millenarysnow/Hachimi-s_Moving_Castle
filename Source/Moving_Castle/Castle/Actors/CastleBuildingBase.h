@@ -14,6 +14,7 @@ class UStaticMeshComponent;
 class UTextRenderComponent;
 class UBuildingMergeComponent;
 class UAssemblyFlightComponent;
+class UBuildingGameplayRootComponent;
 
 /**
  * 所有可放置建筑的共同 Actor 基类。
@@ -28,8 +29,15 @@ class MOVING_CASTLE_API ACastleBuildingBase : public AActor
 	GENERATED_BODY()
 
 public:
-	/** 创建逻辑根节点、占位网格和通用建筑标签。 */
+	/** 创建逻辑根节点、功能分组、占位网格和通用建筑标签。 */
 	ACastleBuildingBase();
+
+	/**
+	 * 放置隐藏碰撞、导航表面和触发区域的公共父节点；所有深度的后代均不参与两种建筑动画。
+	 * 初始化模型时保留这些组件的碰撞和导航配置，功能组件也不参与模型检测和预览取景。
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="建筑|功能组件")
+	TObjectPtr<UBuildingGameplayRootComponent> GameplayRoot;
 
 	/** 所有建筑原生携带的零件合并组件；仅在棋盘合并时启动，卡片预览和普通放置不播放。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="建筑|动画")

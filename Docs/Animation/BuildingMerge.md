@@ -62,6 +62,8 @@ UBuildingMergeComponent 提供两种入口：
 | Change Origin | 关闭 | 开启后多个结果共享同一个世界空间传播原点 |
 | Excluded Component Tag | MergeExclude | 排除标签底牌等辅助网格 |
 
+来源和结果建筑的 `GameplayRoot` 完整功能分支始终排除，不参与零件匹配、动画副本生成或结果显隐接管。旧功能组件随旧 Actor 退出，结果使用自己配置的功能组件；详见 [GameplayRoot 配置与验收](GameplayRoot.md)。
+
 棋盘有 bUseSharedVisualChangeOrigin 和 VisualChangeOrigin，合并流程会把它们传给结果建筑。以后把多种 PCG 结构变化收集为一次放置事务时，只需让这些结果使用同一个 VisualChangeOrigin，每个建筑仍只处理自己的零件，时间轴会自然形成一圈向外传播的变化。这样不会为每座建筑各自播放独立的旋转特效。
 
 ## 建筑合并中的接入

@@ -5,6 +5,7 @@
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
+#include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -79,7 +80,8 @@ void ABuildingMergeDemo::BeginPlay()
 		Building->GetComponents<UStaticMeshComponent>(Meshes, false);
 		for (const UStaticMeshComponent* Mesh : Meshes)
 		{
-			if (Mesh->GetStaticMesh() && !Mesh->ComponentHasTag(TEXT("MergeExclude")))
+			if (Mesh->GetStaticMesh() && !Mesh->ComponentHasTag(TEXT("MergeExclude"))
+				&& !UBuildingGameplayRootComponent::IsInGameplayHierarchy(Mesh))
 			{
 				Bounds += Mesh->Bounds.GetBox();
 			}

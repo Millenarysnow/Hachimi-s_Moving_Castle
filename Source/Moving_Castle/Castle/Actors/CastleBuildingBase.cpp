@@ -5,6 +5,7 @@
 #include "CastleBuildingDefinition.h"
 #include "BuildingMergeComponent.h"
 #include "AssemblyFlightComponent.h"
+#include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -20,6 +21,9 @@ ACastleBuildingBase::ACastleBuildingBase()
 	// 建筑逻辑和模型组件现在位于同一个 Actor；VisualRoot 只提供统一的组件根节点。
 	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
 	SetRootComponent(VisualRoot);
+	// 功能分支随整座建筑移动，但不承担美术零件；子组件可继续按楼层等需求嵌套分组。
+	GameplayRoot = CreateDefaultSubobject<UBuildingGameplayRootComponent>(TEXT("GameplayRoot"));
+	GameplayRoot->SetupAttachment(VisualRoot);
 	BuildingMerge = CreateDefaultSubobject<UBuildingMergeComponent>(TEXT("BuildingMerge"));
 	AssemblyFlight = CreateDefaultSubobject<UAssemblyFlightComponent>(TEXT("AssemblyFlight"));
 	// 所有建筑共享原有连续飞入实现；只有棋盘放置流程有权起播，避免预览/升级模型误播。
@@ -172,7 +176,8 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 	bool bHasConfiguredModel = false;
 	for (UStaticMeshComponent* Component : StaticMeshes)
 	{
-		if (Component == PrototypeMesh || Component == PrototypeLabelPlate)
+		if (Component == PrototypeMesh || Component == PrototypeLabelPlate
+			|| UBuildingGameplayRootComponent::IsInGameplayHierarchy(Component))
 		{
 			continue;
 		}
@@ -218,11 +223,15 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 		PrototypeMesh->SetVisibility(true);
 	}
 
-	// 正式模型和占位模型都提供 Visibility 射线命中，但不阻挡玩家或参与物理模拟。
+	// 美术模型提供 Visibility 射线命中；功能分支保留作者配置，不能按可见性关闭隐藏地板碰撞。
 	TArray<UPrimitiveComponent*> Primitives;
 	GetComponents<UPrimitiveComponent>(Primitives);
 	for (UPrimitiveComponent* Primitive : Primitives)
 	{
+		if (UBuildingGameplayRootComponent::IsInGameplayHierarchy(Primitive))
+		{
+			continue;
+		}
 		Primitive->SetSimulatePhysics(false);
 		Primitive->SetCollisionEnabled(Primitive->IsVisible() ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
 		Primitive->SetCollisionResponseToAllChannels(ECR_Ignore);
@@ -265,6 +274,11 @@ FBox ACastleBuildingBase::GetVisualBounds() const
 	GetComponents<UPrimitiveComponent>(Primitives);
 	for (const UPrimitiveComponent* Primitive : Primitives)
 	{
+		// 隐藏碰撞即使为了编辑调试临时设为可见，也不能扩大建筑标签高度和卡片取景范围。
+		if (UBuildingGameplayRootComponent::IsInGameplayHierarchy(Primitive))
+		{
+			continue;
+		}
 		// 标签不属于模型几何体，取景和标签高度都不应把文字自身再次计入范围。
 		if (Primitive == PrototypeLabelPlate || Primitive == PrototypeLabel)
 		{
@@ -292,6 +306,14 @@ void ACastleBuildingBase::PrepareForPreview()
 	GetComponents<UPrimitiveComponent>(Primitives);
 	for (UPrimitiveComponent* Primitive : Primitives)
 	{
+		if (UBuildingGameplayRootComponent::IsInGameplayHierarchy(Primitive))
+		{
+			// 预览使用独立 Actor：功能几何不进入卡片，也不向真实关卡提供碰撞或导航。
+			Primitive->SetVisibility(false, false);
+			Primitive->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			Primitive->SetCanEverAffectNavigation(false);
+			continue;
+		}
 		Primitive->SetVisibleInSceneCaptureOnly(true);
 		Primitive->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		Primitive->SetCastShadow(false);

@@ -1,5 +1,6 @@
 #include "AssemblyFlightComponent.h"
 #include "CastleNavigationSubsystem.h"
+#include "Components/Building/BuildingGameplayRootComponent.h"
 
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -61,6 +62,11 @@ bool UAssemblyFlightComponent::CaptureParts(FString& OutError)
 
 	for (UStaticMeshComponent* Mesh : Meshes)
 	{
+		// 功能分支优先排除；即使组件可见或带有参与标签，也不创建飞行副本或改动其碰撞。
+		if (UBuildingGameplayRootComponent::IsInGameplayHierarchy(Mesh))
+		{
+			continue;
+		}
 		if (!ExcludedComponentTag.IsNone() && Mesh->ComponentHasTag(ExcludedComponentTag))
 		{
 			continue;

@@ -20,6 +20,7 @@ DECLARE_MULTICAST_DELEGATE_TwoParams(FAssemblyFlightFinishedNative, UAssemblyFli
  *
  * 所有排序、发射调度、弧线运动、中心旋转和收尾都由 C++ 完成。
  * 原零件只临时隐藏并禁用自身碰撞；飞行使用瞬态显示组件，因而可以安全处理网格根组件和嵌套层级。
+ * 自动排除 Building Gameplay Root 的完整功能分支，不改动这些组件的显隐与碰撞。
  * 不处理实例化网格、骨骼网格或物理模拟零件；配置不合法时明确报错，不改用其他显现方式。
  */
 UCLASS(ClassGroup=(Castle), meta=(BlueprintSpawnableComponent, DisplayName="Assembly Flight"))
@@ -54,7 +55,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Assembly Flight|Path", meta=(ClampMin="0.0", Units="cm"))
 	double FlightArcHeight = 220.0;
 
-	/** 留空收集所属 Actor 自身的所有静态网格；填写后只处理带此 Component Tag 的零件。 */
+	/** 留空收集所属 Actor 自身功能分支以外的可见静态网格；填写后再按此 Component Tag 筛选。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Assembly Flight|Selection")
 	FName PartComponentTag = NAME_None;
 

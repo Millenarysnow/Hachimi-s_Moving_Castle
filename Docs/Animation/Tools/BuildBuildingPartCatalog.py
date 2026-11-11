@@ -18,8 +18,10 @@ for suffix in ["lv1", "lv2", "lv2_vertical", "lv3", "lv4"]:
     assert cls, "无法加载等级建筑：" + asset
     actor = subsystem.spawn_actor_from_class(cls, unreal.Vector())
     assert actor, "无法生成分析实例。"
+    # 与运行时共用原生父级链判断，功能分支中的网格不写入美术零件几何目录。
     meshes = [c.get_editor_property("static_mesh") for c in actor.get_components_by_class(unreal.StaticMeshComponent)
-              if c.get_editor_property("static_mesh") and c.is_visible() and not c.component_has_tag("MergeExclude")]
+              if not unreal.BuildingGameplayRootComponent.is_in_gameplay_hierarchy(c)
+              and c.get_editor_property("static_mesh") and c.is_visible() and not c.component_has_tag("MergeExclude")]
     mesh_groups[suffix] = meshes
     all_meshes.update({mesh.get_path_name(): mesh for mesh in meshes})
     subsystem.destroy_actor(actor)
