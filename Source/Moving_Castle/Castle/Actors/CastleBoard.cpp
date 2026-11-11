@@ -183,9 +183,6 @@ bool ACastleBoard::SpawnMainTower(FText& OutFailureReason)
 	}
 
 	const FTransform TowerTransform(GetActorQuat(), GetGridWorldLocation(GetBoardCenterCoordinate()), GetActorScale3D());
-	FActorSpawnParameters SpawnParameters;
-	SpawnParameters.Owner = this;
-	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	AActor* TowerActor = GetWorld()->SpawnActorDeferred<AActor>(MainTowerClass, TowerTransform, this, nullptr,
 		ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	if (TowerActor == nullptr)

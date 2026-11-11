@@ -8,6 +8,7 @@
 #include "CastleMassProcessors.h"
 #include "CastleMassTraits.h"
 #include "CastleMassUnitSubsystem.h"
+#include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "MassCommonFragments.h"
@@ -25,6 +26,7 @@ namespace CastleMassEnemyTests
 	struct FScopedWorld
 	{
 		UWorld* World = nullptr;
+		FWorldContext* WorldContext = nullptr;
 		AActor* TowerActor = nullptr;
 		UCastleMainTowerComponent* Tower = nullptr;
 
@@ -35,6 +37,8 @@ namespace CastleMassEnemyTests
 				.CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(false).SetTransactional(false);
 			World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Settings);
 			if (World == nullptr) { return; }
+			WorldContext = &GEngine->CreateNewWorldContext(EWorldType::Game);
+			WorldContext->SetCurrentWorld(World);
 
 			TowerActor = World->SpawnActor<AActor>(AActor::StaticClass(), FTransform::Identity);
 			Tower = NewObject<UCastleMainTowerComponent>(TowerActor, TEXT("TestMainTowerHealth"));
@@ -52,6 +56,7 @@ namespace CastleMassEnemyTests
 			{
 				if (TowerActor != nullptr) { TowerActor->Destroy(); }
 				World->DestroyWorld(false);
+				GEngine->DestroyWorldContext(World);
 			}
 		}
 
