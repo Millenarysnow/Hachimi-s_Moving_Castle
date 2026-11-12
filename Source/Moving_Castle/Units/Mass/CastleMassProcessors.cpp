@@ -1,6 +1,7 @@
 #include "CastleMassProcessors.h"
 
 #include "CastleMassFragments.h"
+#include "Mass/CastleMassPatrolFragments.h"
 #include "MassCommonFragments.h"
 #include "MassCommonTypes.h"
 #include "MassCommandBuffer.h"
@@ -8,6 +9,7 @@
 #include "MassMovementFragments.h"
 #include "MassRepresentationAnimationProcessor.h"
 #include "MassRepresentationFragments.h"
+#include "Moving_Castle.h"
 
 namespace CastleMass
 {
@@ -37,6 +39,7 @@ void UCastleMassMovementProcessor::ConfigureQueries(const TSharedRef<FMassEntity
 	Query.AddRequirement<FMassVelocityFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassMoveTargetFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassUnitFragment>(EMassFragmentAccess::ReadOnly);
+	Query.AddRequirement<FCastleMassPatrolFragment>(EMassFragmentAccess::ReadOnly, EMassFragmentPresence::Optional);
 	Query.AddConstSharedRequirement<FCastleMassMovementParameters>();
 }
 
@@ -50,9 +53,10 @@ void UCastleMassMovementProcessor::Execute(FMassEntityManager& EntityManager, FM
 		const auto Velocities = Chunk.GetMutableFragmentView<FMassVelocityFragment>();
 		const auto Targets = Chunk.GetMutableFragmentView<FCastleMassMoveTargetFragment>();
 		const auto Units = Chunk.GetFragmentView<FCastleMassUnitFragment>();
+		const auto Patrols = Chunk.GetFragmentView<FCastleMassPatrolFragment>();
 		for (FMassExecutionContext::FEntityIterator It = Chunk.CreateEntityIterator(); It; ++It)
 		{
-			if (Units[It].Health <= 0.0f) { continue; }
+			if (Units[It].Health <= 0.0f || (!Patrols.IsEmpty() && Patrols[It].bEnabled)) { continue; }
 			FTransform& Transform = Transforms[It].GetMutableTransform();
 			FVector& Velocity = Velocities[It].Value;
 			FCastleMassMoveTargetFragment& Target = Targets[It];

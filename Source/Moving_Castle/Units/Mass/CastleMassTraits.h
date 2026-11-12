@@ -37,12 +37,14 @@ protected:
 	virtual ECastleMassUnitKind GetKind() const PURE_VIRTUAL(UCastleMassUnitTrait::GetKind, return ECastleMassUnitKind::Enemy;);
 };
 
+/** 敌人的公共身份、生命与普通移动；不自动添加任何兵种的索敌或攻击能力。 */
 UCLASS(meta=(DisplayName="Castle Mass 敌人基类"))
 class MOVING_CASTLE_API UCastleMassEnemyTrait : public UCastleMassUnitTrait
 {
 	GENERATED_BODY()
 public:
 	UCastleMassEnemyTrait();
+
 protected:
 	virtual ECastleMassUnitKind GetKind() const override { return ECastleMassUnitKind::Enemy; }
 };

@@ -23,6 +23,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category="移动城堡|Mass")
 	bool MoveUnitsTo(const TArray<FCastleMassUnitHandle>& Units, FVector Destination);
 
+	/** 让一批 NPC 消费世界唯一的完整循环路线；不发起寻路。单位应已在路线上，推荐沿路线生成。 */
+	UFUNCTION(BlueprintCallable, Category="移动城堡|Mass")
+	bool FollowSharedPatrolRoute(const TArray<FCastleMassUnitHandle>& Units, FText& OutFailureReason);
+
 	/** 人形设置持续期望速度；子弹设置实际弹道速度。 */
 	UFUNCTION(BlueprintCallable, Category="移动城堡|Mass")
 	bool SetUnitsVelocity(const TArray<FCastleMassUnitHandle>& Units, FVector Velocity);

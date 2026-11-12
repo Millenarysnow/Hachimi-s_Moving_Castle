@@ -9,9 +9,12 @@
 
 class ACastleBuildingBase;
 class ACastleGroundTileActor;
+class ACastleMassEnemySpawner;
 class UAssemblyFlightComponent;
 class UCastleBackpackComponent;
+class UCastleCombatDataAsset;
 class UCastleGroundGenerator;
+class UCastleMainTowerComponent;
 class USceneComponent;
 
 /**
@@ -95,6 +98,30 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|地面")
 	bool bGenerateGroundOnBeginPlay = true;
 
+	/** 主塔和开局敌人共用的战斗配置 Data Asset。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "战斗|配置")
+	TObjectPtr<UCastleCombatDataAsset> CombatData;
+
+	/** 自动生成的主塔模型类；默认指向 Content/MovingCastle/BP/BP_MainTower。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "战斗|主塔")
+	TSubclassOf<AActor> MainTowerClass;
+
+	/** BeginPlay 时是否在棋盘中心生成主塔。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "战斗|主塔")
+	bool bSpawnMainTowerOnBeginPlay = true;
+
+	/** BeginPlay 时是否在主塔周围生成战斗配置中的初始敌人。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "战斗|敌人")
+	bool bSpawnInitialEnemiesOnBeginPlay = true;
+
+	/** 自动生成的主塔 Actor，供调试和后续 UI 读取。 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "战斗|主塔")
+	TObjectPtr<AActor> MainTowerActor;
+
+	/** 自动生成的敌人批次管理器。 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "战斗|敌人")
+	TObjectPtr<ACastleMassEnemySpawner> InitialEnemySpawner;
+
 	/** 原型背包会自动装入道路、箭塔、炮塔和农田样例卡牌。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "棋盘|原型操作")
 	TObjectPtr<UCastleBackpackComponent> PrototypeBackpack;
@@ -150,11 +177,15 @@ public:
 	/**
 	 * 检查一张建筑卡牌是否可以放到目标坐标。
 	 *
-	 * 放置只检查目标格和六个面相邻格；道路只接受道路地面或道路邻居，功能
-	 * 建筑不会把道路当成颜色/数字匹配来源。
+	 * 没有射线方向的坐标入口固定从下方顶面放置：首层只匹配目标地面，
+	 * 上层只匹配正下方建筑。玩家交互必须使用带高亮面来源的光标入口。
 	 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
 	bool CanPlaceBuilding(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason) const;
+
+	/** 校验当前高亮面：只匹配该面所属地面或建筑，同时检查整座建筑的占用、边界与支撑。 */
+	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
+	bool CanPlaceBuildingAtCursor(const FCastleGridCursorTarget& CursorTarget, const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason) const;
 
 	/** 生成并占用格子，游戏中先播放 Assembly Flight；返回新放置 Actor，完成后才可能被合并结果替换。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|棋盘")
@@ -187,6 +218,10 @@ public:
 	/** 将网格坐标转换为棋盘 Actor 所在世界中的网格中心。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
 	FVector GetGridWorldLocation(const FIntVector& Coordinate) const;
+
+	/** 返回棋盘平面中心格；偶数尺寸取中心左下侧的确定格，保证每局可复现。 */
+	UFUNCTION(BlueprintPure, Category = "移动城堡|战斗")
+	FIntVector GetBoardCenterCoordinate() const;
 
 	/**
 	 * 将一条世界空间射线解析为当前吸附的格子和格面。
@@ -228,6 +263,12 @@ protected:
 
 	/** 在屏幕上显示当前原型操作结果和失败原因。 */
 	void ShowPrototypeMessage(const FString& Message, const FColor& Color = FColor::White) const;
+
+	/** 在中心格生成主塔模型并挂载 C++ 生命组件。 */
+	bool SpawnMainTower(FText& OutFailureReason);
+
+	/** 读取战斗配置并延迟生成初始敌人圆环。 */
+	bool SpawnInitialEnemies(FText& OutFailureReason);
 
 	/** 已经通过校验并被棋盘接收的地面结果。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "棋盘|地面")
@@ -289,6 +330,18 @@ protected:
 	/** 检查指定地面坐标是否存在，允许查询上层坐标对应的平面地面。 */
 	bool TryGetGroundCellAtPlane(const FIntVector& Coordinate, FCastleGroundCell& OutCell) const;
 
-	/** 判断一个建筑描述是否能和邻居或目标地面形成匹配。 */
-	bool HasPlacementMatch(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor) const;
+	/** 从高亮面的唯一来源解析落点；地面顶面落在本格，建筑面落在该面外侧格。 */
+	bool TryResolvePlacementCoordinate(const FCastleGridCursorTarget& CursorTarget, FIntVector& OutCoordinate, FText& OutFailureReason) const;
+
+	/** 匹配指定来源；无光标的坐标入口仅使用下方顶面，绝不搜索其余邻居。 */
+	bool HasPlacementMatch(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason) const;
+
+	/** 公共校验入口，整次操作保留同一高亮面，防止背包扣牌或生成阶段丢失放置方向。 */
+	bool CanPlaceBuildingInternal(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason) const;
+
+	/** 校验后执行既有生成、占用、飞入和合成流程；光标来源只参与本次放置匹配。 */
+	ACastleBuildingBase* PlaceBuildingInternal(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, bool bTryMerge, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason);
+
+	/** 扣牌前后都保留来源；失败不消费卡牌，也不改用其他面重试。 */
+	ACastleBuildingBase* PlaceBuildingFromBackpackInternal(const FIntVector& Coordinate, UCastleBackpackComponent* Backpack, int32 BackpackIndex, bool bTryMerge, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason);
 };

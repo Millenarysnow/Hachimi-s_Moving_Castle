@@ -8,9 +8,48 @@
 #include "AssemblyFlightComponent.h"
 #include "CastleBuildings.h"
 #include "CastleBoard.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/World.h"
 
 namespace CastleBuildingTests
 {
+	/**
+	 * 为独立逻辑测试显式提供固定美术模型，避免测试依赖正式蓝图资产的编辑状态。
+	 * 只有主动创建此夹具的世界才会安装生成回调；模型总是作为测试输入添加，
+	 * 不判断是否缺模型，也不向生产建筑类或默认对象写入任何替代资源。
+	 */
+	class FScopedNativeBuildingModels
+	{
+	public:
+		explicit FScopedNativeBuildingModels(UWorld* InWorld) : World(InWorld)
+		{
+			SpawnHandle = World->AddOnActorSpawnedHandler(FOnActorSpawned::FDelegate::CreateLambda([](AActor* Actor)
+			{
+				ACastleBuildingBase* Building = Cast<ACastleBuildingBase>(Actor);
+				if (!Building || Building->GetClass()->HasAnyClassFlags(CLASS_CompiledFromBlueprint)) { return; }
+				UStaticMeshComponent* Model = NewObject<UStaticMeshComponent>(Building, TEXT("TestBuildingModel"));
+				Model->SetupAttachment(Building->GetRootComponent());
+				Model->SetCanEverAffectNavigation(false);
+				Model->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+				Model->SetStaticMesh(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")));
+				// 固定模型底面在 Actor 局部 Z=0，便于独立验证棋盘锚点而不复制生产尺寸计算。
+				Model->SetRelativeLocation(FVector(0.0, 0.0, 50.0));
+				Building->AddInstanceComponent(Model);
+				Model->RegisterComponent();
+			}));
+		}
+
+		~FScopedNativeBuildingModels()
+		{
+			if (IsValid(World)) { World->RemoveOnActorSpawnedHandler(SpawnHandle); }
+		}
+
+	private:
+		UWorld* World;
+		FDelegateHandle SpawnHandle;
+	};
+
 	/** 自动化用完整推进原有放置飞入；测试仍走正式游戏世界与放置状态机。 */
 	inline bool CompletePlacement(ACastleBuildingBase* Building)
 	{

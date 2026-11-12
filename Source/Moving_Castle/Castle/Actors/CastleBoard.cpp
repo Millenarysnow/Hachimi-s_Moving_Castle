@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleBoard.h"
+#include "Units/BuildingInteraction/CastleBuildingTriggerSubsystem.h"
 
 #include "CastleBackpackComponent.h"
 #include "CastleBuildingBase.h"
@@ -9,11 +10,15 @@
 #include "BuildingMergeComponent.h"
 #include "AssemblyFlightComponent.h"
 #include "CastleGroundGenerator.h"
+#include "CastleCombatData.h"
+#include "CastleMainTowerComponent.h"
+#include "CastleMassEnemySpawner.h"
 #include "CastleNavigationSubsystem.h"
 #include "Components/SceneComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Moving_Castle.h"
+#include "UObject/ConstructorHelpers.h"
 
 namespace
 {
@@ -90,11 +95,23 @@ ACastleBoard::ACastleBoard()
 	PrototypeBackpack = CreateDefaultSubobject<UCastleBackpackComponent>(TEXT("PrototypeBackpack"));
 
 	GroundGeneratorClass = UCastleRandomGroundGenerator::StaticClass();
+
+	static ConstructorHelpers::FClassFinder<AActor> MainTowerBlueprint(
+		TEXT("/Game/MovingCastle/BP/BP_MainTower"));
+	MainTowerClass = MainTowerBlueprint.Class;
 }
 
 void ACastleBoard::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// 运行时再解析默认战斗 Data Asset，避免 CDO 构造早于资产注册时产生无意义的加载警告；
+	// 关卡实例仍可直接覆盖 CombatData，缺失资产会在 SpawnMainTower 中明确报错。
+	if (CombatData == nullptr)
+	{
+		CombatData = LoadObject<UCastleCombatDataAsset>(nullptr,
+			TEXT("/Game/MovingCastle/Data/DA_CastleCombat.DA_CastleCombat"));
+	}
 
 	if (bGenerateGroundOnBeginPlay)
 	{
@@ -109,6 +126,158 @@ void ACastleBoard::BeginPlay()
 	{
 		InitializePrototypeDeck();
 	}
+
+	if (bSpawnMainTowerOnBeginPlay)
+	{
+		FText FailureReason;
+		if (!SpawnMainTower(FailureReason))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 BeginPlay 生成主塔失败：%s"), *FailureReason.ToString());
+			return;
+		}
+	}
+
+	if (bSpawnInitialEnemiesOnBeginPlay)
+	{
+		FText FailureReason;
+		if (!SpawnInitialEnemies(FailureReason))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 BeginPlay 生成初始敌人失败：%s"), *FailureReason.ToString());
+		}
+	}
+}
+
+FIntVector ACastleBoard::GetBoardCenterCoordinate() const
+{
+	return GridOrigin + FIntVector(
+		FMath::Max(0, (GridSize.X - 1) / 2),
+		FMath::Max(0, (GridSize.Y - 1) / 2),
+		0);
+}
+
+bool ACastleBoard::SpawnMainTower(FText& OutFailureReason)
+{
+	OutFailureReason = FText::GetEmpty();
+	if (IsValid(MainTowerActor))
+	{
+		OutFailureReason = FText::FromString(TEXT("棋盘已经生成过主塔，不能重复生成。"));
+		return false;
+	}
+	if (!IsValid(CombatData))
+	{
+		OutFailureReason = FText::FromString(TEXT("棋盘没有配置战斗 Data Asset。"));
+		return false;
+	}
+	if (!CombatData->ValidateConfiguration(OutFailureReason))
+	{
+		return false;
+	}
+	if (MainTowerClass == nullptr || GetWorld() == nullptr)
+	{
+		OutFailureReason = FText::FromString(TEXT("棋盘没有配置有效的主塔 Actor 类或 World。"));
+		return false;
+	}
+	if (!IsCoordinateWithinBoard(GetBoardCenterCoordinate()))
+	{
+		OutFailureReason = FText::FromString(TEXT("棋盘中心坐标超出棋盘范围。"));
+		return false;
+	}
+
+	// 主塔与普通建筑共用“占用范围底面中心”锚点：中心格只有一个占用单元，
+	// 因此先取该格的中心，再沿棋盘局部 Z 下降半个层高得到底面中心。
+	// 使用棋盘变换转换偏移，保证旋转和缩放棋盘时主塔仍与其他建筑保持同一落格规则。
+	const FVector TowerBottomCenter = GetGridWorldLocation(GetBoardCenterCoordinate())
+		+ GetActorTransform().TransformVector(FVector(0.0f, 0.0f, -LayerHeight * 0.5f));
+	const FTransform TowerTransform(GetActorQuat(), TowerBottomCenter, GetActorScale3D());
+	AActor* TowerActor = GetWorld()->SpawnActorDeferred<AActor>(MainTowerClass, TowerTransform, this, nullptr,
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	if (TowerActor == nullptr)
+	{
+		OutFailureReason = FText::FromString(TEXT("World 延迟生成主塔 Actor 失败。"));
+		return false;
+	}
+
+	UCastleMainTowerComponent* TowerComponent = NewObject<UCastleMainTowerComponent>(TowerActor, TEXT("MainTowerHealth"));
+	if (TowerComponent == nullptr)
+	{
+		TowerActor->Destroy();
+		OutFailureReason = FText::FromString(TEXT("创建主塔生命组件失败。"));
+		return false;
+	}
+	TowerActor->AddInstanceComponent(TowerComponent);
+	TowerComponent->MaxHealth = CombatData->MainTowerMaxHealth;
+	TowerComponent->TargetHeightOffset = CombatData->MainTowerTargetHeightOffset;
+	if (!TowerComponent->InitializeHealth())
+	{
+		TowerActor->Destroy();
+		OutFailureReason = FText::FromString(TEXT("主塔生命组件初始化失败。"));
+		return false;
+	}
+	TowerComponent->RegisterComponent();
+	TowerActor->FinishSpawning(TowerTransform);
+
+	UCastleMainTowerSubsystem* TowerSubsystem = GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>();
+	if (TowerSubsystem == nullptr || TowerSubsystem->GetRegisteredMainTower() != TowerComponent)
+	{
+		TowerActor->Destroy();
+		OutFailureReason = FText::FromString(TEXT("主塔生成后没有成功注册到当前 World。"));
+		return false;
+	}
+
+	MainTowerActor = TowerActor;
+	UE_LOG(LogMoving_Castle, Display, TEXT("主塔已在棋盘中心格 (%d, %d, %d) 生成，生命 %.1f。"),
+		GetBoardCenterCoordinate().X, GetBoardCenterCoordinate().Y, GetBoardCenterCoordinate().Z,
+		CombatData->MainTowerMaxHealth);
+	return true;
+}
+
+bool ACastleBoard::SpawnInitialEnemies(FText& OutFailureReason)
+{
+	OutFailureReason = FText::GetEmpty();
+	if (!IsValid(CombatData) || !CombatData->ValidateConfiguration(OutFailureReason))
+	{
+		return false;
+	}
+	if (!IsValid(MainTowerActor))
+	{
+		OutFailureReason = FText::FromString(TEXT("生成初始敌人前必须先生成主塔。"));
+		return false;
+	}
+	if (IsValid(InitialEnemySpawner))
+	{
+		OutFailureReason = FText::FromString(TEXT("棋盘已经生成过初始敌人批次，不能重复生成。"));
+		return false;
+	}
+
+	const FTransform SpawnerTransform(GetActorQuat(), GetActorLocation(), GetActorScale3D());
+	ACastleMassEnemySpawner* Spawner = GetWorld()->SpawnActorDeferred<ACastleMassEnemySpawner>(
+		ACastleMassEnemySpawner::StaticClass(), SpawnerTransform, this, nullptr,
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	if (Spawner == nullptr)
+	{
+		OutFailureReason = FText::FromString(TEXT("World 延迟生成 Mass 敌人生成器失败。"));
+		return false;
+	}
+	Spawner->Configuration = CombatData->EnemyConfiguration;
+	Spawner->Count = CombatData->InitialEnemyCount;
+	Spawner->InnerRadius = CombatData->EnemySpawnInnerRadius;
+	Spawner->OuterRadius = CombatData->EnemySpawnOuterRadius;
+	Spawner->HeightOffset = CombatData->EnemySpawnHeightOffset;
+	Spawner->RandomSeed = CombatData->EnemySpawnSeed;
+	Spawner->bSpawnOnBeginPlay = true;
+	Spawner->FinishSpawning(SpawnerTransform);
+
+	if (Spawner->SpawnedUnits.Num() != CombatData->InitialEnemyCount)
+	{
+		Spawner->Destroy();
+		OutFailureReason = FText::FromString(TEXT("Mass 敌人生成器 BeginPlay 没有生成完整的初始批次。"));
+		return false;
+	}
+
+	InitialEnemySpawner = Spawner;
+	UE_LOG(LogMoving_Castle, Display, TEXT("已生成 %d 个主塔初始敌人，圆环范围 %.1f~%.1f cm。"),
+		Spawner->SpawnedUnits.Num(), Spawner->InnerRadius, Spawner->OuterRadius);
+	return true;
 }
 
 bool ACastleBoard::GenerateGround(FText& OutFailureReason)
@@ -238,6 +407,18 @@ bool ACastleBoard::IsCoordinateWithinBoard(const FIntVector& Coordinate) const
 
 bool ACastleBoard::CanPlaceBuilding(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason) const
 {
+	return CanPlaceBuildingInternal(Coordinate, Descriptor, nullptr, OutFailureReason);
+}
+
+bool ACastleBoard::CanPlaceBuildingAtCursor(const FCastleGridCursorTarget& CursorTarget, const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason) const
+{
+	FIntVector Coordinate;
+	return TryResolvePlacementCoordinate(CursorTarget, Coordinate, OutFailureReason)
+		&& CanPlaceBuildingInternal(Coordinate, Descriptor, &CursorTarget, OutFailureReason);
+}
+
+bool ACastleBoard::CanPlaceBuildingInternal(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason) const
+{
 	OutFailureReason = FText::GetEmpty();
 
 	if (!ValidateBuildingDescriptor(Descriptor, OutFailureReason))
@@ -246,7 +427,6 @@ bool ACastleBoard::CanPlaceBuilding(const FIntVector& Coordinate, const FCastleB
 	}
 
 	const TArray<FIntVector> Footprint = BuildPlacementFootprint(Coordinate, Descriptor.Level);
-	bool bHasMatch = false;
 	for (const FIntVector& Cell : Footprint)
 	{
 		if (!IsCoordinateWithinBoard(Cell) || GetBuildingAt(Cell) != nullptr)
@@ -270,22 +450,21 @@ bool ACastleBoard::CanPlaceBuilding(const FIntVector& Coordinate, const FCastleB
 				return false;
 			}
 		}
-		bHasMatch |= HasPlacementMatch(Cell, Descriptor);
 	}
-	if (!bHasMatch)
-	{
-		OutFailureReason = FText::FromString(TEXT("建筑占用范围或六面相邻格没有满足颜色/数字匹配规则的对象。"));
-		return false;
-	}
-
-	return true;
+	// 占用和支撑检查遍历整座建筑；属性匹配只读取玩家选中的一个面。
+	return HasPlacementMatch(Coordinate, Descriptor, CursorTarget, OutFailureReason);
 }
 
 ACastleBuildingBase* ACastleBoard::PlaceBuilding(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, bool bTryMerge, FText& OutFailureReason)
 {
+	return PlaceBuildingInternal(Coordinate, Descriptor, bTryMerge, nullptr, OutFailureReason);
+}
+
+ACastleBuildingBase* ACastleBoard::PlaceBuildingInternal(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, bool bTryMerge, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason)
+{
 	OutFailureReason = FText::GetEmpty();
 
-	if (!CanPlaceBuilding(Coordinate, Descriptor, OutFailureReason))
+	if (!CanPlaceBuildingInternal(Coordinate, Descriptor, CursorTarget, OutFailureReason))
 	{
 		return nullptr;
 	}
@@ -418,6 +597,7 @@ void ACastleBoard::HandleBuildingDestroyed(AActor* Actor)
 {
 	const FScopedCastleNavigationChange NavigationChange(GetWorld(), this);
 	ACastleBuildingBase* Building = CastChecked<ACastleBuildingBase>(Actor);
+	if (auto* Triggers = GetWorld()->GetSubsystem<UCastleBuildingTriggerSubsystem>()) { Triggers->UnregisterBuilding(Building); }
 	ForgetPlacement(Building);
 	// 也覆盖关卡代码直接 Destroy 的中途取消；合并路径已先注销，不能删除新结果的坐标。
 	for (const FIntVector& Coordinate : Building->GetOccupiedCoordinates())
@@ -432,6 +612,8 @@ void ACastleBoard::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	{
 		if (ACastleBuildingBase* Building = Pair.Value.Get(); IsValid(Building))
 		{
+			// 流送移除棋盘时不留下无人管理的触发区域；多格重复清理由子系统保持幂等。
+			if (auto* Triggers = GetWorld()->GetSubsystem<UCastleBuildingTriggerSubsystem>()) { Triggers->UnregisterBuilding(Building); }
 			Building->AssemblyFlight->OnAssemblyFinishedNative.RemoveAll(this);
 			Building->OnDestroyed.RemoveDynamic(this, &ACastleBoard::HandleBuildingDestroyed);
 		}
@@ -443,6 +625,11 @@ void ACastleBoard::EndPlay(const EEndPlayReason::Type EndPlayReason)
 }
 
 ACastleBuildingBase* ACastleBoard::PlaceBuildingFromBackpack(const FIntVector& Coordinate, UCastleBackpackComponent* Backpack, int32 BackpackIndex, bool bTryMerge, FText& OutFailureReason)
+{
+	return PlaceBuildingFromBackpackInternal(Coordinate, Backpack, BackpackIndex, bTryMerge, nullptr, OutFailureReason);
+}
+
+ACastleBuildingBase* ACastleBoard::PlaceBuildingFromBackpackInternal(const FIntVector& Coordinate, UCastleBackpackComponent* Backpack, int32 BackpackIndex, bool bTryMerge, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason)
 {
 	OutFailureReason = FText::GetEmpty();
 
@@ -460,7 +647,7 @@ ACastleBuildingBase* ACastleBoard::PlaceBuildingFromBackpack(const FIntVector& C
 	}
 
 	// 先做完整校验，再取出卡牌；这样失败时背包不会发生任何变化。
-	if (!CanPlaceBuilding(Coordinate, Descriptor, OutFailureReason))
+	if (!CanPlaceBuildingInternal(Coordinate, Descriptor, CursorTarget, OutFailureReason))
 	{
 		return nullptr;
 	}
@@ -473,7 +660,7 @@ ACastleBuildingBase* ACastleBoard::PlaceBuildingFromBackpack(const FIntVector& C
 		return nullptr;
 	}
 
-	ACastleBuildingBase* PlacedBuilding = PlaceBuilding(Coordinate, RemovedDescriptor, bTryMerge, OutFailureReason);
+	ACastleBuildingBase* PlacedBuilding = PlaceBuildingInternal(Coordinate, RemovedDescriptor, bTryMerge, CursorTarget, OutFailureReason);
 	if (PlacedBuilding != nullptr)
 	{
 		return PlacedBuilding;
@@ -670,6 +857,7 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 	}
 
 	BuildGridCursorTarget(HitCell, LocalImpactPoint, LocalNormal, OutTarget);
+	OutTarget.bGroundSurface = bHitGroundTile;
 	return OutTarget.bValid;
 }
 
@@ -810,6 +998,19 @@ bool ACastleBoard::RegisterBuilding(ACastleBuildingBase* Building, FText& OutFai
 		}
 	}
 
+	if (auto* Triggers = GetWorld()->GetSubsystem<UCastleBuildingTriggerSubsystem>())
+	{
+		// 占用规则是触发区域的唯一来源，使用棋盘局部坐标，避免美术屋檐、模型缩放改变范围。
+		TArray<FBox> Boxes;
+		const FVector Extent(CellSize * 0.5, CellSize * 0.5, LayerHeight * 0.5);
+		for (const FIntVector& Coordinate : OccupiedCoordinates)
+		{
+			const FIntVector Relative = Coordinate - GridOrigin;
+			const FVector Center(Relative.X * CellSize, Relative.Y * CellSize, WorldBaseHeight + Relative.Z * LayerHeight);
+			Boxes.Emplace(Center - Extent, Center + Extent);
+		}
+		if (!Triggers->RegisterBuilding(Building, GetActorTransform(), MoveTemp(Boxes), OutFailureReason)) { return false; }
+	}
 	for (const FIntVector& Coordinate : OccupiedCoordinates)
 	{
 		BuildingByCoordinate.Add(Coordinate, Building);
@@ -838,6 +1039,7 @@ bool ACastleBoard::UnregisterBuilding(ACastleBuildingBase* Building, FText& OutF
 		}
 	}
 
+	if (auto* Triggers = GetWorld()->GetSubsystem<UCastleBuildingTriggerSubsystem>()) { Triggers->UnregisterBuilding(Building); }
 	for (const FIntVector& Coordinate : OccupiedCoordinates)
 	{
 		BuildingByCoordinate.Remove(Coordinate);
@@ -1274,62 +1476,83 @@ bool ACastleBoard::TryGetGroundCellAtPlane(const FIntVector& Coordinate, FCastle
 	return TryGetGroundCell(Coordinate, OutCell);
 }
 
-bool ACastleBoard::HasPlacementMatch(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor) const
+bool ACastleBoard::TryResolvePlacementCoordinate(const FCastleGridCursorTarget& CursorTarget, FIntVector& OutCoordinate, FText& OutFailureReason) const
 {
+	OutFailureReason = FText::GetEmpty();
+	const FIntVector FaceOffset = GetGridFaceOffset(CursorTarget.Face);
+	if (!CursorTarget.bValid || !IsCoordinateWithinBoard(CursorTarget.Cell) || FaceOffset == FIntVector::ZeroValue
+		|| CursorTarget.AdjacentCell != CursorTarget.Cell + FaceOffset)
+	{
+		OutFailureReason = FText::FromString(TEXT("放置失败：当前指向的格面无效，请重新对准棋盘。"));
+		return false;
+	}
+
+	if (CursorTarget.bGroundSurface)
+	{
+		// 地块的顶面支撑首层建筑，落点仍是地块所在格；地块侧面不允许用于建造。
+		FCastleGroundCell GroundCell;
+		if (CursorTarget.Face != ECastleGridFace::Up || !TryGetGroundCellAtPlane(CursorTarget.Cell, GroundCell)
+			|| GetBuildingAt(CursorTarget.Cell) != nullptr)
+		{
+			OutFailureReason = FText::FromString(TEXT("放置失败：指向的地面顶面已不可用，请重新选择。"));
+			return false;
+		}
+		OutCoordinate = CursorTarget.Cell;
+		return true;
+	}
+
+	// 建筑的任一面都指向其外侧邻格；建筑消失后不能改用同坐标的地面作为匹配来源。
+	if (!IsValid(GetBuildingAt(CursorTarget.Cell)))
+	{
+		OutFailureReason = FText::FromString(TEXT("放置失败：指向的建筑已不存在，请重新选择格面。"));
+		return false;
+	}
+	OutCoordinate = CursorTarget.AdjacentCell;
+	return true;
+}
+
+bool ACastleBoard::HasPlacementMatch(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason) const
+{
+	// 无视线来源的坐标接口只使用正下方的支撑面，避免它继续扫描邻居而绕过定向规则。
+	FCastleGridCursorTarget SupportTarget;
+	if (CursorTarget == nullptr)
+	{
+		SupportTarget.bValid = true;
+		SupportTarget.bGroundSurface = Coordinate.Z == GridOrigin.Z;
+		SupportTarget.Cell = SupportTarget.bGroundSurface ? Coordinate : Coordinate - FIntVector(0, 0, 1);
+		SupportTarget.Face = ECastleGridFace::Up;
+		SupportTarget.AdjacentCell = SupportTarget.Cell + FIntVector(0, 0, 1);
+		CursorTarget = &SupportTarget;
+	}
+
+	FIntVector ResolvedCoordinate;
+	if (!TryResolvePlacementCoordinate(*CursorTarget, ResolvedCoordinate, OutFailureReason)) { return false; }
+	if (ResolvedCoordinate != Coordinate)
+	{
+		OutFailureReason = FText::FromString(TEXT("放置失败：落点与当前高亮面不一致。"));
+		return false;
+	}
+
+	// 所有占用格共享建筑的颜色和数字，只读取命中面所属的地块或建筑一次。
 	const bool bIsRoad = Descriptor.GetBuildingType() == ECastleBuildingType::Road;
-
-	// 地面只存在于 Z=0 平面，只有在该平面放置时才把目标地面本身作为匹配来源。
-	if (Coordinate.Z == GridOrigin.Z)
+	bool bMatches = false;
+	if (CursorTarget->bGroundSurface)
 	{
-		FCastleGroundCell TargetGroundCell;
-		if (TryGetGroundCellAtPlane(Coordinate, TargetGroundCell))
-		{
-			if (bIsRoad ? TargetGroundCell.IsRoadTile() : (TargetGroundCell.Color == Descriptor.Color || TargetGroundCell.Number == Descriptor.Number))
-			{
-				return true;
-			}
-		}
+		FCastleGroundCell GroundCell;
+		if (!TryGetGroundCellAtPlane(CursorTarget->Cell, GroundCell)) { return false; }
+		bMatches = bIsRoad ? GroundCell.IsRoadTile()
+			: !GroundCell.IsRoadTile() && (GroundCell.Color == Descriptor.Color || GroundCell.Number == Descriptor.Number);
 	}
-
-	TArray<FIntVector> Neighbors;
-	GetFaceNeighborCoordinates(Coordinate, Neighbors);
-	for (const FIntVector& NeighborCoordinate : Neighbors)
+	else
 	{
-		if (!IsCoordinateWithinBoard(NeighborCoordinate))
-		{
-			continue;
-		}
-
-		if (ACastleBuildingBase* NeighborBuilding = GetBuildingAt(NeighborCoordinate))
-		{
-			if (bIsRoad)
-			{
-				if (NeighborBuilding->IsRoad())
-				{
-					return true;
-				}
-			}
-			else if (!NeighborBuilding->IsRoad() && (NeighborBuilding->GetBuildingColor() == Descriptor.Color || NeighborBuilding->GetBuildingNumber() == Descriptor.Number))
-			{
-				return true;
-			}
-
-			continue;
-		}
-
-		if (NeighborCoordinate.Z == GridOrigin.Z)
-		{
-			FCastleGroundCell NeighborGroundCell;
-			if (TryGetGroundCellAtPlane(NeighborCoordinate, NeighborGroundCell))
-			{
-				if (bIsRoad ? NeighborGroundCell.IsRoadTile() : (NeighborGroundCell.Color == Descriptor.Color || NeighborGroundCell.Number == Descriptor.Number))
-				{
-					return true;
-				}
-			}
-		}
+		const ACastleBuildingBase* Source = GetBuildingAt(CursorTarget->Cell);
+		bMatches = bIsRoad ? Source->IsRoad()
+			: !Source->IsRoad() && (Source->GetBuildingColor() == Descriptor.Color || Source->GetBuildingNumber() == Descriptor.Number);
 	}
-
+	if (bMatches) { return true; }
+	OutFailureReason = FText::FromString(bIsRoad
+		? TEXT("放置失败：道路只能依靠当前高亮的道路面放置。")
+		: TEXT("放置失败：卡牌必须与当前高亮面的颜色或数字相同，且不能依靠道路匹配。"));
 	return false;
 }
 
@@ -1450,18 +1673,15 @@ ACastleBuildingBase* ACastleBoard::PlaceBackpackBuildingAtCursor(const FCastleGr
 		return nullptr;
 	}
 
-	// 地面顶面是初始建筑的支撑格，其他格面则把放置位置设为该面的外侧邻格。
-	FIntVector TargetCoordinate = CursorTarget.AdjacentCell;
-	if (CursorTarget.Face == ECastleGridFace::Up && CursorTarget.Cell.Z == GridOrigin.Z)
+	FIntVector TargetCoordinate;
+	if (!TryResolvePlacementCoordinate(CursorTarget, TargetCoordinate, OutFailureReason))
 	{
-		FCastleGroundCell GroundCell;
-		if (TryGetGroundCellAtPlane(CursorTarget.Cell, GroundCell) && GetBuildingAt(CursorTarget.Cell) == nullptr)
-		{
-			TargetCoordinate = CursorTarget.Cell;
-		}
+		ShowPrototypeMessage(OutFailureReason.ToString(), FColor::Red);
+		return nullptr;
 	}
 
-	ACastleBuildingBase* PlacedBuilding = PlaceBuildingFromBackpack(TargetCoordinate, PrototypeBackpack, BackpackIndex, true, OutFailureReason);
+	// 预览、取牌前校验和真正生成始终携带同一个面，不能退回只知道落点的坐标接口。
+	ACastleBuildingBase* PlacedBuilding = PlaceBuildingFromBackpackInternal(TargetCoordinate, PrototypeBackpack, BackpackIndex, true, &CursorTarget, OutFailureReason);
 	if (PlacedBuilding == nullptr)
 	{
 		ShowPrototypeMessage(OutFailureReason.ToString(), FColor::Red);

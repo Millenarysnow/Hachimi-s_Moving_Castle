@@ -30,7 +30,7 @@ bool UCastleBuildingDefinition::ValidateConfiguration(FText& OutFailureReason) c
 	TSet<int32> SeenLevels;
 	for (const FCastleBuildingLevelDefinition& Entry : Levels)
 	{
-		// 等级必须覆盖 1..Num，避免配置了四级却无法经过三级升级到达。
+		// 等级必须覆盖 1..Num，避免配置了四级却缺少通向它的三级类定义。
 		if (Entry.Level < 1 || Entry.Level > Levels.Num() || SeenLevels.Contains(Entry.Level))
 		{
 			OutFailureReason = FText::FromString(TEXT("建筑等级必须从 1 开始连续且不重复；缺模型的等级也要保留配置项。"));

@@ -6,6 +6,7 @@
 #include "BuildingMergeComponent.h"
 #include "AssemblyFlightComponent.h"
 #include "Components/Building/BuildingGameplayRootComponent.h"
+#include "Components/Building/Effects/CastleBuildingEffectComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -15,9 +16,11 @@
 #include "Materials/MaterialInterface.h"
 #include "Moving_Castle.h"
 #include "UObject/ConstructorHelpers.h"
+#include "Units/BuildingInteraction/CastleBuildingTriggerSubsystem.h"
 
 ACastleBuildingBase::ACastleBuildingBase()
 {
+	BuildingEffect = CreateDefaultSubobject<UCastleBuildingEffectComponent>(TEXT("BuildingEffect"));
 	// 建筑逻辑和模型组件现在位于同一个 Actor；VisualRoot 只提供统一的组件根节点。
 	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
 	SetRootComponent(VisualRoot);
@@ -30,17 +33,11 @@ ACastleBuildingBase::ACastleBuildingBase()
 	AssemblyFlight->bAutoPlay = false;
 	AssemblyFlight->ExcludedComponentTag = TEXT("MergeExclude");
 
-	// 只有没有美术模型的等级才显示这个组件，正式模型直接来自等级蓝图自身。
-	PrototypeMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PrototypeMesh"));
-	PrototypeMesh->SetupAttachment(VisualRoot);
-	PrototypeMesh->SetCanEverAffectNavigation(false);
-	PrototypeMesh->SetVisibility(false);
-	PrototypeMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-
+	// 引擎基础资源只用于数字底牌；建筑美术必须由等级蓝图显式配置。
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-	PlaceholderCube = Cube.Object;
-	PlaceholderMaterial = Material.Object;
+	LabelPlateMesh = Cube.Object;
+	LabelPlateMaterial = Material.Object;
 
 	// 标签只在 ConfigureBuildingVisual 成功后显示，避免生成中间状态被玩家看见。
 	PrototypeLabel = CreateDefaultSubobject<UTextRenderComponent>(TEXT("PrototypeLabel"));
@@ -59,16 +56,36 @@ ACastleBuildingBase::ACastleBuildingBase()
 	// 标签底牌不参与碰撞或导航；先设置资格，再赋网格，避免创建期导航更新。
 	PrototypeLabelPlate->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	PrototypeLabelPlate->SetCanEverAffectNavigation(false);
-	PrototypeLabelPlate->SetStaticMesh(PlaceholderCube);
-	PrototypeLabelPlate->SetMaterial(0, PlaceholderMaterial);
+	PrototypeLabelPlate->SetStaticMesh(LabelPlateMesh);
+	PrototypeLabelPlate->SetMaterial(0, LabelPlateMaterial);
 	PrototypeLabelPlate->SetVisibility(false);
+}
+
+bool ACastleBuildingBase::TriggerBuildingEffect(const FCastleBuildingTriggerContext& Context)
+{
+	if (!BuildingEffect)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑 %s 缺少原生效果组件。"), *GetName());
+		return false;
+	}
+	return BuildingEffect->Trigger(Context);
 }
 
 void ACastleBuildingBase::SetPlacementComplete(const bool bComplete)
 {
+	if (bHasCompletedPlacement != bComplete)
+	{
+		if (auto* Triggers = GetWorld()->GetSubsystem<UCastleBuildingTriggerSubsystem>()) { Triggers->NotifyBuildingStateChanged(this); }
+	}
 	bHasCompletedPlacement = bComplete;
 	PrototypeLabel->SetVisibility(bComplete, false);
 	PrototypeLabelPlate->SetVisibility(bComplete, false);
+}
+
+void ACastleBuildingBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (auto* Triggers = GetWorld()->GetSubsystem<UCastleBuildingTriggerSubsystem>()) { Triggers->UnregisterBuilding(this); }
+	Super::EndPlay(EndPlayReason);
 }
 
 bool ACastleBuildingBase::InitializeBuilding(const FCastleBuildingDescriptor& Descriptor, const TArray<FIntVector>& InOccupiedCoordinates)
@@ -165,19 +182,17 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 	}
 	const FIntVector Dimensions = Maximum - Minimum + FIntVector(1, 1, 1);
 
-	// 先隐藏标签和占位网格，再检查蓝图是否直接提供了可见 StaticMeshComponent。
-	// 这样同一个函数同时支持带模型的等级蓝图和没有模型的纯 C++ 等级。
+	// 只有美术分支中的可见网格才算建筑模型；功能楼板和标签不能掩盖模型漏配。
+	// 失败时标签保持隐藏，棋盘会销毁未提交的 Actor，并保留原有卡牌与占用。
 	PrototypeLabel->SetVisibility(false);
 	PrototypeLabelPlate->SetVisibility(false);
-	PrototypeMesh->SetVisibility(false);
-	PrototypeMesh->SetStaticMesh(nullptr);
 
 	TArray<UStaticMeshComponent*> StaticMeshes;
 	GetComponents<UStaticMeshComponent>(StaticMeshes);
 	bool bHasConfiguredModel = false;
 	for (UStaticMeshComponent* Component : StaticMeshes)
 	{
-		if (Component == PrototypeMesh || Component == PrototypeLabelPlate
+		if (Component == PrototypeLabelPlate
 			|| UBuildingGameplayRootComponent::IsInGameplayHierarchy(Component))
 		{
 			continue;
@@ -189,44 +204,16 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 		}
 	}
 
-	bUsingPlaceholder = !bHasConfiguredModel;
-	if (bUsingPlaceholder)
+	if (!bHasConfiguredModel)
 	{
-		if (PlaceholderCube == nullptr || PlaceholderMaterial == nullptr)
-		{
-			OutFailureReason = FText::FromString(TEXT("未配置模型，且引擎占位立方体或基础材质不可用。"));
-			return false;
-		}
-		PrototypeMesh->SetStaticMesh(PlaceholderCube);
-		const FVector PlaceholderSize(Dimensions.X * InCellSize * 0.86f,
-			Dimensions.Y * InCellSize * 0.86f, Dimensions.Z * InLayerHeight * 0.72f);
-		// 引擎立方体的原点在几何中心；上移自身半高，让占位模型底面与建筑底部锚点重合。
-		// 正式蓝图模型保持作者配置的全部局部变换，不通过分组偏移适配新锚点。
-		PrototypeMesh->SetRelativeTransform(FTransform(FQuat::Identity,
-			FVector(0.0f, 0.0f, PlaceholderSize.Z * 0.5f), PlaceholderSize / 100.0f));
-		UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(PlaceholderMaterial, this);
-		if (Material == nullptr)
-		{
-			OutFailureReason = FText::FromString(TEXT("建筑占位颜色材质创建失败。"));
-			return false;
-		}
-		const FLinearColor Colors[] = {
-			FLinearColor(0.42f, 0.46f, 0.52f), FLinearColor(0.85f, 0.12f, 0.12f),
-			FLinearColor(0.10f, 0.35f, 0.90f), FLinearColor(0.10f, 0.75f, 0.25f),
-			FLinearColor(0.95f, 0.70f, 0.08f), FLinearColor(0.65f, 0.20f, 0.85f)
-		};
-		const int32 ColorIndex = static_cast<int32>(Color);
-		if (ColorIndex < 0 || ColorIndex >= UE_ARRAY_COUNT(Colors))
-		{
-			OutFailureReason = FText::FromString(TEXT("建筑占位颜色无效。"));
-			return false;
-		}
-		Material->SetVectorParameterValue(TEXT("Color"), Colors[ColorIndex]);
-		PrototypeMesh->SetMaterial(0, Material);
-		PrototypeMesh->SetVisibility(true);
+		OutFailureReason = FText::FromString(FString::Printf(
+			TEXT("建筑类 %s 缺少可见美术模型：请在 VisualRoot 下配置 StaticMeshComponent；GameplayRoot 下的功能网格不算美术模型。"),
+			*GetClass()->GetPathName()));
+		return false;
 	}
 
-	// 美术模型提供 Visibility 射线命中；功能分支保留作者配置，不能按可见性关闭隐藏地板碰撞。
+	// 已启用的美术碰撞只提供 Visibility 查询；作者明确关闭碰撞的纯表现组件保持无碰撞。
+	// 功能分支完整保留作者配置，不能按可见性关闭隐藏地板碰撞。
 	TArray<UPrimitiveComponent*> Primitives;
 	GetComponents<UPrimitiveComponent>(Primitives);
 	for (UPrimitiveComponent* Primitive : Primitives)
@@ -236,7 +223,9 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 			continue;
 		}
 		Primitive->SetSimulatePhysics(false);
-		Primitive->SetCollisionEnabled(Primitive->IsVisible() ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
+		const bool bNeedsSelectionQuery = Primitive->IsVisible()
+			&& Primitive->GetCollisionEnabled() != ECollisionEnabled::NoCollision;
+		Primitive->SetCollisionEnabled(bNeedsSelectionQuery ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
 		Primitive->SetCollisionResponseToAllChannels(ECR_Ignore);
 		Primitive->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 		Primitive->SetCanEverAffectNavigation(false);
@@ -254,7 +243,7 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 	const float Depth = FMath::Min(Dimensions.Y * InCellSize * 0.72f, 180.0f);
 	PrototypeLabelPlate->SetRelativeLocation(FVector(0.0f, 0.0f, PlateHeight));
 	PrototypeLabelPlate->SetRelativeScale3D(FVector(Width / 100.0f, Depth / 100.0f, 0.035f));
-	UMaterialInstanceDynamic* PlateMaterial = UMaterialInstanceDynamic::Create(PlaceholderMaterial, this);
+	UMaterialInstanceDynamic* PlateMaterial = UMaterialInstanceDynamic::Create(LabelPlateMaterial, this);
 	if (PlateMaterial == nullptr)
 	{
 		OutFailureReason = FText::FromString(TEXT("建筑标签材质创建失败。"));
@@ -287,10 +276,6 @@ FBox ACastleBuildingBase::GetVisualBounds() const
 		{
 			continue;
 		}
-		if (Primitive == PrototypeMesh && PrototypeMesh->GetStaticMesh() == nullptr)
-		{
-			continue;
-		}
 		if (Primitive->IsRegistered() && Primitive->IsVisible())
 		{
 			Result += Primitive->Bounds.GetBox();
@@ -301,6 +286,8 @@ FBox ACastleBuildingBase::GetVisualBounds() const
 
 void ACastleBuildingBase::PrepareForPreview()
 {
+	// 预览虽然使用相同建筑类，但不属于真实放置实例，不能接收任何玩法效果。
+	bBuildingPreview = true;
 	// 卡片只显示建筑形状，等级与数字由卡片自己的文字控件显示。
 	PrototypeLabel->SetVisibility(false);
 	PrototypeLabelPlate->SetVisibility(false);

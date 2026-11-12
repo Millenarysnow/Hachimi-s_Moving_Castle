@@ -7,6 +7,112 @@
 #include "Moving_Castle.h"
 #include "NavigationData.h"
 #include "NavigationSystem.h"
+#include "NavMesh/NavMeshPath.h"
+#include "NavMesh/RecastNavMesh.h"
+
+void FCastleSharedNavigationPath::SamplePatrol(double Distance, FVector& OutLocation, FVector& OutDirection) const
+{
+	check(!PatrolPoints.IsEmpty() && PatrolPoints.Num() == PatrolDistances.Num());
+	OutLocation = PatrolPoints[0];
+	OutDirection = FVector::ZeroVector;
+	if (PatrolPoints.Num() == 1) { return; }
+	// 二分找距离右侧的采样点；保持原始折线转折，不用插值平滑把单位带入墙内。
+	int32 Low = 1;
+	int32 High = PatrolDistances.Num() - 1;
+	while (Low < High)
+	{
+		const int32 Middle = (Low + High) / 2;
+		if (PatrolDistances[Middle] <= Distance) { Low = Middle + 1; }
+		else { High = Middle; }
+	}
+	const double Span = PatrolDistances[Low] - PatrolDistances[Low - 1];
+	const double Alpha = Span > UE_DOUBLE_SMALL_NUMBER ? FMath::Clamp((Distance - PatrolDistances[Low - 1]) / Span, 0.0, 1.0) : 0.0;
+	OutLocation = FMath::Lerp(PatrolPoints[Low - 1], PatrolPoints[Low], Alpha);
+	OutDirection = (PatrolPoints[Low] - PatrolPoints[Low - 1]).GetSafeNormal();
+}
+
+int32 FCastleSharedNavigationPath::FindPatrolLeg(double Distance) const
+{
+	int32 Leg = 0;
+	while (Leg + 2 < WaypointDistances.Num() && Distance >= WaypointDistances[Leg + 1]) { ++Leg; }
+	return Leg;
+}
+
+bool FCastleSharedNavigationPath::FindClosestPatrolDistance(FVector Location, int32 Leg, double& OutDistance, double& OutSeparation) const
+{
+	if (PatrolPoints.IsEmpty()) { return false; }
+	const double Begin = Leg >= 0 && WaypointDistances.IsValidIndex(Leg) ? WaypointDistances[Leg] : 0.0;
+	const double End = Leg >= 0 && WaypointDistances.IsValidIndex(Leg + 1) ? WaypointDistances[Leg + 1] : Length;
+	OutDistance = 0.0;
+	double BestSquared = TNumericLimits<double>::Max();
+	if (PatrolPoints.Num() == 1)
+	{
+		OutSeparation = FVector::Distance(Location, PatrolPoints[0]);
+		return true;
+	}
+	for (int32 Index = 1; Index < PatrolPoints.Num(); ++Index)
+	{
+		if (PatrolDistances[Index] < Begin || PatrolDistances[Index - 1] > End) { continue; }
+		const FVector Candidate = FMath::ClosestPointOnSegment(Location, PatrolPoints[Index - 1], PatrolPoints[Index]);
+		const double Squared = FVector::DistSquared(Location, Candidate);
+		if (Squared < BestSquared)
+		{
+			BestSquared = Squared;
+			OutDistance = PatrolDistances[Index - 1] + FVector::Distance(PatrolPoints[Index - 1], Candidate);
+		}
+	}
+	OutSeparation = FMath::Sqrt(BestSquared);
+	return BestSquared < TNumericLimits<double>::Max();
+}
+
+namespace CastlePatrolNavigation
+{
+	/** 沿已求出的走廊采样高度。只读取本轮有效多边形，快照不保留会因重建过期的引用。 */
+	bool AppendSurfaceSamples(const ARecastNavMesh& Mesh, const FNavMeshPath& Leg, double Spacing,
+		FCastleSharedNavigationPath& OutPath, FText& OutFailure)
+	{
+		const TArray<FNavPathPoint>& Corners = Leg.GetPathPoints();
+		int32 CorridorCursor = 0;
+		for (int32 Corner = 1; Corner < Corners.Num(); ++Corner)
+		{
+			const FVector Start = Corners[Corner - 1].Location;
+			const FVector End = Corners[Corner].Location;
+			const int32 EndPoly = Leg.GetNodeRefIndex(Corners[Corner].NodeRef);
+			if (EndPoly < CorridorCursor) { OutFailure = FText::FromString(TEXT("巡逻路径走廊顺序无效，无法生成共享贴地采样。")); return false; }
+			const int32 Steps = FMath::Max(1, FMath::CeilToInt(FVector::Dist2D(Start, End) / Spacing));
+			for (int32 Step = 1; Step <= Steps; ++Step)
+			{
+				const FVector Sample = FMath::Lerp(Start, End, static_cast<double>(Step) / Steps);
+				double BestScore = TNumericLimits<double>::Max();
+				FVector BestPoint = FVector::ZeroVector;
+				int32 BestPoly = INDEX_NONE;
+				for (int32 Poly = CorridorCursor; Poly <= EndPoly; ++Poly)
+				{
+					FVector OnSurface;
+					if (!Mesh.GetClosestPointOnPoly(Leg.PathCorridor[Poly], Sample, OnSurface)) { continue; }
+					const double HorizontalSquared = FVector::DistSquared2D(Sample, OnSurface);
+					// 限制在求解器选中的折线上；高度以最近已走表面连续选择，防止吸到重叠楼层。
+					if (HorizontalSquared > 1.0) { continue; }
+					const double Score = HorizontalSquared * 1000000.0 + FMath::Square(OnSurface.Z - OutPath.PatrolPoints.Last().Z);
+					if (Score < BestScore) { BestScore = Score; BestPoint = OnSurface; BestPoly = Poly; }
+				}
+				if (BestPoly == INDEX_NONE)
+				{
+					OutFailure = FText::FromString(TEXT("无法沿最短路走廊生成共享表面采样；未发布悬空或跨楼层直线路线。"));
+					return false;
+				}
+				CorridorCursor = BestPoly;
+				const double Span = FVector::Distance(OutPath.PatrolPoints.Last(), BestPoint);
+				if (Span > UE_DOUBLE_SMALL_NUMBER)
+				{
+					OutPath.PatrolPoints.Add(BestPoint);
+					OutPath.PatrolDistances.Add(OutPath.PatrolDistances.Last() + Span);
+				}
+			}
+		}
+		return true;
+	}
+}
 
 bool UCastleNavigationSubsystem::DoesSupportWorldType(EWorldType::Type WorldType) const
 {
@@ -116,19 +222,53 @@ bool UCastleNavigationSubsystem::RequestNavigationRefresh(FText& OutFailureReaso
 
 bool UCastleNavigationSubsystem::RequestSharedPath(FVector Start, FVector Goal, FText& OutFailureReason)
 {
+	return RequestRoute({Start, Goal}, false, OutFailureReason);
+}
+
+bool UCastleNavigationSubsystem::RequestSharedPatrolRoute(const TArray<FVector>& Waypoints, FText& OutFailureReason)
+{
+	return RequestRoute(Waypoints, true, OutFailureReason);
+}
+
+void UCastleNavigationSubsystem::ClearSharedRoute()
+{
+	check(IsInGameThread());
+	RequestedWaypoints.Reset();
+	bHasPathRequest = bPathPending = false;
+	++RouteRevision;
+	LastFailure = FText::GetEmpty();
+	FCastleSharedNavigationPath Empty;
+	Empty.NavigationRevision = NavigationRevision;
+	Empty.RouteRevision = RouteRevision;
+	PublishPath(MoveTemp(Empty));
+}
+
+bool UCastleNavigationSubsystem::RequestRoute(const TArray<FVector>& Waypoints, bool bClosedLoop, FText& OutFailureReason)
+{
 	check(IsInGameThread());
 	OutFailureReason = FText::GetEmpty();
 	UNavigationSystemV1* Navigation;
 	ANavigationData* Data;
-	if (Start.ContainsNaN() || Goal.ContainsNaN() || ProjectionExtent.ContainsNaN() || ProjectionExtent.GetMin() <= 0.0)
+	if (Waypoints.IsEmpty() || ProjectionExtent.ContainsNaN() || ProjectionExtent.GetMin() <= 0.0
+		|| !FMath::IsFinite(PatrolSampleSpacing) || PatrolSampleSpacing < 1.0)
 	{
 		OutFailureReason = FText::FromString(TEXT("共享路线的起终点和导航投影范围必须有效。"));
 		return false;
 	}
+	for (int32 Index = 0; Index < Waypoints.Num(); ++Index)
+	{
+		if (Waypoints[Index].ContainsNaN()
+			|| (Waypoints.Num() > 1 && Waypoints[Index].Equals(Waypoints[(Index + 1) % Waypoints.Num()], 1.0)))
+		{
+			OutFailureReason = FText::FromString(TEXT("路径点必须是有限坐标，相邻点（含末点与首点）不能重合。"));
+			return false;
+		}
+	}
 	if (!ValidateNavigation(Navigation, Data, OutFailureReason)) { return false; }
-	if (bHasPathRequest && RequestedStart.Equals(Start) && RequestedGoal.Equals(Goal)) { return true; }
-	RequestedStart = Start;
-	RequestedGoal = Goal;
+	if (bHasPathRequest && bRequestedClosedLoop == bClosedLoop && RequestedWaypoints == Waypoints) { return true; }
+	RequestedWaypoints = Waypoints;
+	bRequestedClosedLoop = bClosedLoop;
+	++RouteRevision;
 	bHasPathRequest = true;
 	bPathPending = true;
 	LastFailure = FText::GetEmpty();
@@ -192,40 +332,95 @@ void UCastleNavigationSubsystem::CalculateSharedPath()
 	bPathPending = false;
 	FCastleSharedNavigationPath Path;
 	Path.NavigationRevision = NavigationRevision;
+	Path.RouteRevision = RouteRevision;
+	Path.bClosedLoop = bRequestedClosedLoop;
 	if (!ValidateNavigation(Navigation, Data, Failure)) { FailNavigation(Failure); return; }
-	FNavLocation Start;
-	FNavLocation Goal;
-	if (!Navigation->ProjectPointToNavigation(RequestedStart, Start, ProjectionExtent, Data)
-		|| !Navigation->ProjectPointToNavigation(RequestedGoal, Goal, ProjectionExtent, Data))
+	const ARecastNavMesh* Mesh = Cast<ARecastNavMesh>(Data);
+	LastFailure = FText::GetEmpty();
+	// 所有路径点先统一投影；任一点无效时不开始各路段的 A*，也不发布上轮旧路线。
+	for (int32 Index = 0; Index < RequestedWaypoints.Num(); ++Index)
 	{
-		LastFailure = FText::FromString(TEXT("共享路线起点或终点附近没有可行走 NavMesh，请检查楼板、楼梯碰撞及 Agent 尺寸。"));
+		FNavLocation Projected;
+		if (!Navigation->ProjectPointToNavigation(RequestedWaypoints[Index], Projected, ProjectionExtent, Data))
+		{
+			LastFailure = FText::FromString(FString::Printf(TEXT("共享路线起点或终点附近没有可行走 NavMesh（路径点 %d），请检查楼板、楼梯碰撞及 Agent 尺寸。"), Index + 1));
+			break;
+		}
+		Path.Waypoints.Add(Projected.Location);
 	}
-	else
+	if (LastFailure.IsEmpty() && bRequestedClosedLoop && !Mesh)
 	{
-		FPathFindingQuery Query(this, *Data, Start.Location, Goal.Location);
+		LastFailure = FText::FromString(TEXT("Mass 共享巡逻需要 Recast NavMesh 提供表面走廊。"));
+	}
+	if (LastFailure.IsEmpty() && bRequestedClosedLoop)
+	{
+		Path.PatrolPoints.Add(Path.Waypoints[0]);
+		Path.PatrolDistances.Add(0.0);
+		Path.WaypointDistances.Add(0.0);
+	}
+	const int32 LegCount = bRequestedClosedLoop ? (RequestedWaypoints.Num() > 1 ? RequestedWaypoints.Num() : 0) : 1;
+	// 一次调用完整求解 1→2、2→3、…、N→1。循环内部只有本地临时结果，绝不逐段发布。
+	for (int32 LegIndex = 0; LegIndex < LegCount && LastFailure.IsEmpty(); ++LegIndex)
+	{
+		const int32 Next = (LegIndex + 1) % Path.Waypoints.Num();
+		if (Path.Waypoints[LegIndex].Equals(Path.Waypoints[Next], 1.0))
+		{
+			LastFailure = FText::FromString(FString::Printf(TEXT("路径点 %d 与 %d 投影后重合，请增大间距。"), LegIndex + 1, Next + 1));
+			break;
+		}
+		FPathFindingQuery Query(this, *Data, Path.Waypoints[LegIndex], Path.Waypoints[Next]);
 		Query.SetAllowPartialPaths(false);
 		++PathQueryCount;
 		const FPathFindingResult Result = Navigation->FindPathSync(Query);
 		if (Result.IsSuccessful() && Result.Path.IsValid() && Result.Path->IsValid() && !Result.Path->IsPartial())
 		{
-			// 重算由本子系统统一触发，不让引擎给每个路线消费者另建自动重算任务。
+			// 原生路径对象只活在集中预处理中，关闭其自动重算，所有 NPC 只读最终数值快照。
 			Result.Path->EnableRecalculationOnInvalidation(false);
 			for (const FNavPathPoint& Point : Result.Path->GetPathPoints())
 			{
+				if (!Path.Points.IsEmpty() && Path.Points.Last().Equals(Point.Location)) { continue; }
 				Path.Points.Add(Point.Location);
 				Path.PointFlags.Add(static_cast<int32>(Point.Flags));
 			}
-			Path.Length = Result.Path->GetLength();
-			Path.bValid = true;
-			LastFailure = FText::GetEmpty();
+			Path.Length += Result.Path->GetLength();
+			if (bRequestedClosedLoop)
+			{
+				// 当前没有跳跃/传送/门交互行为，不能把特殊连接伪装成普通行走。
+				for (const FNavPathPoint& Point : Result.Path->GetPathPoints())
+				{
+					if (Point.CustomNavLinkId.IsValid() || FNavMeshNodeFlags(Point.Flags).IsNavLink())
+					{
+						LastFailure = FText::FromString(TEXT("共享巡逻经过 NavLink；尚未配置对应动作，拒绝按直线穿越特殊连接。"));
+						break;
+					}
+				}
+				const FNavMeshPath* Corridor = Result.Path->CastPath<FNavMeshPath>();
+				if (LastFailure.IsEmpty() && (!Corridor || !CastlePatrolNavigation::AppendSurfaceSamples(*Mesh, *Corridor, PatrolSampleSpacing, Path, LastFailure)))
+				{
+					if (LastFailure.IsEmpty()) { LastFailure = FText::FromString(TEXT("共享巡逻缺少 Recast 路径走廊。")); }
+				}
+				if (LastFailure.IsEmpty()) { Path.WaypointDistances.Add(Path.PatrolDistances.Last()); }
+			}
 		}
 		else
 		{
-			LastFailure = FText::FromString(TEXT("共享路线不可达：起点与终点之间没有完整导航路径，不发布部分路线。"));
+			LastFailure = FText::FromString(FString::Printf(TEXT("共享路线不可达：路径点 %d→%d 之间没有完整最短路，整条路线不发布。"), LegIndex + 1, Next + 1));
 		}
 	}
+	Path.bValid = LastFailure.IsEmpty();
+	if (Path.bValid && bRequestedClosedLoop)
+	{
+		Path.Length = Path.PatrolDistances.Last();
+		if (LegCount == 0) { Path.Points = Path.Waypoints; Path.PointFlags.Add(0); Path.WaypointDistances.Add(0.0); }
+	}
+	// 失败快照必须为空，界面和消费者都不能将临时已完成的前几段误当成可用路线。
+	if (!Path.bValid)
+	{
+		Path.Points.Reset(); Path.PointFlags.Reset(); Path.PatrolPoints.Reset();
+		Path.PatrolDistances.Reset(); Path.WaypointDistances.Reset(); Path.Length = 0.0;
+	}
 	if (!Path.bValid) { UE_LOG(LogMoving_Castle, Warning, TEXT("NPC 导航：%s"), *LastFailure.ToString()); }
-	else { UE_LOG(LogMoving_Castle, Display, TEXT("NPC 共享路线发布：导航版本 %d，查询累计 %d 次，%d 个转折点，长度 %.1f cm。"), NavigationRevision, PathQueryCount, Path.Points.Num(), Path.Length); }
+	else { UE_LOG(LogMoving_Castle, Display, TEXT("NPC 共享路线发布：导航版本 %d，查询累计 %d 次，完整 %d 段，%d 个转折点，%d 个共享采样，长度 %.1f cm。"), NavigationRevision, PathQueryCount, LegCount, Path.Points.Num(), Path.PatrolPoints.Num(), Path.Length); }
 	PublishPath(MoveTemp(Path));
 }
 

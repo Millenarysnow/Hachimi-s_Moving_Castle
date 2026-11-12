@@ -263,16 +263,19 @@ bool FBuildingGameplayConfigurationTest::RunTest(const FString& Parameters)
 	FCastleBuildingDescriptor Descriptor;
 	FText Reason;
 	if (!TestTrue(TEXT("创建一级建筑描述"), Definition->CreateDescriptor(1, ECastleTileColor::Red, 3, Descriptor, Reason))) { return false; }
-	TestTrue(TEXT("初始化建筑占位"), Building->InitializeBuilding(Descriptor, { FIntVector::ZeroValue }));
-	if (!TestTrue(TEXT("配置仅有功能几何的建筑"), Building->ConfigureBuildingVisual(700.0f, 500.0f, Reason))) { return false; }
-	TestTrue(TEXT("功能网格不冒充正式美术模型"), Building->IsUsingPlaceholder());
-	TestTrue(TEXT("远处功能网格不扩大展示包围盒"), Building->GetVisualBounds().Max.X < 1000.0);
+	TestTrue(TEXT("初始化建筑占用"), Building->InitializeBuilding(Descriptor, { FIntVector::ZeroValue }));
+	TestFalse(TEXT("仅有功能几何时必须拒绝配置"), Building->ConfigureBuildingVisual(700.0f, 500.0f, Reason));
+	TestTrue(TEXT("缺模型错误明确提示功能分支不算美术"), Reason.ToString().Contains(TEXT("GameplayRoot"))
+		&& Reason.ToString().Contains(TEXT("缺少可见美术模型")));
+	TestFalse(TEXT("功能网格和标签不会形成美术包围盒"), Building->GetVisualBounds().IsValid != 0);
+	TestNull(TEXT("失败不会生成占位网格组件"), Building->GetDefaultSubobjectByName(TEXT("PrototypeMesh")));
 	Branch.Verify(*this);
 
 	// 再增加一个真正的模型，反复初始化仍应保留全部功能设置，并只按模型计算展示范围。
 	UStaticMeshComponent* Visual = AddVisual(Building, Cube);
+	Visual->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	if (!TestTrue(TEXT("可重新配置正式美术模型"), Building->ConfigureBuildingVisual(700.0f, 500.0f, Reason))) { return false; }
-	TestFalse(TEXT("功能分支外的模型被正常识别"), Building->IsUsingPlaceholder());
+	TestEqual(TEXT("纯表现模型保持作者的无碰撞配置"), Visual->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
 	const FBox VisualBounds = Building->GetVisualBounds();
 	const FBox MeshBounds = Visual->Bounds.GetBox();
 	TestTrue(TEXT("展示范围只包含正式美术模型"), VisualBounds.Min.Equals(MeshBounds.Min) && VisualBounds.Max.Equals(MeshBounds.Max));

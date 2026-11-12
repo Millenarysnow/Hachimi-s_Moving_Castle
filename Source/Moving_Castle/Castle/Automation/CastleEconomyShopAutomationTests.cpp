@@ -131,6 +131,7 @@ bool FCastleShopConstructionTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	ON_SCOPE_EXIT { World->DestroyWorld(false); };
+	CastleBuildingTests::FScopedNativeBuildingModels TestModels(World);
 	ACastleBoard* Board = World->SpawnActor<ACastleBoard>();
 	if (!TestNotNull(TEXT("在真实 World 中生成棋盘"), Board))
 	{
@@ -160,7 +161,9 @@ bool FCastleShopConstructionTest::RunTest(const FString& Parameters)
 	}
 	FCastleGridCursorTarget Target;
 	Target.bValid = true;
+	Target.bGroundSurface = true;
 	Target.Face = ECastleGridFace::Up;
+	Target.AdjacentCell = Target.Cell + FIntVector(0, 0, 1);
 	Shop->CloseShop();
 	ACastleBuildingBase* Placed = Board->PlaceBackpackBuildingAtCursor(Target, 0, Reason);
 	if (!TestNotNull(TEXT("购买牌能从实际背包槽位成功放置"), Placed))

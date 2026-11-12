@@ -1,14 +1,16 @@
-# 交互
+# 工具使用
    
 - 不允许使用 codex 自身的 Computer Use。
 - 若要使用类似工具，可以用 Cua Driver。先加载对应 skill，再根据 skill 指引使用 mcp。
 - 大部分操作无需使用 Cua 的鼠标点击，而可以使用引擎操作代替。
 
-
-# 文档位置
+# 文档
 
 - 文档都放在在名为 `Docs/` 的文件夹中。    
 - 项目总策划案为 `F:\Ue5 Project\Moving_Castle\Docs\总策划案.md`。
+- 所有技术文档以 `技术文档-` 开头命名，使用 `Tech Design Doc` skill 创建。
+- 其余所有临时文档，包括如验收方案等不需要持久存在的文档，以 `Temp-` 开头命名，便于后续删除。
+- 未经用户允许不允许修改 `AGENTS.md`。
 
 # 代码要求
 
@@ -64,5 +66,5 @@
 
 ## MCP
 
-- 项目安装了 UE5.8 官方 MCP，需要阅读使用文档 `Docs/UE5.8_MCP_Agent_Guide.md` 
+- 项目安装了 UE5.8 官方 MCP，需要阅读使用文档 `Docs\UE5.8官方MCP使用指南.md` 
 

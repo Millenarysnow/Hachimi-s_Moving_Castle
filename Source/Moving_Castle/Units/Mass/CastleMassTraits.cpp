@@ -3,6 +3,8 @@
 #include "Animation/AnimSequenceTransformProviderData.h"
 #include "Animation/Skeleton.h"
 #include "CastleMassFragments.h"
+#include "Mass/CastleMassPatrolFragments.h"
+#include "Units/BuildingInteraction/Mass/CastleMassBuildingTraversalFragment.h"
 #include "MassActorSubsystem.h"
 #include "MassCommonFragments.h"
 #include "MassEntityTemplateRegistry.h"
@@ -42,6 +44,9 @@ void UCastleMassUnitTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildC
 	case ECastleMassUnitKind::NPC:
 		BuildContext.AddTag<FCastleMassNPCTag>();
 		BuildContext.AddTag<FCastleMassHumanoidTag>();
+		BuildContext.AddFragment<FCastleMassPatrolFragment>();
+		// 所有 NPC 具备进入触发所需的值状态；未启用共享巡逻时不会凭终点位置触发建筑。
+		BuildContext.AddFragment<FCastleMassBuildingTraversalFragment>();
 		break;
 	case ECastleMassUnitKind::Projectile:
 		BuildContext.AddTag<FCastleMassProjectileTag>();
@@ -69,6 +74,7 @@ bool UCastleMassUnitTrait::ValidateTemplate(const FMassEntityTemplateBuildContex
 UCastleMassEnemyTrait::UCastleMassEnemyTrait()
 {
 	Team = 1;
+	// 基类只设置敌人通用默认值；生命 10 等测试平衡数值由具体兵种 DA 覆盖。
 	Movement.MaxSpeed = 350.0f;
 }
 

@@ -49,7 +49,7 @@ ACastleGridCursor::ACastleGridCursor()
 	CursorMesh->SetMaterial(0, CursorMaterial);
 }
 
-void ACastleGridCursor::ApplyTarget(const FCastleGridCursorTarget& Target)
+void ACastleGridCursor::ApplyTarget(const FCastleGridCursorTarget& Target, bool bCanPlace)
 {
 	if (!Target.bValid)
 	{
@@ -57,6 +57,12 @@ void ACastleGridCursor::ApplyTarget(const FCastleGridCursorTarget& Target)
 		return;
 	}
 
+	// 非法卡牌仍高亮玩家实际指向的面，明确反馈失败原因来自这个面而非其他邻格。
+	if (CursorMaterial != nullptr)
+	{
+		CursorMaterial->SetVectorParameterValue(TEXT("Color"), bCanPlace
+			? FLinearColor(0.12f, 0.78f, 1.0f, 1.0f) : FLinearColor(1.0f, 0.08f, 0.04f, 1.0f));
+	}
 	SetActorTransform(Target.IndicatorTransform);
 	SetActorHiddenInGame(false);
 }

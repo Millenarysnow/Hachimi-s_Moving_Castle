@@ -71,4 +71,25 @@ struct MOVING_CASTLE_API FCastleMassUnitSnapshot
 
 	UPROPERTY(BlueprintReadOnly, Category="单位")
 	bool bHasMoveTarget = false;
+
+	/** 敌人是否已经进入主塔攻击距离。 */
+	UPROPERTY(BlueprintReadOnly, Category="战斗")
+	bool bInAttackRange = false;
+
+	/** 已完成的主塔攻击次数，零伤害攻击也会计入。 */
+	UPROPERTY(BlueprintReadOnly, Category="战斗")
+	int32 AttackCount = 0;
+
+	/** 调试与验收读取巡逻状态；高频整军查询仍应使用 Mass Query。 */
+	UPROPERTY(BlueprintReadOnly, Category="巡逻")
+	bool bFollowingSharedRoute = false;
+
+	UPROPERTY(BlueprintReadOnly, Category="巡逻")
+	bool bPatrolBlocked = false;
+
+	UPROPERTY(BlueprintReadOnly, Category="巡逻")
+	int32 PatrolLeg = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category="巡逻")
+	int64 CompletedPatrolLaps = 0;
 };

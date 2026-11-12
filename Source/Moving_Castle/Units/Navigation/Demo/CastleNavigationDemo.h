@@ -25,6 +25,14 @@ public:
 	UPROPERTY(VisibleAnywhere, Category="导航演示")
 	TObjectPtr<UCameraComponent> DemoCamera;
 
+	/** 新的 Mass 巡逻关卡复用楼板/楼梯/飞入墙体，只关闭旧的单段路线与自动合并演示。 */
+	UPROPERTY(EditAnywhere, Category="导航演示")
+	bool bRunPathDemonstration = true;
+
+	/** 关闭时使用关卡默认飞行相机，玩家可以移动视角并瞄准不同楼层放置路径点。 */
+	UPROPERTY(EditAnywhere, Category="导航演示")
+	bool bUseFixedCamera = true;
+
 	/** 0=飞入/初次构建，1=初始路线，2=合并中，3=新路线；-1 为明确失败。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="导航演示")
 	int32 Phase = 0;
