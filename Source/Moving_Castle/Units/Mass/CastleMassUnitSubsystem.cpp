@@ -10,6 +10,27 @@
 #include "MassEntitySubsystem.h"
 #include "MassMovementFragments.h"
 #include "MassSpawnerSubsystem.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogCastleMassHomingProjectile, Log, All);
+
+bool UCastleMassUnitSubsystem::FindNearestEnemy(const FVector& Origin, float Radius, FCastleMassUnitHandle& OutEnemy) const
+{
+	// 首个接口交付仅供建筑层编译接入；能力实现提交前必须明确失败，不能伪装成正常无目标。
+	OutEnemy = FCastleMassUnitHandle();
+	UE_LOG(LogCastleMassHomingProjectile, Error, TEXT("FindNearestEnemy：追踪子弹接口尚未完成实现，不能执行查询。"));
+	return false;
+}
+
+bool UCastleMassUnitSubsystem::SpawnHomingProjectiles(UMassEntityConfigAsset* Configuration,
+	const TArray<FCastleMassHomingProjectileSpawn>& Spawns, TArray<FCastleMassUnitHandle>& OutProjectiles, FText& OutFailureReason)
+{
+	// 未完成能力前拒绝整批生成，避免上层消耗待射数量后实际没有生成子弹。
+	OutProjectiles.Reset();
+	OutFailureReason = FText::FromString(TEXT("追踪子弹接口尚未完成实现，整批生成已拒绝。"));
+	UE_LOG(LogCastleMassHomingProjectile, Error, TEXT("SpawnHomingProjectiles：配置 %s：%s"),
+		*GetPathNameSafe(Configuration), *OutFailureReason.ToString());
+	return false;
+}
 #include "Mass/CastleMassPatrolFragments.h"
 
 bool UCastleMassUnitSubsystem::DoesSupportWorldType(EWorldType::Type WorldType) const

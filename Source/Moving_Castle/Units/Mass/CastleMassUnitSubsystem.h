@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "CastleMassTypes.h"
+#include "Projectiles/CastleMassHomingProjectileTypes.h"
 #include "CastleMassUnitSubsystem.generated.h"
 
 class UMassEntityConfigAsset;
@@ -14,6 +15,15 @@ class MOVING_CASTLE_API UCastleMassUnitSubsystem : public UWorldSubsystem
 {
 	GENERATED_BODY()
 public:
+	/** 游戏线程且 Mass 未处理时，查询三维半径内最近的存活敌人；正常无目标返回 false。 */
+	UFUNCTION(BlueprintCallable, Category="移动城堡|Mass")
+	bool FindNearestEnemy(const FVector& Origin, float Radius, FCastleMassUnitHandle& OutEnemy) const;
+
+	/** 整批先校验后生成追踪子弹；配置必须具有追踪 Trait，每发目标和伤害必须有效。 */
+	UFUNCTION(BlueprintCallable, Category="移动城堡|Mass")
+	bool SpawnHomingProjectiles(UMassEntityConfigAsset* Configuration,
+		const TArray<FCastleMassHomingProjectileSpawn>& Spawns, TArray<FCastleMassUnitHandle>& OutProjectiles, FText& OutFailureReason);
+
 	/** 在 Mass Processor 外调用；整批先校验再生成。子弹沿各变换的 +X 方向发射。 */
 	UFUNCTION(BlueprintCallable, Category="移动城堡|Mass")
 	bool SpawnUnits(UMassEntityConfigAsset* Configuration, const TArray<FTransform>& SpawnTransforms,
