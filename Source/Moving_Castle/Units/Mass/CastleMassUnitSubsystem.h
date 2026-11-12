@@ -15,11 +15,17 @@ class MOVING_CASTLE_API UCastleMassUnitSubsystem : public UWorldSubsystem
 {
 	GENERATED_BODY()
 public:
-	/** 游戏线程且 Mass 未处理时，查询三维半径内最近的存活敌人；正常无目标返回 false。 */
+	/**
+	 * 在 Origin 周围 Radius（三维，cm）内查询最近的存活敌人（EnemyTag 且 Health>0）。
+	 * 只能在游戏线程且 Mass 未处理时调用；非法调用或输入写 Error，正常无目标返回 false 且不报错。
+	 */
 	UFUNCTION(BlueprintCallable, Category="移动城堡|Mass")
 	bool FindNearestEnemy(const FVector& Origin, float Radius, FCastleMassUnitHandle& OutEnemy) const;
 
-	/** 整批先校验后生成追踪子弹；配置必须具有追踪 Trait，每发目标和伤害必须有效。 */
+	/**
+	 * 游戏线程且 Mass 未处理时，整批先校验后生成；配置必须具有 UCastleMassHomingProjectileTrait。
+	 * 每发 Target 必须是当前世界存活敌人，Damage 必须为有限非负数；任一失败均清空输出、写失败原因及 Error。
+	 */
 	UFUNCTION(BlueprintCallable, Category="移动城堡|Mass")
 	bool SpawnHomingProjectiles(UMassEntityConfigAsset* Configuration,
 		const TArray<FCastleMassHomingProjectileSpawn>& Spawns, TArray<FCastleMassUnitHandle>& OutProjectiles, FText& OutFailureReason);
