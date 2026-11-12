@@ -86,13 +86,17 @@ void UCastleMassHomingProjectileProcessor::Execute(FMassEntityManager& EntityMan
 			if (!Target.IsSet())
 			{
 				UE_LOG(LogMoving_Castle, Error, TEXT("Mass 追踪子弹 %d 缺少锁定目标，必须通过 SpawnHomingProjectiles 生成。"), Chunk.GetEntity(It).Index);
-				return;
+				Units[It].Health = 0.0f;
+				Velocities[It].Value = FVector::ZeroVector;
+				continue;
 			}
 			const FEnemyState* Enemy = Enemies.Find(Target);
 			if (Enemy == nullptr && EntityManager.IsEntityActive(Target))
 			{
 				UE_LOG(LogMoving_Castle, Error, TEXT("Mass 追踪子弹 %d 的目标 %d 缺少敌人身份、位置、半径或生命组成。"), Chunk.GetEntity(It).Index, Target.Index);
-				return;
+				Units[It].Health = 0.0f;
+				Velocities[It].Value = FVector::ZeroVector;
+				continue;
 			}
 			if (Enemy == nullptr || Enemy->Unit->Health <= 0.0f)
 			{
@@ -112,7 +116,9 @@ void UCastleMassHomingProjectileProcessor::Execute(FMassEntityManager& EntityMan
 				|| !FMath::IsFinite(Projectile.Damage) || Projectile.Damage < 0.0f)
 			{
 				UE_LOG(LogMoving_Castle, Error, TEXT("Mass 追踪子弹 %d 或目标 %d 的运行数据无效：位置/速度/半径/生命/伤害必须为有效数值。"), Chunk.GetEntity(It).Index, Target.Index);
-				return;
+				Units[It].Health = 0.0f;
+				Velocities[It].Value = FVector::ZeroVector;
+				continue;
 			}
 			Projectile.PreviousLocation = Transform.GetLocation();
 			const FVector ToTarget = Enemy->Location - Projectile.PreviousLocation;

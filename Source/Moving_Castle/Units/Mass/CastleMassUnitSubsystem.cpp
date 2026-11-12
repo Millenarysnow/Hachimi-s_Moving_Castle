@@ -11,6 +11,7 @@
 #include "MassEntityQuery.h"
 #include "MassEntityView.h"
 #include "MassExecutionContext.h"
+#include "MassEntityUtils.h"
 #include "MassMovementFragments.h"
 #include "MassSpawnerSubsystem.h"
 #include "Mass/CastleMassPatrolFragments.h"
@@ -86,56 +87,51 @@ bool UCastleMassUnitSubsystem::SpawnHomingProjectiles(UMassEntityConfigAsset* Co
 	const auto* Trait = Cast<UCastleMassHomingProjectileTrait>(Configuration->FindTrait(UCastleMassHomingProjectileTrait::StaticClass()));
 	if (!Trait) { return Reject(TEXT("配置必须包含 UCastleMassHomingProjectileTrait，整批拒绝。")); }
 
-	// UE 按精确类合并继承 Trait；按子到父解析同类覆盖，并只计每条继承链上最具体的单位 Trait。
-	// 派生追踪 Trait 会复用子弹基础组成，父子 Trait 的共享 Movement 参数必须保持一致。
-	const EProcessorExecutionFlags WorldFlag = GetWorld()->GetNetMode() == NM_Standalone ? EProcessorExecutionFlags::Standalone
-		: GetWorld()->GetNetMode() == NM_Client ? EProcessorExecutionFlags::Client : EProcessorExecutionFlags::Server;
-	TSet<const UMassEntityConfigAsset*> Visited;
-	TSet<const UClass*> ResolvedClasses;
-	TArray<const UClass*> ResolvedUnitClasses;
-	TArray<const UCastleMassUnitTrait*> ResolvedUnitTraits;
+	// 引擎没有公开 FMassEntityConfig::GetCombinedTraits；这里用公开 Parent/GetTraits
+	// 严格复刻 MassEntityConfig::GetCombinedTraitsInternal 的父优先、精确类与标志交集覆盖规则。
+	TArray<const UMassEntityConfigAsset*> ConfigHierarchy;
+	TSet<const UMassEntityConfigAsset*> VisitedConfigurations;
 	for (const UMassEntityConfigAsset* Asset = Configuration; Asset; Asset = Asset->GetConfig().GetParent())
 	{
-		if (Visited.Contains(Asset)) { return Reject(TEXT("配置父链存在循环，整批拒绝。")); }
-		Visited.Add(Asset);
-		for (const UMassEntityTraitBase* ConfiguredTrait : Asset->GetConfig().GetTraits())
+		if (VisitedConfigurations.Contains(Asset)) { return Reject(TEXT("配置父链存在循环，整批拒绝。")); }
+		VisitedConfigurations.Add(Asset);
+		ConfigHierarchy.Add(Asset);
+	}
+	TArray<const UMassEntityTraitBase*> CombinedTraits;
+	for (int32 HierarchyIndex = ConfigHierarchy.Num() - 1; HierarchyIndex >= 0; --HierarchyIndex)
+	{
+		for (const UMassEntityTraitBase* ConfiguredTrait : ConfigHierarchy[HierarchyIndex]->GetConfig().GetTraits())
 		{
-			if (!IsValid(ConfiguredTrait)) { return Reject(FString::Printf(TEXT("资产 %s 含无效 Trait，整批拒绝。"), *Asset->GetPathName())); }
-			if (ResolvedClasses.Contains(ConfiguredTrait->GetClass())) { continue; }
-			ResolvedClasses.Add(ConfiguredTrait->GetClass());
-			if (ConfiguredTrait->IsA<UCastleMassUnitTrait>() && EnumHasAnyFlags(ConfiguredTrait->ValidTargetConfig, WorldFlag))
+			if (!IsValid(ConfiguredTrait))
 			{
-				ResolvedUnitClasses.Add(ConfiguredTrait->GetClass());
-				ResolvedUnitTraits.Add(CastChecked<UCastleMassUnitTrait>(ConfiguredTrait));
+				return Reject(FString::Printf(TEXT("资产 %s 含无效 Trait，整批拒绝。"), *ConfigHierarchy[HierarchyIndex]->GetPathName()));
 			}
+			const int32 OverrideIndex = CombinedTraits.IndexOfByPredicate([ConfiguredTrait](const UMassEntityTraitBase* ExistingTrait)
+			{
+				return ConfiguredTrait->GetClass() == ExistingTrait->GetClass()
+					&& static_cast<bool>(ConfiguredTrait->ValidTargetConfig & ExistingTrait->ValidTargetConfig);
+			});
+			if (OverrideIndex != INDEX_NONE) { CombinedTraits[OverrideIndex] = ConfiguredTrait; }
+			else { CombinedTraits.Add(ConfiguredTrait); }
 		}
 	}
-	for (const UCastleMassUnitTrait* ConfiguredUnitTrait : ResolvedUnitTraits)
-	{
-		const UCastleMassProjectileTrait* ProjectileTrait = Cast<UCastleMassProjectileTrait>(ConfiguredUnitTrait);
-		if (ProjectileTrait == nullptr || ConfiguredUnitTrait == Trait) { continue; }
-		const FCastleMassMovementSettings& ParentMovement = ProjectileTrait->Movement;
-		const FCastleMassMovementSettings& HomingMovement = Trait->Movement;
-		if (ParentMovement.MaxSpeed != HomingMovement.MaxSpeed || ParentMovement.Acceleration != HomingMovement.Acceleration
-			|| ParentMovement.AcceptanceRadius != HomingMovement.AcceptanceRadius || ParentMovement.TurnRate != HomingMovement.TurnRate
-			|| ParentMovement.bKeepUpright != HomingMovement.bKeepUpright)
-		{
-			return Reject(FString::Printf(TEXT("资产 %s 的 Trait %s 与追踪 Trait 的 Movement 参数不同，无法建立唯一共享移动 Fragment，整批拒绝。"),
-				*ConfiguredUnitTrait->GetPathName(), *GetNameSafe(Trait)));
-		}
-	}
+
+	const EProcessorExecutionFlags WorldFlags = UE::Mass::Utils::DetermineProcessorExecutionFlags(GetWorld());
 	int32 UnitTraitCount = 0;
-	for (const UClass* Candidate : ResolvedUnitClasses)
+	bool bHomingTraitIsTheOnlyUnitTrait = false;
+	for (const UMassEntityTraitBase* ConfiguredTrait : CombinedTraits)
 	{
-		const bool bReplacedByMoreSpecificTrait = ResolvedUnitClasses.ContainsByPredicate([Candidate](const UClass* Other)
+		// 与 FMassEntityTemplateBuildContext::BuildFromTraits 一样，只计当前 World 会实际构建的 Trait。
+		if (!EnumHasAnyFlags(ConfiguredTrait->ValidTargetConfig, WorldFlags)) { continue; }
+		if (ConfiguredTrait->IsA<UCastleMassUnitTrait>())
 		{
-			return Candidate != Other && Other->IsChildOf(Candidate);
-		});
-		if (!bReplacedByMoreSpecificTrait) { ++UnitTraitCount; }
+			++UnitTraitCount;
+			bHomingTraitIsTheOnlyUnitTrait = ConfiguredTrait == Trait;
+		}
 	}
-	if (UnitTraitCount != 1 || !EnumHasAnyFlags(Trait->ValidTargetConfig, WorldFlag))
+	if (UnitTraitCount != 1 || !bHomingTraitIsTheOnlyUnitTrait)
 	{
-		return Reject(TEXT("追踪子弹必须是当前世界唯一启用的单位 Trait；父子 Trait 的共享 Movement 参数必须相同，整批拒绝。"));
+		return Reject(TEXT("当前 World 实际构建的 Unit Trait 必须恰好一个且为 UCastleMassHomingProjectileTrait；含普通子弹父配置的组合不会被 C++ 继承覆盖，整批拒绝。"));
 	}
 
 	TArray<FVector> Directions;

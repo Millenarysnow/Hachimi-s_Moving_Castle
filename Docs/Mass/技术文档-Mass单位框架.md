@@ -22,7 +22,7 @@
 
 **新能力通过专用 Fragment、Tag、Trait 和 Processor 接入。** 敌人与 NPC 共用人形标记，子弹使用自己的运动分支；不需要为每种单位新增一套生成 API，否则外部玩法会被迫了解内部组成。
 
-**Mass 配置只按 Trait 精确类覆盖，不按 C++ 继承关系替换。** `UCastleMassHomingProjectileTrait` 继承 `UCastleMassProjectileTrait`，因此继承子弹基类资产的箭矢子配置要在本地显式覆盖并停用普通子弹 Trait，再启用追踪子类。否则两个 Trait 会重复添加基础 Fragment，并尝试写入不同的共享移动参数；只更改成子类类型并不能替换父 Trait。
+**Mass 配置只按 Trait 精确类且有效目标标志有交集时覆盖，不按 C++ 继承关系替换。** `UCastleMassHomingProjectileTrait` 在代码中继承 `UCastleMassProjectileTrait`，但配置继承一个装配普通子弹 Trait 的资产仍会同时构建两种 Trait，重复写入子弹基础组成。箭矢使用无 Parent 的普通 `UMassEntityConfigAsset`，本地组合追踪 Trait、LOD Collector 和静态网格显示 Trait；以后新增的追踪子弹资产也不能继承含普通子弹 Trait 的配置。
 
 **无效单位或动画配置必须拒绝模板，不能静默切换显示。** 人形动画提供器、序列和骨架必须兼容，网格需具备实例化所需的统一骨骼映射；只换网格而放过校验会在实际表示阶段才暴露错误。
 

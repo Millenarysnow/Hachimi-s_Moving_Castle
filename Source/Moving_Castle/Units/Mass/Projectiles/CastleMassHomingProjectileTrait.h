@@ -6,8 +6,8 @@
 /**
  * 子弹基类的追踪子类，拥有完整的单位/子弹组成及独立锁定目标状态。
  * 速度取本 Trait 的 Movement.MaxSpeed，伤害必须由 SpawnHomingProjectiles 逐发提供。
- * Mass 配置按 Trait 精确类合并；派生 Trait 不会替换普通子弹 Trait。
- * 子资产应使父子 Trait 的共享 Movement 参数相同，追踪 Processor 再独占追踪弹位移。
+ * Mass 配置按精确 Trait 类及有效目标标志的交集合并，不按 C++ 继承关系替换。
+ * 追踪子弹资产不要继承含 UCastleMassProjectileTrait 的配置，避免同时构建两个子弹 Unit Trait。
  */
 UCLASS(meta=(DisplayName="Castle Mass 追踪子弹"))
 class MOVING_CASTLE_API UCastleMassHomingProjectileTrait : public UCastleMassProjectileTrait

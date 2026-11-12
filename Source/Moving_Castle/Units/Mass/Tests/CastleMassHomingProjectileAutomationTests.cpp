@@ -12,13 +12,13 @@
 #include "MassEntitySubsystem.h"
 #include "MassExecutionContext.h"
 #include "MassExecutor.h"
+#include "MassLODTrait.h"
 #include "MassMovementFragments.h"
 #include "MassProcessingContext.h"
 #include "MassRepresentationFragments.h"
 #include "Misc/AutomationTest.h"
 #include "Projectiles/CastleMassHomingProjectileFragments.h"
 #include "Projectiles/CastleMassHomingProjectileProcessor.h"
-#include "Projectiles/CastleMassHomingProjectileAssetUtility.h"
 #include "Projectiles/CastleMassHomingProjectileTrait.h"
 #include <limits>
 
@@ -249,12 +249,10 @@ bool FCastleMassHomingBatchValidationTest::RunTest(const FString& Parameters)
 	RejectBatch(TEXT("异世界目标导致整批拒绝"), Config, {ValidShot, Invalid});
 	Invalid.Target = FCastleMassUnitHandle();
 	RejectBatch(TEXT("未设置的目标导致整批拒绝"), Config, {ValidShot, Invalid});
-	UMassEntityConfigAsset* IncompatibleParent = MakeConfig<UCastleMassProjectileTrait>();
+	UMassEntityConfigAsset* ProjectileParent = MakeConfig<UCastleMassProjectileTrait>();
 	UMassEntityConfigAsset* Conflicting = MakeProjectileConfig();
-	Conflicting->GetMutableConfig().SetParentAsset(*IncompatibleParent);
-	auto* ConflictingTrait = CastChecked<UCastleMassHomingProjectileTrait>(Conflicting->GetMutableConfig().FindMutableTrait(UCastleMassHomingProjectileTrait::StaticClass()));
-	ConflictingTrait->Movement.MaxSpeed += 1.0f;
-	RejectBatch(TEXT("单位模板父子 Trait 的共享移动参数冲突时明确拒绝"), Conflicting, {ValidShot});
+	Conflicting->GetMutableConfig().SetParentAsset(*ProjectileParent);
+	RejectBatch(TEXT("含普通子弹 Trait 的父链与追踪 Trait 组合会被整批拒绝"), Conflicting, {ValidShot});
 	AddExpectedMessage(TEXT("SpawnUnits：配置"), ELogVerbosity::Error, EAutomationExpectedMessageFlags::Contains, 1, false);
 	TestFalse(TEXT("通用入口不能隐式发射无目标追踪弹"), Scope.Units().SpawnUnits(Config, {FTransform::Identity}, Projectiles, Reason));
 	TestEqual(TEXT("通用入口同样没有部分生成"), CountProjectiles(Scope), Before);
@@ -300,35 +298,43 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleMassArrowAssetTest, "MovingCastle.Mass.H
 bool FCastleMassArrowAssetTest::RunTest(const FString& Parameters)
 {
 	using namespace CastleMassHomingTests;
-	UMassEntityConfigAsset* Base = LoadObject<UMassEntityConfigAsset>(nullptr, TEXT("/Game/MovingCastle/Mass/DA_MassProjectileBase"));
 	UMassEntityConfigAsset* Arrow = LoadObject<UMassEntityConfigAsset>(nullptr, TEXT("/Game/MovingCastle/Mass/DA_MassArrowProjectile"));
-	if (!TestNotNull(TEXT("子弹基类资产存在"), Base) || !TestNotNull(TEXT("箭矢子配置存在"), Arrow)) { return false; }
-	TestTrue(TEXT("箭矢使用普通 Mass 配置类，避免构造器默认 Trait 覆盖父配置"), Arrow->GetClass() == UMassEntityConfigAsset::StaticClass());
-	TestTrue(TEXT("箭矢显式继承子弹基类资产"), Arrow->GetConfig().GetParent() == Base);
+	if (!TestNotNull(TEXT("独立箭矢配置存在"), Arrow)) { return false; }
+	TestTrue(TEXT("箭矢使用无构造器默认 Trait 的普通 Mass 配置"), Arrow->GetClass() == UMassEntityConfigAsset::StaticClass());
+	TestNull(TEXT("箭矢不继承含基类子弹 Trait 的配置"), Arrow->GetConfig().GetParent());
+	TestNull(TEXT("箭矢没有装配精确类普通子弹 Trait"), Arrow->FindTrait(UCastleMassProjectileTrait::StaticClass(), true));
 	const auto* Homing = Cast<UCastleMassHomingProjectileTrait>(Arrow->FindTrait(UCastleMassHomingProjectileTrait::StaticClass()));
-	const auto* ProjectileBase = Cast<UCastleMassProjectileTrait>(Base->FindTrait(UCastleMassProjectileTrait::StaticClass()));
 	const auto* Visual = Cast<UMassMovableVisualizationTrait>(Arrow->FindTrait(UMassMovableVisualizationTrait::StaticClass()));
-	if (!TestNotNull(TEXT("箭矢装配真正的子弹 Trait 子类"), Homing) || !TestNotNull(TEXT("基类资产保留子弹配置 Trait"), ProjectileBase)
-		|| !TestNotNull(TEXT("继承可见的实例化网格表示"), Visual)) { return false; }
-	const auto* ArrowBase = Cast<UCastleMassProjectileTrait>(Arrow->FindTrait(UCastleMassProjectileTrait::StaticClass(), true));
-	if (!TestNotNull(TEXT("子资产明确配置精确类型的父 Trait"), ArrowBase)) { return false; }
-	TestEqual(TEXT("普通子弹基类模板在子资产中显式停用"), static_cast<uint8>(ArrowBase->ValidTargetConfig), uint8(0));
-	TestTrue(TEXT("追踪子类保留有效处理模式"), static_cast<uint8>(Homing->ValidTargetConfig) != 0);
+	if (!TestNotNull(TEXT("箭矢装配真正的子弹 Trait 子类"), Homing)
+		|| !TestNotNull(TEXT("本地可见的实例化网格表示"), Visual)) { return false; }
+	int32 UnitTraitCount = 0;
+	for (const UMassEntityTraitBase* ConfiguredTrait : Arrow->GetConfig().GetTraits())
+	{
+		if (ConfiguredTrait && ConfiguredTrait->IsA<UCastleMassUnitTrait>())
+		{
+			++UnitTraitCount;
+			TestTrue(TEXT("唯一 Unit Trait 是追踪子类"), ConfiguredTrait->GetClass() == UCastleMassHomingProjectileTrait::StaticClass());
+		}
+	}
+	TestEqual(TEXT("资产本地只装配一个 Unit Trait"), UnitTraitCount, 1);
+	TestNotNull(TEXT("静态网格显示所需的 LOD Collector 存在"), Arrow->FindTrait(UMassLODCollectorTrait::StaticClass()));
 	TestTrue(TEXT("箭矢配置有正飞行速度、半径和有限寿命"), Homing->Movement.MaxSpeed > 0.0f && Homing->Radius > 0.0f && Homing->Lifetime > 0.0f);
 	if (!TestTrue(TEXT("表示包含可见网格"), !Visual->StaticMeshInstanceDesc.Meshes.IsEmpty())) { return false; }
-	TestNotNull(TEXT("继承的可见网格有效"), Visual->StaticMeshInstanceDesc.Meshes[0].Mesh.Get());
+	TestNotNull(TEXT("配置的可见网格有效"), Visual->StaticMeshInstanceDesc.Meshes[0].Mesh.Get());
 	FScopedWorld Scope;
 	TArray<FCastleMassUnitHandle> Enemies, Projectiles;
 	FText Reason;
-	if (!TestTrue(TEXT("为真实资产创建目标"), Scope.Units().SpawnUnits(MakeConfig<UCastleMassEnemyTrait>(),
-		{FTransform(FVector(100000, 0, 0))}, Enemies, Reason))) { AddError(Reason.ToString()); return false; }
+	if (!TestTrue(TEXT("为真实资产创建命中目标"), Scope.Units().SpawnUnits(MakeConfig<UCastleMassEnemyTrait>(),
+		{FTransform(FVector(1000, 0, 0))}, Enemies, Reason))) { AddError(Reason.ToString()); return false; }
 	FCastleMassHomingProjectileSpawn Shot;
 	Shot.Target = Enemies[0]; Shot.Damage = 4.0f;
-	if (!TestTrue(TEXT("真实资产通过继承和模板验证"), Scope.Units().SpawnHomingProjectiles(Arrow, {Shot}, Projectiles, Reason))) { AddError(Reason.ToString()); return false; }
+	if (!TestTrue(TEXT("无父配置的真实资产成功生成"), Scope.Units().SpawnHomingProjectiles(Arrow, {Shot}, Projectiles, Reason))) { AddError(Reason.ToString()); return false; }
 	TestTrue(TEXT("静态实例显示描述已注册"), Scope.Manager().GetFragmentDataChecked<FMassRepresentationFragment>(Projectiles[0].Entity).StaticMeshDescHandle.IsValid());
 	TestTrue(TEXT("生成使用子类资产配置的速度"), FMath::IsNearlyEqual(Scope.Manager().GetFragmentDataChecked<FMassVelocityFragment>(Projectiles[0].Entity).Value.Size(), static_cast<double>(Homing->Movement.MaxSpeed)));
-	Step<UCastleMassLifetimeProcessor>(Scope, Homing->Lifetime + 0.1f);
-	TestFalse(TEXT("真实追踪子弹使用资产寿命回收"), Scope.Units().IsUnitValid(Projectiles[0]));
+	Step<UCastleMassHomingProjectileProcessor>(Scope, 1.0f);
+	TestEqual(TEXT("真实箭矢命中并使用逐发伤害"), Scope.Manager().GetFragmentDataChecked<FCastleMassUnitFragment>(Enemies[0].Entity).Health, 96.0f);
+	Step<UCastleMassLifetimeProcessor>(Scope, 0.0f);
+	TestFalse(TEXT("真实箭矢命中后进入死亡回收"), Scope.Units().IsUnitValid(Projectiles[0]));
 	return true;
 }
 
