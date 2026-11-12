@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "BuildingNavigationActor.h"
 #include "CastleGameplayTypes.h"
+#include "Components/Building/Effects/CastleBuildingTriggerInterface.h"
 #include "CastleBuildingBase.generated.h"
 
 class UMaterialInterface;
@@ -15,6 +16,7 @@ class UTextRenderComponent;
 class UBuildingMergeComponent;
 class UAssemblyFlightComponent;
 class UBuildingGameplayRootComponent;
+class UCastleBuildingEffectComponent;
 
 /**
  * 所有可放置建筑的共同 Actor 基类。
@@ -24,13 +26,23 @@ class UBuildingGameplayRootComponent;
  * 不再通过独立模型载体或 Child Actor 转发模型和变换。
  */
 UCLASS(Abstract, Blueprintable)
-class MOVING_CASTLE_API ACastleBuildingBase : public ABuildingNavigationActor
+class MOVING_CASTLE_API ACastleBuildingBase : public ABuildingNavigationActor, public ICastleBuildingTriggerInterface
 {
 	GENERATED_BODY()
 
 public:
 	/** 创建逻辑根节点、功能分组、占位网格和通用建筑标签。 */
 	ACastleBuildingBase();
+
+	/** 所有可放置建筑原生携带同一个效果入口；每个实例独立保存状态。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="建筑|效果")
+	TObjectPtr<UCastleBuildingEffectComponent> BuildingEffect;
+
+	/** 高频调用入口只转发给自身组件，不扫描 NPC、不内置冷却。 */
+	virtual bool TriggerBuildingEffect(const FCastleBuildingTriggerContext& Context) override;
+
+	/** 预览与建造中间状态不能作为正式触发目标。 */
+	bool CanReceiveBuildingTrigger() const { return !bBuildingPreview && bHasCompletedPlacement; }
 
 	/**
 	 * 放置隐藏碰撞、导航表面和触发区域的公共父节点；所有深度的后代均不参与两种建筑动画。
@@ -143,6 +155,9 @@ public:
 	static int32 GetExpectedFootprintCellCount(int32 InLevel);
 
 protected:
+	/** 建筑可被关卡流送或直接销毁，必须撤销本实例的触发登记。 */
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
 	/** 所有模型组件和通用标签的公共根节点。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "建筑模型")
 	TObjectPtr<USceneComponent> VisualRoot;
@@ -161,6 +176,10 @@ protected:
 	/** 当前是否没有检测到蓝图提供的可见模型组件。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "建筑模型")
 	bool bUsingPlaceholder = true;
+
+	/** 卡片捕获器也会创建建筑实例，必须显式排除它们的效果调用。 */
+	UPROPERTY(Transient)
+	bool bBuildingPreview = false;
 
 	/** 当前建筑的共享定义；初始化后始终随回收和合成描述一起传递。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "建筑")

@@ -6,6 +6,7 @@
 #include "BuildingMergeComponent.h"
 #include "AssemblyFlightComponent.h"
 #include "Components/Building/BuildingGameplayRootComponent.h"
+#include "Components/Building/Effects/CastleBuildingEffectComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -15,9 +16,11 @@
 #include "Materials/MaterialInterface.h"
 #include "Moving_Castle.h"
 #include "UObject/ConstructorHelpers.h"
+#include "Units/BuildingInteraction/CastleBuildingTriggerSubsystem.h"
 
 ACastleBuildingBase::ACastleBuildingBase()
 {
+	BuildingEffect = CreateDefaultSubobject<UCastleBuildingEffectComponent>(TEXT("BuildingEffect"));
 	// 建筑逻辑和模型组件现在位于同一个 Actor；VisualRoot 只提供统一的组件根节点。
 	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
 	SetRootComponent(VisualRoot);
@@ -64,11 +67,31 @@ ACastleBuildingBase::ACastleBuildingBase()
 	PrototypeLabelPlate->SetVisibility(false);
 }
 
+bool ACastleBuildingBase::TriggerBuildingEffect(const FCastleBuildingTriggerContext& Context)
+{
+	if (!BuildingEffect)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑 %s 缺少原生效果组件。"), *GetName());
+		return false;
+	}
+	return BuildingEffect->Trigger(Context);
+}
+
 void ACastleBuildingBase::SetPlacementComplete(const bool bComplete)
 {
+	if (bHasCompletedPlacement != bComplete)
+	{
+		if (auto* Triggers = GetWorld()->GetSubsystem<UCastleBuildingTriggerSubsystem>()) { Triggers->NotifyBuildingStateChanged(this); }
+	}
 	bHasCompletedPlacement = bComplete;
 	PrototypeLabel->SetVisibility(bComplete, false);
 	PrototypeLabelPlate->SetVisibility(bComplete, false);
+}
+
+void ACastleBuildingBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (auto* Triggers = GetWorld()->GetSubsystem<UCastleBuildingTriggerSubsystem>()) { Triggers->UnregisterBuilding(this); }
+	Super::EndPlay(EndPlayReason);
 }
 
 bool ACastleBuildingBase::InitializeBuilding(const FCastleBuildingDescriptor& Descriptor, const TArray<FIntVector>& InOccupiedCoordinates)
@@ -301,6 +324,8 @@ FBox ACastleBuildingBase::GetVisualBounds() const
 
 void ACastleBuildingBase::PrepareForPreview()
 {
+	// 预览虽然使用相同建筑类，但不属于真实放置实例，不能接收任何玩法效果。
+	bBuildingPreview = true;
 	// 卡片只显示建筑形状，等级与数字由卡片自己的文字控件显示。
 	PrototypeLabel->SetVisibility(false);
 	PrototypeLabelPlate->SetVisibility(false);

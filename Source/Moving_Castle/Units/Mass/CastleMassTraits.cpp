@@ -4,6 +4,7 @@
 #include "Animation/Skeleton.h"
 #include "CastleMassFragments.h"
 #include "Mass/CastleMassPatrolFragments.h"
+#include "Units/BuildingInteraction/Mass/CastleMassBuildingTraversalFragment.h"
 #include "MassActorSubsystem.h"
 #include "MassCommonFragments.h"
 #include "MassEntityTemplateRegistry.h"
@@ -44,6 +45,8 @@ void UCastleMassUnitTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildC
 		BuildContext.AddTag<FCastleMassNPCTag>();
 		BuildContext.AddTag<FCastleMassHumanoidTag>();
 		BuildContext.AddFragment<FCastleMassPatrolFragment>();
+		// 所有 NPC 具备进入触发所需的值状态；未启用共享巡逻时不会凭终点位置触发建筑。
+		BuildContext.AddFragment<FCastleMassBuildingTraversalFragment>();
 		break;
 	case ECastleMassUnitKind::Projectile:
 		BuildContext.AddTag<FCastleMassProjectileTag>();

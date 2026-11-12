@@ -11,6 +11,7 @@
 #include "MassExecutionContext.h"
 #include "MassMovementFragments.h"
 #include "Moving_Castle.h"
+#include "Units/BuildingInteraction/Mass/CastleMassBuildingTraversalFragment.h"
 
 UCastleMassPatrolProcessor::UCastleMassPatrolProcessor() : Query(*this)
 {
@@ -27,6 +28,7 @@ void UCastleMassPatrolProcessor::ConfigureQueries(const TSharedRef<FMassEntityMa
 	Query.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FMassVelocityFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassPatrolFragment>(EMassFragmentAccess::ReadWrite);
+	Query.AddRequirement<FCastleMassBuildingTraversalFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassMoveTargetFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassUnitFragment>(EMassFragmentAccess::ReadOnly);
 	Query.AddConstSharedRequirement<FCastleMassMovementParameters>();
@@ -42,12 +44,18 @@ void UCastleMassPatrolProcessor::Execute(FMassEntityManager& EntityManager, FMas
 		const auto Transforms = Chunk.GetMutableFragmentView<FTransformFragment>();
 		const auto Velocities = Chunk.GetMutableFragmentView<FMassVelocityFragment>();
 		const auto Patrols = Chunk.GetMutableFragmentView<FCastleMassPatrolFragment>();
+		const auto Traversals = Chunk.GetMutableFragmentView<FCastleMassBuildingTraversalFragment>();
 		const auto Targets = Chunk.GetMutableFragmentView<FCastleMassMoveTargetFragment>();
 		const auto Units = Chunk.GetFragmentView<FCastleMassUnitFragment>();
 		const auto& Settings = Chunk.GetConstSharedFragment<FCastleMassMovementParameters>().Settings;
 		for (FMassExecutionContext::FEntityIterator It = Chunk.CreateEntityIterator(); It; ++It)
 		{
 			auto& Patrol = Patrols[It];
+			auto& Traversal = Traversals[It];
+			// 先结束上轮记录；停止、死亡、失效路线和绑定失败都不能残留可再次消费的旧位移。
+			++Traversal.MovementSerial;
+			Traversal.PathRevision = INDEX_NONE;
+			Traversal.TravelDistance = 0.0;
 			if (!Patrol.bEnabled || Units[It].Health <= 0.0f) { continue; }
 			FTransform& Transform = Transforms[It].GetMutableTransform();
 			FVector& Velocity = Velocities[It].Value;
@@ -89,6 +97,11 @@ void UCastleMassPatrolProcessor::Execute(FMassEntityManager& EntityManager, FMas
 				+ Patrol.Speed * (DeltaTime - AcceleratingTime);
 			if (Path->Length > UE_DOUBLE_SMALL_NUMBER)
 			{
+				// 必须在版本重绑定完成后记录真实起点，且保留未取模的行进长度。
+				// 只比较本帧两个终点会漏掉整栋穿越、同帧多次进入和跨越多圈的情况。
+				Traversal.PathRevision = Path->PathRevision;
+				Traversal.StartDistance = Patrol.Distance;
+				Traversal.TravelDistance = Travel;
 				const double Total = Patrol.Distance + Travel;
 				Patrol.CompletedLaps += static_cast<int64>(Total / Path->Length);
 				Patrol.Distance = FMath::Fmod(Total, Path->Length);
