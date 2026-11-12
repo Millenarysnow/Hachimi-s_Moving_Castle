@@ -80,6 +80,10 @@ struct MOVING_CASTLE_API FCastleGridCursorTarget
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")
 	FIntVector AdjacentCell = FIntVector::ZeroValue;
 
+	/** 命中的是地面顶面还是建筑面；放置时保留来源，不能在建筑消失后改用其下方地面匹配。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")
+	bool bGroundSurface = false;
+
 	/** 指示平面在世界中的法线方向。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")
 	FVector WorldNormal = FVector::UpVector;

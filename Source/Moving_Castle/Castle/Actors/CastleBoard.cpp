@@ -406,6 +406,18 @@ bool ACastleBoard::IsCoordinateWithinBoard(const FIntVector& Coordinate) const
 
 bool ACastleBoard::CanPlaceBuilding(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason) const
 {
+	return CanPlaceBuildingInternal(Coordinate, Descriptor, nullptr, OutFailureReason);
+}
+
+bool ACastleBoard::CanPlaceBuildingAtCursor(const FCastleGridCursorTarget& CursorTarget, const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason) const
+{
+	FIntVector Coordinate;
+	return TryResolvePlacementCoordinate(CursorTarget, Coordinate, OutFailureReason)
+		&& CanPlaceBuildingInternal(Coordinate, Descriptor, &CursorTarget, OutFailureReason);
+}
+
+bool ACastleBoard::CanPlaceBuildingInternal(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason) const
+{
 	OutFailureReason = FText::GetEmpty();
 
 	if (!ValidateBuildingDescriptor(Descriptor, OutFailureReason))
@@ -414,7 +426,6 @@ bool ACastleBoard::CanPlaceBuilding(const FIntVector& Coordinate, const FCastleB
 	}
 
 	const TArray<FIntVector> Footprint = BuildPlacementFootprint(Coordinate, Descriptor.Level);
-	bool bHasMatch = false;
 	for (const FIntVector& Cell : Footprint)
 	{
 		if (!IsCoordinateWithinBoard(Cell) || GetBuildingAt(Cell) != nullptr)
@@ -438,22 +449,21 @@ bool ACastleBoard::CanPlaceBuilding(const FIntVector& Coordinate, const FCastleB
 				return false;
 			}
 		}
-		bHasMatch |= HasPlacementMatch(Cell, Descriptor);
 	}
-	if (!bHasMatch)
-	{
-		OutFailureReason = FText::FromString(TEXT("建筑占用范围或六面相邻格没有满足颜色/数字匹配规则的对象。"));
-		return false;
-	}
-
-	return true;
+	// 占用和支撑检查遍历整座建筑；属性匹配只读取玩家选中的一个面。
+	return HasPlacementMatch(Coordinate, Descriptor, CursorTarget, OutFailureReason);
 }
 
 ACastleBuildingBase* ACastleBoard::PlaceBuilding(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, bool bTryMerge, FText& OutFailureReason)
 {
+	return PlaceBuildingInternal(Coordinate, Descriptor, bTryMerge, nullptr, OutFailureReason);
+}
+
+ACastleBuildingBase* ACastleBoard::PlaceBuildingInternal(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, bool bTryMerge, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason)
+{
 	OutFailureReason = FText::GetEmpty();
 
-	if (!CanPlaceBuilding(Coordinate, Descriptor, OutFailureReason))
+	if (!CanPlaceBuildingInternal(Coordinate, Descriptor, CursorTarget, OutFailureReason))
 	{
 		return nullptr;
 	}
@@ -612,6 +622,11 @@ void ACastleBoard::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 ACastleBuildingBase* ACastleBoard::PlaceBuildingFromBackpack(const FIntVector& Coordinate, UCastleBackpackComponent* Backpack, int32 BackpackIndex, bool bTryMerge, FText& OutFailureReason)
 {
+	return PlaceBuildingFromBackpackInternal(Coordinate, Backpack, BackpackIndex, bTryMerge, nullptr, OutFailureReason);
+}
+
+ACastleBuildingBase* ACastleBoard::PlaceBuildingFromBackpackInternal(const FIntVector& Coordinate, UCastleBackpackComponent* Backpack, int32 BackpackIndex, bool bTryMerge, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason)
+{
 	OutFailureReason = FText::GetEmpty();
 
 	if (Backpack == nullptr)
@@ -628,7 +643,7 @@ ACastleBuildingBase* ACastleBoard::PlaceBuildingFromBackpack(const FIntVector& C
 	}
 
 	// 先做完整校验，再取出卡牌；这样失败时背包不会发生任何变化。
-	if (!CanPlaceBuilding(Coordinate, Descriptor, OutFailureReason))
+	if (!CanPlaceBuildingInternal(Coordinate, Descriptor, CursorTarget, OutFailureReason))
 	{
 		return nullptr;
 	}
@@ -641,7 +656,7 @@ ACastleBuildingBase* ACastleBoard::PlaceBuildingFromBackpack(const FIntVector& C
 		return nullptr;
 	}
 
-	ACastleBuildingBase* PlacedBuilding = PlaceBuilding(Coordinate, RemovedDescriptor, bTryMerge, OutFailureReason);
+	ACastleBuildingBase* PlacedBuilding = PlaceBuildingInternal(Coordinate, RemovedDescriptor, bTryMerge, CursorTarget, OutFailureReason);
 	if (PlacedBuilding != nullptr)
 	{
 		return PlacedBuilding;
@@ -838,6 +853,7 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 	}
 
 	BuildGridCursorTarget(HitCell, LocalImpactPoint, LocalNormal, OutTarget);
+	OutTarget.bGroundSurface = bHitGroundTile;
 	return OutTarget.bValid;
 }
 
@@ -1442,62 +1458,83 @@ bool ACastleBoard::TryGetGroundCellAtPlane(const FIntVector& Coordinate, FCastle
 	return TryGetGroundCell(Coordinate, OutCell);
 }
 
-bool ACastleBoard::HasPlacementMatch(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor) const
+bool ACastleBoard::TryResolvePlacementCoordinate(const FCastleGridCursorTarget& CursorTarget, FIntVector& OutCoordinate, FText& OutFailureReason) const
 {
+	OutFailureReason = FText::GetEmpty();
+	const FIntVector FaceOffset = GetGridFaceOffset(CursorTarget.Face);
+	if (!CursorTarget.bValid || !IsCoordinateWithinBoard(CursorTarget.Cell) || FaceOffset == FIntVector::ZeroValue
+		|| CursorTarget.AdjacentCell != CursorTarget.Cell + FaceOffset)
+	{
+		OutFailureReason = FText::FromString(TEXT("放置失败：当前指向的格面无效，请重新对准棋盘。"));
+		return false;
+	}
+
+	if (CursorTarget.bGroundSurface)
+	{
+		// 地块的顶面支撑首层建筑，落点仍是地块所在格；地块侧面不允许用于建造。
+		FCastleGroundCell GroundCell;
+		if (CursorTarget.Face != ECastleGridFace::Up || !TryGetGroundCellAtPlane(CursorTarget.Cell, GroundCell)
+			|| GetBuildingAt(CursorTarget.Cell) != nullptr)
+		{
+			OutFailureReason = FText::FromString(TEXT("放置失败：指向的地面顶面已不可用，请重新选择。"));
+			return false;
+		}
+		OutCoordinate = CursorTarget.Cell;
+		return true;
+	}
+
+	// 建筑的任一面都指向其外侧邻格；建筑消失后不能改用同坐标的地面作为匹配来源。
+	if (!IsValid(GetBuildingAt(CursorTarget.Cell)))
+	{
+		OutFailureReason = FText::FromString(TEXT("放置失败：指向的建筑已不存在，请重新选择格面。"));
+		return false;
+	}
+	OutCoordinate = CursorTarget.AdjacentCell;
+	return true;
+}
+
+bool ACastleBoard::HasPlacementMatch(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason) const
+{
+	// 无视线来源的坐标接口只使用正下方的支撑面，避免它继续扫描邻居而绕过定向规则。
+	FCastleGridCursorTarget SupportTarget;
+	if (CursorTarget == nullptr)
+	{
+		SupportTarget.bValid = true;
+		SupportTarget.bGroundSurface = Coordinate.Z == GridOrigin.Z;
+		SupportTarget.Cell = SupportTarget.bGroundSurface ? Coordinate : Coordinate - FIntVector(0, 0, 1);
+		SupportTarget.Face = ECastleGridFace::Up;
+		SupportTarget.AdjacentCell = SupportTarget.Cell + FIntVector(0, 0, 1);
+		CursorTarget = &SupportTarget;
+	}
+
+	FIntVector ResolvedCoordinate;
+	if (!TryResolvePlacementCoordinate(*CursorTarget, ResolvedCoordinate, OutFailureReason)) { return false; }
+	if (ResolvedCoordinate != Coordinate)
+	{
+		OutFailureReason = FText::FromString(TEXT("放置失败：落点与当前高亮面不一致。"));
+		return false;
+	}
+
+	// 所有占用格共享建筑的颜色和数字，只读取命中面所属的地块或建筑一次。
 	const bool bIsRoad = Descriptor.GetBuildingType() == ECastleBuildingType::Road;
-
-	// 地面只存在于 Z=0 平面，只有在该平面放置时才把目标地面本身作为匹配来源。
-	if (Coordinate.Z == GridOrigin.Z)
+	bool bMatches = false;
+	if (CursorTarget->bGroundSurface)
 	{
-		FCastleGroundCell TargetGroundCell;
-		if (TryGetGroundCellAtPlane(Coordinate, TargetGroundCell))
-		{
-			if (bIsRoad ? TargetGroundCell.IsRoadTile() : (TargetGroundCell.Color == Descriptor.Color || TargetGroundCell.Number == Descriptor.Number))
-			{
-				return true;
-			}
-		}
+		FCastleGroundCell GroundCell;
+		if (!TryGetGroundCellAtPlane(CursorTarget->Cell, GroundCell)) { return false; }
+		bMatches = bIsRoad ? GroundCell.IsRoadTile()
+			: !GroundCell.IsRoadTile() && (GroundCell.Color == Descriptor.Color || GroundCell.Number == Descriptor.Number);
 	}
-
-	TArray<FIntVector> Neighbors;
-	GetFaceNeighborCoordinates(Coordinate, Neighbors);
-	for (const FIntVector& NeighborCoordinate : Neighbors)
+	else
 	{
-		if (!IsCoordinateWithinBoard(NeighborCoordinate))
-		{
-			continue;
-		}
-
-		if (ACastleBuildingBase* NeighborBuilding = GetBuildingAt(NeighborCoordinate))
-		{
-			if (bIsRoad)
-			{
-				if (NeighborBuilding->IsRoad())
-				{
-					return true;
-				}
-			}
-			else if (!NeighborBuilding->IsRoad() && (NeighborBuilding->GetBuildingColor() == Descriptor.Color || NeighborBuilding->GetBuildingNumber() == Descriptor.Number))
-			{
-				return true;
-			}
-
-			continue;
-		}
-
-		if (NeighborCoordinate.Z == GridOrigin.Z)
-		{
-			FCastleGroundCell NeighborGroundCell;
-			if (TryGetGroundCellAtPlane(NeighborCoordinate, NeighborGroundCell))
-			{
-				if (bIsRoad ? NeighborGroundCell.IsRoadTile() : (NeighborGroundCell.Color == Descriptor.Color || NeighborGroundCell.Number == Descriptor.Number))
-				{
-					return true;
-				}
-			}
-		}
+		const ACastleBuildingBase* Source = GetBuildingAt(CursorTarget->Cell);
+		bMatches = bIsRoad ? Source->IsRoad()
+			: !Source->IsRoad() && (Source->GetBuildingColor() == Descriptor.Color || Source->GetBuildingNumber() == Descriptor.Number);
 	}
-
+	if (bMatches) { return true; }
+	OutFailureReason = FText::FromString(bIsRoad
+		? TEXT("放置失败：道路只能依靠当前高亮的道路面放置。")
+		: TEXT("放置失败：卡牌必须与当前高亮面的颜色或数字相同，且不能依靠道路匹配。"));
 	return false;
 }
 
@@ -1618,18 +1655,15 @@ ACastleBuildingBase* ACastleBoard::PlaceBackpackBuildingAtCursor(const FCastleGr
 		return nullptr;
 	}
 
-	// 地面顶面是初始建筑的支撑格，其他格面则把放置位置设为该面的外侧邻格。
-	FIntVector TargetCoordinate = CursorTarget.AdjacentCell;
-	if (CursorTarget.Face == ECastleGridFace::Up && CursorTarget.Cell.Z == GridOrigin.Z)
+	FIntVector TargetCoordinate;
+	if (!TryResolvePlacementCoordinate(CursorTarget, TargetCoordinate, OutFailureReason))
 	{
-		FCastleGroundCell GroundCell;
-		if (TryGetGroundCellAtPlane(CursorTarget.Cell, GroundCell) && GetBuildingAt(CursorTarget.Cell) == nullptr)
-		{
-			TargetCoordinate = CursorTarget.Cell;
-		}
+		ShowPrototypeMessage(OutFailureReason.ToString(), FColor::Red);
+		return nullptr;
 	}
 
-	ACastleBuildingBase* PlacedBuilding = PlaceBuildingFromBackpack(TargetCoordinate, PrototypeBackpack, BackpackIndex, true, OutFailureReason);
+	// 预览、取牌前校验和真正生成始终携带同一个面，不能退回只知道落点的坐标接口。
+	ACastleBuildingBase* PlacedBuilding = PlaceBuildingFromBackpackInternal(TargetCoordinate, PrototypeBackpack, BackpackIndex, true, &CursorTarget, OutFailureReason);
 	if (PlacedBuilding == nullptr)
 	{
 		ShowPrototypeMessage(OutFailureReason.ToString(), FColor::Red);

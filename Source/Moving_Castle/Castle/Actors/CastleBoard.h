@@ -177,11 +177,15 @@ public:
 	/**
 	 * 检查一张建筑卡牌是否可以放到目标坐标。
 	 *
-	 * 放置只检查目标格和六个面相邻格；道路只接受道路地面或道路邻居，功能
-	 * 建筑不会把道路当成颜色/数字匹配来源。
+	 * 没有射线方向的坐标入口固定从下方顶面放置：首层只匹配目标地面，
+	 * 上层只匹配正下方建筑。玩家交互必须使用带高亮面来源的光标入口。
 	 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
 	bool CanPlaceBuilding(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason) const;
+
+	/** 校验当前高亮面：只匹配该面所属地面或建筑，同时检查整座建筑的占用、边界与支撑。 */
+	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
+	bool CanPlaceBuildingAtCursor(const FCastleGridCursorTarget& CursorTarget, const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason) const;
 
 	/** 生成并占用格子，游戏中先播放 Assembly Flight；返回新放置 Actor，完成后才可能被合并结果替换。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|棋盘")
@@ -326,6 +330,18 @@ protected:
 	/** 检查指定地面坐标是否存在，允许查询上层坐标对应的平面地面。 */
 	bool TryGetGroundCellAtPlane(const FIntVector& Coordinate, FCastleGroundCell& OutCell) const;
 
-	/** 判断一个建筑描述是否能和邻居或目标地面形成匹配。 */
-	bool HasPlacementMatch(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor) const;
+	/** 从高亮面的唯一来源解析落点；地面顶面落在本格，建筑面落在该面外侧格。 */
+	bool TryResolvePlacementCoordinate(const FCastleGridCursorTarget& CursorTarget, FIntVector& OutCoordinate, FText& OutFailureReason) const;
+
+	/** 匹配指定来源；无光标的坐标入口仅使用下方顶面，绝不搜索其余邻居。 */
+	bool HasPlacementMatch(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason) const;
+
+	/** 公共校验入口，整次操作保留同一高亮面，防止背包扣牌或生成阶段丢失放置方向。 */
+	bool CanPlaceBuildingInternal(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason) const;
+
+	/** 校验后执行既有生成、占用、飞入和合成流程；光标来源只参与本次放置匹配。 */
+	ACastleBuildingBase* PlaceBuildingInternal(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, bool bTryMerge, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason);
+
+	/** 扣牌前后都保留来源；失败不消费卡牌，也不改用其他面重试。 */
+	ACastleBuildingBase* PlaceBuildingFromBackpackInternal(const FIntVector& Coordinate, UCastleBackpackComponent* Backpack, int32 BackpackIndex, bool bTryMerge, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason);
 };

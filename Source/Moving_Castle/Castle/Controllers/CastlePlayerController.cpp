@@ -195,7 +195,13 @@ void ACastlePlayerController::UpdateGridCursor()
 	if (ActiveBoard->TryResolveGridCursorTarget(RayOrigin, RayEnd, NewTarget))
 	{
 		CurrentGridCursorTarget = NewTarget;
-		GridCursor->ApplyTarget(CurrentGridCursorTarget);
+		// 高亮颜色和点击建造共用棋盘校验，背包选择或命中方向变化后会在本帧重新计算。
+		FCastleBuildingDescriptor Descriptor;
+		FText FailureReason;
+		const bool bCanPlace = ActiveBoard->PrototypeBackpack != nullptr
+			&& ActiveBoard->PrototypeBackpack->TryGetItemAt(SelectedBackpackIndex, Descriptor)
+			&& ActiveBoard->CanPlaceBuildingAtCursor(CurrentGridCursorTarget, Descriptor, FailureReason);
+		GridCursor->ApplyTarget(CurrentGridCursorTarget, bCanPlace);
 	}
 	else
 	{
