@@ -9,6 +9,7 @@
 #include "Components/Building/Effects/CastleBuildingEffectComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/TextRenderComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
@@ -39,6 +40,25 @@ ACastleBuildingTriggerDemo::ACastleBuildingTriggerDemo()
 	DemoCamera->SetFieldOfView(60);
 	DemoCamera->PostProcessSettings.bOverride_AutoExposureBias = true;
 	DemoCamera->PostProcessSettings.AutoExposureBias = -1.0f;
+	CounterA = CreateDefaultSubobject<UTextRenderComponent>(TEXT("CounterA"));
+	CounterB = CreateDefaultSubobject<UTextRenderComponent>(TEXT("CounterB"));
+	for (UTextRenderComponent* Counter : {CounterA.Get(), CounterB.Get()})
+	{
+		Counter->SetupAttachment(GetRootComponent());
+		Counter->SetHorizontalAlignment(EHTA_Center);
+		Counter->SetWorldSize(64);
+		Counter->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Counter->SetCanEverAffectNavigation(false);
+	}
+	CounterA->SetRelativeLocation(FVector(350, -450, 100));
+	CounterB->SetRelativeLocation(FVector(1400, -450, 100));
+	// 文字朝向本演示的固定相机，不向业务建筑添加逐帧面向相机的额外功能。
+	CounterA->SetRelativeRotation((DemoCamera->GetRelativeLocation() - CounterA->GetRelativeLocation()).Rotation());
+	CounterB->SetRelativeRotation((DemoCamera->GetRelativeLocation() - CounterB->GetRelativeLocation()).Rotation());
+	CounterA->SetTextRenderColor(FColor::Cyan);
+	CounterB->SetTextRenderColor(FColor::Orange);
+	CounterA->SetText(FText::FromString(TEXT("A (2 cells): 0")));
+	CounterB->SetText(FText::FromString(TEXT("B (1 cell): 0")));
 }
 
 void ACastleBuildingTriggerDemo::BeginPlay()
@@ -123,6 +143,17 @@ void ACastleBuildingTriggerDemo::Tick(float DeltaSeconds)
 	}
 	DrawDebugBox(GetWorld(), GetActorTransform().TransformPosition(FVector(350, 0, 15)), FVector(700, 350, 15), GetActorQuat(), FColor::Cyan, false, -1, 0, 4);
 	DrawDebugBox(GetWorld(), GetActorTransform().TransformPosition(FVector(1400, 0, 15)), FVector(350, 350, 15), GetActorQuat(), FColor::Orange, false, -1, 0, 4);
+	// 仅次数变化时重建文字网格，演示 Tick 不以帧率重复提交同一段渲染数据。
+	if (DisplayedCountA != Buildings[0]->BuildingEffect->TriggerCount)
+	{
+		DisplayedCountA = Buildings[0]->BuildingEffect->TriggerCount;
+		CounterA->SetText(FText::FromString(FString::Printf(TEXT("A (2 cells): %lld"), DisplayedCountA)));
+	}
+	if (DisplayedCountB != Buildings[1]->BuildingEffect->TriggerCount)
+	{
+		DisplayedCountB = Buildings[1]->BuildingEffect->TriggerCount;
+		CounterB->SetText(FText::FromString(FString::Printf(TEXT("B (1 cell): %lld"), DisplayedCountB)));
+	}
 	if (GEngine)
 	{
 		GEngine->AddOnScreenDebugMessage(static_cast<uint64>(GetUniqueID()), 0.0f, FColor::Yellow, FString::Printf(

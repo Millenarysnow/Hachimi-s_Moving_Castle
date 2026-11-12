@@ -9,6 +9,7 @@ class ACastleBuildingBase;
 class ACastleMassSpawner;
 class ACastlePatrolRoute;
 class UCameraComponent;
+class UTextRenderComponent;
 
 /** 直接运行的原生演示：真实放置双格/单格建筑，共享 NavMesh 路线及可见 Mass NPC。 */
 UCLASS()
@@ -47,6 +48,17 @@ protected:
 private:
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UCameraComponent> DemoCamera;
+
+	/** 直接渲染在场景中的计数，验收反馈不依赖屏幕调试信息开关或 HUD。 */
+	UPROPERTY(VisibleAnywhere)
+	TObjectPtr<UTextRenderComponent> CounterA;
+
+	UPROPERTY(VisibleAnywhere)
+	TObjectPtr<UTextRenderComponent> CounterB;
+
+	/** 只比较整数变化，避免每帧重复创建文字、字体布局和渲染资源。 */
+	int64 DisplayedCountA = -1;
+	int64 DisplayedCountB = -1;
 
 	/** 演示失败停止推进并显示原因，不能用隐藏的备用路线或模型补出成功。 */
 	void Fail(const FText& Reason);
