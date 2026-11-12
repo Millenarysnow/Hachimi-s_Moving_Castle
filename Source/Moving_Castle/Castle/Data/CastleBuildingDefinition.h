@@ -12,8 +12,8 @@ class UBuildingPartCatalog;
 /**
  * 同一种建筑的一级配置。
  *
- * 每个等级只保存一个最终生成类：没有模型组件的 C++ 类使用统一立方体占位，
- * 带模型的蓝图则直接继承对应等级 C++ 类。这样棋盘、合成、背包和商店始终
+ * 每个等级只保存一个最终生成类：蓝图直接继承对应等级 C++ 类，且必须显式
+ * 提供美术模型。这样棋盘、合成、背包和商店始终
  * 生成同一个 Actor，不再额外维护模型 Actor 引用。
  */
 USTRUCT(BlueprintType)
@@ -21,7 +21,7 @@ struct MOVING_CASTLE_API FCastleBuildingLevelDefinition
 {
 	GENERATED_BODY()
 
-	/** 实际等级，从 1 开始连续配置；空模型不等于缺失这个等级。 */
+	/** 实际等级，从 1 开始连续配置；模型漏配不会改变等级占用规则。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "等级", meta = (ClampMin = "1", ClampMax = "5"))
 	int32 Level = 1;
 
@@ -60,7 +60,7 @@ public:
 	/** 查找准确等级，不把缺失等级替换为其他等级或其他建筑。 */
 	const FCastleBuildingLevelDefinition* FindLevel(int32 InLevel) const;
 
-	/** 校验名称、连续等级和最终生成类；没有模型组件的类使用统一立方体占位。 */
+	/** 校验名称、连续等级和最终生成类；模型实例的完整性由实际生成时严格检查。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑定义")
 	bool ValidateConfiguration(FText& OutFailureReason) const;
 

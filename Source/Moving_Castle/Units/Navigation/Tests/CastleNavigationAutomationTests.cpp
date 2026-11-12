@@ -212,6 +212,8 @@ namespace CastleNavigationTests
 		bool BeginBoardPlacement()
 		{
 			UWorld* World = Demo->GetWorld();
+			// 此集成测试只检查业务变化调度，显式提供模型，避免重新依赖生产占位行为。
+			TestModels = MakeUnique<CastleBuildingTests::FScopedNativeBuildingModels>(World);
 			const FTransform Transform(FVector(6000.0, 6000.0, 0.0));
 			Board = World->SpawnActorDeferred<ACastleBoard>(ACastleBoard::StaticClass(), Transform);
 			if (!Test->TestNotNull(TEXT("创建业务集成用棋盘"), Board)) { return false; }
@@ -254,6 +256,7 @@ namespace CastleNavigationTests
 		ACastleNavigationDemo* Demo = nullptr;
 		UCastleNavigationSubsystem* Navigation = nullptr;
 		ACastleBoard* Board = nullptr;
+		TUniquePtr<CastleBuildingTests::FScopedNativeBuildingModels> TestModels;
 		TSharedPtr<const FCastleSharedNavigationPath, ESPMode::ThreadSafe> OldPath;
 		FVector Start;
 		FVector Goal;

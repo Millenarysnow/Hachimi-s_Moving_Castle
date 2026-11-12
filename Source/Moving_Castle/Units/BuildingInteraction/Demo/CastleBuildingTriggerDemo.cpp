@@ -6,6 +6,7 @@
 #include "CastleBuildings.h"
 #include "CastleMassSpawner.h"
 #include "CastleNavigationSubsystem.h"
+#include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Components/Building/Effects/CastleBuildingEffectComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -72,21 +73,24 @@ void ACastleBuildingTriggerDemo::BeginPlay()
 	Board->WorldBaseHeight = 250;
 	Board->FinishSpawning(GetActorTransform());
 
-	// 这是显式的演示白模定义，不替代正式建筑资产，也不会修改正式商店配置。
+	// 演示显式引用带模型的等级蓝图；缺少模型时由正式放置接口报错，不生成演示占位件。
 	UCastleBuildingDefinition* A = NewObject<UCastleBuildingDefinition>(Board);
 	A->DisplayName = FText::FromString(TEXT("演示双格箭塔"));
 	A->BuildingType = ECastleBuildingType::ArcherTower;
 	FCastleBuildingLevelDefinition Level1;
 	Level1.Level = 1;
-	Level1.BuildingClass = ACastleArcherTowerLevel1::StaticClass();
+	Level1.BuildingClass = LoadClass<ACastleBuildingBase>(nullptr,
+		TEXT("/Game/MovingCastle/BP/BP_ArcherTower_lv1.BP_ArcherTower_lv1_C"));
 	FCastleBuildingLevelDefinition Level2;
 	Level2.Level = 2;
-	Level2.BuildingClass = ACastleArcherTowerLevel2::StaticClass();
+	Level2.BuildingClass = LoadClass<ACastleBuildingBase>(nullptr,
+		TEXT("/Game/MovingCastle/BP/BP_ArcherTower_lv2.BP_ArcherTower_lv2_C"));
 	A->Levels = {Level1, Level2};
 	UCastleBuildingDefinition* B = NewObject<UCastleBuildingDefinition>(Board);
 	B->DisplayName = FText::FromString(TEXT("演示单格农田"));
 	B->BuildingType = ECastleBuildingType::Farm;
-	Level1.BuildingClass = ACastleFarmLevel1::StaticClass();
+	Level1.BuildingClass = LoadClass<ACastleBuildingBase>(nullptr,
+		TEXT("/Game/MovingCastle/BP/BP_Farm_lv1.BP_Farm_lv1_C"));
 	B->Levels = {Level1};
 	Board->BuildingDefinitions = {A, B};
 	FCastleGroundGenerationResult Ground;
@@ -133,10 +137,16 @@ void ACastleBuildingTriggerDemo::Tick(float DeltaSeconds)
 		if (!Path || !Path->bValid || Spawner->SpawnedUnits.Num() != NPCCount) { return; }
 		for (ACastleBuildingBase* Building : Buildings)
 		{
-			// 只隐藏演示白模，不隐藏数字标签，也不改变效果、触发范围和实际楼板。
-			if (UStaticMeshComponent* Mesh = Cast<UStaticMeshComponent>(Building->GetDefaultSubobjectByName(TEXT("PrototypeMesh"))))
+			// 只隐藏蓝图美术分支，不隐藏数字标签，也不改变功能地板碰撞和触发范围。
+			TArray<UStaticMeshComponent*> Meshes;
+			Building->GetComponents<UStaticMeshComponent>(Meshes);
+			for (UStaticMeshComponent* Mesh : Meshes)
 			{
-				Mesh->SetVisibility(false);
+				if (!UBuildingGameplayRootComponent::IsInGameplayHierarchy(Mesh)
+					&& !Mesh->ComponentHasTag(TEXT("MergeExclude")))
+				{
+					Mesh->SetVisibility(false);
+				}
 			}
 		}
 		Phase = 1;

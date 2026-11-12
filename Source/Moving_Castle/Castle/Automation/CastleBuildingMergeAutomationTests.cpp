@@ -62,6 +62,7 @@ bool FCastleRealBuildingMergeTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("正式箭塔零件目录存在"), Definition->PartCatalog.Get())) { return false; }
 	UWorld* World = CastleMergeTests::MakeWorld();
 	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
+	CastleBuildingTests::FScopedNativeBuildingModels TestModels(World);
 	ACastleBoard* Board = CastleMergeTests::MakeBoard(World, Definition);
 	FCastleBuildingDescriptor Card;
 	FText Reason;
@@ -132,6 +133,7 @@ bool FCastleChainBuildingMergeTest::RunTest(const FString& Parameters)
 {
 	UWorld* World = CastleMergeTests::MakeWorld();
 	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
+	CastleBuildingTests::FScopedNativeBuildingModels TestModels(World);
 	UCastleBuildingDefinition* Definition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::ArcherTower);
 	ACastleBoard* Board = CastleMergeTests::MakeBoard(World, Definition);
 	FCastleBuildingDescriptor Card;
@@ -186,6 +188,7 @@ bool FCastleDeferredPlacementMergeTest::RunTest(const FString& Parameters)
 {
 	UWorld* World = CastleMergeTests::MakeWorld();
 	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
+	CastleBuildingTests::FScopedNativeBuildingModels TestModels(World);
 	UCastleBuildingDefinition* Definition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::ArcherTower);
 	ACastleBoard* Board = CastleMergeTests::MakeBoard(World, Definition);
 	FCastleBuildingDescriptor Card;
@@ -217,6 +220,7 @@ bool FCastleCancelledPlacementMergeTest::RunTest(const FString& Parameters)
 {
 	UWorld* World = CastleMergeTests::MakeWorld();
 	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
+	CastleBuildingTests::FScopedNativeBuildingModels TestModels(World);
 	UCastleBuildingDefinition* Definition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::ArcherTower);
 	ACastleBoard* Board = CastleMergeTests::MakeBoard(World, Definition);
 	FCastleBuildingDescriptor Card;

@@ -21,8 +21,8 @@ class UCastleBuildingEffectComponent;
 /**
  * 所有可放置建筑的共同 Actor 基类。
  *
- * 这个 Actor 同时承载建筑逻辑和该等级蓝图中的直接模型组件。没有模型组件的
- * C++ 等级类使用统一立方体占位；带模型的等级蓝图直接继承对应 C++ 类。
+ * 这个 Actor 同时承载建筑逻辑和该等级蓝图中的直接模型组件。等级蓝图直接
+ * 继承对应 C++ 类，必须显式提供美术模型；缺少模型时拒绝配置和放置。
  * 不再通过独立模型载体或 Child Actor 转发模型和变换。
  */
 UCLASS(Abstract, Blueprintable)
@@ -31,7 +31,7 @@ class MOVING_CASTLE_API ACastleBuildingBase : public ABuildingNavigationActor, p
 	GENERATED_BODY()
 
 public:
-	/** 创建逻辑根节点、功能分组、占位网格和通用建筑标签。 */
+	/** 创建逻辑根节点、功能分组和通用建筑标签，不创建替代美术模型。 */
 	ACastleBuildingBase();
 
 	/** 所有可放置建筑原生携带同一个效果入口；每个实例独立保存状态。 */
@@ -118,7 +118,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
 	UCastleBuildingDefinition* GetBuildingDefinition() const { return BuildingDefinition; }
 
-	/** 根据当前 Actor 自身的模型组件或空模型状态配置视觉与标签。 */
+	/** 根据当前 Actor 自身的美术组件配置视觉与标签；缺少美术模型时返回明确错误。 */
 	bool ConfigureBuildingVisual(float InCellSize, float InLayerHeight, FText& OutFailureReason);
 
 	/** 返回当前 Actor 直接拥有的可见模型包围盒，供标签和卡片预览取景使用。 */
@@ -126,10 +126,6 @@ public:
 
 	/** 预览模式下只允许 SceneCapture 看见模型，且关闭碰撞和阴影。 */
 	void PrepareForPreview();
-
-	/** 没有蓝图模型组件时是否正在使用统一立方体占位。 */
-	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
-	bool IsUsingPlaceholder() const { return bUsingPlaceholder; }
 
 	/** 判断当前建筑是否属于道路。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
@@ -162,20 +158,13 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "建筑模型")
 	TObjectPtr<USceneComponent> VisualRoot;
 
-	/** 无模型等级使用的引擎立方体；有模型时保持隐藏。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "建筑模型")
-	TObjectPtr<UStaticMeshComponent> PrototypeMesh;
-
-	/** 占位立方体与标签底牌共用的引擎基础资源。 */
+	/** 仅供数字标签底牌使用的引擎资源，不得用于替代缺失的建筑模型。 */
 	UPROPERTY()
-	TObjectPtr<UStaticMesh> PlaceholderCube;
+	TObjectPtr<UStaticMesh> LabelPlateMesh;
 
+	/** 数字标签底牌的基础材质；每座建筑单独创建深色动态实例。 */
 	UPROPERTY()
-	TObjectPtr<UMaterialInterface> PlaceholderMaterial;
-
-	/** 当前是否没有检测到蓝图提供的可见模型组件。 */
-	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "建筑模型")
-	bool bUsingPlaceholder = true;
+	TObjectPtr<UMaterialInterface> LabelPlateMaterial;
 
 	/** 卡片捕获器也会创建建筑实例，必须显式排除它们的效果调用。 */
 	UPROPERTY(Transient)
@@ -205,11 +194,11 @@ protected:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "建筑")
 	TArray<FIntVector> OccupiedCoordinates;
 
-	/** 无论是否使用正式模型，都显示建筑的颜色、数字和等级以便判断放置规则。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
+	/** 在模型配置成功后显示颜色、数字和等级，以便判断放置规则。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "建筑标签")
 	TObjectPtr<class UTextRenderComponent> PrototypeLabel;
 
 	/** 建筑标签的深色底牌，确保数字在各种建筑颜色上都能读取。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "建筑标签")
 	TObjectPtr<class UStaticMeshComponent> PrototypeLabelPlate;
 };

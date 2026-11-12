@@ -131,6 +131,7 @@ bool FCastleShopConstructionTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	ON_SCOPE_EXIT { World->DestroyWorld(false); };
+	CastleBuildingTests::FScopedNativeBuildingModels TestModels(World);
 	ACastleBoard* Board = World->SpawnActor<ACastleBoard>();
 	if (!TestNotNull(TEXT("在真实 World 中生成棋盘"), Board))
 	{

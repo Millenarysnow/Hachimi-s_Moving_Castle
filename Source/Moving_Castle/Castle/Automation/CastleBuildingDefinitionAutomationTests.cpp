@@ -14,7 +14,7 @@
 #include "Engine/World.h"
 #include "Misc/ScopeExit.h"
 
-/** 验证缺等级与非法逻辑类被明确拒绝，空模型仍是合法定义。 */
+/** 数据校验只检查等级和类型；模型完整性由生成实例后的视觉配置严格检查。 */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleBuildingDefinitionValidationTest, "MovingCastle.Logic.BuildingDefinitionValidation",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -22,7 +22,7 @@ bool FCastleBuildingDefinitionValidationTest::RunTest(const FString& Parameters)
 {
 	UCastleBuildingDefinition* Definition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::ArcherTower);
 	FText Reason;
-	TestTrue(TEXT("所有等级留空模型时定义仍然有效"), Definition->ValidateConfiguration(Reason));
+	TestTrue(TEXT("仅有原生等级类的数据定义通过类型校验"), Definition->ValidateConfiguration(Reason));
 	FCastleBuildingDescriptor Card;
 	TestTrue(TEXT("定义工厂创建二级卡牌"), Definition->CreateDescriptor(2, ECastleTileColor::Red, 3, Card, Reason));
 	TestTrue(TEXT("卡牌保留准确资产身份与等级类"), Card.Definition == Definition && Card.GetBuildingClass() == ACastleArcherTowerLevel2::StaticClass());
@@ -35,7 +35,7 @@ bool FCastleBuildingDefinitionValidationTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-/** 在真实 World 中验证模型、空模型占位、合成升级和回收完整保留 Data Asset。 */
+/** 在真实 World 中验证缺模型时不消耗卡牌，并验证显式测试模型的合成与回收。 */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleBuildingDefinitionPlacementTest, "MovingCastle.Logic.BuildingDefinitionPlacement",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -69,11 +69,25 @@ bool FCastleBuildingDefinitionPlacementTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("配置测试地面"), Board->ApplyGroundGenerationResult(Ground, Reason))) { return false; }
 	FCastleBuildingDescriptor Card;
 	Definition->CreateDescriptor(1, ECastleTileColor::Red, 3, Card, Reason);
+	int32 AddedIndex = INDEX_NONE;
+	if (!TestTrue(TEXT("先将待放置卡牌加入背包"), Board->PrototypeBackpack->TryAddBuilding(
+		Definition, 1, ECastleTileColor::Red, 3, AddedIndex, Reason))) { return false; }
+	TestNull(TEXT("缺少美术模型时明确拒绝放置"), Board->PlaceBuildingFromBackpack(
+		FIntVector::ZeroValue, Board->PrototypeBackpack, AddedIndex, false, Reason));
+	TestTrue(TEXT("错误指出缺少模型并包含实际类名"), Reason.ToString().Contains(TEXT("缺少可见美术模型"))
+		&& Reason.ToString().Contains(TEXT("CastleArcherTowerLevel1")));
+	TestEqual(TEXT("缺模型不消耗背包卡牌"), Board->PrototypeBackpack->GetItemCount(), 1);
+	TestEqual(TEXT("缺模型不提交建筑索引"), Board->GetPlacedBuildingCount(), 0);
+	TestEqual(TEXT("缺模型不提交格子占用"), Board->GetOccupiedRoomCellCount(), 0);
+	FCastleBuildingDescriptor UnusedCard;
+	Board->PrototypeBackpack->TryRemoveItemAt(AddedIndex, UnusedCard, Reason);
+	// 缺模型失败边界验证完毕后，为后续合成测试显式提供模型输入。
+	CastleBuildingTests::FScopedNativeBuildingModels TestModels(World);
 	ACastleBuildingBase* First = Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason);
 	if (!TestNotNull(TEXT("一级模型放置成功"), First)) { AddError(Reason.ToString()); return false; }
 	TestFalse(TEXT("首次放置先播放原有飞入"), First->bHasCompletedPlacement);
 	TestTrue(TEXT("原有放置飞入完整完成"), CastleBuildingTests::CompletePlacement(First));
-	TestTrue(TEXT("没有模型组件的等级使用统一立方体占位"), First->IsUsingPlaceholder());
+	TestNull(TEXT("建筑不再包含原生占位网格"), First->GetDefaultSubobjectByName(TEXT("PrototypeMesh")));
 	ACastleBuildingBase* Merged = Board->PlaceBuilding(FIntVector(1, 0, 0), Card, true, Reason);
 	if (!TestNotNull(TEXT("第二张一级卡先放入棋盘"), Merged)) { AddError(Reason.ToString()); return false; }
 	TestEqual(TEXT("第二座建筑飞入期间仍保持一级"), Board->GetPlacedBuildingCount(), 2);
@@ -82,7 +96,7 @@ bool FCastleBuildingDefinitionPlacementTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("飞入完成后两张一级卡自动合成"), Merged)) { return false; }
 	TestEqual(TEXT("合成结果为二级"), Merged->GetBuildingLevel(), 2);
 	TestTrue(TEXT("升级后仍引用同一建筑定义"), Merged->GetBuildingDefinition() == Definition);
-	TestTrue(TEXT("二级没有配置模型时使用立方体"), Merged->IsUsingPlaceholder());
+	TestTrue(TEXT("二级使用测试显式提供的模型"), Merged->GetVisualBounds().IsValid != 0);
 	TestEqual(TEXT("合成建筑占用两格"), Merged->GetOccupiedCoordinates().Num(), 2);
 	TestTrue(TEXT("回收成功"), Board->RemoveBuildingToBackpack(Merged, Board->PrototypeBackpack, Reason));
 	FCastleBuildingDescriptor Recovered;
@@ -185,7 +199,7 @@ bool FCastleDirectBuildingBlueprintTest::RunTest(const FString& Parameters)
 	const auto CheckDirectBlueprint = [this, &AuthoredTransforms, BlueprintClass, AuthoredRootScale](ACastleBuildingBase* Building)
 	{
 		TestTrue(TEXT("实际建筑自身就是等级蓝图"), Building->GetClass() == BlueprintClass);
-		TestFalse(TEXT("正式蓝图没有使用立方体"), Building->IsUsingPlaceholder());
+		TestNull(TEXT("正式蓝图不含原生占位组件"), Building->GetDefaultSubobjectByName(TEXT("PrototypeMesh")));
 		TestTrue(TEXT("原生根缩放未被覆盖"), Building->GetActorScale3D().Equals(AuthoredRootScale));
 		TArray<UChildActorComponent*> ChildActors;
 		Building->GetComponents<UChildActorComponent>(ChildActors);
@@ -223,21 +237,19 @@ bool FCastleDirectBuildingBlueprintTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("沿 Y 轴时整体旋转 90 度"), MergedAlongY->GetActorRotation().Equals(FRotator(0.0f, 90.0f, 0.0f)));
 	Board->RemoveBuilding(MergedAlongY, Reason);
 
-	// 三级仍按用户确认保留平面四格占位，四级则直接生成自身的八格等级蓝图。
+	// 用户要求保留箭塔 DA：三级仍引用无模型 C++ 类，必须明确失败，不能再生成占位几何。
 	Definition->CreateDescriptor(3, ECastleTileColor::Red, 3, Card, Reason);
 	ACastleBuildingBase* Level3Building = Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason);
-	if (!TestNotNull(TEXT("直接放置三级卡"), Level3Building)) { AddError(Reason.ToString()); return false; }
-	CastleBuildingTests::CompletePlacement(Level3Building);
-	TestTrue(TEXT("三级继续使用四格占位"), Level3Building->IsUsingPlaceholder()
-		&& Level3Building->GetOccupiedCoordinates().Num() == 4);
-	Board->RemoveBuilding(Level3Building, Reason);
+	TestNull(TEXT("未配置美术模型的三级箭塔明确失败"), Level3Building);
+	TestTrue(TEXT("三级失败给出缺模型原因"), Reason.ToString().Contains(TEXT("缺少可见美术模型")));
+	TestEqual(TEXT("三级失败后棋盘仍为空"), Board->GetPlacedBuildingCount(), 0);
 	Definition->CreateDescriptor(4, ECastleTileColor::Red, 3, Card, Reason);
 	ACastleBuildingBase* Level4Building = Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason);
 	if (!TestNotNull(TEXT("直接放置四级卡"), Level4Building)) { AddError(Reason.ToString()); return false; }
 	CastleBuildingTests::CompletePlacement(Level4Building);
 	TestTrue(TEXT("四级直接使用定义中的蓝图并占八格"), Level4Building->GetClass() == Definition->FindLevel(4)->BuildingClass
 		&& Level4Building->GetClass()->IsChildOf(ACastleArcherTowerLevel4::StaticClass())
-		&& !Level4Building->IsUsingPlaceholder() && Level4Building->GetOccupiedCoordinates().Num() == 8);
+		&& Level4Building->GetOccupiedCoordinates().Num() == 8);
 	TArray<UStaticMeshComponent*> Level4Meshes;
 	Level4Building->GetComponents<UStaticMeshComponent>(Level4Meshes);
 	const int32 Level4PartCount = Level4Meshes.FilterByPredicate([](const UStaticMeshComponent* Component)

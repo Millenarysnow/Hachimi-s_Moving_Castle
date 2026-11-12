@@ -95,7 +95,7 @@ UTextureRenderTarget2D* UCastleBuildingPreviewSubsystem::GetPreview(const FCastl
 		OutFailureReason = FText::FromString(TEXT("建筑卡片预览无法生成等级建筑 Actor。"));
 		return nullptr;
 	}
-	// 与放置入口读取同一棋盘尺寸，增大单格间距后，占位模型的高宽比例也保持一致。
+	// 与放置入口读取同一棋盘尺寸，卡片沿用正式建筑的占用范围和标签配置来源。
 	const ACastleBoard* Board = Cast<ACastleBoard>(UGameplayStatics::GetActorOfClass(GetWorld(), ACastleBoard::StaticClass()));
 	if (Board == nullptr)
 	{

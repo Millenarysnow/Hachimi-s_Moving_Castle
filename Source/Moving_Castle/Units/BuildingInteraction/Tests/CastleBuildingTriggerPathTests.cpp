@@ -132,6 +132,7 @@ bool FCastleBuildingTriggerRegistrationTest::RunTest(const FString& Parameters)
 	// 正式 Destroy 路径要求世界上下文，否则引擎会拒绝销毁，无法验证 OnDestroyed 注销。
 	GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
 	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
+	CastleBuildingTests::FScopedNativeBuildingModels TestModels(World);
 	// AActor::ProcessEvent 在未初始化的临时世界中会跳过动态 OnDestroyed 回调，
 	// 因此采用实际的 Actor 初始化边界，而不是直接把测试未运行的回调视为生产逻辑失败。
 	World->InitializeActorsForPlay(FURL());

@@ -26,6 +26,7 @@ bool FCastleBuildingBottomCenterPlacementTest::RunTest(const FString& Parameters
 	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
 	Context.SetCurrentWorld(World);
 	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
+	CastleBuildingTests::FScopedNativeBuildingModels TestModels(World);
 
 	// 非零原点、倾斜旋转和非均匀缩放能发现沿世界 Z 直接减高度造成的错误。
 	const FTransform BoardTransform(FRotator(18.0f, 37.0f, -11.0f), FVector(120.0f, -80.0f, 250.0f), FVector(1.25f, 0.8f, 1.5f));
@@ -66,12 +67,12 @@ bool FCastleBuildingBottomCenterPlacementTest::RunTest(const FString& Parameters
 		bool bValid = TestTrue(FString::Printf(TEXT("%s：Actor 原点位于预期底面中心，实际 %s，预期 %s"),
 			Phase, *Building->GetActorLocation().ToString(), *ExpectedWorld.ToString()),
 			Building->GetActorLocation().Equals(ExpectedWorld, 0.01f));
-		UStaticMeshComponent* Mesh = Cast<UStaticMeshComponent>(Building->GetDefaultSubobjectByName(TEXT("PrototypeMesh")));
-		if (!TestNotNull(FString::Printf(TEXT("%s：原生占位组件存在"), Phase), Mesh)
-			|| !TestTrue(FString::Printf(TEXT("%s：占位组件已配置网格"), Phase), Mesh->GetStaticMesh() != nullptr)) { return false; }
+		UStaticMeshComponent* Mesh = FindObject<UStaticMeshComponent>(Building, TEXT("TestBuildingModel"));
+		if (!TestNotNull(FString::Printf(TEXT("%s：显式测试模型存在"), Phase), Mesh)
+			|| !TestTrue(FString::Printf(TEXT("%s：测试模型已配置网格"), Phase), Mesh->GetStaticMesh() != nullptr)) { return false; }
 		const FBox BoundsInBoard = Mesh->GetStaticMesh()->GetBoundingBox().TransformBy(
 			Mesh->GetComponentTransform().ToMatrixWithScale() * BoardTransform.ToInverseMatrixWithScale());
-		bValid &= TestTrue(FString::Printf(TEXT("%s：占位立方体底面与建筑锚点同高，实际 %.3f，预期 %.3f"),
+		bValid &= TestTrue(FString::Printf(TEXT("%s：作者配置的模型底面与建筑锚点同高，实际 %.3f，预期 %.3f"),
 			Phase, BoundsInBoard.Min.Z, ExpectedLocal.Z), FMath::IsNearlyEqual(BoundsInBoard.Min.Z, ExpectedLocal.Z, 0.01));
 		return bValid;
 	};
@@ -122,6 +123,7 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
 	Context.SetCurrentWorld(World);
 	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
+	CastleBuildingTests::FScopedNativeBuildingModels TestModels(World);
 	ACastleBoard* Board = World->SpawnActor<ACastleBoard>();
 	if (!TestNotNull(TEXT("创建测试棋盘"), Board)) { return false; }
 	Board->GridSize = FIntVector(3, 3, 3);
@@ -159,10 +161,16 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	const FIntVector Destination(1, 1, 0);
 	const FVector Center = Board->GetGridWorldLocation(Destination);
 	FCastleGridCursorTarget FloorTarget, LeftTarget, RightTarget;
+	// 侧面射线对准实际美术模型，不能再假定存在一个填满整个格子高度的自动占位方块。
+	const auto ResolveSide = [Board, Center](const ACastleBuildingBase* Building, FCastleGridCursorTarget& Target)
+	{
+		const FVector ModelCenter = Building->GetVisualBounds().GetCenter();
+		return Board->TryResolveGridCursorTarget(FVector(Center.X, Center.Y, ModelCenter.Z), ModelCenter, Target);
+	};
 	if (!TestTrue(TEXT("射线命中中央地面"), Board->TryResolveGridCursorTarget(Center + FVector(0, 0, Board->LayerHeight),
 		Center - FVector(0, 0, Board->LayerHeight), FloorTarget))
-		|| !TestTrue(TEXT("射线命中左侧建筑面"), Board->TryResolveGridCursorTarget(Center, Board->GetGridWorldLocation(FIntVector(0, 1, 0)), LeftTarget))
-		|| !TestTrue(TEXT("射线命中右侧建筑面"), Board->TryResolveGridCursorTarget(Center, Board->GetGridWorldLocation(FIntVector(2, 1, 0)), RightTarget))) { return false; }
+		|| !TestTrue(TEXT("射线命中左侧建筑面"), ResolveSide(Left, LeftTarget))
+		|| !TestTrue(TEXT("射线命中右侧建筑面"), ResolveSide(Right, RightTarget))) { return false; }
 	TestTrue(TEXT("地面来源被保留"), FloorTarget.bGroundSurface);
 	TestFalse(TEXT("建筑来源不会误认成下方地面"), LeftTarget.bGroundSurface);
 	TestEqual(TEXT("左侧高亮面向 +X"), LeftTarget.Face, ECastleGridFace::PositiveX);
