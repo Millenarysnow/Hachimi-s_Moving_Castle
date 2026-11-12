@@ -5,12 +5,15 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "CastleBuildingDefinition.h"
+#include "CastleTowerAttackDataAsset.h"
 #include "AssemblyFlightComponent.h"
 #include "CastleBuildings.h"
 #include "CastleBoard.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "MassEntityConfigAsset.h"
+#include "Units/Mass/Projectiles/CastleMassHomingProjectileTrait.h"
 
 namespace CastleBuildingTests
 {
@@ -103,6 +106,24 @@ namespace CastleBuildingTests
 			Entry.Level = Index + 1;
 			Entry.BuildingClass = Classes[Index];
 			Definition->Levels.Add(Entry);
+		}
+		if (Type == ECastleBuildingType::ArcherTower)
+		{
+			// 箭塔测试定义显式创建完整的攻击数据输入，不借助生产默认对象补齐配置。
+			UCastleTowerAttackDataAsset* AttackData = NewObject<UCastleTowerAttackDataAsset>(Definition);
+			AttackData->ProjectileConfiguration = NewObject<UMassEntityConfigAsset>(AttackData);
+			AttackData->ProjectileConfiguration->GetMutableConfig().AddTrait(
+				*NewObject<UCastleMassHomingProjectileTrait>(AttackData->ProjectileConfiguration));
+			for (int32 Level = 1; Level <= 5; ++Level)
+			{
+				FCastleTowerAttackLevelData Entry;
+				Entry.Level = Level;
+				Entry.AttacksPerSecond = 1.0f;
+				Entry.ProjectileDamage = 10.0f;
+				Entry.AttackRadius = 1000.0f;
+				AttackData->Levels.Add(Entry);
+			}
+			Definition->AttackData = AttackData;
 		}
 		return Definition;
 	}

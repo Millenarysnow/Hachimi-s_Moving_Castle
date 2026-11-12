@@ -18,7 +18,8 @@
 #include "UObject/ConstructorHelpers.h"
 #include "Units/BuildingInteraction/CastleBuildingTriggerSubsystem.h"
 
-ACastleBuildingBase::ACastleBuildingBase()
+ACastleBuildingBase::ACastleBuildingBase(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
 {
 	BuildingEffect = CreateDefaultSubobject<UCastleBuildingEffectComponent>(TEXT("BuildingEffect"));
 	// 建筑逻辑和模型组件现在位于同一个 Actor；VisualRoot 只提供统一的组件根节点。

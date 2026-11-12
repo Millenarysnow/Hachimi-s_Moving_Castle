@@ -8,6 +8,7 @@
 #include "CastleBuildingDefinition.generated.h"
 
 class UBuildingPartCatalog;
+class UCastleTowerAttackDataAsset;
 
 /**
  * 同一种建筑的一级配置。
@@ -56,6 +57,10 @@ public:
 	/** 各等级使用不同导入资产时，通过离线几何目录建立可复用零件关系。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="建筑|变化动画")
 	TObjectPtr<UBuildingPartCatalog> PartCatalog;
+
+	/** 箭塔定义持有该塔族唯一的攻击参数；道路、农田和未接入攻击的建筑保持为空。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="建筑|攻击")
+	TObjectPtr<UCastleTowerAttackDataAsset> AttackData;
 
 	/** 查找准确等级，不把缺失等级替换为其他等级或其他建筑。 */
 	const FCastleBuildingLevelDefinition* FindLevel(int32 InLevel) const;

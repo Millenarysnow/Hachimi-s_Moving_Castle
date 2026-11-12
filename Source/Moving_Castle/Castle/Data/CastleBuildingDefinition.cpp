@@ -3,6 +3,7 @@
 #include "CastleBuildingDefinition.h"
 
 #include "CastleBuildingBase.h"
+#include "CastleTowerAttackDataAsset.h"
 #include "Misc/DataValidation.h"
 
 const FCastleBuildingLevelDefinition* UCastleBuildingDefinition::FindLevel(int32 InLevel) const
@@ -25,6 +26,18 @@ bool UCastleBuildingDefinition::ValidateConfiguration(FText& OutFailureReason) c
 	{
 		OutFailureReason = FText::FromString(TEXT("建筑类别无效，或道路配置了一级以外的等级。"));
 		return false;
+	}
+	if (BuildingType == ECastleBuildingType::ArcherTower)
+	{
+		if (!IsValid(AttackData))
+		{
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("%s 没有配置箭塔攻击 Data Asset。"), *DisplayName.ToString()));
+			return false;
+		}
+		if (!AttackData->ValidateConfiguration(OutFailureReason))
+		{
+			return false;
+		}
 	}
 
 	TSet<int32> SeenLevels;

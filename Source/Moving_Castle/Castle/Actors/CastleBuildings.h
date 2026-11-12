@@ -24,7 +24,7 @@ class MOVING_CASTLE_API ACastleArcherTowerBuilding : public ACastleBuildingBase
 
 public:
 	/** 设置箭塔类别。 */
-	ACastleArcherTowerBuilding();
+	explicit ACastleArcherTowerBuilding(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 };
 

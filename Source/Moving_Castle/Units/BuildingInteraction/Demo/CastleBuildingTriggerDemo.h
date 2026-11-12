@@ -11,7 +11,7 @@ class ACastlePatrolRoute;
 class UCameraComponent;
 class UTextRenderComponent;
 
-/** 直接运行的原生演示：真实放置双格/单格建筑，共享 NavMesh 路线及可见 Mass NPC。 */
+	/** 直接运行的原生演示：箭塔、农田、共享巡逻 NPC 和会受伤的 Mass 敌人。 */
 UCLASS()
 class MOVING_CASTLE_API ACastleBuildingTriggerDemo : public AActor
 {
@@ -33,6 +33,10 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="建筑触发演示")
 	TObjectPtr<ACastleMassSpawner> Spawner;
+
+	/** 箭塔攻击范围内的可见 Mass 敌人；死亡时由同一演示面板显示结果。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="建筑触发演示")
+	TObjectPtr<ACastleMassSpawner> EnemySpawner;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category="建筑触发演示")
 	TObjectPtr<ACastlePatrolRoute> Route;
@@ -56,9 +60,14 @@ private:
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UTextRenderComponent> CounterB;
 
+	/** 直接显示敌人当前生命或死亡状态，验证结果不依赖编辑器 Output Log。 */
+	UPROPERTY(VisibleAnywhere)
+	TObjectPtr<UTextRenderComponent> EnemyStatus;
+
 	/** 只比较整数变化，避免每帧重复创建文字、字体布局和渲染资源。 */
 	int64 DisplayedCountA = -1;
 	int64 DisplayedCountB = -1;
+	float DisplayedEnemyHealth = -1.0f;
 
 	/** 演示失败停止推进并显示原因，不能用隐藏的备用路线或模型补出成功。 */
 	void Fail(const FText& Reason);

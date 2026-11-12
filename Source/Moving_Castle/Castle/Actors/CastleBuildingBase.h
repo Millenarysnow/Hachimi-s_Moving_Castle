@@ -32,7 +32,7 @@ class MOVING_CASTLE_API ACastleBuildingBase : public ABuildingNavigationActor, p
 
 public:
 	/** 创建逻辑根节点、功能分组和通用建筑标签，不创建替代美术模型。 */
-	ACastleBuildingBase();
+	explicit ACastleBuildingBase(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 	/** 所有可放置建筑原生携带同一个效果入口；每个实例独立保存状态。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="建筑|效果")

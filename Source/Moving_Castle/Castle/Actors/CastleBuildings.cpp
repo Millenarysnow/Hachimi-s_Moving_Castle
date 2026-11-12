@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleBuildings.h"
+#include "Components/Building/Effects/Attack/CastleTowerAttackEffectComponent.h"
 
 ACastleRoadBuilding::ACastleRoadBuilding()
 {
@@ -8,9 +9,10 @@ ACastleRoadBuilding::ACastleRoadBuilding()
 	BuildingType = ECastleBuildingType::Road;
 	BuildingLevel = 1;
 }
-ACastleArcherTowerBuilding::ACastleArcherTowerBuilding()
+ACastleArcherTowerBuilding::ACastleArcherTowerBuilding(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UCastleTowerAttackEffectComponent>(TEXT("BuildingEffect")))
 {
-	// 箭塔族的具体等级由等级子类构造函数设置，此处只设置类别。
+	// 箭塔等级子类只设置等级；共同建筑效果子对象在构造时已替换为通用塔攻击组件。
 	BuildingType = ECastleBuildingType::ArcherTower;
 }
 

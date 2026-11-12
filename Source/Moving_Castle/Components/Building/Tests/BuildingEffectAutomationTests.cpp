@@ -2,6 +2,7 @@
 
 #include "CastleBuildings.h"
 #include "Components/Building/Effects/CastleBuildingEffectComponent.h"
+#include "Components/Building/Effects/Attack/CastleTowerAttackEffectComponent.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 
@@ -19,6 +20,9 @@ bool FCastleBuildingEffectEntryTest::RunTest(const FString& Parameters)
 	ACastleRoadBuilding* Road = World->SpawnActor<ACastleRoadBuilding>();
 	TestNotNull(TEXT("箭塔自带效果组件"), Tower->BuildingEffect.Get());
 	TestNotNull(TEXT("道路同样自带效果组件"), Road->BuildingEffect.Get());
+	TestTrue(TEXT("箭塔复用 BuildingEffect 子对象并使用原生塔攻击组件"),
+		Tower->BuildingEffect->IsA<UCastleTowerAttackEffectComponent>());
+	TestFalse(TEXT("道路继续使用基础建筑效果组件"), Road->BuildingEffect->IsA<UCastleTowerAttackEffectComponent>());
 	ICastleBuildingTriggerInterface* Entry = Cast<ICastleBuildingTriggerInterface>(Tower);
 	if (TestNotNull(TEXT("建筑实现共同原生接口"), Entry))
 	{
