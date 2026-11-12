@@ -71,17 +71,27 @@ bool FCastleTowerAttackQueueTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("待射队列打开组件 Tick"), Attack->IsComponentTickEnabled());
 
 	AddExpectedMessagePlain(TEXT("本次待射作废：攻击半径内没有存活敌人"),
-		ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 2);
-	Attack->TickComponent(0.49f, LEVELTICK_All, nullptr);
-	TestEqual(TEXT("少于半秒不消耗第一发"), Attack->PendingShotCount, int64(2));
-	Attack->TickComponent(0.02f, LEVELTICK_All, nullptr);
-	TestEqual(TEXT("达到每秒两发的首个半秒后只消耗一发"), Attack->PendingShotCount, int64(1));
-	Attack->TickComponent(0.48f, LEVELTICK_All, nullptr);
-	TestEqual(TEXT("第二发仍等待自己的射速间隔"), Attack->PendingShotCount, int64(1));
-	Attack->TickComponent(0.02f, LEVELTICK_All, nullptr);
-	TestEqual(TEXT("第二个半秒到期后消耗第二发"), Attack->PendingShotCount, int64(0));
+		ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 3);
+	Attack->TickComponent(0.0f, LEVELTICK_All, nullptr);
+	TestEqual(TEXT("闲置箭塔在触发后的首个 Tick 立即发出第一发"), Attack->PendingShotCount, int64(1));
+	World->TimeSeconds += 0.49;
+	Attack->TickComponent(0.0f, LEVELTICK_All, nullptr);
+	TestEqual(TEXT("第一发后的半秒冷却内不消耗第二发"), Attack->PendingShotCount, int64(1));
+	World->TimeSeconds += 0.02;
+	Attack->TickComponent(0.0f, LEVELTICK_All, nullptr);
+	TestEqual(TEXT("半秒射速冷却结束后消耗第二发"), Attack->PendingShotCount, int64(0));
 	TestFalse(TEXT("队列耗尽后关闭组件 Tick"), Attack->IsComponentTickEnabled());
 	TestEqual(TEXT("所有触发仍保留在建筑触发计数中"), Tower->BuildingEffect->TriggerCount, int64(2));
+
+	// 队列清空不清除射速状态；冷却中新的触发必须等到上一发的下一时刻。
+	TestTrue(TEXT("队列清空后再次触发仍加入待射"), Tower->TriggerBuildingEffect(Context));
+	World->TimeSeconds += 0.1;
+	Attack->TickComponent(0.0f, LEVELTICK_All, nullptr);
+	TestEqual(TEXT("队列清空后的冷却期间不提前发射"), Attack->PendingShotCount, int64(1));
+	TestTrue(TEXT("冷却期间保留组件 Tick"), Attack->IsComponentTickEnabled());
+	World->TimeSeconds += 0.42;
+	Attack->TickComponent(0.0f, LEVELTICK_All, nullptr);
+	TestEqual(TEXT("原冷却结束后消耗清空后加入的待射"), Attack->PendingShotCount, int64(0));
 
 	// 同一份攻击数据显式引用的追踪配置用于真实 Mass 生成，不替换生产参数或默认对象。
 	UMassEntityConfigAsset* EnemyConfiguration = NewObject<UMassEntityConfigAsset>(World);
@@ -98,7 +108,11 @@ bool FCastleTowerAttackQueueTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("敌人确实位于箭塔发射点"), World->GetSubsystem<UCastleMassUnitSubsystem>()->IsUnitValid(Enemies[0]));
 	TestTrue(TEXT("有敌人时触发仍增加一发"), Tower->TriggerBuildingEffect(Context));
-	Attack->TickComponent(0.5f, LEVELTICK_All, nullptr);
+	World->TimeSeconds += 0.46;
+	Attack->TickComponent(0.0f, LEVELTICK_All, nullptr);
+	TestEqual(TEXT("有敌人时仍服从上一发的冷却"), Attack->PendingShotCount, int64(1));
+	World->TimeSeconds += 0.02;
+	Attack->TickComponent(0.0f, LEVELTICK_All, nullptr);
 	TestEqual(TEXT("成功生成一发后只消耗对应待射项"), Attack->PendingShotCount, int64(0));
 	CastleTowerAttackTests::StepProcessor<UCastleMassHomingProjectileProcessor>(World, 0.0f);
 	FCastleMassUnitSnapshot EnemySnapshot;
@@ -110,7 +124,6 @@ bool FCastleTowerAttackQueueTest::RunTest(const FString& Parameters)
 	Tower->DispatchBeginPlay();
 	TestTrue(TEXT("销毁前 Actor 与组件已进入 BeginPlay"), Attack->HasBegunPlay());
 	TestTrue(TEXT("销毁前再次触发以验证实例清理"), Tower->TriggerBuildingEffect(Context));
-	Attack->TickComponent(0.1f, LEVELTICK_All, nullptr);
 	TestEqual(TEXT("销毁前待射状态存在"), Attack->PendingShotCount, int64(1));
 	Tower->Destroy();
 	Attack->EndPlay(EEndPlayReason::Destroyed);

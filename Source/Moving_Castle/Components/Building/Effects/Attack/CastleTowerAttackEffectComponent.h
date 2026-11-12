@@ -47,11 +47,11 @@ private:
 	bool FireOneShot(const UCastleTowerAttackDataAsset& DataAsset,
 		const FCastleTowerAttackLevelData& LevelData);
 
-	/** 清理待射状态并关闭 Tick，供队列耗尽和 EndPlay 共用。 */
+	/** 建筑结束生命周期时清理待射状态和冷却时刻。 */
 	void ClearPendingShots();
 
-	/** 从首发开始到下一发的剩余时间；负值表示尚未启动当前队列计时。 */
-	float SecondsUntilNextShot = -1.0f;
+	/** 下一发允许发射的世界游戏时间；负值表示该塔还没有发射过。队列清空时保留该时刻。 */
+	double NextShotWorldTime = -1.0;
 
 	/** 配置或 Mass 接口失败后保留待射项，等待新触发再次尝试，避免逐帧重复报错。 */
 	bool bWaitingForExternalRetry = false;

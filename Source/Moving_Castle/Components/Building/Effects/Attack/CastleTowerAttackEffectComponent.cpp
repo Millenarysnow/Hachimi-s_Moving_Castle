@@ -40,7 +40,8 @@ void UCastleTowerAttackEffectComponent::TickComponent(const float DeltaTime, con
 
 	if (PendingShotCount <= 0)
 	{
-		ClearPendingShots();
+		bWaitingForExternalRetry = false;
+		SetComponentTickEnabled(false);
 		return;
 	}
 	if (bWaitingForExternalRetry)
@@ -67,7 +68,7 @@ void UCastleTowerAttackEffectComponent::TickComponent(const float DeltaTime, con
 		bWaitingForExternalRetry = true;
 		return;
 	}
-	const float IntervalSeconds = 1.0f / LevelData->AttacksPerSecond;
+	const double IntervalSeconds = 1.0 / static_cast<double>(LevelData->AttacksPerSecond);
 	if (!FMath::IsFinite(IntervalSeconds) || IntervalSeconds <= 0.0f)
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("塔攻击间隔无效，攻击资产=%s，等级=%d。"),
@@ -75,15 +76,37 @@ void UCastleTowerAttackEffectComponent::TickComponent(const float DeltaTime, con
 		bWaitingForExternalRetry = true;
 		return;
 	}
-
-	// 每发都经过完整射速间隔；大 DeltaTime 会按到期顺序补发，但不会越过待射队列数量。
-	if (SecondsUntilNextShot < 0.0f)
+	const UWorld* World = GetWorld();
+	if (!IsValid(World))
 	{
-		SecondsUntilNextShot = IntervalSeconds;
+		UE_LOG(LogMoving_Castle, Error, TEXT("塔攻击无法读取当前世界时间，建筑=%s。"), *GetNameSafe(GetOwner()));
+		bWaitingForExternalRetry = true;
+		return;
 	}
-	SecondsUntilNextShot -= DeltaTime;
-	while (PendingShotCount > 0 && SecondsUntilNextShot <= 0.0f)
+	const double CurrentWorldTime = static_cast<double>(World->GetTimeSeconds());
+	if (!FMath::IsFinite(CurrentWorldTime) || CurrentWorldTime < 0.0)
 	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("塔攻击收到无效世界时间，建筑=%s，TimeSeconds=%f。"),
+			*GetNameSafe(GetOwner()), CurrentWorldTime);
+		bWaitingForExternalRetry = true;
+		return;
+	}
+
+	// 冷却独立于待射队列：首发无历史冷却时本 Tick 即可发射，清空队列也不重置下一发时刻。
+	if (NextShotWorldTime < 0.0)
+	{
+		NextShotWorldTime = CurrentWorldTime;
+	}
+	while (PendingShotCount > 0 && CurrentWorldTime + KINDA_SMALL_NUMBER >= NextShotWorldTime)
+	{
+		const double FollowingShotWorldTime = NextShotWorldTime + IntervalSeconds;
+		if (!FMath::IsFinite(FollowingShotWorldTime))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("塔攻击下一发冷却时间溢出，攻击资产=%s，等级=%d。"),
+				*DataAsset->GetPathName(), LevelData->Level);
+			bWaitingForExternalRetry = true;
+			return;
+		}
 		if (!FireOneShot(*DataAsset, *LevelData))
 		{
 			// 生成接口失败时保留当前待射项并暂停计时；新触发解除等待，避免逐帧重复错误日志。
@@ -92,12 +115,13 @@ void UCastleTowerAttackEffectComponent::TickComponent(const float DeltaTime, con
 		}
 
 		--PendingShotCount;
+		NextShotWorldTime = FollowingShotWorldTime;
 		if (PendingShotCount == 0)
 		{
-			ClearPendingShots();
+			bWaitingForExternalRetry = false;
+			SetComponentTickEnabled(false);
 			return;
 		}
-		SecondsUntilNextShot += IntervalSeconds;
 	}
 }
 
@@ -183,7 +207,7 @@ bool UCastleTowerAttackEffectComponent::FireOneShot(const UCastleTowerAttackData
 	FCastleMassUnitHandle Target;
 	if (!Units->FindNearestEnemy(Origin, LevelData.AttackRadius, Target))
 	{
-		UE_LOG(LogMoving_Castle, Warning, TEXT("箭塔 %s 本次待射作废：攻击半径内没有存活敌人。"), *Building->GetName());
+		UE_LOG(LogMoving_Castle, Warning, TEXT("塔 %s 本次待射作废：攻击半径内没有存活敌人。"), *Building->GetName());
 		return true;
 	}
 
@@ -205,7 +229,7 @@ bool UCastleTowerAttackEffectComponent::FireOneShot(const UCastleTowerAttackData
 void UCastleTowerAttackEffectComponent::ClearPendingShots()
 {
 	PendingShotCount = 0;
-	SecondsUntilNextShot = -1.0f;
+	NextShotWorldTime = -1.0;
 	bWaitingForExternalRetry = false;
 	SetComponentTickEnabled(false);
 }
