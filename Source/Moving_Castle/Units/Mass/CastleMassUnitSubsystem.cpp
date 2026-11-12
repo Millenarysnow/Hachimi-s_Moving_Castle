@@ -2,6 +2,7 @@
 
 #include "CastleMassFragments.h"
 #include "CastleMassTraits.h"
+#include "Enemies/CastleMassMeleeAttackFragments.h"
 #include "Engine/World.h"
 #include "MassCommands.h"
 #include "MassCommonFragments.h"
@@ -256,10 +257,10 @@ bool UCastleMassUnitSubsystem::GetUnitSnapshot(const FCastleMassUnitHandle& Unit
 		OutSnapshot.PatrolLeg = Patrol->Leg;
 		OutSnapshot.CompletedPatrolLaps = Patrol->CompletedLaps;
 	}
-	if (const auto* Enemy = Manager->GetFragmentDataPtr<FCastleMassEnemyFragment>(Unit.Entity))
+	if (const auto* Melee = Manager->GetFragmentDataPtr<FCastleMassMeleeAttackFragment>(Unit.Entity))
 	{
-		OutSnapshot.bInAttackRange = Enemy->bInAttackRange;
-		OutSnapshot.AttackCount = Enemy->AttackCount;
+		OutSnapshot.bInAttackRange = Melee->bInAttackRange;
+		OutSnapshot.AttackCount = Melee->AttackCount;
 	}
 	return true;
 }

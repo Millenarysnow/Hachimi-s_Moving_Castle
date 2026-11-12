@@ -1,6 +1,5 @@
 #include "CastleMassProcessors.h"
 
-#include "CastleMainTowerComponent.h"
 #include "CastleMassFragments.h"
 #include "Mass/CastleMassPatrolFragments.h"
 #include "MassCommonFragments.h"
@@ -95,93 +94,6 @@ void UCastleMassMovementProcessor::Execute(FMassEntityManager& EntityManager, FM
 			{
 				Transform.AddToTranslation(Step);
 				CastleMass::FaceVelocity(Transform, Velocity, Settings, DeltaTime);
-			}
-		}
-	});
-}
-
-UCastleMassEnemyAttackProcessor::UCastleMassEnemyAttackProcessor() : Query(*this)
-{
-	ExecutionFlags = static_cast<int32>(EProcessorExecutionFlags::All);
-	ExecutionOrder.ExecuteInGroup = UE::Mass::ProcessorGroupNames::Movement;
-	ExecutionOrder.ExecuteAfter.Add(UCastleMassMovementProcessor::StaticClass()->GetFName());
-	// 攻击结算需要访问主塔组件；只在游戏线程访问 UObject，实体本身仍按 Mass 查询批处理。
-	bRequiresGameThreadExecution = true;
-}
-
-void UCastleMassEnemyAttackProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
-{
-	Query.AddTagRequirement<FCastleMassEnemyTag>(EMassFragmentPresence::All);
-	Query.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
-	Query.AddRequirement<FMassVelocityFragment>(EMassFragmentAccess::ReadWrite);
-	Query.AddRequirement<FCastleMassMoveTargetFragment>(EMassFragmentAccess::ReadWrite);
-	Query.AddRequirement<FCastleMassUnitFragment>(EMassFragmentAccess::ReadOnly);
-	Query.AddRequirement<FCastleMassEnemyFragment>(EMassFragmentAccess::ReadWrite);
-}
-
-void UCastleMassEnemyAttackProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
-{
-	UCastleMainTowerSubsystem* TowerSubsystem = GetWorld() != nullptr
-		? GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>() : nullptr;
-	FVector TargetLocation = FVector::ZeroVector;
-	if (TowerSubsystem == nullptr || !TowerSubsystem->GetMainTowerTargetLocation(TargetLocation))
-	{
-		// 没有主塔时不把敌人静默传送到任意坐标；停住并保留明确日志，等待关卡修复配置。
-		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 敌人处理器没有找到存活的主塔目标，当前批次停止移动。"));
-		Query.ForEachEntityChunk(Context, [](FMassExecutionContext& Chunk)
-		{
-			const auto Velocities = Chunk.GetMutableFragmentView<FMassVelocityFragment>();
-			const auto Targets = Chunk.GetMutableFragmentView<FCastleMassMoveTargetFragment>();
-			for (FMassExecutionContext::FEntityIterator It = Chunk.CreateEntityIterator(); It; ++It)
-			{
-				Velocities[It].Value = FVector::ZeroVector;
-				Targets[It] = FCastleMassMoveTargetFragment();
-			}
-		});
-		return;
-	}
-
-	Query.ForEachEntityChunk(Context, [TowerSubsystem, TargetLocation](FMassExecutionContext& Chunk)
-	{
-		const float DeltaTime = FMath::Max(0.0f, Chunk.GetDeltaTimeSeconds());
-		const auto Transforms = Chunk.GetFragmentView<FTransformFragment>();
-		const auto Velocities = Chunk.GetMutableFragmentView<FMassVelocityFragment>();
-		const auto Targets = Chunk.GetMutableFragmentView<FCastleMassMoveTargetFragment>();
-		const auto Units = Chunk.GetFragmentView<FCastleMassUnitFragment>();
-		const auto Enemies = Chunk.GetMutableFragmentView<FCastleMassEnemyFragment>();
-
-		for (FMassExecutionContext::FEntityIterator It = Chunk.CreateEntityIterator(); It; ++It)
-		{
-			if (Units[It].Health <= 0.0f) { continue; }
-
-			FCastleMassEnemyFragment& Enemy = Enemies[It];
-			const FVector ToTower = TargetLocation - Transforms[It].GetTransform().GetLocation();
-			const float DistanceSquared = ToTower.SizeSquared();
-			const float RangeSquared = FMath::Square(FMath::Max(0.0f, Enemy.AttackRange));
-			Enemy.bInAttackRange = DistanceSquared <= RangeSquared;
-
-			if (!Enemy.bInAttackRange)
-			{
-				FCastleMassMoveTargetFragment& Target = Targets[It];
-				Target.Target = TargetLocation;
-				Target.DesiredVelocity = FVector::ZeroVector;
-				Target.bHasTarget = true;
-				continue;
-			}
-
-			// 已经贴近主塔，清除普通移动目标并停速，避免攻击时继续穿过主塔。
-			Targets[It] = FCastleMassMoveTargetFragment();
-			Velocities[It].Value = FVector::ZeroVector;
-			Enemy.AttackCooldown = FMath::Max(0.0f, Enemy.AttackCooldown - DeltaTime);
-			if (Enemy.AttackCooldown > 0.0f)
-			{
-				continue;
-			}
-
-			if (TowerSubsystem->ApplyMainTowerDamage(Enemy.AttackDamage))
-			{
-				++Enemy.AttackCount;
-				Enemy.AttackCooldown = Enemy.AttackInterval;
 			}
 		}
 	});

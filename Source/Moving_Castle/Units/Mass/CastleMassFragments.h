@@ -41,36 +41,6 @@ struct MOVING_CASTLE_API FCastleMassUnitFragment : public FMassFragment
 	float Age = 0.0f;
 };
 
-/**
- * 敌人专用战斗状态；攻击逻辑只写入当前实体的值数据，不创建逐敌人 UObject。
- *
- * AttackCount 和 bInAttackRange 同时用于运行时诊断，便于在伤害暂时配置为 0
- * 时仍能确认敌人已经停在主塔附近并持续执行攻击事件。
- */
-USTRUCT()
-struct MOVING_CASTLE_API FCastleMassEnemyFragment : public FMassFragment
-{
-	GENERATED_BODY()
-
-	UPROPERTY()
-	float AttackDamage = 0.0f;
-
-	UPROPERTY()
-	float AttackInterval = 1.0f;
-
-	UPROPERTY()
-	float AttackRange = 150.0f;
-
-	UPROPERTY()
-	float AttackCooldown = 0.0f;
-
-	UPROPERTY()
-	bool bInAttackRange = false;
-
-	UPROPERTY()
-	int32 AttackCount = 0;
-};
-
 USTRUCT()
 struct MOVING_CASTLE_API FCastleMassMoveTargetFragment : public FMassFragment
 {

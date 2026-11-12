@@ -14,7 +14,7 @@ ACastleMassEnemySpawner::ACastleMassEnemySpawner()
 {
 	// 生成器只在 BeginPlay 或外部显式调用时创建实体，不执行逐帧逻辑。
 	static ConstructorHelpers::FObjectFinder<UMassEntityConfigAsset> EnemyConfig(
-		TEXT("/Game/MovingCastle/Mass/DA_MassEnemyBase.DA_MassEnemyBase"));
+		TEXT("/Game/MovingCastle/Mass/DA_MassMeleeTest.DA_MassMeleeTest"));
 	Configuration = EnemyConfig.Object;
 	Count = 1;
 	Columns = 1;

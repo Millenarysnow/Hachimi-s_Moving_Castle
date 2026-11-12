@@ -12,8 +12,8 @@ class UMassEntityConfigAsset;
  * 当前战斗原型的集中配置。
  *
  * 主塔生命、敌人批次生成参数和敌人 Mass 配置从同一份 Data Asset 读取；
- * 敌人的生命、伤害、攻击间隔和攻击距离继续在 EnemyConfiguration 的
- * UCastleMassEnemyTrait 中配置，避免在棋盘代码中复制兵种数值。
+ * 敌人生命与移动由 EnemyConfiguration 的基础 Trait 配置，具体攻击由其
+ * 可选能力 Trait 配置（例如近战），避免在棋盘或基类中写入兵种逻辑。
  */
 UCLASS(BlueprintType)
 class MOVING_CASTLE_API UCastleCombatDataAsset : public UDataAsset

@@ -71,38 +71,8 @@ bool UCastleMassUnitTrait::ValidateTemplate(const FMassEntityTemplateBuildContex
 UCastleMassEnemyTrait::UCastleMassEnemyTrait()
 {
 	Team = 1;
-	// 当前原型基础敌人的数值由此处和 DA_MassEnemyBase 共同提供：生命 10、伤害 0。
-	MaxHealth = 10.0f;
-	AttackDamage = 0.0f;
-	AttackInterval = 1.0f;
-	AttackRange = 150.0f;
+	// 基类只设置敌人通用默认值；生命 10 等测试平衡数值由具体兵种 DA 覆盖。
 	Movement.MaxSpeed = 350.0f;
-}
-
-void UCastleMassEnemyTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildContext, const UWorld& World) const
-{
-	Super::BuildTemplate(BuildContext, World);
-	FCastleMassEnemyFragment& Enemy = BuildContext.AddFragment_GetRef<FCastleMassEnemyFragment>();
-	Enemy.AttackDamage = AttackDamage;
-	Enemy.AttackInterval = AttackInterval;
-	Enemy.AttackRange = AttackRange;
-	Enemy.AttackCooldown = 0.0f;
-	Enemy.bInAttackRange = false;
-	Enemy.AttackCount = 0;
-}
-
-bool UCastleMassEnemyTrait::ValidateTemplate(const FMassEntityTemplateBuildContext& BuildContext, const UWorld& World,
-	FAdditionalTraitRequirements& OutTraitRequirements) const
-{
-	const bool bValid = Super::ValidateTemplate(BuildContext, World, OutTraitRequirements)
-		&& FMath::IsFinite(AttackDamage) && AttackDamage >= 0.0f
-		&& FMath::IsFinite(AttackInterval) && AttackInterval > 0.0f
-		&& FMath::IsFinite(AttackRange) && AttackRange >= 0.0f;
-	if (!bValid)
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 敌人攻击配置无效：%s，伤害必须非负，间隔必须为正，范围必须非负。"), *GetPathName());
-	}
-	return bValid;
 }
 
 UCastleMassNPCTrait::UCastleMassNPCTrait()
