@@ -71,7 +71,7 @@ bool FCastleTowerAttackQueueTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("待射队列打开组件 Tick"), Attack->IsComponentTickEnabled());
 
 	AddExpectedMessagePlain(TEXT("本次待射作废：攻击半径内没有存活敌人"),
-		ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 3);
+		ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 6);
 	Attack->TickComponent(0.0f, LEVELTICK_All, nullptr);
 	TestEqual(TEXT("闲置箭塔在触发后的首个 Tick 立即发出第一发"), Attack->PendingShotCount, int64(1));
 	World->TimeSeconds += 0.49;
@@ -93,6 +93,21 @@ bool FCastleTowerAttackQueueTest::RunTest(const FString& Parameters)
 	Attack->TickComponent(0.0f, LEVELTICK_All, nullptr);
 	TestEqual(TEXT("原冷却结束后消耗清空后加入的待射"), Attack->PendingShotCount, int64(0));
 
+	// 过期冷却不会让空闲期间积累的多次触发在同一 Tick 一次性发完。
+	World->TimeSeconds += 10.0;
+	for (int32 Index = 0; Index < 3; ++Index)
+	{
+		TestTrue(TEXT("长时间空闲后的同帧触发仍逐次入队"), Tower->TriggerBuildingEffect(Context));
+	}
+	Attack->TickComponent(0.0f, LEVELTICK_All, nullptr);
+	TestEqual(TEXT("长时间空闲后同一 Tick 只立即发出一发"), Attack->PendingShotCount, int64(2));
+	World->TimeSeconds += 0.51;
+	Attack->TickComponent(0.0f, LEVELTICK_All, nullptr);
+	TestEqual(TEXT("空闲后的第二发仍等待一整个射速间隔"), Attack->PendingShotCount, int64(1));
+	World->TimeSeconds += 0.51;
+	Attack->TickComponent(0.0f, LEVELTICK_All, nullptr);
+	TestEqual(TEXT("空闲后的第三发再等待一个射速间隔"), Attack->PendingShotCount, int64(0));
+
 	// 同一份攻击数据显式引用的追踪配置用于真实 Mass 生成，不替换生产参数或默认对象。
 	UMassEntityConfigAsset* EnemyConfiguration = NewObject<UMassEntityConfigAsset>(World);
 	UCastleMassEnemyTrait* EnemyTrait = NewObject<UCastleMassEnemyTrait>(EnemyConfiguration);
@@ -108,10 +123,10 @@ bool FCastleTowerAttackQueueTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("敌人确实位于箭塔发射点"), World->GetSubsystem<UCastleMassUnitSubsystem>()->IsUnitValid(Enemies[0]));
 	TestTrue(TEXT("有敌人时触发仍增加一发"), Tower->TriggerBuildingEffect(Context));
-	World->TimeSeconds += 0.46;
+	World->TimeSeconds += 0.45;
 	Attack->TickComponent(0.0f, LEVELTICK_All, nullptr);
 	TestEqual(TEXT("有敌人时仍服从上一发的冷却"), Attack->PendingShotCount, int64(1));
-	World->TimeSeconds += 0.02;
+	World->TimeSeconds += 0.06;
 	Attack->TickComponent(0.0f, LEVELTICK_All, nullptr);
 	TestEqual(TEXT("成功生成一发后只消耗对应待射项"), Attack->PendingShotCount, int64(0));
 	CastleTowerAttackTests::StepProcessor<UCastleMassHomingProjectileProcessor>(World, 0.0f);

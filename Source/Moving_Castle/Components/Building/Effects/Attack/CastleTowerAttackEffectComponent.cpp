@@ -28,8 +28,34 @@ void UCastleTowerAttackEffectComponent::ExecuteEffect(const FCastleBuildingTrigg
 		UE_LOG(LogMoving_Castle, Error, TEXT("塔攻击待射队列溢出，建筑=%s；本次触发无法记录。"), *GetNameSafe(GetOwner()));
 		return;
 	}
+	if (PendingShotCount == 0 || bWaitingForExternalRetry)
+	{
+		// 队列空闲或错误恢复时只对齐首发时刻；连续队列的后续射击仍由冷却间隔推进。
+		const UWorld* World = GetWorld();
+		if (!IsValid(World))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("塔攻击接收新待射时无法访问世界时间，建筑=%s。"), *GetNameSafe(GetOwner()));
+			bWaitingForExternalRetry = true;
+		}
+		else
+		{
+			const double CurrentWorldTime = static_cast<double>(World->GetTimeSeconds());
+			if (!FMath::IsFinite(CurrentWorldTime) || CurrentWorldTime < 0.0)
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("塔攻击接收新待射时世界时间无效，建筑=%s，TimeSeconds=%f。"),
+					*GetNameSafe(GetOwner()), CurrentWorldTime);
+				bWaitingForExternalRetry = true;
+			}
+			else
+			{
+				NextShotWorldTime = NextShotWorldTime < 0.0
+					? CurrentWorldTime
+					: FMath::Max(NextShotWorldTime, CurrentWorldTime);
+				bWaitingForExternalRetry = false;
+			}
+		}
+	}
 	++PendingShotCount;
-	bWaitingForExternalRetry = false;
 	SetComponentTickEnabled(true);
 }
 
