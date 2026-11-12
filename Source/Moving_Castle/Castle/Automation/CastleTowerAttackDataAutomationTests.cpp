@@ -4,6 +4,9 @@
 
 #include "CastleTowerAttackDataAsset.h"
 
+#include "Castle/Actors/CastleBuildingBase.h"
+#include "Components/Building/Effects/Attack/CastleTowerAttackEffectComponent.h"
+#include "Components/Building/Effects/CastleBuildingEffectComponent.h"
 #include "MassEntityConfigAsset.h"
 #include "Castle/Automation/CastleBuildingTestUtilities.h"
 #include "Castle/Data/CastleBuildingDefinition.h"
@@ -113,6 +116,22 @@ bool FCastleArcherTowerAttackAssetTest::RunTest(const FString& Parameters)
 	for (int32 Index = 0; Index < Data->Levels.Num(); ++Index)
 	{
 		const FCastleTowerAttackLevelData& Entry = Data->Levels[Index];
+		const FCastleBuildingLevelDefinition* BuildingLevel = Definition->FindLevel(Entry.Level);
+		if (!TestNotNull(TEXT("正式箭塔定义存在对应等级类"), BuildingLevel)) { continue; }
+		UClass* BuildingClass = BuildingLevel->BuildingClass.Get();
+		if (!TestNotNull(TEXT("正式箭塔等级类已加载"), BuildingClass)) { continue; }
+		ACastleBuildingBase* Defaults = Cast<ACastleBuildingBase>(BuildingClass->GetDefaultObject());
+		if (!TestNotNull(TEXT("正式箭塔等级类 CDO 存在"), Defaults)) { continue; }
+		TestTrue(FString::Printf(TEXT("%d 级 CDO 的 BuildingEffect 是通用塔攻击组件"), Entry.Level),
+			IsValid(Defaults->BuildingEffect) && Defaults->BuildingEffect->IsA<UCastleTowerAttackEffectComponent>());
+		TArray<UCastleBuildingEffectComponent*> EffectComponents;
+		Defaults->GetComponents<UCastleBuildingEffectComponent>(EffectComponents);
+		TestEqual(FString::Printf(TEXT("%d 级 CDO 只有一个建筑效果组件"), Entry.Level), EffectComponents.Num(), 1);
+		if (Entry.Level == 1 || Entry.Level == 2 || Entry.Level == 4)
+		{
+			TestTrue(FString::Printf(TEXT("%d 级保留现有箭塔蓝图类"), Entry.Level),
+				BuildingClass->HasAnyClassFlags(CLASS_CompiledFromBlueprint));
+		}
 		TestEqual(TEXT("等级行顺序和等级值一致"), Entry.Level, Index + 1);
 		TestEqual(TEXT("策划案每秒一箭"), Entry.AttacksPerSecond, 1.0f);
 		TestEqual(TEXT("单发伤害按等级递增"), Entry.ProjectileDamage, static_cast<float>((Index + 1) * 5 + 5));

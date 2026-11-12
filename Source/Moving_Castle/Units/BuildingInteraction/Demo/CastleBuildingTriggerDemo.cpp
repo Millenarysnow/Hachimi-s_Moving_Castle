@@ -146,8 +146,8 @@ void ACastleBuildingTriggerDemo::BeginPlay()
 	EnemySpawner->Columns = 1;
 	EnemySpawner->Spacing = 1.0f;
 	EnemySpawner->bSpawnOnBeginPlay = false;
-	EnemySpawner->bStartMoving = true;
-	EnemySpawner->LocalMovementDirection = FVector(0.0f, 1.0f, 0.0f);
+	// 敌人保持在箭塔射程内，避免巡逻 NPC 到达前目标已移动离开攻击半径。
+	EnemySpawner->bStartMoving = false;
 	EnemySpawner->FinishSpawning(EnemySpawnerTransform);
 	if (!EnemySpawner->Configuration
 		|| EnemySpawner->Configuration->FindTrait(UCastleMassEnemyTrait::StaticClass()) == nullptr)
