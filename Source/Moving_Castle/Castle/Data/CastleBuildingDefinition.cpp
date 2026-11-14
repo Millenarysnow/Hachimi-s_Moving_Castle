@@ -22,7 +22,8 @@ bool UCastleBuildingDefinition::ValidateConfiguration(FText& OutFailureReason) c
 		OutFailureReason = FText::FromString(TEXT("建筑定义必须填写名称，并配置 1 至 5 个连续等级。"));
 		return false;
 	}
-	if (BuildingType > ECastleBuildingType::Farm || (BuildingType == ECastleBuildingType::Road && Levels.Num() != 1))
+	// 盾塔与其他功能建筑使用相同的定义校验；只扩展合法类别，不放宽道路的单级约束。
+	if (BuildingType > ECastleBuildingType::ShieldTower || (BuildingType == ECastleBuildingType::Road && Levels.Num() != 1))
 	{
 		OutFailureReason = FText::FromString(TEXT("建筑类别无效，或道路配置了一级以外的等级。"));
 		return false;

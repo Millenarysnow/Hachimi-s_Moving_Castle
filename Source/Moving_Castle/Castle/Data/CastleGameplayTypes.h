@@ -27,8 +27,8 @@ enum class ECastleTileColor : uint8
 /**
  * 当前阶段实现的建筑类别。
  *
- * 敌人、NPC 和战斗逻辑不属于本阶段，所以这里仅描述棋盘和背包需要识别的
- * 道路、箭塔、炮塔、农田四类建筑。
+ * 棋盘、背包、商店和建筑定义共同使用此身份；具体效果由各建筑的原生组件实现。
+ * 新类别只追加到末尾，保留已有资产中道路、箭塔、炮塔和农田的序列化数值。
  */
 UENUM(BlueprintType)
 enum class ECastleBuildingType : uint8
@@ -36,7 +36,8 @@ enum class ECastleBuildingType : uint8
 	Road UMETA(DisplayName = "道路"),
 	ArcherTower UMETA(DisplayName = "箭塔"),
 	CannonTower UMETA(DisplayName = "炮塔"),
-	Farm UMETA(DisplayName = "农田")
+	Farm UMETA(DisplayName = "农田"),
+	ShieldTower UMETA(DisplayName = "盾塔")
 };
 
 /**

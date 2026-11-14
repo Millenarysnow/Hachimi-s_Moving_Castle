@@ -202,3 +202,73 @@ public:
 	ACastleFarmLevel5();
 };
 
+/**
+ * 盾塔建筑族的抽象基类，与炮塔、农田共用放置、合成、回收和触发框架。
+ * 当前阶段保留基础 BuildingEffect 的触发计数，不实现护盾、嘲讽、抵挡或反伤。
+ * 等级蓝图直接继承下方对应 C++ 类，美术和功能地板由蓝图显式配置。
+ */
+UCLASS(Abstract, Blueprintable)
+class MOVING_CASTLE_API ACastleShieldTowerBuilding : public ACastleBuildingBase
+{
+	GENERATED_BODY()
+
+public:
+	/** 只设置盾塔类别，具体等级由各等级子类确定。 */
+	ACastleShieldTowerBuilding();
+};
+
+/** 盾塔 1 级，占用一个网格，作为商店与开局卡牌的建筑类。 */
+UCLASS(Blueprintable)
+class MOVING_CASTLE_API ACastleShieldTowerLevel1 : public ACastleShieldTowerBuilding
+{
+	GENERATED_BODY()
+
+public:
+	/** 固定本类的一级身份，不在运行时推断等级。 */
+	ACastleShieldTowerLevel1();
+};
+
+/** 盾塔 2 级，占用两个网格，允许沿用现有水平或垂直合成形状。 */
+UCLASS(Blueprintable)
+class MOVING_CASTLE_API ACastleShieldTowerLevel2 : public ACastleShieldTowerBuilding
+{
+	GENERATED_BODY()
+
+public:
+	/** 固定本类的二级身份，占用由统一棋盘规则计算。 */
+	ACastleShieldTowerLevel2();
+};
+
+/** 盾塔 3 级，占用四个网格，合成时保留输入建筑实际形成的平面。 */
+UCLASS(Blueprintable)
+class MOVING_CASTLE_API ACastleShieldTowerLevel3 : public ACastleShieldTowerBuilding
+{
+	GENERATED_BODY()
+
+public:
+	/** 固定本类的三级身份，不另建盾塔专用合成流程。 */
+	ACastleShieldTowerLevel3();
+};
+
+/** 盾塔 4 级，占用八格立方体，使用现有自动合成上限。 */
+UCLASS(Blueprintable)
+class MOVING_CASTLE_API ACastleShieldTowerLevel4 : public ACastleShieldTowerBuilding
+{
+	GENERATED_BODY()
+
+public:
+	/** 固定本类的四级身份，表现尺寸由等级蓝图保留。 */
+	ACastleShieldTowerLevel4();
+};
+
+/** 盾塔 5 级，与其他塔一致预留奖励升级身份，不新增四升五自动合成。 */
+UCLASS(Blueprintable)
+class MOVING_CASTLE_API ACastleShieldTowerLevel5 : public ACastleShieldTowerBuilding
+{
+	GENERATED_BODY()
+
+public:
+	/** 固定本类的五级身份，供显式创建五级卡或后续奖励系统使用。 */
+	ACastleShieldTowerLevel5();
+};
+

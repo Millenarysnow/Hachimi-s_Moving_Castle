@@ -106,3 +106,39 @@ ACastleFarmLevel5::ACastleFarmLevel5()
 	BuildingLevel = 5;
 }
 
+ACastleShieldTowerBuilding::ACastleShieldTowerBuilding()
+{
+	// 盾塔使用建筑基类原有的唯一效果组件，仅接入通用触发入口与计数。
+	BuildingType = ECastleBuildingType::ShieldTower;
+}
+
+ACastleShieldTowerLevel1::ACastleShieldTowerLevel1()
+{
+	// 一级卡可直接购买和放置，单格占用沿用建筑基类规则。
+	BuildingLevel = 1;
+}
+
+ACastleShieldTowerLevel2::ACastleShieldTowerLevel2()
+{
+	// 二级只改变等级身份，两个实际占用格由棋盘在合成时传入。
+	BuildingLevel = 2;
+}
+
+ACastleShieldTowerLevel3::ACastleShieldTowerLevel3()
+{
+	// 三级继续使用统一四格合成和回收描述，不复制占用算法。
+	BuildingLevel = 3;
+}
+
+ACastleShieldTowerLevel4::ACastleShieldTowerLevel4()
+{
+	// 四级是现有八格自动合成结果，不在盾塔族内扩大升级上限。
+	BuildingLevel = 4;
+}
+
+ACastleShieldTowerLevel5::ACastleShieldTowerLevel5()
+{
+	// 五级与其他功能塔对齐预留类和资产，具体防御效果后续另行实现。
+	BuildingLevel = 5;
+}
+

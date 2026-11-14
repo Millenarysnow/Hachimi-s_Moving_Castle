@@ -77,7 +77,9 @@ bool FCastleVerticalMergeShapesTest::RunTest(const FString& Parameters)
 		{ TEXT("四级来自 XZ 立面"), 4, { {0,0,0}, {0,0,1}, {1,0,0}, {1,0,1}, {0,1,0}, {0,1,1}, {1,1,0}, {1,1,1} } },
 		{ TEXT("四级来自 YZ 立面"), 4, { {0,0,0}, {0,0,1}, {0,1,0}, {0,1,1}, {1,0,0}, {1,0,1}, {1,1,0}, {1,1,1} } }
 	};
-	for (const ECastleBuildingType Type : { ECastleBuildingType::ArcherTower, ECastleBuildingType::CannonTower, ECastleBuildingType::Farm })
+	// 盾塔复用完全相同的水平/垂直合成、占用索引及回收规则，不能在接入时遗漏。
+	for (const ECastleBuildingType Type : { ECastleBuildingType::ArcherTower, ECastleBuildingType::CannonTower,
+		ECastleBuildingType::Farm, ECastleBuildingType::ShieldTower })
 	{
 		UCastleBuildingDefinition* Definition = CastleBuildingTests::MakeDefinition(Type);
 		ACastleBoard* Board = CastleVerticalMergeTests::MakeBoard(World, Definition);
