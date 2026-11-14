@@ -7,6 +7,7 @@
 #include "CastleMassTraits.generated.h"
 
 class UAnimSequenceTransformProviderData;
+class UMaterialInterface;
 
 /** 三类单位的公共组成。具体行为用 Tag 查询扩展，不为单个单位分配 UObject。 */
 UCLASS(Abstract)
@@ -91,6 +92,10 @@ public:
 	/** 提供器同时指定骨骼网格和序列集合，离线构建后可随项目 Cook。 */
 	UPROPERTY(EditAnywhere, Category="人形动画")
 	TObjectPtr<UAnimSequenceTransformProviderData> AnimationProvider;
+
+	/** 按网格材质槽覆盖；空数组保留原资产材质，数组中的每个引用都必须有效。 */
+	UPROPERTY(EditAnywhere, Category="人形动画|材质")
+	TArray<TObjectPtr<UMaterialInterface>> MaterialOverrides;
 
 	UPROPERTY(EditAnywhere, Category="人形动画", meta=(ClampMin="0"))
 	int32 IdleSequence = 0;

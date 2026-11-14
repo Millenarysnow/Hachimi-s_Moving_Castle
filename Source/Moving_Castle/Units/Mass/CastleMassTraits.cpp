@@ -14,6 +14,7 @@
 #include "Moving_Castle.h"
 #include "Engine/World.h"
 #include "Rendering/SkeletalMeshRenderData.h"
+#include "Materials/MaterialInterface.h"
 
 void UCastleMassUnitTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildContext, const UWorld& World) const
 {
@@ -142,6 +143,7 @@ void UCastleMassHumanoidVisualizationTrait::BuildTemplate(FMassEntityTemplateBui
 		FMassSkinnedMeshInstanceVisualizationMeshDesc& Mesh = SkinnedMeshInstanceDesc.Meshes.AddDefaulted_GetRef();
 		Mesh.Asset = AnimationProvider->GetSkinnedAsset();
 		Mesh.TransformProvider = AnimationProvider;
+		Mesh.MaterialOverrides = MaterialOverrides;
 		Mesh.LocalTransform = MeshOffset;
 		Mesh.bCastShadows = bCastShadows;
 		Mesh.AnimationMinScreenSize = AnimationMinScreenSize;
@@ -176,6 +178,14 @@ bool UCastleMassHumanoidVisualizationTrait::ValidateTemplate(const FMassEntityTe
 		&& FMath::IsFinite(MovePlayRate) && MovePlayRate > 0.0f
 		&& FMath::IsFinite(BlendTime) && BlendTime >= 0.0f && !MeshOffset.ContainsNaN()
 		&& FMath::IsFinite(AnimationMinScreenSize);
+	for (int32 Slot = 0; Slot < MaterialOverrides.Num(); ++Slot)
+	{
+		if (!IsValid(MaterialOverrides[Slot]))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("Mass 材质覆盖无效：%s，材质槽 %d 为空，拒绝模板。"), *GetPathName(), Slot);
+			bValid = false;
+		}
+	}
 	if (bValid)
 	{
 		const USkinnedAsset* Asset = AnimationProvider->GetSkinnedAsset();

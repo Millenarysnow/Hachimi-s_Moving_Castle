@@ -10,6 +10,7 @@
 #include "MassExecutionContext.h"
 #include "MassMovementFragments.h"
 #include "Moving_Castle.h"
+#include "Subsystems/CastleShieldTowerSubsystem.h"
 
 UCastleMassMeleeAttackProcessor::UCastleMassMeleeAttackProcessor() : Query(*this)
 {
@@ -26,7 +27,8 @@ void UCastleMassMeleeAttackProcessor::ConfigureQueries(const TSharedRef<FMassEnt
 	Query.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
 	Query.AddRequirement<FMassVelocityFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassMoveTargetFragment>(EMassFragmentAccess::ReadWrite);
-	Query.AddRequirement<FCastleMassUnitFragment>(EMassFragmentAccess::ReadOnly);
+	// 护盾反伤即时修改攻击者生命，必须向调度器声明写权限。
+	Query.AddRequirement<FCastleMassUnitFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassMeleeAttackFragment>(EMassFragmentAccess::ReadWrite);
 }
 
@@ -34,30 +36,34 @@ void UCastleMassMeleeAttackProcessor::Execute(FMassEntityManager& EntityManager,
 {
 	UCastleMainTowerSubsystem* TowerSubsystem = GetWorld() != nullptr
 		? GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>() : nullptr;
-	FVector TargetLocation = FVector::ZeroVector;
-	const bool bHasTower = TowerSubsystem != nullptr && TowerSubsystem->GetMainTowerTargetLocation(TargetLocation);
-	bool bLoggedMissingTower = false;
-	Query.ForEachEntityChunk(Context, [TowerSubsystem, TargetLocation, bHasTower, &bLoggedMissingTower](FMassExecutionContext& Chunk)
+	UCastleShieldTowerSubsystem* Shields = GetWorld()->GetSubsystem<UCastleShieldTowerSubsystem>();
+	bool bAnyMissingTarget = false;
+	Query.ForEachEntityChunk(Context, [this, TowerSubsystem, Shields, &bAnyMissingTarget](FMassExecutionContext& Chunk)
 	{
 		const float DeltaTime = FMath::Max(0.0f, Chunk.GetDeltaTimeSeconds());
 		const auto Transforms = Chunk.GetFragmentView<FTransformFragment>();
 		const auto Velocities = Chunk.GetMutableFragmentView<FMassVelocityFragment>();
 		const auto Targets = Chunk.GetMutableFragmentView<FCastleMassMoveTargetFragment>();
-		const auto Units = Chunk.GetFragmentView<FCastleMassUnitFragment>();
+		const auto Units = Chunk.GetMutableFragmentView<FCastleMassUnitFragment>();
 		const auto Melees = Chunk.GetMutableFragmentView<FCastleMassMeleeAttackFragment>();
 
-		// 仅世界确有近战实体时才报缺失主塔，避免普通敌人或 NPC 世界产生无关错误。
-		if (!bHasTower && !bLoggedMissingTower)
-		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("Mass 近战处理器没有找到存活的主塔目标，当前近战批次停止移动。"));
-			bLoggedMissingTower = true;
-		}
 		for (FMassExecutionContext::FEntityIterator It = Chunk.CreateEntityIterator(); It; ++It)
 		{
 			if (Units[It].Health <= 0.0f) { continue; }
 			FCastleMassMeleeAttackFragment& Melee = Melees[It];
-			if (!bHasTower)
+			FVector TargetLocation;
+			uint64 ShieldId = 0;
+			const bool bShieldTarget = Shields->FindNearestActiveShield(
+				Transforms[It].GetTransform().GetLocation(), MAX_flt, true, ShieldId, TargetLocation);
+			const bool bHasTarget = bShieldTarget || (TowerSubsystem && TowerSubsystem->GetMainTowerTargetLocation(TargetLocation));
+			if (!bHasTarget)
 			{
+				bAnyMissingTarget = true;
+				if (!bLoggedMissingTargets)
+				{
+					UE_LOG(LogMoving_Castle, Error, TEXT("Mass 近战处理器：世界 %s 没有吸引圈内激活护盾或存活主塔，停止移动。"), *GetNameSafe(GetWorld()));
+					bLoggedMissingTargets = true;
+				}
 				// 不把缺失目标解释为世界原点，不借用其他对象；明确停止等待配置修复。
 				Melee.bInAttackRange = false;
 				Targets[It] = FCastleMassMoveTargetFragment();
@@ -80,11 +86,17 @@ void UCastleMassMeleeAttackProcessor::Execute(FMassEntityManager& EntityManager,
 			Velocities[It].Value = FVector::ZeroVector;
 			Melee.AttackCooldown = FMath::Max(0.0f, Melee.AttackCooldown - DeltaTime);
 			if (Melee.AttackCooldown > 0.0f) { continue; }
-			if (TowerSubsystem->ApplyMainTowerDamage(Melee.AttackDamage))
+			FCastleMassUnitHandle Attacker;
+			Attacker.World = GetWorld();
+			Attacker.Entity = Chunk.GetEntity(It);
+			int64 RemainingBlocks = 0;
+			if (bShieldTarget ? Shields->ApplyAttackToShield(ShieldId, Attacker, RemainingBlocks)
+				: TowerSubsystem->ApplyMainTowerDamage(Melee.AttackDamage))
 			{
 				++Melee.AttackCount;
 				Melee.AttackCooldown = Melee.AttackInterval;
 			}
 		}
 	});
+	if (!bAnyMissingTarget) { bLoggedMissingTargets = false; }
 }

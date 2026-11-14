@@ -12,6 +12,7 @@ class ACastleGridCursor;
 class UCastleEconomyComponent;
 class UCastleShopComponent;
 class ACastleMassSpawner;
+class ACastleMassEnemySpawner;
 
 /**
  * 移动城堡的自有玩家控制器。
@@ -65,6 +66,10 @@ public:
 	/** 验收命令：CastleSpawnPatrolNPCs 32，沿完整共享路线生成一批可见 NPC；重复执行替换上一批。 */
 	UFUNCTION(Exec)
 	void CastleSpawnPatrolNPCs(int32 Count = 32);
+
+	/** 验收命令：CastleSpawnEnemy LavaGoliath|LavaPup|MiasmaWelp|ShadowSwarm [波数]。 */
+	UFUNCTION(Exec)
+	void CastleSpawnEnemy(const FString& EnemyType, int32 WaveCount = 1);
 
 protected:
 	/** 隐藏鼠标、锁定输入并创建指示器。 */
@@ -145,4 +150,8 @@ protected:
 	/** 仅由验收命令创建的那一批，避免重复命令不断累积测试单位。 */
 	UPROPERTY(Transient)
 	TObjectPtr<ACastleMassSpawner> PatrolPreviewSpawner;
+
+	/** 命令生成器由当前控制器管理，结束 PIE 时明确清理，不创建逐敌人 Actor。 */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<ACastleMassEnemySpawner>> EnemyPreviewSpawners;
 };

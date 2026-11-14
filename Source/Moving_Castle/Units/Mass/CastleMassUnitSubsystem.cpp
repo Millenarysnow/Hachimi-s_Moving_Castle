@@ -17,6 +17,10 @@
 #include "Mass/CastleMassPatrolFragments.h"
 #include "Projectiles/CastleMassHomingProjectileFragments.h"
 #include "Projectiles/CastleMassHomingProjectileTrait.h"
+#include "Projectiles/CastleMassEnemyProjectileTrait.h"
+#include "Projectiles/CastleMassEnemyProjectileFragments.h"
+#include "Enemies/CastleMassEnemyRangedAttackFragments.h"
+#include "CastleMainTowerComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCastleMassHomingProjectile, Log, All);
 
@@ -24,7 +28,8 @@ bool UCastleMassUnitSubsystem::GetNPCFarmBuff(const FCastleMassUnitHandle& NPC, 
 {
 	OutBonusNumber = 0.0f;
 	FMassEntityManager* Manager = GetManager();
-	if (Manager && !Manager->IsProcessing() && NPC.World.Get() == GetWorld() && Manager->IsEntityActive(NPC.Entity))
+	// 建筑触发在并行查询同步结束后于游戏线程派发；IsProcessing 仍为 true，不能延迟到下一帧。
+	if (Manager && NPC.World.Get() == GetWorld() && Manager->IsEntityActive(NPC.Entity))
 	{
 		const FMassEntityView View(*Manager, NPC.Entity);
 		const auto* Unit = View.GetFragmentDataPtr<FCastleMassUnitFragment>();
@@ -37,7 +42,7 @@ bool UCastleMassUnitSubsystem::GetNPCFarmBuff(const FCastleMassUnitHandle& NPC, 
 			return true;
 		}
 	}
-	UE_LOG(LogCastleMassHomingProjectile, Error, TEXT("GetNPCFarmBuff：世界 %s，实体 %d 必须是本世界存活 NPC，含有效农田状态，且在游戏线程 Mass 非处理期间调用。"), *GetNameSafe(GetWorld()), NPC.Entity.Index);
+	UE_LOG(LogCastleMassHomingProjectile, Error, TEXT("GetNPCFarmBuff：世界 %s，实体 %d 必须是本世界存活 NPC，含有效农田状态，且在游戏线程调用。"), *GetNameSafe(GetWorld()), NPC.Entity.Index);
 	return false;
 }
 
@@ -257,6 +262,63 @@ bool UCastleMassUnitSubsystem::SpawnHomingProjectiles(UMassEntityConfigAsset* Co
 	return true;
 }
 
+bool UCastleMassUnitSubsystem::SpawnEnemyProjectiles(UMassEntityConfigAsset* Configuration,
+	const TArray<FCastleMassEnemyProjectileSpawn>& Spawns, TArray<FCastleMassUnitHandle>& OutProjectiles, FText& OutFailureReason)
+{
+	OutProjectiles.Reset();
+	OutFailureReason = FText::GetEmpty();
+	const auto Reject = [Configuration, &OutFailureReason](const FString& Reason)
+	{
+		OutFailureReason = FText::FromString(Reason);
+		UE_LOG(LogCastleMassHomingProjectile, Error, TEXT("SpawnEnemyProjectiles：配置 %s：%s"), *GetPathNameSafe(Configuration), *Reason);
+		return false;
+	};
+	FMassEntityManager* Manager = GetManager();
+	if (!Manager || Manager->IsProcessing()) { return Reject(TEXT("必须在游戏线程且 Mass 非处理期间生成。")); }
+	if (!IsValid(Configuration) || Spawns.IsEmpty() || !Configuration->FindTrait(UCastleMassEnemyProjectileTrait::StaticClass()))
+	{
+		return Reject(TEXT("需要敌方追踪弹配置和非空发射批次。"));
+	}
+	for (const auto& Spawn : Spawns)
+	{
+		const bool bShield = Spawn.ShieldId != 0;
+		const bool bTower = Spawn.TargetTower.IsValid();
+		if (Spawn.Origin.ContainsNaN() || !FMath::IsFinite(Spawn.Damage) || Spawn.Damage < 0.0f
+			|| Spawn.Attacker.World.Get() != GetWorld() || !Spawn.Attacker.Entity.IsSet()
+			|| bShield == bTower || (bTower && Spawn.TargetTower->GetWorld() != GetWorld()))
+		{
+			return Reject(TEXT("发射点、非负伤害、攻击者世界或互斥锁定目标无效，整批拒绝。"));
+		}
+	}
+	if (!ValidatedConfigurations.Contains(Configuration))
+	{
+		if (!Configuration->GetMutableConfig().ValidateEntityTemplate(*GetWorld())) { return Reject(TEXT("敌方追踪弹模板校验失败。")); }
+		ValidatedConfigurations.Add(Configuration);
+	}
+	const FMassEntityTemplate& Template = Configuration->GetOrCreateEntityTemplate(*GetWorld());
+	UMassSpawnerSubsystem* Spawner = GetWorld()->GetSubsystem<UMassSpawnerSubsystem>();
+	if (!Template.IsValid() || !Spawner) { return Reject(TEXT("模板或 Mass 生成子系统未就绪。")); }
+	TArray<FMassEntityHandle> Entities;
+	auto CreationContext = Spawner->SpawnEntities(Template, Spawns.Num(), Entities);
+	checkf(Entities.Num() == Spawns.Num(), TEXT("敌方弹生成数量不符：%s"), *Configuration->GetPathName());
+	for (int32 Index = 0; Index < Entities.Num(); ++Index)
+	{
+		const auto Entity = Entities[Index];
+		Manager->GetFragmentDataChecked<FTransformFragment>(Entity).GetMutableTransform() = FTransform(Spawns[Index].Origin);
+		Manager->GetFragmentDataChecked<FCastleMassEnemyProjectileFragment>(Entity).Launch = Spawns[Index];
+		auto& Projectile = Manager->GetFragmentDataChecked<FCastleMassProjectileFragment>(Entity);
+		Projectile.PreviousLocation = Spawns[Index].Origin;
+		Projectile.Damage = Spawns[Index].Damage;
+		auto& Handle = OutProjectiles.AddDefaulted_GetRef();
+		Handle.Entity = Entity;
+		Handle.World = GetWorld();
+	}
+	// Observer 完成后显式置零，首个追踪帧才按锁定目标计算实际速度，避免随机初始化覆盖。
+	CreationContext.Reset();
+	for (const auto Entity : Entities) { Manager->GetFragmentDataChecked<FMassVelocityFragment>(Entity).Value = FVector::ZeroVector; }
+	return true;
+}
+
 bool UCastleMassUnitSubsystem::DoesSupportWorldType(EWorldType::Type WorldType) const
 {
 	return WorldType == EWorldType::Game || WorldType == EWorldType::PIE;
@@ -302,6 +364,12 @@ bool UCastleMassUnitSubsystem::SpawnUnits(UMassEntityConfigAsset* Configuration,
 	{
 		// 追踪子类必须逐发给出目标和伤害，不能借通用入口隐式采用 Trait 的模板伤害。
 		OutFailureReason = FText::FromString(TEXT("追踪子弹必须通过 SpawnHomingProjectiles 提供逐发目标与伤害，整批生成已取消。"));
+		UE_LOG(LogCastleMassHomingProjectile, Error, TEXT("SpawnUnits：配置 %s：%s"), *Configuration->GetPathName(), *OutFailureReason.ToString());
+		return false;
+	}
+	if (Configuration->FindTrait(UCastleMassEnemyProjectileTrait::StaticClass()))
+	{
+		OutFailureReason = FText::FromString(TEXT("敌方追踪弹必须通过 SpawnEnemyProjectiles 提供锁定目标、攻击者和逐发伤害。"));
 		UE_LOG(LogCastleMassHomingProjectile, Error, TEXT("SpawnUnits：配置 %s：%s"), *Configuration->GetPathName(), *OutFailureReason.ToString());
 		return false;
 	}
@@ -513,6 +581,11 @@ bool UCastleMassUnitSubsystem::GetUnitSnapshot(const FCastleMassUnitHandle& Unit
 	{
 		OutSnapshot.bInAttackRange = Melee->bInAttackRange;
 		OutSnapshot.AttackCount = Melee->AttackCount;
+	}
+	if (const auto* Ranged = Manager->GetFragmentDataPtr<FCastleMassEnemyRangedAttackFragment>(Unit.Entity))
+	{
+		OutSnapshot.bInAttackRange = Ranged->bInAttackRange;
+		OutSnapshot.AttackCount = Ranged->AttackCount;
 	}
 	return true;
 }
