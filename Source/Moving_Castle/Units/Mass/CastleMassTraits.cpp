@@ -43,6 +43,7 @@ void UCastleMassUnitTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildC
 		break;
 	case ECastleMassUnitKind::NPC:
 		BuildContext.AddTag<FCastleMassNPCTag>();
+		BuildContext.AddFragment<FCastleMassNPCFarmBuffFragment>();
 		BuildContext.AddTag<FCastleMassHumanoidTag>();
 		BuildContext.AddFragment<FCastleMassPatrolFragment>();
 		// 所有 NPC 具备进入触发所需的值状态；未启用共享巡逻时不会凭终点位置触发建筑。

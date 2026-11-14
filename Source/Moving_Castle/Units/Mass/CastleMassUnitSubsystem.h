@@ -15,6 +15,13 @@ class MOVING_CASTLE_API UCastleMassUnitSubsystem : public UWorldSubsystem
 {
 	GENERATED_BODY()
 public:
+	/** 游戏线程、Mass 非处理期间向本世界存活 NPC 累加有限正数；失败写 Error。 */
+	bool AddNPCFarmBuff(const FCastleMassUnitHandle& NPC, float DeltaBonus);
+	/** 游戏线程、Mass 非处理期间读取存活 NPC 的农田增益；失败输出零并写 Error。 */
+	bool GetNPCFarmBuff(const FCastleMassUnitHandle& NPC, float& OutBonusNumber) const;
+	/** 游戏线程即时伤害，允许游戏线程 Processor 调用；调度器必须声明生命写权限。 */
+	bool ApplyImmediateDamageToEnemy(const FCastleMassUnitHandle& Enemy, float Damage);
+
 	/**
 	 * 在 Origin 周围 Radius（三维，cm）内查询最近的存活敌人（EnemyTag 且 Health>0）。
 	 * 只能在游戏线程且 Mass 未处理时调用；非法调用或输入写 Error，正常无目标返回 false 且不报错。

@@ -20,6 +20,66 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogCastleMassHomingProjectile, Log, All);
 
+bool UCastleMassUnitSubsystem::GetNPCFarmBuff(const FCastleMassUnitHandle& NPC, float& OutBonusNumber) const
+{
+	OutBonusNumber = 0.0f;
+	FMassEntityManager* Manager = GetManager();
+	if (Manager && !Manager->IsProcessing() && NPC.World.Get() == GetWorld() && Manager->IsEntityActive(NPC.Entity))
+	{
+		const FMassEntityView View(*Manager, NPC.Entity);
+		const auto* Unit = View.GetFragmentDataPtr<FCastleMassUnitFragment>();
+		const auto* Buff = View.GetFragmentDataPtr<FCastleMassNPCFarmBuffFragment>();
+		if (View.HasTag<FCastleMassNPCTag>() && Unit && Unit->Kind == ECastleMassUnitKind::NPC
+			&& FMath::IsFinite(Unit->Health) && Unit->Health > 0.0f && Buff
+			&& FMath::IsFinite(Buff->BonusNumber) && Buff->BonusNumber >= 0.0f)
+		{
+			OutBonusNumber = Buff->BonusNumber;
+			return true;
+		}
+	}
+	UE_LOG(LogCastleMassHomingProjectile, Error, TEXT("GetNPCFarmBuff：世界 %s，实体 %d 必须是本世界存活 NPC，含有效农田状态，且在游戏线程 Mass 非处理期间调用。"), *GetNameSafe(GetWorld()), NPC.Entity.Index);
+	return false;
+}
+
+bool UCastleMassUnitSubsystem::AddNPCFarmBuff(const FCastleMassUnitHandle& NPC, float DeltaBonus)
+{
+	if (!FMath::IsFinite(DeltaBonus) || DeltaBonus <= 0.0f)
+	{
+		UE_LOG(LogCastleMassHomingProjectile, Error, TEXT("AddNPCFarmBuff：世界 %s，实体 %d 的增量必须为有限正数。"), *GetNameSafe(GetWorld()), NPC.Entity.Index);
+		return false;
+	}
+	float Current = 0.0f;
+	if (!GetNPCFarmBuff(NPC, Current)) { return false; }
+	const float Updated = Current + DeltaBonus;
+	if (!FMath::IsFinite(Updated))
+	{
+		UE_LOG(LogCastleMassHomingProjectile, Error, TEXT("AddNPCFarmBuff：世界 %s，实体 %d 的农田增益溢出，拒绝修改。"), *GetNameSafe(GetWorld()), NPC.Entity.Index);
+		return false;
+	}
+	GetManager()->GetFragmentDataChecked<FCastleMassNPCFarmBuffFragment>(NPC.Entity).BonusNumber = Updated;
+	return true;
+}
+
+bool UCastleMassUnitSubsystem::ApplyImmediateDamageToEnemy(const FCastleMassUnitHandle& Enemy, float Damage)
+{
+	FMassEntityManager* Manager = GetManager();
+	if (Manager && FMath::IsFinite(Damage) && Damage >= 0.0f && Enemy.World.Get() == GetWorld()
+		&& Manager->IsEntityActive(Enemy.Entity))
+	{
+		FMassEntityView View(*Manager, Enemy.Entity);
+		auto* Unit = View.GetFragmentDataPtr<FCastleMassUnitFragment>();
+		if (View.HasTag<FCastleMassEnemyTag>() && Unit && Unit->Kind == ECastleMassUnitKind::Enemy
+			&& FMath::IsFinite(Unit->Health) && Unit->Health > 0.0f)
+		{
+			// 这是契约要求的死亡归零规则；输入事先验证，不用夹紧修复非法伤害。
+			Unit->Health = FMath::Max(0.0f, Unit->Health - Damage);
+			return true;
+		}
+	}
+	UE_LOG(LogCastleMassHomingProjectile, Error, TEXT("ApplyImmediateDamageToEnemy：世界 %s，实体 %d 必须是本世界存活敌人，伤害须为有限非负数，且在游戏线程调用。"), *GetNameSafe(GetWorld()), Enemy.Entity.Index);
+	return false;
+}
+
 bool UCastleMassUnitSubsystem::FindNearestEnemy(const FVector& Origin, float Radius, FCastleMassUnitHandle& OutEnemy) const
 {
 	OutEnemy = FCastleMassUnitHandle();
