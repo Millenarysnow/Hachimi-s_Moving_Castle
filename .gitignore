@@ -15,5 +15,7 @@
 
 !AGENTS.md
 !CLAUDE.md
+!AO-ORCHESTRATOR.md
+!AO-WORKER.md
 
 !/.agents/skills/**
