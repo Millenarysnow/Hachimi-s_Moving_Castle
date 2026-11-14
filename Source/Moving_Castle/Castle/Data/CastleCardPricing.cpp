@@ -13,7 +13,6 @@ bool UCastleSimpleCardPricing::TryCalculatePrice_Implementation(const FCastleBui
 	{
 		return false;
 	}
-	const bool bRoad = Descriptor.GetBuildingType() == ECastleBuildingType::Road;
 	if (Kind != ECastleCardPriceKind::Buy && Kind != ECastleCardPriceKind::Sell)
 	{
 		OutFailureReason = FText::FromString(TEXT("定价失败：未知的交易类型。"));
@@ -21,7 +20,7 @@ bool UCastleSimpleCardPricing::TryCalculatePrice_Implementation(const FCastleBui
 	}
 
 	// 先计算基础购买价，再按交易类型得到最终报价；数值只存在于这个测试策略中。
-	const int32 BuyPrice = bRoad ? 2 : 5 + Descriptor.Number * 2 + (Descriptor.Level - 1) * 10;
+	const int32 BuyPrice = 5 + Descriptor.Number * 2 + (Descriptor.Level - 1) * 10;
 	OutPrice = Kind == ECastleCardPriceKind::Buy ? BuyPrice : BuyPrice / 2;
 	return true;
 }

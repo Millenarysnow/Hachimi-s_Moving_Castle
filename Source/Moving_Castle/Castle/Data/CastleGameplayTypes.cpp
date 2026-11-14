@@ -39,12 +39,11 @@ bool FCastleBuildingDescriptor::Validate(FText& OutFailureReason) const
 		OutFailureReason = FText::FromString(FString::Printf(TEXT("%s 没有配置 %d 级。"), *Definition->DisplayName.ToString(), Level));
 		return false;
 	}
-	const bool bRoad = Definition->BuildingType == ECastleBuildingType::Road;
+	const bool bNormalRoom = Definition->BuildingType == ECastleBuildingType::NormalRoom;
 	const bool bValidColor = Color >= ECastleTileColor::Red && Color <= ECastleTileColor::Purple;
-	if ((bRoad && (Level != 1 || Color != ECastleTileColor::Gray || Number != 0))
-		|| (!bRoad && (!bValidColor || Number < 1 || Number > 9)))
+	if (!bValidColor || Number < 1 || Number > 9 || (bNormalRoom && Level != 1))
 	{
-		OutFailureReason = FText::FromString(TEXT("道路必须是灰色 0 号 1 级；功能建筑必须是有效颜色的 1 至 9 号。"));
+		OutFailureReason = FText::FromString(TEXT("所有房间必须使用五色之一与 1 至 9 数字；普通房间固定为 1 级。"));
 		return false;
 	}
 	return true;

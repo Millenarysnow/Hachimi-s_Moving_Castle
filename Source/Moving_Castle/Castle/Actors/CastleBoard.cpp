@@ -313,7 +313,6 @@ bool ACastleBoard::GenerateGround(FText& OutFailureReason)
 	Request.GridSize = GridSize;
 	Request.Origin = GridOrigin;
 	Request.Seed = GroundSeed;
-	Request.bReserveRoadStartTile = bReserveRoadStartTile;
 
 	const FCastleGroundGenerationResult Result = Generator->GenerateGround(Request);
 	return ApplyGroundGenerationResult(Result, OutFailureReason);
@@ -360,15 +359,11 @@ bool ACastleBoard::ApplyGroundGenerationResult(const FCastleGroundGenerationResu
 		}
 		UniqueCoordinates.Add(Cell.Coordinate);
 
-		if (Cell.Number < 0 || Cell.Number > 9)
+		if (Cell.Number < 1 || Cell.Number > 9 || Cell.Color < ECastleTileColor::Red || Cell.Color > ECastleTileColor::Purple)
 		{
-			OutFailureReason = FText::FromString(FString::Printf(TEXT("地面坐标 (%d, %d, %d) 的数字 %d 无效。"), Cell.Coordinate.X, Cell.Coordinate.Y, Cell.Coordinate.Z, Cell.Number));
-			return false;
-		}
-
-		if ((Cell.Color == ECastleTileColor::Gray && Cell.Number != 0) || (Cell.Color != ECastleTileColor::Gray && Cell.Number == 0))
-		{
-			OutFailureReason = FText::FromString(FString::Printf(TEXT("地面坐标 (%d, %d, %d) 的颜色和数字组合无效。"), Cell.Coordinate.X, Cell.Coordinate.Y, Cell.Coordinate.Z));
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("地面坐标 (%d, %d, %d) 必须使用五色之一与 1 至 9 数字，实际颜色=%d，数字=%d。"),
+				Cell.Coordinate.X, Cell.Coordinate.Y, Cell.Coordinate.Z, static_cast<int32>(Cell.Color), Cell.Number));
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 拒绝非法地面：%s"), *GetName(), *OutFailureReason.ToString());
 			return false;
 		}
 	}
@@ -1541,25 +1536,20 @@ bool ACastleBoard::HasPlacementMatch(const FIntVector& Coordinate, const FCastle
 	}
 
 	// 所有占用格共享建筑的颜色和数字，只读取命中面所属的地块或建筑一次。
-	const bool bIsRoad = Descriptor.GetBuildingType() == ECastleBuildingType::Road;
 	bool bMatches = false;
 	if (CursorTarget->bGroundSurface)
 	{
 		FCastleGroundCell GroundCell;
 		if (!TryGetGroundCellAtPlane(CursorTarget->Cell, GroundCell)) { return false; }
-		bMatches = bIsRoad ? GroundCell.IsRoadTile()
-			: !GroundCell.IsRoadTile() && (GroundCell.Color == Descriptor.Color || GroundCell.Number == Descriptor.Number);
+		bMatches = GroundCell.Color == Descriptor.Color || GroundCell.Number == Descriptor.Number;
 	}
 	else
 	{
 		const ACastleBuildingBase* Source = GetBuildingAt(CursorTarget->Cell);
-		bMatches = bIsRoad ? Source->IsRoad()
-			: !Source->IsRoad() && (Source->GetBuildingColor() == Descriptor.Color || Source->GetBuildingNumber() == Descriptor.Number);
+		bMatches = Source->GetBuildingColor() == Descriptor.Color || Source->GetBuildingNumber() == Descriptor.Number;
 	}
 	if (bMatches) { return true; }
-	OutFailureReason = FText::FromString(bIsRoad
-		? TEXT("放置失败：道路只能依靠当前高亮的道路面放置。")
-		: TEXT("放置失败：卡牌必须与当前高亮面的颜色或数字相同，且不能依靠道路匹配。"));
+	OutFailureReason = FText::FromString(TEXT("放置失败：卡牌必须与当前高亮面的颜色或数字相同。"));
 	return false;
 }
 
@@ -1580,14 +1570,8 @@ void ACastleBoard::InitializePrototypeDeck()
 		return;
 	}
 
-	TArray<FCastleGroundCell> FunctionalCells;
-	for (const FCastleGroundCell& Cell : GeneratedGroundCells)
-	{
-		if (!Cell.IsRoadTile())
-		{
-			FunctionalCells.Add(Cell);
-		}
-	}
+	// 接收阶段已严格验证整份地面，普通房间与功能建筑直接共享全部格子。
+	const TArray<FCastleGroundCell>& FunctionalCells = GeneratedGroundCells;
 
 	if (FunctionalCells.Num() == 0)
 	{
@@ -1608,9 +1592,9 @@ void ACastleBoard::InitializePrototypeDeck()
 		UE_LOG(LogMoving_Castle, Error, TEXT("开局卡组配置错误：%s"), *DefinitionReason.ToString());
 		return;
 	}
-	const ECastleBuildingType Types[] = { ECastleBuildingType::Road, ECastleBuildingType::ArcherTower,
+	const ECastleBuildingType Types[] = { ECastleBuildingType::NormalRoom, ECastleBuildingType::ArcherTower,
 		ECastleBuildingType::CannonTower, ECastleBuildingType::Farm, ECastleBuildingType::ShieldTower };
-	const FCastleGroundCell Cells[] = { FCastleGroundCell(), ArcherCell, CannonCell, FarmCell, ShieldCell };
+	const FCastleGroundCell Cells[] = { ArcherCell, ArcherCell, CannonCell, FarmCell, ShieldCell };
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Types); ++Index)
 	{
 		UCastleBuildingDefinition* Definition = FindBuildingDefinition(Types[Index]);

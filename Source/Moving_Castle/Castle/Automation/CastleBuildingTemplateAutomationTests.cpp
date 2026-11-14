@@ -12,11 +12,11 @@
 #include "Misc/ScopeExit.h"
 
 /** 所有目标等级都走正式卡牌与棋盘入口，不能只在编辑器模板上看起来配置正确。 */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleBuildingRoadTemplateTest,
-	"MovingCastle.Logic.BuildingRoadTemplateBlueprints",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleBuildingNormalRoomTemplateTest,
+	"MovingCastle.Logic.BuildingNormalRoomTemplateBlueprints",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FCastleBuildingRoadTemplateTest::RunTest(const FString& Parameters)
+bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 {
 	const UWorld::InitializationValues Settings = UWorld::InitializationValues().AllowAudioPlayback(false)
 		.CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(false);
@@ -40,21 +40,24 @@ bool FCastleBuildingRoadTemplateTest::RunTest(const FString& Parameters)
 	FText Reason;
 	if (!TestTrue(TEXT("配置所有等级的支撑地面"), Board->ApplyGroundGenerationResult(Ground, Reason))) { return false; }
 
-	for (const TCHAR* Family : { TEXT("CannonTower"), TEXT("Farm"), TEXT("ShieldTower") })
+	for (const TCHAR* Family : { TEXT("NormalRoom"), TEXT("CannonTower"), TEXT("Farm"), TEXT("ShieldTower") })
 	{
 		const FString DefinitionPath = FString::Printf(TEXT("/Game/MovingCastle/Data/Buildings/DA_%s.DA_%s"), Family, Family);
 		UCastleBuildingDefinition* Definition = LoadObject<UCastleBuildingDefinition>(nullptr, *DefinitionPath);
-		if (!TestNotNull(TEXT("加载正式炮塔、农田或盾塔 DA"), Definition)) { return false; }
+		if (!TestNotNull(TEXT("加载正式普通房间或功能建筑 DA"), Definition)) { return false; }
 		Board->BuildingDefinitions = { Definition };
-		TestEqual(TEXT("每种模板建筑都配置完整五级"), Definition->Levels.Num(), 5);
-		for (int32 Level = 1; Level <= 5; ++Level)
+		const bool bNormalRoom = Definition->BuildingType == ECastleBuildingType::NormalRoom;
+		const int32 LevelCount = bNormalRoom ? 1 : 5;
+		TestEqual(TEXT("普通房间仅一级，功能建筑保持完整五级"), Definition->Levels.Num(), LevelCount);
+		for (int32 Level = 1; Level <= LevelCount; ++Level)
 		{
 			FCastleBuildingDescriptor Card;
 			if (!Definition->CreateDescriptor(Level, ECastleTileColor::Red, 3, Card, Reason)) { AddError(Reason.ToString()); return false; }
 			UClass* BuildingClass = Card.GetBuildingClass();
 			const FString ExpectedPath = FString::Printf(TEXT("/Game/MovingCastle/BP/BP_%s_lv%d.BP_%s_lv%d_C"), Family, Level, Family, Level);
 			TestEqual(TEXT("DA 直接引用对应命名的等级蓝图"), BuildingClass->GetPathName(), ExpectedPath);
-			const FString NativePath = FString::Printf(TEXT("/Script/Moving_Castle.Castle%sLevel%d"), Family, Level);
+			const FString NativePath = bNormalRoom ? TEXT("/Script/Moving_Castle.CastleNormalRoomBuilding")
+				: FString::Printf(TEXT("/Script/Moving_Castle.Castle%sLevel%d"), Family, Level);
 			TestEqual(TEXT("每级蓝图直接继承对应 C++ 父类"), BuildingClass->GetSuperClass(), LoadObject<UClass>(nullptr, *NativePath));
 
 			ACastleBuildingBase* Building = Board->PlaceBuilding(FIntVector::ZeroValue, Card, false, Reason);
@@ -77,7 +80,7 @@ bool FCastleBuildingRoadTemplateTest::RunTest(const FString& Parameters)
 				{
 					++Floors;
 					TestTrue(TEXT("地板直接挂在功能根下"), Mesh->GetAttachParent() == Building->GameplayRoot);
-					TestEqual(TEXT("功能地板保留道路模板的实体碰撞"), Mesh->GetCollisionEnabled(), ECollisionEnabled::QueryAndPhysics);
+					TestEqual(TEXT("功能地板保留普通房间模板的实体碰撞"), Mesh->GetCollisionEnabled(), ECollisionEnabled::QueryAndPhysics);
 					TestEqual(TEXT("功能地板继续阻挡 Pawn"), Mesh->GetCollisionResponseToChannel(ECC_Pawn), ECR_Block);
 				}
 				else

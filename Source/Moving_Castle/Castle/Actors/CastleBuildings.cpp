@@ -3,10 +3,10 @@
 #include "CastleBuildings.h"
 #include "Components/Building/Effects/Attack/CastleTowerAttackEffectComponent.h"
 
-ACastleRoadBuilding::ACastleRoadBuilding()
+ACastleNormalRoomBuilding::ACastleNormalRoomBuilding()
 {
-	// 道路不参与功能建筑合成，固定使用道路类别和 1 级类定义。
-	BuildingType = ECastleBuildingType::Road;
+	// 普通房间不参与合成，颜色和数字来自正式卡牌描述。
+	BuildingType = ECastleBuildingType::NormalRoom;
 	BuildingLevel = 1;
 }
 ACastleArcherTowerBuilding::ACastleArcherTowerBuilding(const FObjectInitializer& ObjectInitializer)

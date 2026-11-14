@@ -46,7 +46,7 @@ namespace
 }
 
 /**
- * 验证随机地面生成器的确定性、道路起始格和无效请求拒绝逻辑。
+ * 验证随机地面生成器的确定性、全棋盘五色 1～9 数字和无效请求拒绝逻辑。
  *
  * 该测试只依赖 UObject 数据对象，不创建任何美术资源，因此可以在编辑器的
  * NullRHI 模式下运行，也能保证后续替换生成策略时接口行为不会悄悄改变。
@@ -69,7 +69,6 @@ bool FCastleRandomGroundGeneratorAutomationTest::RunTest(const FString& Paramete
 	Request.GridSize = FIntVector(4, 3, 4);
 	Request.Origin = FIntVector(10, 20, 0);
 	Request.Seed = 20261107;
-	Request.bReserveRoadStartTile = true;
 
 	const FCastleGroundGenerationResult FirstResult = Generator->GenerateGround(Request);
 	const FCastleGroundGenerationResult SecondResult = Generator->GenerateGround(Request);
@@ -87,10 +86,16 @@ bool FCastleRandomGroundGeneratorAutomationTest::RunTest(const FString& Paramete
 	}
 
 	FCastleGroundCell StartCell;
-	TestTrue(TEXT("启用道路起始格时原点应为灰色 0 号"), FirstResult.FindCell(Request.Origin, StartCell));
+	TestTrue(TEXT("原点同样参与完整地面生成"), FirstResult.FindCell(Request.Origin, StartCell));
 	if (FirstResult.FindCell(Request.Origin, StartCell))
 	{
-		TestTrue(TEXT("原点地面应标记为道路格"), StartCell.IsRoadTile());
+		TestTrue(TEXT("原点必须为五色 1～9 号格"), StartCell.Color >= ECastleTileColor::Red
+			&& StartCell.Color <= ECastleTileColor::Purple && StartCell.Number >= 1 && StartCell.Number <= 9);
+	}
+	for (const FCastleGroundCell& Cell : FirstResult.Cells)
+	{
+		TestTrue(TEXT("整个棋盘没有灰色或 0 号地面"), Cell.Color >= ECastleTileColor::Red
+			&& Cell.Color <= ECastleTileColor::Purple && Cell.Number >= 1 && Cell.Number <= 9);
 	}
 
 	FCastleGroundGenerationRequest InvalidRequest = Request;
@@ -163,8 +168,8 @@ bool FCastleBoardGroundActorAutomationTest::RunTest(const FString& Parameters)
 		{
 			FCastleGroundCell& Cell = Ground.Cells.AddDefaulted_GetRef();
 			Cell.Coordinate = FIntVector(X, Y, 0);
-			Cell.Color = X == 0 && Y == 0 ? ECastleTileColor::Gray : ECastleTileColor::Red;
-			Cell.Number = X == 0 && Y == 0 ? 0 : 1;
+			Cell.Color = ECastleTileColor::Red;
+			Cell.Number = 1;
 		}
 	}
 	FText FailureReason;
@@ -232,7 +237,8 @@ bool FCastleBackpackAutomationTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("合法箭塔卡牌应能加入背包"), Backpack->TryAddBuilding(CastleBuildingTests::MakeDefinition(ECastleBuildingType::ArcherTower), 1, ECastleTileColor::Red, 3, AddedIndex, FailureReason));
 	TestEqual(TEXT("加入第一张卡牌后数量应为 1"), Backpack->GetItemCount(), 1);
 
-	TestFalse(TEXT("道路不能使用非灰色 0 号属性"), Backpack->TryAddBuilding(CastleBuildingTests::MakeDefinition(ECastleBuildingType::Road), 1, ECastleTileColor::Red, 3, AddedIndex, FailureReason));
+	TestFalse(TEXT("普通房间拒绝灰色 0 号属性"), Backpack->TryAddBuilding(CastleBuildingTests::MakeDefinition(ECastleBuildingType::NormalRoom), 1, ECastleTileColor::Gray, 0, AddedIndex, FailureReason));
+	TestTrue(TEXT("普通房间接受五色 1～9 号属性"), Backpack->TryAddBuilding(CastleBuildingTests::MakeDefinition(ECastleBuildingType::NormalRoom), 1, ECastleTileColor::Red, 3, AddedIndex, FailureReason));
 
 	for (int32 Index = Backpack->GetItemCount(); Index < Backpack->Capacity; ++Index)
 	{

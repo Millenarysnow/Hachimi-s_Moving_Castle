@@ -48,9 +48,9 @@ public:
 
 	/** 用于放置规则和功能判断，不能与等级逻辑类的类别冲突。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "建筑")
-	ECastleBuildingType BuildingType = ECastleBuildingType::Road;
+	ECastleBuildingType BuildingType = ECastleBuildingType::NormalRoom;
 
-	/** 一份资产配置该建筑的所有等级；道路只配置一级。 */
+	/** 一份资产配置该建筑的所有等级；普通房间只配置一级。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "建筑", meta = (TitleProperty = "Level"))
 	TArray<FCastleBuildingLevelDefinition> Levels;
 
@@ -58,7 +58,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="建筑|变化动画")
 	TObjectPtr<UBuildingPartCatalog> PartCatalog;
 
-	/** 箭塔定义持有该塔族唯一的攻击参数；道路、农田和未接入攻击的建筑保持为空。 */
+	/** 箭塔定义持有该塔族唯一的攻击参数；普通房间、农田和未接入攻击的建筑保持为空。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="建筑|攻击")
 	TObjectPtr<UCastleTowerAttackDataAsset> AttackData;
 

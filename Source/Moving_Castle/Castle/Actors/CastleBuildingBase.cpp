@@ -147,7 +147,7 @@ TSubclassOf<ACastleBuildingBase> ACastleBuildingBase::GetClassForLevel(int32 InL
 bool ACastleBuildingBase::CanMergeToNextLevel() const
 {
 	// 保留策划案的四级自动合成上限；五级仍供后续奖励系统直接升级。
-	return BuildingType != ECastleBuildingType::Road && BuildingLevel >= 1 && BuildingLevel < 4
+	return BuildingType != ECastleBuildingType::NormalRoom && BuildingLevel >= 1 && BuildingLevel < 4
 		&& GetClassForLevel(BuildingLevel + 1) != nullptr;
 }
 

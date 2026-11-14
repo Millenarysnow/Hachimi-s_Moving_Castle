@@ -89,8 +89,8 @@ bool FCastleTowerAttackDataValidationTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("箭塔定义必须引用有效攻击配置"), ArcherDefinition->ValidateConfiguration(FailureReason));
 	ArcherDefinition->AttackData = nullptr;
 	TestFalse(TEXT("箭塔定义缺少攻击资产时明确失败"), ArcherDefinition->ValidateConfiguration(FailureReason));
-	UCastleBuildingDefinition* RoadDefinition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::Road);
-	TestTrue(TEXT("道路定义允许没有塔攻击资产"), RoadDefinition->AttackData == nullptr && RoadDefinition->ValidateConfiguration(FailureReason));
+	UCastleBuildingDefinition* NormalRoomDefinition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::NormalRoom);
+	TestTrue(TEXT("普通房间定义允许没有塔攻击资产"), NormalRoomDefinition->AttackData == nullptr && NormalRoomDefinition->ValidateConfiguration(FailureReason));
 	return true;
 }
 

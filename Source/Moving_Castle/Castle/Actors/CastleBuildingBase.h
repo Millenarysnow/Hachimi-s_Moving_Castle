@@ -71,7 +71,7 @@ public:
 	 * 用背包描述和占用格子初始化一个新建筑。
 	 *
 	 * 棋盘负责在调用前检查坐标是否可用；该函数仍会校验数据，避免其他调用者
-	 * 绕过棋盘写入道路颜色、数字或重复坐标。
+	 * 绕过棋盘写入非法颜色、数字或重复坐标。
 	 */
 	bool InitializeBuilding(const FCastleBuildingDescriptor& Descriptor, const TArray<FIntVector>& InOccupiedCoordinates);
 
@@ -127,11 +127,11 @@ public:
 	/** 预览模式下只允许 SceneCapture 看见模型，且关闭碰撞和阴影。 */
 	void PrepareForPreview();
 
-	/** 判断当前建筑是否属于道路。 */
+	/** 判断当前建筑是否属于固定一级的普通房间。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
-	bool IsRoad() const
+	bool IsNormalRoom() const
 	{
-		return BuildingType == ECastleBuildingType::Road;
+		return BuildingType == ECastleBuildingType::NormalRoom;
 	}
 
 	/**
@@ -176,7 +176,7 @@ protected:
 
 	/** 建筑类别由具体建筑族构造函数设置，初始化时会再次校验描述。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "建筑")
-	ECastleBuildingType BuildingType = ECastleBuildingType::Road;
+	ECastleBuildingType BuildingType = ECastleBuildingType::NormalRoom;
 
 	/** 建筑颜色由放置卡牌提供。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "建筑")

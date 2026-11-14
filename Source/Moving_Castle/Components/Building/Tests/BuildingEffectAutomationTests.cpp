@@ -17,12 +17,12 @@ bool FCastleBuildingEffectEntryTest::RunTest(const FString& Parameters)
 		.CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(false).SetTransactional(false);
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Settings);
 	ACastleArcherTowerLevel1* Tower = World->SpawnActor<ACastleArcherTowerLevel1>();
-	ACastleRoadBuilding* Road = World->SpawnActor<ACastleRoadBuilding>();
+	ACastleNormalRoomBuilding* NormalRoom = World->SpawnActor<ACastleNormalRoomBuilding>();
 	TestNotNull(TEXT("箭塔自带效果组件"), Tower->BuildingEffect.Get());
-	TestNotNull(TEXT("道路同样自带效果组件"), Road->BuildingEffect.Get());
+	TestNotNull(TEXT("普通房间同样自带效果组件"), NormalRoom->BuildingEffect.Get());
 	TestTrue(TEXT("箭塔复用 BuildingEffect 子对象并使用原生塔攻击组件"),
 		Tower->BuildingEffect->IsA<UCastleTowerAttackEffectComponent>());
-	TestFalse(TEXT("道路继续使用基础建筑效果组件"), Road->BuildingEffect->IsA<UCastleTowerAttackEffectComponent>());
+	TestFalse(TEXT("普通房间继续使用基础建筑效果组件"), NormalRoom->BuildingEffect->IsA<UCastleTowerAttackEffectComponent>());
 	ICastleBuildingTriggerInterface* Entry = Cast<ICastleBuildingTriggerInterface>(Tower);
 	if (TestNotNull(TEXT("建筑实现共同原生接口"), Entry))
 	{
@@ -31,7 +31,7 @@ bool FCastleBuildingEffectEntryTest::RunTest(const FString& Parameters)
 			if (!Entry->TriggerBuildingEffect(FCastleBuildingTriggerContext())) { AddError(TEXT("同帧高频触发被拒绝。")); break; }
 		}
 		TestEqual(TEXT("同帧千次调用没有冷却或吞事件"), Tower->BuildingEffect->TriggerCount, int64(1000));
-		TestEqual(TEXT("同类体系其他建筑的实例状态不受影响"), Road->BuildingEffect->TriggerCount, int64(0));
+	TestEqual(TEXT("同类体系其他建筑的实例状态不受影响"), NormalRoom->BuildingEffect->TriggerCount, int64(0));
 		Tower->SetPlacementComplete(false);
 		// 两次拒绝复用同一条错误文本，统一声明次数，避免期望日志相互抢占匹配。
 		AddExpectedMessagePlain(TEXT("建筑效果拒绝无效、预览或尚未完成建造的目标"), ELogVerbosity::Error, EAutomationExpectedMessageFlags::Contains, 2);

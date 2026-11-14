@@ -6,15 +6,15 @@
 #include "CastleBuildingBase.h"
 #include "CastleBuildings.generated.h"
 
-/** 道路建筑没有合成等级，只负责作为人员路线的逻辑占用物。 */
+/** 普通房间使用五色与 1～9 数字，固定一级、不合成且没有自身收益。 */
 UCLASS(Blueprintable)
-class MOVING_CASTLE_API ACastleRoadBuilding : public ACastleBuildingBase
+class MOVING_CASTLE_API ACastleNormalRoomBuilding : public ACastleBuildingBase
 {
 	GENERATED_BODY()
 
 public:
-	/** 设置道路类别和固定的 1 级属性。 */
-	ACastleRoadBuilding();
+	/** 设置普通房间类别和固定的 1 级属性。 */
+	ACastleNormalRoomBuilding();
 };
 /** 箭塔建筑族的抽象基类；等级蓝图直接继承对应 C++ 等级类，生成映射由 Data Asset 配置。 */
 UCLASS(Abstract, Blueprintable)

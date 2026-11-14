@@ -84,8 +84,8 @@ namespace CastleBuildingTests
 		TArray<TSubclassOf<ACastleBuildingBase>> Classes;
 		switch (Type)
 		{
-		case ECastleBuildingType::Road:
-			Classes = { ACastleRoadBuilding::StaticClass() };
+		case ECastleBuildingType::NormalRoom:
+			Classes = { ACastleNormalRoomBuilding::StaticClass() };
 			break;
 		case ECastleBuildingType::ArcherTower:
 			Classes = { ACastleArcherTowerLevel1::StaticClass(), ACastleArcherTowerLevel2::StaticClass(),
@@ -136,7 +136,7 @@ namespace CastleBuildingTests
 	/** 测试中的商店同样从棋盘读池，显式绑定五种定义后才允许初始化。 */
 	inline void ConfigureBoard(ACastleBoard* Board)
 	{
-		Board->BuildingDefinitions = { MakeDefinition(ECastleBuildingType::Road), MakeDefinition(ECastleBuildingType::ArcherTower),
+		Board->BuildingDefinitions = { MakeDefinition(ECastleBuildingType::NormalRoom), MakeDefinition(ECastleBuildingType::ArcherTower),
 			MakeDefinition(ECastleBuildingType::CannonTower), MakeDefinition(ECastleBuildingType::Farm),
 			MakeDefinition(ECastleBuildingType::ShieldTower) };
 	}

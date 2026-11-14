@@ -303,9 +303,9 @@ bool FBuildingGameplayNavigationBoundaryTest::RunTest(const FString& Parameters)
 	UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
 	if (!TestNotNull(TEXT("加载引擎方块"), Cube)) { return false; }
 
-	// 主塔使用无业务状态的建筑模型基类；道路和三个功能建筑族的所有等级均须继承同一边界。
+	// 主塔使用无业务状态的建筑模型基类；普通房间和功能建筑族均须继承同一边界。
 	const TArray<UClass*> Classes = {
-		ABuildingNavigationActor::StaticClass(), ACastleRoadBuilding::StaticClass(),
+		ABuildingNavigationActor::StaticClass(), ACastleNormalRoomBuilding::StaticClass(),
 		ACastleArcherTowerLevel1::StaticClass(), ACastleArcherTowerLevel2::StaticClass(),
 		ACastleArcherTowerLevel3::StaticClass(), ACastleArcherTowerLevel4::StaticClass(), ACastleArcherTowerLevel5::StaticClass(),
 		ACastleCannonTowerLevel1::StaticClass(), ACastleCannonTowerLevel2::StaticClass(),

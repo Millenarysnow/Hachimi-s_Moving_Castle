@@ -11,8 +11,8 @@ class UCastleBuildingDefinition;
 /**
  * 地面和房间共用的颜色枚举。
  *
- * 这里保留灰色是为了表达道路的特殊属性；道路并不是普通的功能房间，
- * 因此棋盘在判断放置匹配时会单独处理灰色 0 号道路。
+ * 灰色仅保留为旧资产颜色序号的占位，不参与地面、卡牌或商店生成。
+ * 普通房间与功能建筑统一使用红、蓝、绿、黄、紫及 1～9 数字。
  */
 UENUM(BlueprintType)
 enum class ECastleTileColor : uint8
@@ -28,12 +28,12 @@ enum class ECastleTileColor : uint8
  * 当前阶段实现的建筑类别。
  *
  * 棋盘、背包、商店和建筑定义共同使用此身份；具体效果由各建筑的原生组件实现。
- * 新类别只追加到末尾，保留已有资产中道路、箭塔、炮塔和农田的序列化数值。
+ * 新类别只追加到末尾，普通房间保留原道路的第 0 项序号，其余已有类别序号不变。
  */
 UENUM(BlueprintType)
 enum class ECastleBuildingType : uint8
 {
-	Road UMETA(DisplayName = "道路"),
+	NormalRoom = 0 UMETA(DisplayName = "普通房间"),
 	ArcherTower UMETA(DisplayName = "箭塔"),
 	CannonTower UMETA(DisplayName = "炮塔"),
 	Farm UMETA(DisplayName = "农田"),
@@ -116,15 +116,10 @@ struct MOVING_CASTLE_API FCastleGroundCell
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "地面")
 	ECastleTileColor Color = ECastleTileColor::Gray;
 
-	/** 该格子的固定数字，正常功能地面范围为 1 到 9，道路使用 0。 */
+	/** 该格子的固定数字；正式地面均使用 1 到 9，0 只表示未初始化。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "地面")
 	int32 Number = 0;
 
-	/** 判断该地面格子是否是灰色 0 号道路起始格。 */
-	bool IsRoadTile() const
-	{
-		return Color == ECastleTileColor::Gray && Number == 0;
-	}
 };
 
 /**
@@ -149,10 +144,6 @@ struct MOVING_CASTLE_API FCastleGroundGenerationRequest
 	/** 随机策略使用的种子；相同参数应得到相同结果，便于复现问题。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "地面生成")
 	int32 Seed = 1337;
-
-	/** 是否要求生成器在原点保留一个灰色 0 号起始格。 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "地面生成")
-	bool bReserveRoadStartTile = true;
 
 	/** 检查生成请求是否具备有效的棋盘平面尺寸。 */
 	bool IsValid() const
@@ -207,15 +198,15 @@ struct MOVING_CASTLE_API FCastleBuildingDescriptor
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑")
 	TObjectPtr<UCastleBuildingDefinition> Definition;
 
-	/** 建筑颜色。道路必须使用灰色。 */
+	/** 建筑颜色。所有类别均要求五色之一，灰色只表示未初始化。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑")
 	ECastleTileColor Color = ECastleTileColor::Gray;
 
-	/** 建筑数字。道路必须使用 0。 */
+	/** 建筑数字。所有类别均要求 1～9，0 只表示未初始化。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑")
 	int32 Number = 0;
 
-	/** 当前卡牌等级。道路固定为 1，升级只改变此值并读取同一资产的下一级配置。 */
+	/** 当前卡牌等级。普通房间固定为 1，升级读取同一资产的下一级配置。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑")
 	int32 Level = 1;
 

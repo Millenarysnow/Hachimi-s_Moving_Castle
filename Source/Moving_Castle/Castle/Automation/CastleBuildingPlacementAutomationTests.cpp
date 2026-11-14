@@ -129,7 +129,7 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	Board->GridSize = FIntVector(3, 3, 3);
 	CastleBuildingTests::ConfigureBoard(Board);
 	UCastleBuildingDefinition* Definition = Board->BuildingDefinitions[1];
-	UCastleBuildingDefinition* RoadDefinition = Board->BuildingDefinitions[0];
+	UCastleBuildingDefinition* NormalRoomDefinition = Board->BuildingDefinitions[0];
 	FText Reason;
 
 	// 中央蓝 5 与红 3 卡牌不匹配，左侧红 1 建筑可匹配，右侧黄 7 建筑不可匹配。
@@ -143,15 +143,14 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 			Cell.Color = X == 0 ? ECastleTileColor::Red : X == 1 ? ECastleTileColor::Blue : ECastleTileColor::Yellow;
 			Cell.Number = X == 0 ? 1 : X == 1 ? 5 : 7;
 			if (X == 1 && Y == 2) { Cell.Color = ECastleTileColor::Red; Cell.Number = 3; }
-			if (X == 0 && Y == 0) { Cell.Color = ECastleTileColor::Gray; Cell.Number = 0; }
 		}
 	}
 	if (!TestTrue(TEXT("配置包含匹配邻地块的异色棋盘"), Board->ApplyGroundGenerationResult(Ground, Reason))) { return false; }
-	FCastleBuildingDescriptor RedCard, LeftCard, RightCard, RoadCard;
+	FCastleBuildingDescriptor RedCard, LeftCard, RightCard, NormalRoomCard;
 	if (!Definition->CreateDescriptor(1, ECastleTileColor::Red, 3, RedCard, Reason)
 		|| !Definition->CreateDescriptor(1, ECastleTileColor::Red, 1, LeftCard, Reason)
 		|| !Definition->CreateDescriptor(1, ECastleTileColor::Yellow, 7, RightCard, Reason)
-		|| !RoadDefinition->CreateDescriptor(1, ECastleTileColor::Gray, 0, RoadCard, Reason)) { return false; }
+		|| !NormalRoomDefinition->CreateDescriptor(1, ECastleTileColor::Red, 3, NormalRoomCard, Reason)) { return false; }
 	ACastleBuildingBase* Left = Board->PlaceBuilding(FIntVector(0, 1, 0), LeftCard, false, Reason);
 	ACastleBuildingBase* Right = Board->PlaceBuilding(FIntVector(2, 1, 0), RightCard, false, Reason);
 	if (!TestNotNull(TEXT("放置左侧匹配建筑"), Left) || !TestNotNull(TEXT("放置右侧不匹配建筑"), Right)) { return false; }
@@ -186,7 +185,11 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	Definition->CreateDescriptor(1, ECastleTileColor::Green, 5, NumberOnly, Reason);
 	TestTrue(TEXT("高亮面仅颜色相同即可"), Board->CanPlaceBuildingAtCursor(FloorTarget, ColorOnly, Reason));
 	TestTrue(TEXT("高亮面仅数字相同即可"), Board->CanPlaceBuildingAtCursor(FloorTarget, NumberOnly, Reason));
-	TestFalse(TEXT("道路不能依靠功能建筑面放置"), Board->CanPlaceBuildingAtCursor(LeftTarget, RoadCard, Reason));
+	TestTrue(TEXT("普通房间可依靠同色功能建筑面放置"), Board->CanPlaceBuildingAtCursor(LeftTarget, NormalRoomCard, Reason));
+	FCastleBuildingDescriptor NumberMatchedRoom;
+	NormalRoomDefinition->CreateDescriptor(1, ECastleTileColor::Green, 1, NumberMatchedRoom, Reason);
+	TestTrue(TEXT("普通房间也可只依靠功能建筑的同数字面放置"), Board->CanPlaceBuildingAtCursor(LeftTarget, NumberMatchedRoom, Reason));
+	TestFalse(TEXT("普通房间不能借未高亮的匹配邻居放置"), Board->CanPlaceBuildingAtCursor(RightTarget, NormalRoomCard, Reason));
 
 	// 验证真实背包点击路径：失败保持槽位、数量和占用，成功才消耗卡牌并占用同一落点。
 	int32 CardIndex = INDEX_NONE;
@@ -202,6 +205,12 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("实际占用的是原先同一落点"), Placed->GetOccupiedCoordinates().Contains(Destination));
 	if (!CastleBuildingTests::CompletePlacement(Placed) || !Board->RemoveBuilding(Placed, Reason)) { return false; }
 
+	// 普通房间从同一真实背包入口依靠功能建筑侧面放置，证明新规则不限于预览高亮。
+	if (!Board->PrototypeBackpack->TryAddItem(NormalRoomCard, CardIndex, Reason)) { return false; }
+	ACastleBuildingBase* RoomOnTowerFace = Board->PlaceBackpackBuildingAtCursor(LeftTarget, CardIndex, Reason);
+	if (!TestNotNull(TEXT("普通房间实际依靠功能建筑面建成"), RoomOnTowerFace)) { AddError(Reason.ToString()); return false; }
+	if (!CastleBuildingTests::CompletePlacement(RoomOnTowerFace) || !Board->RemoveBuilding(RoomOnTowerFace, Reason)) { return false; }
+
 	// 上层仍要求整个底面有支撑；来源建筑消失时也必须拒绝，不能改用其他邻格。
 	FCastleGridCursorTarget TopTarget = LeftTarget;
 	TopTarget.Face = ECastleGridFace::Up;
@@ -213,17 +222,32 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	if (!Board->RemoveBuilding(Left, Reason)) { return false; }
 	TestFalse(TEXT("来源建筑消失后拒绝旧高亮面"), Board->CanPlaceBuildingAtCursor(LeftTarget, RedCard, Reason));
 
-	// 道路面只给道路提供匹配；即使旁边还有匹配地面也不能让功能卡借用它。
-	ACastleBuildingBase* Road = Board->PlaceBuilding(FIntVector(0, 0, 0), RoadCard, false, Reason);
-	if (!TestNotNull(TEXT("在道路地面放置道路"), Road)) { return false; }
-	if (!CastleBuildingTests::CompletePlacement(Road)) { return false; }
-	FCastleGridCursorTarget RoadTarget;
-	RoadTarget.bValid = true;
-	RoadTarget.Cell = FIntVector(0, 0, 0);
-	RoadTarget.Face = ECastleGridFace::PositiveY;
-	RoadTarget.AdjacentCell = FIntVector(0, 1, 0);
-	TestFalse(TEXT("功能建筑不能借道路面匹配"), Board->CanPlaceBuildingAtCursor(RoadTarget, RedCard, Reason));
-	TestTrue(TEXT("道路仍可依靠道路面延伸"), Board->CanPlaceBuildingAtCursor(RoadTarget, RoadCard, Reason));
+	// 功能建筑与普通房间双向使用同色或同数字匹配，不再存在类别隔离。
+	ACastleBuildingBase* NormalRoom = Board->PlaceBuilding(FIntVector(0, 0, 0), NormalRoomCard, false, Reason);
+	if (!TestNotNull(TEXT("在五色地面放置普通房间"), NormalRoom)) { return false; }
+	if (!CastleBuildingTests::CompletePlacement(NormalRoom)) { return false; }
+	FCastleGridCursorTarget NormalRoomTarget;
+	NormalRoomTarget.bValid = true;
+	NormalRoomTarget.Cell = FIntVector(0, 0, 0);
+	NormalRoomTarget.Face = ECastleGridFace::PositiveY;
+	NormalRoomTarget.AdjacentCell = FIntVector(0, 1, 0);
+	TestTrue(TEXT("功能建筑可依靠普通房间同色面匹配"), Board->CanPlaceBuildingAtCursor(NormalRoomTarget, RedCard, Reason));
+	FCastleBuildingDescriptor NumberMatchedTower;
+	Definition->CreateDescriptor(1, ECastleTileColor::Green, 3, NumberMatchedTower, Reason);
+	TestTrue(TEXT("功能建筑可只依靠普通房间同数字面匹配"), Board->CanPlaceBuildingAtCursor(NormalRoomTarget, NumberMatchedTower, Reason));
+	if (!Board->PrototypeBackpack->TryAddItem(NumberMatchedTower, CardIndex, Reason)) { return false; }
+	ACastleBuildingBase* TowerOnRoomFace = Board->PlaceBackpackBuildingAtCursor(NormalRoomTarget, CardIndex, Reason);
+	if (!TestNotNull(TEXT("功能建筑实际依靠普通房间侧面建成"), TowerOnRoomFace)) { AddError(Reason.ToString()); return false; }
+	if (!CastleBuildingTests::CompletePlacement(TowerOnRoomFace) || !Board->RemoveBuilding(TowerOnRoomFace, Reason)) { return false; }
+
+	// 使用开启自动合成的正式放置路径；相同定义、颜色和数字也不能升级普通房间。
+	ACastleBuildingBase* SecondRoom = Board->PlaceBuilding(FIntVector(0, 1, 0), NormalRoomCard, true, Reason);
+	if (!TestNotNull(TEXT("同属性普通房间可紧贴放置"), SecondRoom)) { return false; }
+	if (!CastleBuildingTests::CompletePlacement(SecondRoom)) { return false; }
+	TestTrue(TEXT("两座普通房间保持独立 Lv1 且不能合成"), IsValid(NormalRoom) && IsValid(SecondRoom)
+		&& NormalRoom != SecondRoom && NormalRoom->GetBuildingLevel() == 1 && SecondRoom->GetBuildingLevel() == 1
+		&& !NormalRoom->CanMergeWith(SecondRoom) && !NormalRoom->CanMergeToNextLevel());
+	TestEqual(TEXT("棋盘保留两座普通房间及原先右侧功能塔"), Board->GetPlacedBuildingCount(), 3);
 	return true;
 }
 

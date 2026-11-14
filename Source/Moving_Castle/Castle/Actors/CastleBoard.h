@@ -90,10 +90,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|地面")
 	int32 GroundSeed = 1337;
 
-	/** 是否要求随机生成器在棋盘原点生成灰色 0 号道路起始格。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|地面")
-	bool bReserveRoadStartTile = true;
-
 	/** BeginPlay 时自动生成地面，关闭后可以由关卡蓝图手动调用 GenerateGround。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|地面")
 	bool bGenerateGroundOnBeginPlay = true;
@@ -122,7 +118,7 @@ public:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "战斗|敌人")
 	TObjectPtr<ACastleMassEnemySpawner> InitialEnemySpawner;
 
-	/** 原型背包会自动装入道路、箭塔、炮塔、农田和盾塔各两张样例卡牌。 */
+	/** 原型背包装入普通房间、箭塔、炮塔、农田和盾塔各两张五色 1～9 号卡。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "棋盘|原型操作")
 	TObjectPtr<UCastleBackpackComponent> PrototypeBackpack;
 

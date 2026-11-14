@@ -94,15 +94,10 @@ bool UCastleShopComponent::GenerateOffers(FRandomStream& Stream, TArray<FCastleS
 	for (int32 Index = 0; Index < 6; ++Index)
 	{
 		UCastleBuildingDefinition* Definition = Board->BuildingDefinitions[Stream.RandRange(0, Board->BuildingDefinitions.Num() - 1)];
-		ECastleTileColor Color = ECastleTileColor::Gray;
-		int32 Number = 0;
-		if (Definition->BuildingType != ECastleBuildingType::Road)
-		{
-			// 允许重复商品，沿用五种颜色、1 至 9 的数字范围；建筑身份直接来自定义池。
-			Color = static_cast<ECastleTileColor>(Stream.RandRange(
-				static_cast<int32>(ECastleTileColor::Red), static_cast<int32>(ECastleTileColor::Purple)));
-			Number = Stream.RandRange(1, 9);
-		}
+		// 普通房间与功能建筑共用五色、1～9 数字规则；商品可以重复。
+		const ECastleTileColor Color = static_cast<ECastleTileColor>(Stream.RandRange(
+			static_cast<int32>(ECastleTileColor::Red), static_cast<int32>(ECastleTileColor::Purple)));
+		const int32 Number = Stream.RandRange(1, 9);
 		FCastleShopOffer Offer;
 		if (!Definition->CreateDescriptor(1, Color, Number, Offer.Descriptor, OutFailureReason))
 		{

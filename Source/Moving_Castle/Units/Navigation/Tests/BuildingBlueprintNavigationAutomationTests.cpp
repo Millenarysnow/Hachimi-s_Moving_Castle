@@ -61,6 +61,28 @@ namespace BuildingBlueprintNavigationTests
 
 			if (Stage == 0)
 			{
+				// 真实关卡 BeginPlay 必须生成全彩地面，并把原点属性用于首种普通房间样例卡。
+				// 此处复用既有游戏测试入口，覆盖运行时初始化而不是仅测试纯数据工厂。
+				for (int32 Y = 0; Y < Board->GridSize.Y; ++Y)
+				{
+					for (int32 X = 0; X < Board->GridSize.X; ++X)
+					{
+						FCastleGroundCell Ground;
+						Test->TestTrue(TEXT("真实关卡所有地面均为五色 1～9 号"),
+							Board->TryGetGroundCell(Board->GridOrigin + FIntVector(X, Y, 0), Ground)
+							&& Ground.Color >= ECastleTileColor::Red && Ground.Color <= ECastleTileColor::Purple
+							&& Ground.Number >= 1 && Ground.Number <= 9);
+					}
+				}
+				if (!Test->TestTrue(TEXT("开局第一种卡牌是已初始化普通房间"), Board->PrototypePalette.IsValidIndex(0)
+					&& Board->PrototypePalette[0].HasDefinition()
+					&& Board->PrototypePalette[0].GetBuildingType() == ECastleBuildingType::NormalRoom)) { return true; }
+				FCastleGroundCell OriginGround;
+				if (!Test->TestTrue(TEXT("真实关卡包含原点地面"), Board->TryGetGroundCell(Board->GridOrigin, OriginGround))) { return true; }
+				Test->TestTrue(TEXT("开局普通房间卡直接采用原点地面属性且固定一级"),
+					Board->PrototypePalette[0].Color == OriginGround.Color && Board->PrototypePalette[0].Number == OriginGround.Number
+					&& Board->PrototypePalette[0].Level == 1);
+
 				UCastleBuildingDefinition* Definition = LoadObject<UCastleBuildingDefinition>(nullptr,
 					TEXT("/Game/MovingCastle/Data/Buildings/DA_ArcherTower.DA_ArcherTower"));
 				if (!Test->TestNotNull(TEXT("加载一级箭塔定义"), Definition)) { return true; }
