@@ -1,0 +1,1 @@
+部分本项目 skill 在 `.agents/skills/`。 
