@@ -919,7 +919,8 @@ void ACastleBoard::BuildGridCursorTarget(const FIntVector& Cell, const FVector& 
 
 TArray<FIntVector> ACastleBoard::BuildPlacementFootprint(const FIntVector& Coordinate, int32 Level) const
 {
-	// 与既有合成形状一致：二级横向两格，三级平面四格，四级两层八格。
+	// 卡牌直接放置仍采用标准朝向：二级沿 X 两格，三级 XY 平面四格，四级两层八格。
+	// 自动合成使用两座建筑的实际联合占用，不能在升级时调用这里而丢掉垂直形状。
 	const int32 Width = Level >= 2 && Level <= 4 ? 2 : 1;
 	const int32 Depth = Level >= 3 && Level <= 4 ? 2 : 1;
 	const int32 Height = Level == 4 ? 2 : 1;
@@ -1089,9 +1090,10 @@ ACastleBuildingBase* ACastleBoard::SpawnBuildingActor(const FCastleBuildingDescr
 	// 生成等级蓝图自身，并显式保留它的根缩放；棋盘的缩放在此基础上叠乘。
 	SpawnParameters.TransformScaleMethod = ESpawnActorScaleMethod::MultiplyWithRoot;
 	FQuat SpawnRotation = GetActorQuat();
-	if (Descriptor.Level == 2 && OccupiedCoordinates[0].X == OccupiedCoordinates[1].X)
+	if (Descriptor.Level == 2 && Maximum.Y > Minimum.Y)
 	{
 		// 标准二级蓝图沿 X 轴制作，沿 Y 合成时旋转整个建筑，不再依赖模型载体节点。
+		// 垂直两格的 X/Y 都相同，不能仅凭 X 相同误判为沿 Y；垂直合成保留模型直立朝向。
 		SpawnRotation *= FQuat(FVector::UpVector, HALF_PI);
 	}
 	ACastleBuildingBase* NewBuilding = GetWorld()->SpawnActor<ACastleBuildingBase>(Descriptor.GetBuildingClass(),
@@ -1292,12 +1294,17 @@ bool ACastleBoard::BuildMergedFootprint(const ACastleBuildingBase* First, const 
 	switch (CurrentLevel)
 	{
 	case 1:
-		// 一级合成二级只能在水平 X/Y 方向形成 2x1，不允许用上下堆叠完成合成。
-		bValidShape = Dimensions.Z == 1 && ((Dimensions.X == 2 && Dimensions.Y == 1) || (Dimensions.X == 1 && Dimensions.Y == 2));
+		// 二级允许沿 X、Y 或 Z 紧贴的两格；三个轴只允许其中一个跨度为 2，斜接不能升级。
+		bValidShape = Dimensions == FIntVector(2, 1, 1)
+			|| Dimensions == FIntVector(1, 2, 1)
+			|| Dimensions == FIntVector(1, 1, 2);
 		break;
 	case 2:
-		// 二级合成三级固定为同一平面 2x2 方形。
-		bValidShape = Dimensions == FIntVector(2, 2, 1);
+		// 三级必须填满一个 2x2 方形，既支持水平 XY，也支持垂直 XZ/YZ；四格直线仍非法。
+		// 只校验联合形状，不限制两座二级自身的方向，水平对和垂直对都能拼成同一个方形。
+		bValidShape = Dimensions == FIntVector(2, 2, 1)
+			|| Dimensions == FIntVector(2, 1, 2)
+			|| Dimensions == FIntVector(1, 2, 2);
 		break;
 	case 3:
 		// 三级合成四级固定为 2x2x2 立方体。
