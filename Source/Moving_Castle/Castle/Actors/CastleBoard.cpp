@@ -1599,6 +1599,8 @@ void ACastleBoard::InitializePrototypeDeck()
 	const FCastleGroundCell& ArcherCell = FunctionalCells[0];
 	const FCastleGroundCell& CannonCell = FunctionalCells[FMath::Min(1, FunctionalCells.Num() - 1)];
 	const FCastleGroundCell& FarmCell = FunctionalCells[FMath::Min(2, FunctionalCells.Num() - 1)];
+	// 盾塔样例明确与箭塔共用第一块功能地面的属性，便于直接比较不同塔的放置和合成。
+	const FCastleGroundCell& ShieldCell = FunctionalCells[0];
 
 	FText DefinitionReason;
 	if (!ValidateBuildingDefinitions(DefinitionReason))
@@ -1607,8 +1609,8 @@ void ACastleBoard::InitializePrototypeDeck()
 		return;
 	}
 	const ECastleBuildingType Types[] = { ECastleBuildingType::Road, ECastleBuildingType::ArcherTower,
-		ECastleBuildingType::CannonTower, ECastleBuildingType::Farm };
-	const FCastleGroundCell Cells[] = { FCastleGroundCell(), ArcherCell, CannonCell, FarmCell };
+		ECastleBuildingType::CannonTower, ECastleBuildingType::Farm, ECastleBuildingType::ShieldTower };
+	const FCastleGroundCell Cells[] = { FCastleGroundCell(), ArcherCell, CannonCell, FarmCell, ShieldCell };
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Types); ++Index)
 	{
 		UCastleBuildingDefinition* Definition = FindBuildingDefinition(Types[Index]);
@@ -1622,7 +1624,7 @@ void ACastleBoard::InitializePrototypeDeck()
 		PrototypePalette.Add(Descriptor);
 	}
 
-	// 每种样例卡放两张，箭塔可以直接在相邻地块完成一次 1 级到 2 级的合成。
+	// 五种样例卡各放两张，盾塔位于第 9、10 槽；同属性盾塔可直接验证一级升二级。
 	for (int32 PaletteIndex = 0; PaletteIndex < PrototypePalette.Num(); ++PaletteIndex)
 	{
 		const int32 CardCount = 2;

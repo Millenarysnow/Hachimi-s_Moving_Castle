@@ -1,9 +1,10 @@
-// 使用正式炮塔与农田资产验证等级映射、双组件结构及放置后的碰撞边界。
+// 使用正式炮塔、农田与盾塔资产验证等级映射、双组件结构及放置后的碰撞边界。
 
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "CastleBuildingTestUtilities.h"
 #include "Components/Building/BuildingGameplayRootComponent.h"
+#include "Components/Building/Effects/CastleBuildingEffectComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -39,13 +40,13 @@ bool FCastleBuildingRoadTemplateTest::RunTest(const FString& Parameters)
 	FText Reason;
 	if (!TestTrue(TEXT("配置所有等级的支撑地面"), Board->ApplyGroundGenerationResult(Ground, Reason))) { return false; }
 
-	for (const TCHAR* Family : { TEXT("CannonTower"), TEXT("Farm") })
+	for (const TCHAR* Family : { TEXT("CannonTower"), TEXT("Farm"), TEXT("ShieldTower") })
 	{
 		const FString DefinitionPath = FString::Printf(TEXT("/Game/MovingCastle/Data/Buildings/DA_%s.DA_%s"), Family, Family);
 		UCastleBuildingDefinition* Definition = LoadObject<UCastleBuildingDefinition>(nullptr, *DefinitionPath);
-		if (!TestNotNull(TEXT("加载正式炮塔或农田 DA"), Definition)) { return false; }
+		if (!TestNotNull(TEXT("加载正式炮塔、农田或盾塔 DA"), Definition)) { return false; }
 		Board->BuildingDefinitions = { Definition };
-		TestEqual(TEXT("两种建筑都配置完整五级"), Definition->Levels.Num(), 5);
+		TestEqual(TEXT("每种模板建筑都配置完整五级"), Definition->Levels.Num(), 5);
 		for (int32 Level = 1; Level <= 5; ++Level)
 		{
 			FCastleBuildingDescriptor Card;
@@ -92,6 +93,15 @@ bool FCastleBuildingRoadTemplateTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("蓝图恰好新增两个网格组件"), AuthoredMeshes, 2);
 			TestEqual(TEXT("只有一个功能地板"), Floors, 1);
 			TestEqual(TEXT("只有一个纯表现模型"), Visuals, 1);
+			if (Definition->BuildingType == ECastleBuildingType::ShieldTower)
+			{
+				// 盾塔当前只复用共同触发计数；不能误继承攻击组件或复制炮塔的攻击数据。
+				if (!TestNotNull(TEXT("盾塔保留共同效果组件"), Building->BuildingEffect.Get())) { return false; }
+				TestEqual(TEXT("盾塔使用基础效果而非攻击实现"), Building->BuildingEffect->GetClass(), UCastleBuildingEffectComponent::StaticClass());
+				TestNull(TEXT("盾塔定义不配置攻击 DA"), Definition->AttackData.Get());
+				TestTrue(TEXT("盾塔接入统一触发入口"), Building->TriggerBuildingEffect(FCastleBuildingTriggerContext()));
+				TestEqual(TEXT("触发反馈来自建筑共同状态"), Building->BuildingEffect->TriggerCount, int64(1));
+			}
 			if (!Board->RemoveBuilding(Building, Reason)) { AddError(Reason.ToString()); return false; }
 		}
 	}

@@ -122,7 +122,7 @@ public:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "战斗|敌人")
 	TObjectPtr<ACastleMassEnemySpawner> InitialEnemySpawner;
 
-	/** 原型背包会自动装入道路、箭塔、炮塔和农田样例卡牌。 */
+	/** 原型背包会自动装入道路、箭塔、炮塔、农田和盾塔各两张样例卡牌。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "棋盘|原型操作")
 	TObjectPtr<UCastleBackpackComponent> PrototypeBackpack;
 
