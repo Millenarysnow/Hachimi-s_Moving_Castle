@@ -2,6 +2,7 @@
 
 #include "AssemblyFlightComponent.h"
 #include "BuildingMergeComponent.h"
+#include "CastleLadderLinkComponent.h"
 #include "Engine/World.h"
 #include "Misc/ScopeRWLock.h"
 #include "Moving_Castle.h"
@@ -38,6 +39,21 @@ int32 FCastleSharedNavigationPath::FindPatrolLeg(double Distance) const
 	return Leg;
 }
 
+bool FCastleSharedNavigationPath::FindLadderRange(const double Distance, double& OutEndDist) const
+{
+	// 梯子区间数量远小于采样点数量；小数组线性扫描可避免额外索引与 UObject 访问。
+	for (const FCastleLadderPathRange& Range : LadderRanges)
+	{
+		if (Distance >= Range.StartDist && Distance < Range.EndDist)
+		{
+			OutEndDist = Range.EndDist;
+			return true;
+		}
+	}
+	OutEndDist = Distance;
+	return false;
+}
+
 bool FCastleSharedNavigationPath::FindClosestPatrolDistance(FVector Location, int32 Leg, double& OutDistance, double& OutSeparation) const
 {
 	if (PatrolPoints.IsEmpty()) { return false; }
@@ -68,7 +84,48 @@ bool FCastleSharedNavigationPath::FindClosestPatrolDistance(FVector Location, in
 namespace CastlePatrolNavigation
 {
 	/** 沿已求出的走廊采样高度。只读取本轮有效多边形，快照不保留会因重建过期的引用。 */
-	bool AppendSurfaceSamples(const ARecastNavMesh& Mesh, const FNavMeshPath& Leg, double Spacing,
+	/** 梯子折线按真实三维距离采样，并只将梯底至梯顶的部分记录为攀爬区间。 */
+	bool AppendLadderPolyline(const TArray<FVector>& Points, const double Spacing,
+		FCastleSharedNavigationPath& OutPath, FText& OutFailure)
+	{
+		if (Points.Num() != 4)
+		{
+			OutFailure = FText::FromString(TEXT("合法梯子的三维通行折线必须包含楼板入口、梯底、梯顶和楼板出口四点。"));
+			return false;
+		}
+		for (int32 Segment = 1; Segment < Points.Num(); ++Segment)
+		{
+			const FVector& Start = Points[Segment - 1];
+			const FVector& End = Points[Segment];
+			const double SegmentLength = FVector::Distance(Start, End);
+			if (!FMath::IsFinite(SegmentLength) || SegmentLength <= UE_DOUBLE_SMALL_NUMBER)
+			{
+				OutFailure = FText::FromString(TEXT("梯子通行折线存在零长度或非法三维线段。"));
+				return false;
+			}
+			const double RangeStart = OutPath.PatrolDistances.Last();
+			const int32 Steps = FMath::Max(1, FMath::CeilToInt(SegmentLength / Spacing));
+			for (int32 Step = 1; Step <= Steps; ++Step)
+			{
+				const FVector Sample = FMath::Lerp(Start, End, static_cast<double>(Step) / Steps);
+				const double Span = FVector::Distance(OutPath.PatrolPoints.Last(), Sample);
+				if (Span > UE_DOUBLE_SMALL_NUMBER)
+				{
+					OutPath.PatrolPoints.Add(Sample);
+					OutPath.PatrolDistances.Add(OutPath.PatrolDistances.Last() + Span);
+				}
+			}
+			if (Segment == 2)
+			{
+				FCastleLadderPathRange& Range = OutPath.LadderRanges.AddDefaulted_GetRef();
+				Range.StartDist = RangeStart;
+				Range.EndDist = OutPath.PatrolDistances.Last();
+			}
+		}
+		return true;
+	}
+
+	bool AppendSurfaceSamples(const ARecastNavMesh& Mesh, UNavigationSystemV1& Navigation, const FNavMeshPath& Leg, double Spacing,
 		FCastleSharedNavigationPath& OutPath, FText& OutFailure)
 	{
 		const TArray<FNavPathPoint>& Corners = Leg.GetPathPoints();
@@ -77,6 +134,31 @@ namespace CastlePatrolNavigation
 		{
 			const FVector Start = Corners[Corner - 1].Location;
 			const FVector End = Corners[Corner].Location;
+			const FNavPathPoint& SegmentStart = Corners[Corner - 1];
+			const bool bIsNavLink = Leg.IsPathSegmentANavLink(Corner - 1) || SegmentStart.CustomNavLinkId.IsValid()
+				|| Corners[Corner].CustomNavLinkId.IsValid();
+			if (bIsNavLink)
+			{
+				const FNavLinkId LinkId = SegmentStart.CustomNavLinkId.IsValid()
+					? SegmentStart.CustomNavLinkId : Corners[Corner].CustomNavLinkId;
+				INavLinkCustomInterface* RegisteredLink = LinkId.IsValid() ? Navigation.GetCustomLink(LinkId) : nullptr;
+				UCastleLadderLinkComponent* Ladder = Cast<UCastleLadderLinkComponent>(RegisteredLink);
+				if (!Ladder || Ladder->GetWorld() != Navigation.GetWorld() || !Ladder->IsRegistered()
+					|| !Ladder->bLadderLinkEnabled || Ladder->GetId() != LinkId)
+				{
+					OutFailure = FText::FromString(TEXT("共享巡逻遇到未登记、已禁用或非梯子类型的 NavLink，拒绝将其当作普通直线路段。"));
+					return false;
+				}
+				TArray<FVector> Traversal;
+				if (!Ladder->GetTraversalPolyline(End.Z > Start.Z, Traversal))
+				{
+					OutFailure = FText::FromString(FString::Printf(TEXT("梯子导航组件 %s 无法提供有效三维通行折线。"), *Ladder->GetPathName()));
+					return false;
+				}
+				if (!AppendLadderPolyline(Traversal, Spacing, OutPath, OutFailure)) { return false; }
+			}
+			else
+			{
 			const int32 EndPoly = Leg.GetNodeRefIndex(Corners[Corner].NodeRef);
 			if (EndPoly < CorridorCursor) { OutFailure = FText::FromString(TEXT("巡逻路径走廊顺序无效，无法生成共享贴地采样。")); return false; }
 			const int32 Steps = FMath::Max(1, FMath::CeilToInt(FVector::Dist2D(Start, End) / Spacing));
@@ -108,6 +190,7 @@ namespace CastlePatrolNavigation
 					OutPath.PatrolPoints.Add(BestPoint);
 					OutPath.PatrolDistances.Add(OutPath.PatrolDistances.Last() + Span);
 				}
+			}
 			}
 		}
 		return true;
@@ -385,17 +468,8 @@ void UCastleNavigationSubsystem::CalculateSharedPath()
 			Path.Length += Result.Path->GetLength();
 			if (bRequestedClosedLoop)
 			{
-				// 当前没有跳跃/传送/门交互行为，不能把特殊连接伪装成普通行走。
-				for (const FNavPathPoint& Point : Result.Path->GetPathPoints())
-				{
-					if (Point.CustomNavLinkId.IsValid() || FNavMeshNodeFlags(Point.Flags).IsNavLink())
-					{
-						LastFailure = FText::FromString(TEXT("共享巡逻经过 NavLink；尚未配置对应动作，拒绝按直线穿越特殊连接。"));
-						break;
-					}
-				}
 				const FNavMeshPath* Corridor = Result.Path->CastPath<FNavMeshPath>();
-				if (LastFailure.IsEmpty() && (!Corridor || !CastlePatrolNavigation::AppendSurfaceSamples(*Mesh, *Corridor, PatrolSampleSpacing, Path, LastFailure)))
+				if (LastFailure.IsEmpty() && (!Corridor || !CastlePatrolNavigation::AppendSurfaceSamples(*Mesh, *Navigation, *Corridor, PatrolSampleSpacing, Path, LastFailure)))
 				{
 					if (LastFailure.IsEmpty()) { LastFailure = FText::FromString(TEXT("共享巡逻缺少 Recast 路径走廊。")); }
 				}
@@ -417,7 +491,7 @@ void UCastleNavigationSubsystem::CalculateSharedPath()
 	if (!Path.bValid)
 	{
 		Path.Points.Reset(); Path.PointFlags.Reset(); Path.PatrolPoints.Reset();
-		Path.PatrolDistances.Reset(); Path.WaypointDistances.Reset(); Path.Length = 0.0;
+		Path.PatrolDistances.Reset(); Path.WaypointDistances.Reset(); Path.LadderRanges.Reset(); Path.Length = 0.0;
 	}
 	if (!Path.bValid) { UE_LOG(LogMoving_Castle, Warning, TEXT("NPC 导航：%s"), *LastFailure.ToString()); }
 	else { UE_LOG(LogMoving_Castle, Display, TEXT("NPC 共享路线发布：导航版本 %d，查询累计 %d 次，完整 %d 段，%d 个转折点，%d 个共享采样，长度 %.1f cm。"), NavigationRevision, PathQueryCount, LegCount, Path.Points.Num(), Path.PatrolPoints.Num(), Path.Length); }

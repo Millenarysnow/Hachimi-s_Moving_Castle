@@ -6,9 +6,23 @@
 #include "CastleNavigationSubsystem.generated.h"
 
 class ANavigationData;
+class UCastleLadderLinkComponent;
 class UAssemblyFlightComponent;
 class UBuildingMergeComponent;
 class UNavigationSystemV1;
+
+/** 路线快照中的梯子攀爬距离；只保存数值，Mass 工作线程不访问组件或 UObject。 */
+USTRUCT(BlueprintType)
+struct MOVING_CASTLE_API FCastleLadderPathRange
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category="共享路线")
+	double StartDist = 0.0;
+
+	UPROPERTY(BlueprintReadOnly, Category="共享路线")
+	double EndDist = 0.0;
+};
 
 /** 全世界的一份路线快照。多个 NPC 可以持有同一个只读快照，各自记录路段进度。 */
 USTRUCT(BlueprintType)
@@ -60,6 +74,10 @@ struct MOVING_CASTLE_API FCastleSharedNavigationPath
 	/** 每个玩家路径点在闭环中的累计距离，最后额外存整圈长度，明确保留 N→1 路段。 */
 	TArray<double> WaypointDistances;
 
+	/** 只包含梯底到梯顶的攀爬区间，不包含两侧楼板接驳走段。 */
+	UPROPERTY(BlueprintReadOnly, Category="共享路线")
+	TArray<FCastleLadderPathRange> LadderRanges;
+
 	/** 只读数值运算，可由 Mass 工作线程调用；Distance 已由调用方限制到 [0, Length]。 */
 	void SamplePatrol(double Distance, FVector& OutLocation, FVector& OutDirection) const;
 
@@ -68,6 +86,9 @@ struct MOVING_CASTLE_API FCastleSharedNavigationPath
 
 	/** 返回距离所在的玩家路段；不将采样点或转折点当作玩家路径点。 */
 	int32 FindPatrolLeg(double Distance) const;
+
+	/** 查询当前位置是否在任一梯子区间，并返回该区间末端距离。 */
+	bool FindLadderRange(double Distance, double& OutEndDist) const;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FCastleSharedPathChanged);
