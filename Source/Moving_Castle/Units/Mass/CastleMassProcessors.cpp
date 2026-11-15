@@ -2,6 +2,7 @@
 
 #include "CastleMassFragments.h"
 #include "Projectiles/CastleMassHomingProjectileFragments.h"
+#include "Projectiles/CastleMassEnemyProjectileFragments.h"
 #include "Mass/CastleMassPatrolFragments.h"
 #include "MassCommonFragments.h"
 #include "MassCommonTypes.h"
@@ -111,6 +112,8 @@ void UCastleMassProjectileProcessor::ConfigureQueries(const TSharedRef<FMassEnti
 	Query.AddTagRequirement<FCastleMassProjectileTag>(EMassFragmentPresence::All);
 	// 追踪子类由专用处理器拥有位移，普通子弹仍保持原有的速度和重力弹道语义。
 	Query.AddRequirement<FCastleMassHomingProjectileFragment>(EMassFragmentAccess::None, EMassFragmentPresence::None);
+	// 敌方追踪弹同样有专属位移所有者，不能再被普通弹道推进一次。
+	Query.AddRequirement<FCastleMassEnemyProjectileFragment>(EMassFragmentAccess::None, EMassFragmentPresence::None);
 	Query.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FMassVelocityFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassProjectileFragment>(EMassFragmentAccess::ReadWrite);

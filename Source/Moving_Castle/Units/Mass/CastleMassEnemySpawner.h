@@ -36,6 +36,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mass|敌人")
 	int32 RandomSeed = 20261112;
 
+	/** 每个圆环基准点同步生成一簇；默认一只保持既有 Count 语义，群虫设置为 6~8。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mass|敌人|簇生成")
+	int32 MinClusterCount = 1;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mass|敌人|簇生成")
+	int32 MaxClusterCount = 1;
+	/** 簇内在水平圆盘均匀散布，群虫使用 120 cm；不改变同一簇的高度。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mass|敌人|簇生成")
+	float ClusterSpreadRadius = 0.0f;
+
 	/** 在主塔周围圆环随机生成敌人；范围错误或主塔缺失时整批拒绝。 */
 	virtual bool SpawnUnits() override;
 };

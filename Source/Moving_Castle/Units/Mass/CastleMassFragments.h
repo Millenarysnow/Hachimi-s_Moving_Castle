@@ -56,6 +56,17 @@ struct MOVING_CASTLE_API FCastleMassMoveTargetFragment : public FMassFragment
 	bool bHasTarget = false;
 };
 
+/** NPC 农田增益的实体值状态；所有 NPC 默认装配，建筑只通过单位子系统读写。 */
+USTRUCT()
+struct MOVING_CASTLE_API FCastleMassNPCFarmBuffFragment : public FMassFragment
+{
+	GENERATED_BODY()
+
+	/** 累计的附加数字，初始零；增加时拒绝非正数、非有限数及溢出。 */
+	UPROPERTY()
+	float BonusNumber = 0.0f;
+};
+
 USTRUCT()
 struct MOVING_CASTLE_API FCastleMassMovementParameters : public FMassConstSharedFragment
 {

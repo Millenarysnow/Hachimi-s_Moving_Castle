@@ -25,9 +25,12 @@ ACastleMassEnemySpawner::ACastleMassEnemySpawner()
 bool ACastleMassEnemySpawner::SpawnUnits()
 {
 	if (Count <= 0 || !FMath::IsFinite(InnerRadius) || !FMath::IsFinite(OuterRadius)
-		|| InnerRadius < 0.0f || OuterRadius <= InnerRadius || !FMath::IsFinite(HeightOffset))
+		|| InnerRadius < 0.0f || OuterRadius <= InnerRadius || !FMath::IsFinite(HeightOffset)
+		|| MinClusterCount <= 0 || MaxClusterCount < MinClusterCount
+		|| static_cast<int64>(Count) * MaxClusterCount > MAX_int32
+		|| !FMath::IsFinite(ClusterSpreadRadius) || ClusterSpreadRadius < 0.0f)
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 敌人圆环生成失败：数量、半径或高度配置无效。"));
+		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 敌人圆环生成失败：%s，数量、半径、高度或簇数量范围无效。"), *GetPathNameSafe(Configuration));
 		return false;
 	}
 
@@ -57,7 +60,7 @@ bool ACastleMassEnemySpawner::SpawnUnits()
 		const float InnerRadiusSquared = FMath::Square(InnerRadius);
 		const float OuterRadiusSquared = FMath::Square(OuterRadius);
 		TArray<FTransform> Transforms;
-		Transforms.Reserve(Count);
+		Transforms.Reserve(Count * MaxClusterCount);
 		for (int32 Index = 0; Index < Count; ++Index)
 		{
 			// 对半径平方做均匀采样，避免圆环外侧因面积更大而被过度偏置。
@@ -65,8 +68,14 @@ bool ACastleMassEnemySpawner::SpawnUnits()
 			const float Angle = RandomStream.FRandRange(0.0f, UE_TWO_PI);
 			const FVector Location = TargetLocation + FVector(FMath::Cos(Angle) * Radius,
 				FMath::Sin(Angle) * Radius, HeightOffset);
-			const FVector Direction = (TargetLocation - Location).GetSafeNormal();
-			Transforms.Emplace(Direction.IsNearlyZero() ? FRotator::ZeroRotator : Direction.Rotation(), Location);
+			const int32 ClusterCount = RandomStream.RandRange(MinClusterCount, MaxClusterCount);
+			for (int32 Member = 0; Member < ClusterCount; ++Member)
+			{
+				const float OffsetRadius = FMath::Sqrt(RandomStream.GetFraction()) * ClusterSpreadRadius;
+				const float OffsetAngle = RandomStream.FRandRange(0.0f, UE_TWO_PI);
+				const FVector MemberLocation = Location + FVector(FMath::Cos(OffsetAngle) * OffsetRadius, FMath::Sin(OffsetAngle) * OffsetRadius, 0);
+				Transforms.Emplace((TargetLocation - MemberLocation).Rotation(), MemberLocation);
+			}
 		}
 
 		FText FailureReason;

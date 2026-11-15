@@ -15,6 +15,9 @@
 #include "Kismet/GameplayStatics.h"
 #include "Moving_Castle.h"
 #include "Interaction/CastlePatrolRoute.h"
+#include "CastleMainTowerComponent.h"
+#include "CastleMassEnemySpawner.h"
+#include "MassEntityConfigAsset.h"
 
 ACastlePlayerController::ACastlePlayerController()
 {
@@ -113,6 +116,11 @@ void ACastlePlayerController::SetupInputComponent()
 
 void ACastlePlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	for (ACastleMassEnemySpawner* Spawner : EnemyPreviewSpawners)
+	{
+		if (IsValid(Spawner)) { Spawner->Destroy(); }
+	}
+	EnemyPreviewSpawners.Reset();
 	Shop->OnShopChanged.RemoveDynamic(this, &ACastlePlayerController::HandleShopChanged);
 	if (GridCursor != nullptr)
 	{
@@ -347,4 +355,69 @@ void ACastlePlayerController::CastleSpendGold(int32 Amount)
 	FText Reason;
 	const bool bSuccess = Economy->TrySpendGold(Amount, Reason);
 	ShowGameplayMessage(bSuccess ? FString::Printf(TEXT("已扣除 %d 金币，余额 %d。"), Amount, Economy->GetGold()) : Reason.ToString(), bSuccess);
+}
+
+void ACastlePlayerController::CastleSpawnEnemy(const FString& EnemyType, int32 WaveCount)
+{
+	const auto Reject = [this](const FString& Message)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("CastleSpawnEnemy：%s"), *Message);
+		ShowGameplayMessage(Message, false);
+	};
+	// 名称就是资产契约中的四个公开兵种，不按未知输入猜测配置。
+	if (EnemyType != TEXT("LavaGoliath") && EnemyType != TEXT("LavaPup")
+		&& EnemyType != TEXT("MiasmaWelp") && EnemyType != TEXT("ShadowSwarm"))
+	{
+		Reject(TEXT("未知类型。用法：CastleSpawnEnemy LavaGoliath|LavaPup|MiasmaWelp|ShadowSwarm [正整数波数]"));
+		return;
+	}
+	if (WaveCount <= 0 || (EnemyType == TEXT("ShadowSwarm") && WaveCount > MAX_int32 / 8))
+	{
+		Reject(TEXT("波数必须是正整数，且总实体数量不得溢出。"));
+		return;
+	}
+	FVector Target;
+	UCastleMainTowerSubsystem* Main = GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>();
+	if (!Main || !Main->GetMainTowerTargetLocation(Target))
+	{
+		Reject(TEXT("当前世界没有存活主塔，无法在外圈圆环生成敌人。"));
+		return;
+	}
+	const FString AssetPath = TEXT("/Game/MovingCastle/Mass/DA_MassEnemy_") + EnemyType;
+	UMassEntityConfigAsset* Configuration = LoadObject<UMassEntityConfigAsset>(nullptr, *AssetPath);
+	if (!Configuration)
+	{
+		Reject(FString::Printf(TEXT("敌人资产 %s 缺失或加载失败。"), *AssetPath));
+		return;
+	}
+	// 延迟生成 Actor，先设置禁用 BeginPlay 自动生成，再完成生命周期，避免误刷默认测试兵。
+	ACastleMassEnemySpawner* Spawner = GetWorld()->SpawnActorDeferred<ACastleMassEnemySpawner>(
+		ACastleMassEnemySpawner::StaticClass(), FTransform::Identity, this, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	if (!Spawner)
+	{
+		Reject(TEXT("无法创建敌人批量生成器。"));
+		return;
+	}
+	Spawner->bSpawnOnBeginPlay = false;
+	Spawner->Configuration = Configuration;
+	Spawner->Count = WaveCount;
+	Spawner->InnerRadius = 1800.0f;
+	Spawner->OuterRadius = 2300.0f;
+	Spawner->RandomSeed = FMath::Rand();
+	if (EnemyType == TEXT("ShadowSwarm"))
+	{
+		Spawner->MinClusterCount = 6;
+		Spawner->MaxClusterCount = 8;
+		Spawner->ClusterSpreadRadius = 120.0f;
+	}
+	Spawner->FinishSpawning(FTransform::Identity);
+	if (!Spawner->SpawnUnits())
+	{
+		Reject(FString::Printf(TEXT("%s 批量生成失败，详见日志。"), *AssetPath));
+		Spawner->Destroy();
+		return;
+	}
+	EnemyPreviewSpawners.Add(Spawner);
+	ShowGameplayMessage(FString::Printf(TEXT("已生成 %s：%d 波，%d 只，主塔外圈 1800~2300 cm。"),
+		*EnemyType, WaveCount, Spawner->SpawnedUnits.Num()), true);
 }

@@ -4,17 +4,28 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "CastleMassTypes.h"
 #include "Projectiles/CastleMassHomingProjectileTypes.h"
+#include "Projectiles/CastleMassEnemyProjectileTypes.h"
 #include "CastleMassUnitSubsystem.generated.h"
 
 class UMassEntityConfigAsset;
 struct FMassEntityManager;
 
-/** 蓝图/建筑系统与 Mass 的批量接口。写操作延迟到安全边界，返回 true 表示命令被接收。 */
+/** 蓝图/建筑系统与 Mass 的批量接口。批量命令延迟执行，农田增益与即时伤害同步修改值状态。 */
 UCLASS()
 class MOVING_CASTLE_API UCastleMassUnitSubsystem : public UWorldSubsystem
 {
 	GENERATED_BODY()
 public:
+	/** 游戏线程向本世界存活 NPC 同步累加有限正数；允许游戏线程 Processor，失败写 Error。 */
+	bool AddNPCFarmBuff(const FCastleMassUnitHandle& NPC, float DeltaBonus);
+	/** 游戏线程同步读取存活 NPC 的农田增益；允许游戏线程 Processor，失败输出零并写 Error。 */
+	bool GetNPCFarmBuff(const FCastleMassUnitHandle& NPC, float& OutBonusNumber) const;
+	/** 游戏线程即时伤害，允许 Processor 调用；须在并行查询同步结束后或拥有生命写权限时使用。 */
+	bool ApplyImmediateDamageToEnemy(const FCastleMassUnitHandle& Enemy, float Damage);
+	/** 只在游戏线程安全边界生成敌方弹；Processor 用延迟 Create 命令调用，逐发锁定护盾或主塔。 */
+	bool SpawnEnemyProjectiles(UMassEntityConfigAsset* Configuration, const TArray<FCastleMassEnemyProjectileSpawn>& Spawns,
+		TArray<FCastleMassUnitHandle>& OutProjectiles, FText& OutFailureReason);
+
 	/**
 	 * 在 Origin 周围 Radius（三维，cm）内查询最近的存活敌人（EnemyTag 且 Health>0）。
 	 * 只能在游戏线程且 Mass 未处理时调用；非法调用或输入写 Error，正常无目标返回 false 且不报错。

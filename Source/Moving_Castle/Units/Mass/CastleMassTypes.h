@@ -72,11 +72,11 @@ struct MOVING_CASTLE_API FCastleMassUnitSnapshot
 	UPROPERTY(BlueprintReadOnly, Category="单位")
 	bool bHasMoveTarget = false;
 
-	/** 敌人是否已经进入主塔攻击距离。 */
+	/** 敌人是否已经进入当前护盾或主塔的攻击距离。 */
 	UPROPERTY(BlueprintReadOnly, Category="战斗")
 	bool bInAttackRange = false;
 
-	/** 已完成的主塔攻击次数，零伤害攻击也会计入。 */
+	/** 已完成的近战攻击或远程发射次数，零伤害攻击也会计入。 */
 	UPROPERTY(BlueprintReadOnly, Category="战斗")
 	int32 AttackCount = 0;
 
