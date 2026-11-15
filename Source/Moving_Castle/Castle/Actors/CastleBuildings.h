@@ -148,7 +148,7 @@ class MOVING_CASTLE_API ACastleFarmBuilding : public ACastleBuildingBase
 
 public:
 	/** 设置农田类别。 */
-	ACastleFarmBuilding();
+	explicit ACastleFarmBuilding(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 };
 

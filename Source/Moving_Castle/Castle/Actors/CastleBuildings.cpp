@@ -2,6 +2,7 @@
 
 #include "CastleBuildings.h"
 #include "Components/Building/Effects/Attack/CastleTowerAttackEffectComponent.h"
+#include "Components/Building/Effects/Farm/CastleFarmEffectComponent.h"
 
 ACastleNormalRoomBuilding::ACastleNormalRoomBuilding()
 {
@@ -74,7 +75,8 @@ ACastleCannonTowerLevel5::ACastleCannonTowerLevel5()
 	BuildingLevel = 5;
 }
 
-ACastleFarmBuilding::ACastleFarmBuilding()
+ACastleFarmBuilding::ACastleFarmBuilding(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UCastleFarmEffectComponent>(TEXT("BuildingEffect")))
 {
 	// 农田族的具体等级由等级子类构造函数设置，此处只设置类别。
 	BuildingType = ECastleBuildingType::Farm;

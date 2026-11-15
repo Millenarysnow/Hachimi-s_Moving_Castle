@@ -5,6 +5,7 @@
 #include "Castle/Actors/CastleBuildingBase.h"
 #include "Castle/Data/CastleBuildingDefinition.h"
 #include "Castle/Actors/CastleBuildings.h"
+#include "Castle/Actors/CastleBoard.h"
 #include "CastleMassUnitSubsystem.h"
 #include "Engine/World.h"
 #include "MassEntitySubsystem.h"
@@ -18,15 +19,65 @@ UCastleTowerAttackEffectComponent::UCastleTowerAttackEffectComponent()
 	SetComponentTickEnabled(false);
 }
 
-void UCastleTowerAttackEffectComponent::ExecuteEffect(const FCastleBuildingTriggerContext& Context)
+bool UCastleTowerAttackEffectComponent::GetTriggerFarmBonus(const FCastleBuildingTriggerContext& Context, float& OutBonus) const
 {
-	Super::ExecuteEffect(Context);
+	OutBonus = 0.0f;
+	// D7 明确主动调用没有 NPC 增益；实体进入必须读取真实 NPC 状态，不能读取失败后改为零。
+	if (Context.Source == ECastleBuildingTriggerSource::Manual) { return true; }
+	UCastleMassUnitSubsystem* Units = GetWorld() ? GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>() : nullptr;
+	if (!Units)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑 %s 读取 NPC 农田增益失败：缺少当前世界单位子系统。"), *GetNameSafe(GetOwner()));
+		return false;
+	}
+	return Units->GetNPCFarmBuff(Context.NPC, OutBonus);
+}
+
+bool UCastleTowerAttackEffectComponent::ExecuteEffect(const FCastleBuildingTriggerContext& Context)
+{
+	const ACastleBuildingBase* Building = Cast<ACastleBuildingBase>(GetOwner());
+	const UCastleTowerAttackDataAsset* Data = nullptr;
+	const FCastleTowerAttackLevelData* LevelData = nullptr;
+	if (!ResolveAttackConfiguration(Data, LevelData)) { return false; }
+	const int32 Level = Building->GetBuildingLevel();
+	int64 NumberSum = Building->GetBuildingNumber();
+	if (Level < 1 || Level > 5 || NumberSum <= 0)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("箭塔 %s 装填失败：等级或自身数字无效，定义=%s。"), *Building->GetPathName(), *GetPathNameSafe(Building->GetBuildingDefinition()));
+		return false;
+	}
+	if (Level > 1)
+	{
+		ACastleBoard* Board = ACastleBoard::FindBoardForBuilding(Building);
+		if (!Board)
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("箭塔 %s 无所属棋盘，无法查询下层建筑。"), *Building->GetPathName());
+			return false;
+		}
+		TArray<ACastleBuildingBase*> Below;
+		if (!Board->GetBuildingsBelow(Building, Level == 5 ? -1 : Level - 1, Below)) { return false; }
+		for (const ACastleBuildingBase* Other : Below) { NumberSum += Other->GetBuildingNumber(); }
+	}
+	float Bonus = 0.0f;
+	if (!GetTriggerFarmBonus(Context, Bonus)) { return false; }
+	const double Total = static_cast<double>(NumberSum) + static_cast<double>(Bonus);
+	if (!FMath::IsFinite(Total) || Total <= 0.0 || Total >= static_cast<double>(MAX_int64))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("箭塔 %s 装填数字溢出或无效，定义=%s。"), *Building->GetPathName(), *GetPathNameSafe(Building->GetBuildingDefinition()));
+		return false;
+	}
+	// D7 的取整只发生在自身、下层建筑和 NPC 增益全部相加之后，不能逐项取整。
+	return QueueShots(FMath::FloorToInt64(Total));
+}
+
+bool UCastleTowerAttackEffectComponent::QueueShots(const int64 ShotCount)
+{
 
 	// 基类已经接受本次触发；即使发射间隔未到或上一发仍在处理，本次也必须独立排队。
-	if (PendingShotCount == TNumericLimits<int64>::Max())
+	if (ShotCount <= 0 || PendingShotCount > MAX_int64 - ShotCount)
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("塔攻击待射队列溢出，建筑=%s；本次触发无法记录。"), *GetNameSafe(GetOwner()));
-		return;
+		return false;
 	}
 	if (PendingShotCount == 0 || bWaitingForExternalRetry)
 	{
@@ -36,6 +87,7 @@ void UCastleTowerAttackEffectComponent::ExecuteEffect(const FCastleBuildingTrigg
 		{
 			UE_LOG(LogMoving_Castle, Error, TEXT("塔攻击接收新待射时无法访问世界时间，建筑=%s。"), *GetNameSafe(GetOwner()));
 			bWaitingForExternalRetry = true;
+			return false;
 		}
 		else
 		{
@@ -45,6 +97,7 @@ void UCastleTowerAttackEffectComponent::ExecuteEffect(const FCastleBuildingTrigg
 				UE_LOG(LogMoving_Castle, Error, TEXT("塔攻击接收新待射时世界时间无效，建筑=%s，TimeSeconds=%f。"),
 					*GetNameSafe(GetOwner()), CurrentWorldTime);
 				bWaitingForExternalRetry = true;
+				return false;
 			}
 			else
 			{
@@ -55,8 +108,9 @@ void UCastleTowerAttackEffectComponent::ExecuteEffect(const FCastleBuildingTrigg
 			}
 		}
 	}
-	++PendingShotCount;
+	PendingShotCount += ShotCount;
 	SetComponentTickEnabled(true);
+	return true;
 }
 
 void UCastleTowerAttackEffectComponent::TickComponent(const float DeltaTime, const ELevelTick TickType,

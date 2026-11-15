@@ -17,6 +17,7 @@
 #include "Components/SceneComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "Moving_Castle.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -766,6 +767,145 @@ TArray<ACastleBuildingBase*> ACastleBoard::GetPlacedBuildings() const
 	}
 
 	return Result;
+}
+
+ACastleBoard* ACastleBoard::FindBoardForBuilding(const ACastleBuildingBase* Building)
+{
+	if (!IsValid(Building) || !Building->GetWorld()) { return nullptr; }
+	const TArray<FIntVector> Cells = Building->GetOccupiedCoordinates();
+	if (Cells.IsEmpty()) { return nullptr; }
+	for (TActorIterator<ACastleBoard> It(Building->GetWorld()); It; ++It)
+	{
+		if (It->GetBuildingAt(Cells[0]) == Building) { return *It; }
+	}
+	return nullptr;
+}
+
+bool ACastleBoard::ValidateEffectQuerySource(const ACastleBuildingBase* Source) const
+{
+	if (!IsValid(Source) || Source->GetWorld() != GetWorld() || !Source->CanReceiveBuildingTrigger()
+		|| Source->GetOccupiedCoordinates().IsEmpty())
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 空间查询失败：源建筑 %s 无效、未初始化或未完成建造。"),
+			*GetPathName(), *GetPathNameSafe(Source));
+		return false;
+	}
+	for (const FIntVector& Cell : Source->GetOccupiedCoordinates())
+	{
+		if (GetBuildingAt(Cell) != Source)
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 空间查询失败：源建筑 %s 的占用索引不完整。"), *GetPathName(), *Source->GetPathName());
+			return false;
+		}
+	}
+	return true;
+}
+
+bool ACastleBoard::GetBuildingsBelow(const ACastleBuildingBase* Source, int32 LayerCount,
+	TArray<ACastleBuildingBase*>& OutBuildings) const
+{
+	OutBuildings.Reset();
+	if (!ValidateEffectQuerySource(Source)) { return false; }
+	if (LayerCount < -1)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 下层查询失败：建筑 %s 的层数 %d 非法。"), *GetPathName(), *Source->GetPathName(), LayerCount);
+		return false;
+	}
+	FIntVector Min = Source->GetOccupiedCoordinates()[0], Max = Min;
+	for (const FIntVector& Cell : Source->GetOccupiedCoordinates()) { Min = Min.ComponentMin(Cell); Max = Max.ComponentMax(Cell); }
+	TSet<ACastleBuildingBase*> Unique;
+	for (const auto& Pair : BuildingByCoordinate)
+	{
+		const FIntVector& Cell = Pair.Key;
+		// D6 定义的集合只有正下方若干层；地面不在建筑占用索引中，多格建筑只贡献一次数字。
+		if (Cell.X < Min.X || Cell.X > Max.X || Cell.Y < Min.Y || Cell.Y > Max.Y || Cell.Z >= Min.Z
+			|| (LayerCount >= 0 && static_cast<int64>(Min.Z) - Cell.Z > LayerCount)) { continue; }
+		if (!IsValid(Pair.Value))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 下层查询遇到失效建筑索引，源=%s，格=%s。"), *GetPathName(), *Source->GetPathName(), *Cell.ToString());
+			return false;
+		}
+		if (Pair.Value != Source && Pair.Value->CanReceiveBuildingTrigger()) { Unique.Add(Pair.Value); }
+	}
+	OutBuildings = Unique.Array();
+	return true;
+}
+
+bool ACastleBoard::GetBuildingsInExpandedBounds(const ACastleBuildingBase* Source, const FIntVector& Expansion,
+	TArray<ACastleBuildingBase*>& OutBuildings) const
+{
+	OutBuildings.Reset();
+	if (!ValidateEffectQuerySource(Source)) { return false; }
+	if (Expansion.X < 0 || Expansion.Y < 0 || Expansion.Z < 0)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 外扩查询失败：建筑 %s 的外扩量 %s 不能为负。"), *GetPathName(), *Source->GetPathName(), *Expansion.ToString());
+		return false;
+	}
+	FIntVector Min = Source->GetOccupiedCoordinates()[0], Max = Min;
+	for (const FIntVector& Cell : Source->GetOccupiedCoordinates()) { Min = Min.ComponentMin(Cell); Max = Max.ComponentMax(Cell); }
+	TSet<ACastleBuildingBase*> Unique;
+	for (const auto& Pair : BuildingByCoordinate)
+	{
+		const FIntVector& Cell = Pair.Key;
+		// 使用 int64 比较外扩边界，避免位于 int32 边缘的棋盘坐标在加减时回绕。
+		if (static_cast<int64>(Cell.X) < static_cast<int64>(Min.X) - Expansion.X || static_cast<int64>(Cell.X) > static_cast<int64>(Max.X) + Expansion.X
+			|| static_cast<int64>(Cell.Y) < static_cast<int64>(Min.Y) - Expansion.Y || static_cast<int64>(Cell.Y) > static_cast<int64>(Max.Y) + Expansion.Y
+			|| static_cast<int64>(Cell.Z) < static_cast<int64>(Min.Z) - Expansion.Z || static_cast<int64>(Cell.Z) > static_cast<int64>(Max.Z) + Expansion.Z) { continue; }
+		if (!IsValid(Pair.Value))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 外扩查询遇到失效建筑索引，源=%s，格=%s。"), *GetPathName(), *Source->GetPathName(), *Cell.ToString());
+			return false;
+		}
+		if (Pair.Value->CanReceiveBuildingTrigger()) { Unique.Add(Pair.Value); }
+	}
+	OutBuildings = Unique.Array();
+	return true;
+}
+
+bool ACastleBoard::GetConnectedBuildings(const ACastleBuildingBase* Source, const TArray<ACastleBuildingBase*>& Candidates,
+	TArray<ACastleBuildingBase*>& OutBuildings) const
+{
+	OutBuildings.Reset();
+	if (!ValidateEffectQuerySource(Source)) { return false; }
+	TSet<ACastleBuildingBase*> Allowed;
+	for (ACastleBuildingBase* Candidate : Candidates)
+	{
+		if (!IsValid(Candidate))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 连通查询失败：源 %s 的候选集合包含失效建筑。"), *GetPathName(), *Source->GetPathName());
+			return false;
+		}
+		// D6 只允许已完成建造的实例参与连通，不能借建造中的建筑跨过空隙。
+		if (!Candidate->CanReceiveBuildingTrigger()) { continue; }
+		if (!ValidateEffectQuerySource(Candidate)) { return false; }
+		Allowed.Add(Candidate);
+	}
+	if (!Allowed.Contains(const_cast<ACastleBuildingBase*>(Source)))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 连通查询失败：候选集合没有源建筑 %s。"), *GetPathName(), *Source->GetPathName());
+		return false;
+	}
+	TSet<ACastleBuildingBase*> Visited;
+	OutBuildings.Add(const_cast<ACastleBuildingBase*>(Source));
+	Visited.Add(const_cast<ACastleBuildingBase*>(Source));
+	for (int32 Head = 0; Head < OutBuildings.Num(); ++Head)
+	{
+		for (const FIntVector& Cell : OutBuildings[Head]->GetOccupiedCoordinates())
+		{
+			TArray<FIntVector> Neighbors;
+			GetFaceNeighborCoordinates(Cell, Neighbors);
+			for (const FIntVector& Neighbor : Neighbors)
+			{
+				ACastleBuildingBase* Building = GetBuildingAt(Neighbor);
+				if (Allowed.Contains(Building) && !Visited.Contains(Building))
+				{
+					Visited.Add(Building);
+					OutBuildings.Add(Building);
+				}
+			}
+		}
+	}
+	return true;
 }
 
 FVector ACastleBoard::GetGridWorldLocation(const FIntVector& Coordinate) const

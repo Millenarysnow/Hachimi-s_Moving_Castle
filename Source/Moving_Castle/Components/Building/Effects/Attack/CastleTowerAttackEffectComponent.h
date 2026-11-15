@@ -8,7 +8,7 @@
 #include "CastleTowerAttackEffectComponent.generated.h"
 
 /**
- * 通用塔攻击效果组件。每次有效建筑触发只向本实例待射队列增加一发，
+ * 箭塔攻击效果及攻击队列基类。箭塔按数字、下层建筑与 NPC 农田增益装填多发，
  * 后续由游戏线程 Tick 按攻击数据依次寻找敌人并生成追踪子弹。
  */
 UCLASS(ClassGroup=(Castle), BlueprintType)
@@ -19,13 +19,19 @@ class MOVING_CASTLE_API UCastleTowerAttackEffectComponent : public UCastleBuildi
 public:
 	UCastleTowerAttackEffectComponent();
 
-	/** 尚未结算的触发次数；无敌人时对应一发会明确警告并作废。 */
+	/** 尚未发射的箭数；无敌人时对应一发会明确警告并作废。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="建筑|塔攻击")
 	int64 PendingShotCount = 0;
 
 protected:
 	/** 记录触发后只排队，不因射速间隔或前一发仍在等待而吞掉新触发。 */
-	virtual void ExecuteEffect(const FCastleBuildingTriggerContext& Context) override;
+	virtual bool ExecuteEffect(const FCastleBuildingTriggerContext& Context) override;
+
+	/** 将本次装填数量一次性入队；溢出或无效世界时间明确失败，不截断或吞掉新触发。 */
+	bool QueueShots(int64 ShotCount);
+
+	/** 在 NPC 进入的同一游戏线程时刻同步读取增益，主动触发的增益严格为零。 */
+	bool GetTriggerFarmBonus(const FCastleBuildingTriggerContext& Context, float& OutBonus) const;
 
 	/** 只在队列非空且没有配置或 Mass 失败等待时推进射速计时。 */
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;

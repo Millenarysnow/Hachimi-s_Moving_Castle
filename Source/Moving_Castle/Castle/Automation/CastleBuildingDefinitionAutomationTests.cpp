@@ -6,6 +6,7 @@
 
 #include "CastleBackpackComponent.h"
 #include "CastleBuildingTestUtilities.h"
+#include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Components/ChildActorComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -237,12 +238,14 @@ bool FCastleDirectBuildingBlueprintTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("沿 Y 轴时整体旋转 90 度"), MergedAlongY->GetActorRotation().Equals(FRotator(0.0f, 90.0f, 0.0f)));
 	Board->RemoveBuilding(MergedAlongY, Reason);
 
-	// 用户要求保留箭塔 DA：三级仍引用无模型 C++ 类，必须明确失败，不能再生成占位几何。
+	// 三级已经显式绑定正式蓝图，必须通过与其他等级相同的生成和飞入链路。
 	Definition->CreateDescriptor(3, ECastleTileColor::Red, 3, Card, Reason);
 	ACastleBuildingBase* Level3Building = Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason);
-	TestNull(TEXT("未配置美术模型的三级箭塔明确失败"), Level3Building);
-	TestTrue(TEXT("三级失败给出缺模型原因"), Reason.ToString().Contains(TEXT("缺少可见美术模型")));
-	TestEqual(TEXT("三级失败后棋盘仍为空"), Board->GetPlacedBuildingCount(), 0);
+	if (!TestNotNull(TEXT("三级正式箭塔模型实际放置成功"), Level3Building)) { AddError(Reason.ToString()); return false; }
+	TestTrue(TEXT("三级完成原有飞入"), CastleBuildingTests::CompletePlacement(Level3Building));
+	TestTrue(TEXT("三级绑定匹配 C++ 父类的正式蓝图"), Level3Building->GetClass()->IsChildOf(ACastleArcherTowerLevel3::StaticClass())
+		&& Level3Building->GetClass()->HasAnyClassFlags(CLASS_CompiledFromBlueprint));
+	Board->RemoveBuilding(Level3Building, Reason);
 	Definition->CreateDescriptor(4, ECastleTileColor::Red, 3, Card, Reason);
 	ACastleBuildingBase* Level4Building = Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason);
 	if (!TestNotNull(TEXT("直接放置四级卡"), Level4Building)) { AddError(Reason.ToString()); return false; }
@@ -259,6 +262,19 @@ bool FCastleDirectBuildingBlueprintTest::RunTest(const FString& Parameters)
 			TEXT("/Game/MovingCastle/Model/Buildings/PrototypeUpgrade/ArcherTowerLV4/"));
 	}).Num();
 	TestEqual(TEXT("四级蓝图保留新版的 324 个模型零件"), Level4PartCount, 324);
+	Board->RemoveBuilding(Level4Building, Reason);
+	Definition->CreateDescriptor(5, ECastleTileColor::Red, 3, Card, Reason);
+	ACastleBuildingBase* Level5Building = Board->PlaceBuilding(FIntVector::ZeroValue, Card, false, Reason);
+	if (!TestNotNull(TEXT("五级正式箭塔模型实际放置成功"), Level5Building)) { AddError(Reason.ToString()); return false; }
+	TestTrue(TEXT("五级完成原有飞入并保留单格占用"), CastleBuildingTests::CompletePlacement(Level5Building)
+		&& Level5Building->GetOccupiedCoordinates().Num() == 1);
+	TestTrue(TEXT("五级蓝图直接继承五级 C++ 类"), Level5Building->GetClass()->GetSuperClass() == ACastleArcherTowerLevel5::StaticClass());
+	TArray<USceneComponent*> Level5Components;
+	Level5Building->GetComponents<USceneComponent>(Level5Components);
+	TestTrue(TEXT("五级显式提供 GameplayRoot 下的功能地板"), Level5Components.ContainsByPredicate([Level5Building](const USceneComponent* Component)
+	{
+		return Component->GetAttachParent() == Level5Building->GameplayRoot && Component->IsA<UStaticMeshComponent>();
+	}));
 	return true;
 }
 

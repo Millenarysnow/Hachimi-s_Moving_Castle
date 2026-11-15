@@ -3,6 +3,7 @@
 #include "CastleBuildingBase.h"
 
 #include "CastleBuildingDefinition.h"
+#include "CastleBoard.h"
 #include "BuildingMergeComponent.h"
 #include "AssemblyFlightComponent.h"
 #include "Components/Building/BuildingGameplayRootComponent.h"
@@ -69,7 +70,11 @@ bool ACastleBuildingBase::TriggerBuildingEffect(const FCastleBuildingTriggerCont
 		UE_LOG(LogMoving_Castle, Error, TEXT("建筑 %s 缺少原生效果组件。"), *GetName());
 		return false;
 	}
-	return BuildingEffect->Trigger(Context);
+	if (!BuildingEffect->Trigger(Context)) { return false; }
+	// 仅真实注册在棋盘里的自身触发参与弹药库联动；独立测试/预览不属于棋盘事件集合。
+	// 联动炮塔直接调用自己的组件入口，因此不会回到这里再次传播，互为弹药库也只有一跳。
+	if (ACastleBoard* Board = ACastleBoard::FindBoardForBuilding(this)) { Board->OnBuildingTriggered.Broadcast(this, Context); }
+	return true;
 }
 
 void ACastleBuildingBase::SetPlacementComplete(const bool bComplete)

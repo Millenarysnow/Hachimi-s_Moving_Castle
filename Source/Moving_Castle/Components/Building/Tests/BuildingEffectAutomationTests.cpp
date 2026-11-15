@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
 #include "CastleBuildings.h"
+#include "CastleBuildingTestUtilities.h"
 #include "Components/Building/Effects/CastleBuildingEffectComponent.h"
 #include "Components/Building/Effects/Attack/CastleTowerAttackEffectComponent.h"
 #include "Engine/World.h"
@@ -18,6 +19,12 @@ bool FCastleBuildingEffectEntryTest::RunTest(const FString& Parameters)
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Settings);
 	ACastleArcherTowerLevel1* Tower = World->SpawnActor<ACastleArcherTowerLevel1>();
 	ACastleNormalRoomBuilding* NormalRoom = World->SpawnActor<ACastleNormalRoomBuilding>();
+	// 箭塔现在会读取真实数字；入口压力测试也显式提供有效定义和数字，不再触发未初始化实例。
+	UCastleBuildingDefinition* Definition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::ArcherTower);
+	FCastleBuildingDescriptor Card;
+	FText Reason;
+	if (!Definition->CreateDescriptor(1, ECastleTileColor::Red, 1, Card, Reason)
+		|| !Tower->InitializeBuilding(Card, {FIntVector::ZeroValue})) { AddError(Reason.ToString()); World->DestroyWorld(false); return false; }
 	TestNotNull(TEXT("箭塔自带效果组件"), Tower->BuildingEffect.Get());
 	TestNotNull(TEXT("普通房间同样自带效果组件"), NormalRoom->BuildingEffect.Get());
 	TestTrue(TEXT("箭塔复用 BuildingEffect 子对象并使用原生塔攻击组件"),

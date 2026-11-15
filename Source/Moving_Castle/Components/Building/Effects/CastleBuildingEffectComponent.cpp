@@ -40,16 +40,29 @@ bool UCastleBuildingEffectComponent::Trigger(const FCastleBuildingTriggerContext
 	}
 
 	// 每次入口单独结算；不能因同帧、相同 NPC 或前一段表现未结束而合并逻辑次数。
+	if (TriggerCount == MAX_int64)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑 %s 的效果触发计数已溢出。"), *Building->GetPathName());
+		return false;
+	}
+	const FCastleBuildingTriggerContext PreviousContext = LastTriggerContext;
 	++TriggerCount;
 	LastTriggerContext = Context;
-	ExecuteEffect(Context);
+	if (!ExecuteEffect(Context))
+	{
+		// 保留“记录→原生执行→表现通知”的既有顺序，但配置/结算失败必须传回调用方，不能报告成功。
+		--TriggerCount;
+		LastTriggerContext = PreviousContext;
+		return false;
+	}
 	OnEffectTriggered.Broadcast(Context);
 	UE_LOG(LogMoving_Castle, Verbose, TEXT("建筑效果：%s，第 %lld 次触发，来源=%s。"),
 		*Building->GetName(), TriggerCount, Context.Source == ECastleBuildingTriggerSource::NPCEntry ? TEXT("NPC进入") : TEXT("主动调用"));
 	return true;
 }
 
-void UCastleBuildingEffectComponent::ExecuteEffect(const FCastleBuildingTriggerContext& Context)
+bool UCastleBuildingEffectComponent::ExecuteEffect(const FCastleBuildingTriggerContext& Context)
 {
 	// 基础效果刻意只记录事件；具体建筑以后在原生派生组件中实现各自的攻击或经济规则。
+	return true;
 }

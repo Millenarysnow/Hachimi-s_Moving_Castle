@@ -36,5 +36,5 @@ public:
 
 protected:
 	/** 具体效果的 C++ 扩展点。基础版本只提供计数，不偷偷赋予道路或塔未经设计的收益。 */
-	virtual void ExecuteEffect(const FCastleBuildingTriggerContext& Context);
+	virtual bool ExecuteEffect(const FCastleBuildingTriggerContext& Context);
 };

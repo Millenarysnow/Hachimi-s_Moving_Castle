@@ -127,15 +127,12 @@ bool FCastleArcherTowerAttackAssetTest::RunTest(const FString& Parameters)
 		TArray<UCastleBuildingEffectComponent*> EffectComponents;
 		Defaults->GetComponents<UCastleBuildingEffectComponent>(EffectComponents);
 		TestEqual(FString::Printf(TEXT("%d 级 CDO 只有一个建筑效果组件"), Entry.Level), EffectComponents.Num(), 1);
-		if (Entry.Level == 1 || Entry.Level == 2 || Entry.Level == 4)
-		{
-			TestTrue(FString::Printf(TEXT("%d 级保留现有箭塔蓝图类"), Entry.Level),
-				BuildingClass->HasAnyClassFlags(CLASS_CompiledFromBlueprint));
-		}
+		TestTrue(FString::Printf(TEXT("%d 级均显式配置箭塔蓝图类"), Entry.Level),
+			BuildingClass->HasAnyClassFlags(CLASS_CompiledFromBlueprint));
 		TestEqual(TEXT("等级行顺序和等级值一致"), Entry.Level, Index + 1);
-		TestEqual(TEXT("策划案每秒一箭"), Entry.AttacksPerSecond, 1.0f);
+		TestEqual(TEXT("保持已查证的各等级实际攻速"), Entry.AttacksPerSecond, Entry.Level == 1 ? 10.0f : 1.0f);
 		TestEqual(TEXT("单发伤害按等级递增"), Entry.ProjectileDamage, static_cast<float>((Index + 1) * 5 + 5));
-		TestEqual(TEXT("攻击半径按等级递增"), Entry.AttackRadius, static_cast<float>(1200 + (Index + 1) * 200));
+		TestEqual(TEXT("保持已查证的各等级实际半径"), Entry.AttackRadius, Entry.Level == 1 ? 3000.0f : static_cast<float>(1200 + (Index + 1) * 200));
 	}
 	return true;
 }

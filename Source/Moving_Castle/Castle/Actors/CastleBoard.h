@@ -16,6 +16,10 @@ class UCastleCombatDataAsset;
 class UCastleGroundGenerator;
 class UCastleMainTowerComponent;
 class USceneComponent;
+struct FCastleBuildingTriggerContext;
+
+/** 只广播棋盘中建筑自身的成功触发；弹药库联动直接进入炮塔组件，不再广播，明确切断级联。 */
+DECLARE_MULTICAST_DELEGATE_TwoParams(FCastleBoardBuildingTriggered, ACastleBuildingBase*, const FCastleBuildingTriggerContext&);
 
 /**
  * 逻辑棋盘 Actor。
@@ -211,6 +215,23 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
 	TArray<ACastleBuildingBase*> GetPlacedBuildings() const;
 
+	/** 按真实占用索引查所属棋盘；独立生成、未注册或已注销的建筑没有所属棋盘。 */
+	static ACastleBoard* FindBoardForBuilding(const ACastleBuildingBase* Building);
+
+	/** 正下方底面投影内扫描指定层数；-1 表示全部下层，结果不含自身且按建筑实例去重。 */
+	bool GetBuildingsBelow(const ACastleBuildingBase* Source, int32 LayerCount, TArray<ACastleBuildingBase*>& OutBuildings) const;
+
+	/** 占用包围盒外扩；任一占用格命中即收录整座已完成建筑，结果含自身且按实例去重。 */
+	bool GetBuildingsInExpandedBounds(const ACastleBuildingBase* Source, const FIntVector& Expansion,
+		TArray<ACastleBuildingBase*>& OutBuildings) const;
+
+	/** 在显式候选集合内按六面相邻 BFS；结果含源建筑，不能穿过集合外的建筑连接两端。 */
+	bool GetConnectedBuildings(const ACastleBuildingBase* Source, const TArray<ACastleBuildingBase*>& Candidates,
+		TArray<ACastleBuildingBase*>& OutBuildings) const;
+
+	/** 原生联动通知不保存历史或去重 NPC；同一次进入只由建筑接口广播一次。 */
+	FCastleBoardBuildingTriggered OnBuildingTriggered;
+
 	/** 将网格坐标转换为棋盘 Actor 所在世界中的网格中心。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
 	FVector GetGridWorldLocation(const FIntVector& Coordinate) const;
@@ -282,6 +303,9 @@ protected:
 
 	/** 返回指定坐标当前占用的建筑，没有建筑时返回空指针。 */
 	ACastleBuildingBase* GetBuildingAt(const FIntVector& Coordinate) const;
+
+	/** 空源、未完成源或索引不完整是错误，不能伪装成没有邻居的成功查询。 */
+	bool ValidateEffectQuerySource(const ACastleBuildingBase* Source) const;
 
 	/** 在不改变 Actor 生命周期的情况下，把建筑的所有坐标注册到棋盘索引。 */
 	bool RegisterBuilding(ACastleBuildingBase* Building, FText& OutFailureReason);
