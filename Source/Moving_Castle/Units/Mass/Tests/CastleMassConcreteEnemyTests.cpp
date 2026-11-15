@@ -545,11 +545,12 @@ bool FCastleConcreteEnemyAssetTest::RunTest(const FString& Parameters)
 	const float Healths[] = {120, 20, 55, 12};
 	const float Speeds[] = {140, 300, 240, 420};
 	const float Radii[] = {55, 28, 38, 22};
-	const float Scales[] = {1.5f, 0.75f, 1.1f, 0.6f};
-	const FLinearColor ExpectedColors[] = {{0.85f, 0.18f, 0.05f}, {1, 0.55f, 0.08f}, {0.12f, 0.8f, 0.45f}, {0.38f, 0.15f, 0.9f}};
-	const float Damages[] = {40, 8, 15, 4};
+	const float Scales[] = {1.35f, 0.65f, 1.1f, 0.6f};
+	const TCHAR* MeshNames[] = {TEXT("BeholderSK"), TEXT("BeholderSK"), TEXT("FlyingDemonSK"), TEXT("SpecterSK")};
+	const TCHAR* AttackNames[] = {TEXT("Beholder_Attack01Anim"), TEXT("Beholder_Attack02RPTAnim"), TEXT("FlyingDemon_Attack01Anim"), TEXT("Specter_Attack01Anim")};
+	const float Damages[] = {40, 5, 15, 4};
 	const float Intervals[] = {2, 1, 1.25f, 0.8f};
-	const float Ranges[] = {180, 140, 2200, 130};
+	const float Ranges[] = {180, 800, 2200, 130};
 	auto* Base = LoadObject<UMassEntityConfigAsset>(nullptr, TEXT("/Game/MovingCastle/Mass/DA_MassEnemyBase"));
 	for (int32 Index = 0; Index < 4; ++Index)
 	{
@@ -564,13 +565,24 @@ bool FCastleConcreteEnemyAssetTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("正式兵种半径"), Unit->Radius, Radii[Index]);
 		TestTrue(TEXT("正式兵种模型比例"), Visual->MeshOffset.GetScale3D().Equals(FVector(Scales[Index])));
 		const auto* Mesh = CastChecked<USkeletalMesh>(Visual->AnimationProvider->GetSkinnedAsset());
+		TestEqual(TEXT("使用指定正式怪物网格"), Mesh->GetName(), FString(MeshNames[Index]));
+		TestTrue(TEXT("网格朝向转换为实体 +X"), Visual->MeshOffset.Rotator().Equals(FRotator(0,-90,0),0.01f));
+		if (!TestTrue(TEXT("攻击序列索引有效"), Visual->AnimationProvider->GetSequences().IsValidIndex(Visual->AttackSequence))) { return false; }
+		TestEqual(TEXT("攻击动作使用指南指定序列"), Visual->AnimationProvider->GetSequences()[Visual->AttackSequence].Sequence->GetName(), FString(AttackNames[Index]));
 		if (!TestEqual(TEXT("完整覆盖网格所有材质槽"), Visual->MaterialOverrides.Num(), Mesh->GetMaterials().Num()) || Visual->MaterialOverrides.IsEmpty()) { return false; }
 		for (const auto& Material : Visual->MaterialOverrides) { TestNotNull(TEXT("材质引用有效"), Material.Get()); }
 		Colors.Add(Visual->MaterialOverrides[0]);
-		FLinearColor ActualColor;
-		TestTrue(TEXT("颜色参数存在"), Visual->MaterialOverrides[0]->GetVectorParameterValue(FMaterialParameterInfo(TEXT("EnemyColor")), ActualColor));
-		TestTrue(TEXT("颜色符合正式配置"), ActualColor.Equals(ExpectedColors[Index]));
-		if (Index == 2)
+		if (Index == 1)
+		{
+			const auto* Attack = CastChecked<UCastleMassEnemyLaserAttackTrait>(Asset->FindTrait(UCastleMassEnemyLaserAttackTrait::StaticClass()));
+			TestEqual(TEXT("激光伤害"), Attack->AttackDamage, Damages[Index]);
+			TestEqual(TEXT("激光间隔"), Attack->AttackInterval, Intervals[Index]);
+			TestEqual(TEXT("激光射程"), Attack->AttackRange, Ranges[Index]);
+			TestNotNull(TEXT("光束网格"), Attack->BeamMesh.Get());
+			TestNotNull(TEXT("发光材质"), Attack->BeamMaterial.Get());
+			TestNull(TEXT("激光兵不装配近战"), Asset->FindTrait(UCastleMassMeleeAttackTrait::StaticClass()));
+		}
+		else if (Index == 2)
 		{
 			const auto* Attack = CastChecked<UCastleMassEnemyRangedAttackTrait>(Asset->FindTrait(UCastleMassEnemyRangedAttackTrait::StaticClass()));
 			TestEqual(TEXT("远程伤害"), Attack->AttackDamage, Damages[Index]);
@@ -588,12 +600,12 @@ bool FCastleConcreteEnemyAssetTest::RunTest(const FString& Parameters)
 		TArray<FCastleMassUnitHandle> Handles;
 		FText Reason;
 		TestTrue(TEXT("正式资产通过模板校验并可生成"), Scope.Units().SpawnUnits(Asset, {FTransform(FVector(1000, Index * 200, 0))}, Handles, Reason));
-		if (TestEqual(TEXT("构建出的骨骼批次描述有效"), Visual->SkinnedMeshInstanceDesc.Meshes.Num(), 1))
+		if (TestEqual(TEXT("Specter 包含主体与剑两份骨骼描述"), Visual->SkinnedMeshInstanceDesc.Meshes.Num(), Index == 3 ? 2 : 1))
 		{
 			TestTrue(TEXT("Trait 把覆盖传递到引擎批次描述"), Visual->SkinnedMeshInstanceDesc.Meshes[0].MaterialOverrides == Visual->MaterialOverrides);
 		}
 	}
-	TestEqual(TEXT("四色兵种材质互不相同"), Colors.Num(), 4);
+	TestEqual(TEXT("巨骸幼骸异色，其余保留原包材质"), Colors.Num(), 3);
 	auto* Pup = LoadObject<UMassEntityConfigAsset>(nullptr, TEXT("/Game/MovingCastle/Mass/DA_MassEnemy_LavaPup"));
 	TestNull(TEXT("正式幼骸不再分裂"), Pup->FindTrait(UCastleMassDeathSplitTrait::StaticClass()));
 	auto* Projectile = LoadObject<UMassEntityConfigAsset>(nullptr, TEXT("/Game/MovingCastle/Mass/DA_MassEnemyMiasmaProjectile"));

@@ -391,7 +391,7 @@ bool FCastleBuildingConcreteCombatTest::RunTest(const FString& Parameters)
 			if (Data[It].Health == 20) { ++Pups; }
 		}
 	});
-	TestEqual(TEXT("反伤死亡经正式分裂处理器生成三只幼骸"), Pups, 3);
+	TestEqual(TEXT("反伤死亡经正式分裂处理器按正式 SpawnCount 生成六只幼骸"), Pups, 6);
 	// 关闭第一座护盾，远程敌人在1500吸引圈外、2200射程内仍会消耗第二座护盾。
 	Shields->DeactivateShield(Shield);
 	auto* RangedShield = Cast<ACastleShieldTowerBuilding>(Scope.Place(ECastleBuildingType::ShieldTower, 1, 2, FIntVector(8, 3, 0)));
@@ -404,7 +404,7 @@ bool FCastleBuildingConcreteCombatTest::RunTest(const FString& Parameters)
 	Step<UCastleMassEnemyProjectileProcessor>(Scope.World, 2);
 	TestEqual(TEXT("远程命中实时同步球体剩余次数"), CastChecked<UCastleShieldTowerEffectComponent>(RangedShield->BuildingEffect)->RemainingBlocks, int64(1));
 	Shields->DeactivateShield(RangedShield);
-	// 三只幼骸由前段真实分裂得到；先在其位置之外设置群虫护盾，避免它们消费本段次数。
+	// 六只幼骸由前段真实分裂得到；先在其位置之外设置群虫护盾，避免它们消费本段次数。
 	auto* SwarmShield = Cast<ACastleShieldTowerBuilding>(Scope.Place(ECastleBuildingType::ShieldTower, 1, 1, FIntVector(8, 7, 0)));
 	if (!SwarmShield || !SwarmShield->TriggerBuildingEffect(FCastleBuildingTriggerContext())) { return false; }
 	MainActor->SetActorLocation(SwarmShield->GetActorLocation());

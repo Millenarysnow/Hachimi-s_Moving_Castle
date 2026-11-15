@@ -4,7 +4,7 @@
 
 ## 目标与核心方案
 
-**单位以 Mass Entity 批量模拟，人形以原生骨骼实例批量显示。** 运行时不为每个单位创建 Character、AIController、Actor Tick 或 AnimInstance，避免规模增长时同时叠加对象、逻辑和动画更新成本。
+**单位以 Mass Entity 批量模拟，人形与怪物以原生骨骼实例批量显示。** 运行时不为每个单位创建 Character、AIController、Actor Tick 或 AnimInstance，避免规模增长时同时叠加对象、逻辑和动画更新成本。
 
 **三种单位共享基础生命周期，通过 Trait、Fragment 和 Processor 区分能力。** 具体敌人组合近战、远程和死亡分裂能力，战斗目标统一通过主塔与激活护盾契约查询；NPC 具有巡逻接入与农田增益值，普通及追踪子弹保留各自弹道。正式波次仍未接通。
 
@@ -50,7 +50,7 @@
 
 **普通目标移动是三维直达，不是寻路或自动落地。** 它负责加减速、限速、到达停止和大时间步防越界；用它代替导航会直线穿越障碍。
 
-**同一实体只能有一个位移所有者。** 显式移动、设速度或停止会解除 NPC 巡逻，普通移动 Processor 跳过巡逻中的实体；新增行为若同时改 Transform，就会重复位移或互相覆盖。
+**同一实体只能有一个位移所有者。** 显式移动、设速度或停止会解除 NPC 巡逻，普通移动 Processor 跳过巡逻中的实体。死亡分裂子实体携带 `FCastleMassSpawnBurstFragment` 时，普通移动、近战、远程与激光查询均排除它；只有 `UCastleMassSpawnBurstProcessor` 能改写位置和移动目标，落点帧精确到达后移除 Fragment 再交还控制权。新增行为若绕过这个排除条件，就会重复位移或破坏爆散圆环。
 
 **普通子弹按速度和可选重力推进，保留上一帧位置。** 停止只清零当前速度，带重力的子弹之后仍会下落。两种追踪弹均由各自 Processor 按目标当前位置重算方向，速度取 Trait 的 `Movement.MaxSpeed`；通用子弹 Processor 必须排除两种追踪 Fragment，避免一帧推进两次。
 
@@ -68,7 +68,11 @@
 
 **每次有效命中只扣一次抵挡次数，且即时反伤仍存活的原攻击者。** 最后一击先注销激活态再广播零次数，委托内重新激活也不会被旧命中删除。同次激活的更新保留 ID，破盾或关闭后重新激活产生新 ID，防止在途旧弹误伤新护盾。
 
-**近战优先查询自身所处吸引圈内最近护盾，远程只用射程限制护盾候选。** 没有合格护盾才追踪主塔，进入攻击距离后清除移动目标与速度；两类目标都不可用则输出一次 Error 并停下。瘴翼龙崽射程 2200 cm 大于盾塔默认吸引半径 1500 cm，因此可在圈外停下耗盾，不应套用近战的吸引圈条件。
+**近战优先查询自身所处吸引圈内最近护盾，远程与激光只用射程限制护盾候选。** 没有合格护盾才追踪主塔，进入攻击距离后清除移动目标与速度；两类目标都不可用则输出一次 Error 并停下。瘴翼龙崽射程 2200 cm 大于盾塔默认吸引半径 1500 cm，因此可在圈外停下耗盾，不应套用近战的吸引圈条件。
+
+**激光是持续引导，不是追踪子弹。** `UCastleMassEnemyLaserAttackProcessor` 每帧重选射程内最近激活护盾，否则追踪存活主塔；进射程即停步、朝向目标并进入攻击动画态，首击立即结算，持续期间每个攻击间隔扣一次护盾次数或主塔生命。护盾即时反伤可以在同次结算中击杀攻击者。离开射程重置引导冷却，目标失效在下一帧重选；无任何合法目标时收束光束、停止移动并输出单次 Error。
+
+**光束由世界级瞬态实例批次统一显示，死亡与回收都必须当帧清理。** `UCastleMassEnemyLaserVisualizationProcessor` 在 Movement 及所有弹体伤害之后、生命周期回收之前，向 `UCastleMassEnemyLaserBeamSubsystem` 提交存活攻击态的完整光束集合；空集合也必须提交，不能被查询剪枝省略。实体删除 Observer 同步移除对应实例，避免直接回收最后一个幼骸时残留光束。批次按网格和材质分组，不为每束激光创建 Actor。显示处理器仅参与运行时网络模式：Mass 编辑器预览调度可没有 UWorld，不能在其中访问世界子系统。
 
 **敌方追踪弹不在飞行途中改选目标。** 护盾提前失效时按约定输出 Warning 并回收该发，不穿透攻击主塔；原攻击者死亡不妨碍弹体命中，但不再产生反伤。主塔目标失效属于 Error。命中按弹体线段扫掠建筑目标点结算，不依赖建筑碰撞体或逐弹 Actor。
 
@@ -78,15 +82,15 @@
 
 **`DA_MassMeleeTest` 是继承基类的独立近战测试兵，使用生命 10、伤害 0。** 它显式添加 `UCastleMassMeleeAttackTrait`，并在本地覆盖测试用生命、速度和模型比例；主塔开局生成入口和圆环生成器默认引用此资产。其他兵种可以继承同一基类而不装配近战能力。
 
-**攻击能力位于 `Units/Mass/Enemies/`，每种实体只装配一种攻击位移决策。** 近战与远程各有 Fragment 和 Processor，不能同时写同一敌人的移动目标。零伤害近战仍递增攻击次数并广播主塔生命事件，远程攻击计数在安全边界实际创建弹体后递增，保证反馈与实际动作一致。
+**攻击能力位于 `Units/Mass/Enemies/`，每种实体只装配一种攻击位移决策。** 近战、远程与激光各有 Fragment 和 Processor，不能同时写同一敌人的移动目标；激光与其他攻击 Trait 共存会拒绝模板。零伤害近战仍递增攻击次数并广播主塔生命事件，远程攻击计数在安全边界实际创建弹体后递增，保证反馈与实际动作一致。
 
 **主塔由棋盘 BeginPlay 在中心格的底面中心生成。** `DA_CastleCombat` 配置主塔初始生命 1000、具体敌人资产、初始数量和圆环范围；数量、范围和兵种速度属于可调测试配置，不代表正式波次或性能预算。
 
 ## 具体敌人与死亡分裂
 
-**四份具体敌人资产继承 `DA_MassEnemyBase`，不修改基础资产或测试兵。** 熔岩巨骸与幼骸使用近战，瘴翼龙崽组合远程攻击，幽影群虫使用高速近战；目前它们都复用人形骨骼和动画，通过暗红橙、亮橙黄、青绿、紫蓝四色与模型比例区分。敌方弹使用青绿球体占位，这是明确的美术占位边界。
+**四份具体敌人资产继承 `DA_MassEnemyBase`，不修改基础资产或测试兵。** 巨骸与幼骸使用 `BeholderSK`，分别以 1.35 和 0.65 倍模型、原包两种异色材质实例区分；巨骸保留近战，幼骸使用射程 800 cm、间隔 1 s 的持续激光和 `Beholder_Attack02RPTAnim`。瘴翼龙崽使用 `FlyingDemonSK` 和远程瘴弹，幽影群虫使用持剑的 `SpecterSK` 和高速近战。敌方弹仍使用青绿球体，激光使用独立发光网格占位，均不作为正式特效方案。
 
-**死亡分裂必须在所有伤害结算后、`UCastleMassLifetimeProcessor` 前执行。** `UCastleMassDeathSplitProcessor` 读取生命归零状态，先标记已分裂，再延迟生成子实体；包含玩家追踪弹和护盾即时反伤致死。巨骸在水平 80 cm 圆周生成三只幼骸，幼骸不装配分裂能力；不能改为 Actor 销毁事件，否则会错过 Mass 回收顺序或递归生成。
+**死亡分裂必须在所有伤害结算后、`UCastleMassLifetimeProcessor` 前执行。** `UCastleMassDeathSplitProcessor` 读取生命归零状态，先标记已分裂，再延迟生成子实体；包含玩家追踪弹和护盾即时反伤致死。巨骸在母体中心生成六只朝圆周外侧的幼骸，0.35 s 内以最高 60 cm 的抛物线散开至水平半径 180 cm 的均匀圆环；数量、半径、时长和弧高均由分裂 Trait 校验配置。爆散只附加给本次死亡生成的子实体，不能装进幼骸通用模板，否则直接生成的幼骸也会被错误搬运。途中仍可受伤并正常死亡，幼骸不装配分裂能力；不能改为 Actor 销毁事件，否则会错过 Mass 回收顺序或递归生成。
 
 **群虫的一波是同一圆环基准点周围的六至八只，散布半径 120 cm。** `CastleSpawnEnemy` 为群虫显式设置簇参数，其他兵种每波一只；命令只是验收入口，正式波次系统仍需主动设置生成器的簇参数，不能假定生成器按资产名称推断数量。
 
@@ -94,9 +98,13 @@
 
 **所有可见表示 LOD 都使用 `SkinnedMeshInstance`，Off 才隐藏。** 骨骼网格自身选择渲染 LOD，近距离也不切换逐单位 Actor。恢复 Actor 表示会改变规模成本，必须先明确哪些单位需要交互及其预算。
 
-**四色覆盖必须写入原生骨骼批次描述，不能只保存 Trait 上的颜色。** `UCastleMassHumanoidVisualizationTrait::MaterialOverrides` 按槽传给 `FMassSkinnedMeshInstanceVisualizationMeshDesc`，空引用拒绝模板。`SKM_MassHumanoid` 的 `M_HeadLegs` 与 `M_Torso` 两槽都要覆盖，避免头腿或躯干保留原材质；独立材质参与批次区分，染色母材质显式支持骨骼实例及静态实例顶点工厂。
+**材质覆盖必须写入原生骨骼批次描述，不能只保存 Trait 上的颜色。** `UCastleMassHumanoidVisualizationTrait::MaterialOverrides` 按槽传给 `FMassSkinnedMeshInstanceVisualizationMeshDesc`，空引用拒绝模板；空数组明确保留原网格材质。`SKM_MassHumanoid` 的 `M_HeadLegs` 与 `M_Torso` 两槽都要覆盖，避免头腿或躯干保留原材质。原包怪物母材质 `PolyartDefaultMAT`、`PolyartMaskTintMAT` 显式开启骨骼实例和静态实例支持，避免渲染退回默认棋盘格。
 
-**速度驱动待机与行走，动画只是模拟状态的表现。** `UCastleMassAnimationProcessor` 在运动后写表示动画 Fragment，再由 `UMassConsumeInstancedSkinnedMeshAnimationProcessor` 消费；单位相位独立，避免整批同步踏步。Root Motion 和 AnimNotify 不承担玩法位移或战斗事件。
+**怪物导入前向为 +Y，实体前向为 +X，模型偏移统一绕 Z 转 -90°。** 各模型按参考包围盒最低点乘模型比例设置局部 Z 偏移，使脚底与实体高度一致；不能把发射偏移直接当作模型原始坐标。幼骸独眼发射点以 `EyeBallCTRL` 参考位置经过模型缩放、旋转和落地偏移后写入实体局部空间。
+
+**Specter 的剑是同骨架的附属骨骼网格，不是逐实体静态组件。** `SKM_SpecterSword` 从原包 `SpecterSwordSM` 转换，保留完整参考骨架并刚性蒙皮到 `Sword` 骨骼（父骨骼 `Hand_R`）。`AdditionalAnimationProviders` 为每份附属网格显式指定自身的提供器；主体与剑的序列顺序、速率、起始位置及参考骨架必须相同，才能消费同一实体的动画状态并同步挥剑。UE 提供器要求其网格与实际组件完全一致，不能让剑直接复用引用主体网格的提供器；仅有相同 Skeleton 仍会触发不匹配警告。附属网格也必须开启 Optimize for Instancing。
+
+**攻击态优先于速度选择动画，动画只是模拟状态的表现。** 近战、远程和激光只写 `FCastleMassAttackAnimationFragment` 的攻击范围态，`UCastleMassAnimationProcessor` 在运动后选择可选攻击循环，否则按速度选择待机或移动，再由 `UMassConsumeInstancedSkinnedMeshAnimationProcessor` 消费。`AttackSequence == INDEX_NONE` 明确表示无攻击动作，NPC 和旧测试兵保持原有二态切换；其他越界索引拒绝模板。单位相位独立，避免整批同步踏步。Root Motion 和 AnimNotify 不承担玩法位移或战斗事件。
 
 **当前行走播放倍率在切入该序列时提交，不承诺同序列每帧变速。** 当前 UE 消费链路在序列索引变化时重新设置轨道；只逐帧改 Fragment 的倍率不会成为可靠的速度同步机制，扩展前需修改并验证实际消费行为。
 
