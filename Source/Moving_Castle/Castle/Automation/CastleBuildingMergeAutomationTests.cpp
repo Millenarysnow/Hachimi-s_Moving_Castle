@@ -49,7 +49,7 @@ namespace CastleMergeTests
 	}
 }
 
-/** 新版真实拆件模型：两座各 68 件的一级塔复用全部 136 件，新增 4 件形成 140 件二级塔。 */
+/** 刀盾真实拆件模型：两座各 9 件一级塔合并后复用 14 件，4 件移除、4 件新增，形成 18 件二级塔。 */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleRealBuildingMergeTest,
 	"MovingCastle.Components.Animation.BuildingMerge.RealBuilding",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -87,14 +87,15 @@ bool FCastleRealBuildingMergeTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("新建筑飞入完成后才触发真实合并"), Result)) { AddError(Reason.ToString()); return false; }
 	UBuildingMergeComponent* Merge = Result->BuildingMerge;
 	TestTrue(TEXT("合并自动启动原生组件"), Merge->bIsPlaying && Reason.IsEmpty());
-	TestTrue(TEXT("使用大量真实旧网格而非立方体或粒子"), Merge->SourcePartCount == SourceCount && SourceCount >= 100);
-	TestEqual(TEXT("两座新版一级塔共提供 136 个模型零件"), SourceCount, 136);
-	TestEqual(TEXT("跨导入资产的零件全部建立对应"), Merge->ReusedPartCount, SourceCount);
-	TestEqual(TEXT("只有新版二级模型增加的 4 个零件从场外飞入"), Merge->IncomingPartCount, 4);
-	TestEqual(TEXT("两座已落位建筑的对应件在合并阶段局部移动"), Merge->MovedPartCount, SourceCount);
-	TestEqual(TEXT("新版二级模型在全部复用件之外增加 4 个零件"), Merge->AddedPartCount, 4);
-	TestEqual(TEXT("新版二级塔包含 140 个独立模型零件"), Merge->TargetPartCount, 140);
-	TestEqual(TEXT("没有把可复用件误判成移除"), Merge->RemovedPartCount, 0);
+	TestEqual(TEXT("来源快照包含全部正式模型件"), Merge->SourcePartCount, SourceCount);
+	TestEqual(TEXT("两座刀盾一级塔共提供 18 个模型零件"), SourceCount, 18);
+	// 该批源模型的屋顶/跨接结构发生变化，不能沿用旧模型“全部件复用”的固定断言。
+	TestEqual(TEXT("目录识别出 14 个跨资产同形零件"), Merge->ReusedPartCount, 14);
+	TestEqual(TEXT("新增结构的 4 个零件从场外飞入"), Merge->IncomingPartCount, 4);
+	TestEqual(TEXT("两座已落位建筑的 14 个对应件局部移动"), Merge->MovedPartCount, 14);
+	TestEqual(TEXT("二级模型增加 4 个变化零件"), Merge->AddedPartCount, 4);
+	TestEqual(TEXT("刀盾二级塔包含 18 个独立模型零件"), Merge->TargetPartCount, 18);
+	TestEqual(TEXT("一级模型的 4 个被替换零件退场"), Merge->RemovedPartCount, 4);
 	TestFalse(TEXT("旧建筑已经被规则销毁"), IsValid(First));
 	TestEqual(TEXT("逻辑只保留一个二级建筑"), Board->GetPlacedBuildingCount(), 1);
 	TestEqual(TEXT("仍占两格"), Board->GetOccupiedRoomCellCount(), 2);

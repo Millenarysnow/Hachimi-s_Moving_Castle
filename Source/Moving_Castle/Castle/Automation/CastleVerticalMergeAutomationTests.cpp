@@ -235,4 +235,59 @@ bool FCastleVerticalMergeDeferredTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/** 正式 DA 与拆件蓝图验证 X/Y/Z、XY/XZ/YZ 六种合成，避免原生夹具掩盖垂直类漏配。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDaoDunMergeBlueprintsTest, "MovingCastle.Logic.VerticalMerge.DaoDunBlueprints",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleDaoDunMergeBlueprintsTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = CastleVerticalMergeTests::MakeWorld();
+	if (!TestNotNull(TEXT("创建正式模型合成世界"), World)) { return false; }
+	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
+	const TArray<TArray<FIntVector>> Shapes = {
+		{ {0,0,0}, {1,0,0} }, { {0,0,0}, {0,1,0} }, { {0,0,0}, {0,0,1} },
+		{ {0,0,0}, {1,0,0}, {0,1,0}, {1,1,0} },
+		{ {0,0,0}, {0,0,1}, {1,0,0}, {1,0,1} },
+		{ {0,0,0}, {0,0,1}, {0,1,0}, {0,1,1} }
+	};
+	for (const TCHAR* Family : { TEXT("ArcherTower"), TEXT("CannonTower"), TEXT("Farm"), TEXT("ShieldTower") })
+	{
+		const FString Path = FString::Printf(TEXT("/Game/MovingCastle/Data/Buildings/DA_%s.DA_%s"), Family, Family);
+		UCastleBuildingDefinition* Definition = LoadObject<UCastleBuildingDefinition>(nullptr, *Path);
+		if (!TestNotNull(TEXT("加载正式功能建筑定义"), Definition)) { return false; }
+		FText Reason;
+		if (!Definition->ValidateConfiguration(Reason)) { AddError(Reason.ToString()); return false; }
+		ACastleBoard* Board = CastleVerticalMergeTests::MakeBoard(World, Definition);
+		if (!TestNotNull(TEXT("创建正式定义测试棋盘"), Board)) { return false; }
+		for (const TArray<FIntVector>& Cells : Shapes)
+		{
+			FCastleBuildingDescriptor Card;
+			if (!Definition->CreateDescriptor(1, ECastleTileColor::Red, 3, Card, Reason)) { AddError(Reason.ToString()); return false; }
+			FIntVector Max = FIntVector::ZeroValue;
+			for (const FIntVector& Cell : Cells)
+			{
+				Max = Max.ComponentMax(Cell);
+				ACastleBuildingBase* Placed = Board->PlaceBuilding(Board->GridOrigin + Cell, Card, true, Reason);
+				if (!TestNotNull(TEXT("正式一级拆件模型可放置"), Placed)) { AddError(Reason.ToString()); return false; }
+				if (!TestTrue(TEXT("正式飞入完成并触发合成"), CastleBuildingTests::CompletePlacement(Placed))) { return false; }
+			}
+			const int32 Level = Cells.Num() == 2 ? 2 : 3;
+			ACastleBuildingBase* Result = CastleBuildingTests::FindPlacedLevel(Board, Level);
+			if (!TestNotNull(TEXT("合成得到正式目标等级"), Result)) { return false; }
+			const FString Suffix = Max.Z == 1 ? TEXT("_vertical") : TEXT("");
+			const FString ExpectedClass = FString::Printf(TEXT("/Game/MovingCastle/BP/BP_%s_lv%d%s.BP_%s_lv%d%s_C"),
+				Family, Level, *Suffix, Family, Level, *Suffix);
+			TestEqual(TEXT("合成精确选用对应水平或垂直蓝图"), Result->GetClass()->GetPathName(), ExpectedClass);
+			FQuat Rotation = Board->GetActorQuat();
+			if (Max.X == 0 && Max.Y == 1) { Rotation *= FQuat(FVector::UpVector, HALF_PI); }
+			TestTrue(TEXT("Y/YZ 整体旋转 90 度，其余保持棋盘朝向"), Result->GetActorQuat().Equals(Rotation, 0.001));
+			TestTrue(TEXT("正式蓝图通过视觉非空检查"), Result->ConfigureBuildingVisual(Board->CellSize, Board->LayerHeight, Reason));
+			Result->BuildingMerge->TickComponent(100.0f, LEVELTICK_All, nullptr);
+			if (!Board->RemoveBuilding(Result, Reason)) { AddError(Reason.ToString()); return false; }
+		}
+		Board->Destroy();
+	}
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS
