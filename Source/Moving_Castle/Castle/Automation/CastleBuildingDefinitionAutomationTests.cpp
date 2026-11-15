@@ -24,6 +24,9 @@ bool FCastleBuildingDefinitionValidationTest::RunTest(const FString& Parameters)
 	UCastleBuildingDefinition* Definition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::ArcherTower);
 	FText Reason;
 	TestTrue(TEXT("仅有原生等级类的数据定义通过类型校验"), Definition->ValidateConfiguration(Reason));
+	TestTrue(TEXT("二级水平占格解析为水平类"), Definition->ResolveBuildingClassForDimensions(2, FIntVector(2, 1, 1)) == ACastleArcherTowerLevel2::StaticClass());
+	TestTrue(TEXT("二级垂直占格解析为垂直类"), Definition->ResolveBuildingClassForDimensions(2, FIntVector(1, 1, 2)) == ACastleArcherTowerLevel2::StaticClass());
+	TestNull(TEXT("非法二级占格尺寸不自动回退到其他类"), Definition->ResolveBuildingClassForDimensions(2, FIntVector(2, 2, 1)));
 	FCastleBuildingDescriptor Card;
 	TestTrue(TEXT("定义工厂创建二级卡牌"), Definition->CreateDescriptor(2, ECastleTileColor::Red, 3, Card, Reason));
 	TestTrue(TEXT("卡牌保留准确资产身份与等级类"), Card.Definition == Definition && Card.GetBuildingClass() == ACastleArcherTowerLevel2::StaticClass());

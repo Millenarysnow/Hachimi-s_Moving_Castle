@@ -14,6 +14,34 @@ const FCastleBuildingLevelDefinition* UCastleBuildingDefinition::FindLevel(int32
 	});
 }
 
+TSubclassOf<ACastleBuildingBase> UCastleBuildingDefinition::ResolveBuildingClassForDimensions(
+	const int32 InLevel, const FIntVector& Dimensions) const
+{
+	const FCastleBuildingLevelDefinition* Entry = FindLevel(InLevel);
+	if (Entry == nullptr)
+	{
+		return nullptr;
+	}
+
+	// 只有二级和三级允许垂直合成；这里按完整包围盒尺寸区分水平与垂直类，
+	// 不对不完整、斜接或超出等级规则的占用形状做自动修正。
+	if (InLevel == 2 && Dimensions == FIntVector(1, 1, 2))
+	{
+		return Entry->VerticalBuildingClass;
+	}
+	if (InLevel == 3 && (Dimensions == FIntVector(2, 1, 2) || Dimensions == FIntVector(1, 2, 2)))
+	{
+		return Entry->VerticalBuildingClass;
+	}
+
+	const bool bHorizontalShape = (InLevel == 1 && Dimensions == FIntVector(1, 1, 1))
+		|| (InLevel == 2 && (Dimensions == FIntVector(2, 1, 1) || Dimensions == FIntVector(1, 2, 1)))
+		|| (InLevel == 3 && Dimensions == FIntVector(2, 2, 1))
+		|| (InLevel == 4 && Dimensions == FIntVector(2, 2, 2))
+		|| (InLevel == 5 && Dimensions == FIntVector(1, 1, 1));
+	return bHorizontalShape ? Entry->BuildingClass : nullptr;
+}
+
 bool UCastleBuildingDefinition::ValidateConfiguration(FText& OutFailureReason) const
 {
 	OutFailureReason = FText::GetEmpty();
@@ -61,6 +89,28 @@ bool UCastleBuildingDefinition::ValidateConfiguration(FText& OutFailureReason) c
 		{
 			OutFailureReason = FText::FromString(FString::Printf(TEXT("%s 的 %d 级建筑类与配置的类别或等级不一致。"), *DisplayName.ToString(), Entry.Level));
 			return false;
+		}
+
+		// 功能塔二级和三级必须显式提供垂直类；缺失时直接拒绝配置，
+		// 防止垂直合成静默退回水平模型或生成占位对象。
+		const bool bRequiresVerticalClass = BuildingType == ECastleBuildingType::ArcherTower
+			|| BuildingType == ECastleBuildingType::CannonTower
+			|| BuildingType == ECastleBuildingType::Farm
+			|| BuildingType == ECastleBuildingType::ShieldTower;
+		if (bRequiresVerticalClass && (Entry.Level == 2 || Entry.Level == 3))
+		{
+			if (Entry.VerticalBuildingClass == nullptr || Entry.VerticalBuildingClass->HasAnyClassFlags(CLASS_Abstract))
+			{
+				OutFailureReason = FText::FromString(FString::Printf(TEXT("%s 的 %d 级缺少有效垂直建筑类。"), *DisplayName.ToString(), Entry.Level));
+				return false;
+			}
+			const ACastleBuildingBase* VerticalDefaults = Entry.VerticalBuildingClass->GetDefaultObject<ACastleBuildingBase>();
+			if (VerticalDefaults == nullptr || VerticalDefaults->GetBuildingType() != BuildingType
+				|| VerticalDefaults->GetBuildingLevel() != Entry.Level)
+			{
+				OutFailureReason = FText::FromString(FString::Printf(TEXT("%s 的 %d 级垂直建筑类与配置的类别或等级不一致。"), *DisplayName.ToString(), Entry.Level));
+				return false;
+			}
 		}
 	}
 	return true;

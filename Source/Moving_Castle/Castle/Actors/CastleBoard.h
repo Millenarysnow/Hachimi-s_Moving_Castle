@@ -46,27 +46,32 @@ public:
 	FIntVector GridOrigin = FIntVector::ZeroValue;
 
 	/**
-	 * 相邻 X/Y 网格中心之间的距离（厘米），地面、建筑占位和格面指示器共用此值。
-	 * 一级箭塔主体保持原来的 500×500 厘米；中心间距扩大到 700 厘米，
-	 * 为伸出主体的屋檐和相邻建筑留出空间，不通过缩放正式模型改变建筑大小。
+	 * 单个棋盘格实体的水平边长（厘米）。相邻格之间的间隙由 GroundTileGap 显式表达。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "1.0", Units = "cm"))
-	float CellSize = 700.0f;
+	float GroundTileSize = 500.0f;
 
-	/** 相邻垂直层的距离（厘米）；与箭塔每层 500 厘米的主体拼接模块保持一致。 */
+	/** 相邻棋盘格实体之间的水平间隙（厘米）。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "0.0", ClampMax = "1000.0", Units = "cm"))
+	float GroundTileGap = 20.0f;
+
+	/** 相邻 X/Y 网格中心之间的距离（厘米），必须等于 GroundTileSize + GroundTileGap。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "1.0", Units = "cm"))
-	float LayerHeight = 500.0f;
+	float CellSize = 520.0f;
+
+	/** 相邻垂直层的距离（厘米）；与外部建筑 FBX 的 560 厘米层高保持一致。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "1.0", Units = "cm"))
+	float LayerHeight = 560.0f;
 
 	/**
 	 * 棋盘第一层网格中心相对于棋盘 Actor 原点的高度。
 	 * 建筑 Actor 位于占用范围的底面中心，因此首层建筑原点还要沿棋盘局部 Z 下降半个层高。
 	 *
-	 * 地面薄片中心位于 WorldBaseHeight - LayerHeight×0.45，因此层高扩大到
-	 * 500 厘米时将本值同步设为 235，使地面中心仍在棋盘原点上方 10 厘米，
-	 * 避免被场景地板遮挡。正式场景仍可在实例上调整首层建筑的基准高度。
+	 * 地面薄片中心位于 WorldBaseHeight - LayerHeight×0.45；首层建筑底面仍由
+	 * 棋盘生成逻辑沿局部 Z 下降半个层高对齐。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "0.0", Units = "cm"))
-	float WorldBaseHeight = 235.0f;
+	float WorldBaseHeight = 262.0f;
 
 	/** 一次操作会影响多处建筑时，调用方可为这些变化指定同一个世界空间传播原点。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="棋盘|变化表现")
@@ -349,6 +354,9 @@ protected:
 
 	/** 检查指定地面坐标是否存在，允许查询上层坐标对应的平面地面。 */
 	bool TryGetGroundCellAtPlane(const FIntVector& Coordinate, FCastleGroundCell& OutCell) const;
+
+	/** 校验棋盘格实体尺寸、间隙、中心距和层高，拒绝无效配置而不自动修正。 */
+	bool ValidateBoardDimensions(FText& OutFailureReason) const;
 
 	/** 从高亮面的唯一来源解析落点；地面顶面落在本格，建筑面落在该面外侧格。 */
 	bool TryResolvePlacementCoordinate(const FCastleGridCursorTarget& CursorTarget, FIntVector& OutCoordinate, FText& OutFailureReason) const;

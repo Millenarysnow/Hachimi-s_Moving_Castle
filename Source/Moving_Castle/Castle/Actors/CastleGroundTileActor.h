@@ -27,7 +27,7 @@ public:
 	 * Actor 的世界变换由棋盘在 SpawnActor 时传入；本函数只配置 Actor 自己的局部组件，
 	 * 并在赋予网格前设定碰撞与导航资格，避免导航系统看到组件的中间状态。
 	 */
-	bool InitializeGroundCell(const FCastleGroundCell& InGroundCell, float CellSize, float LayerHeight);
+	bool InitializeGroundCell(const FCastleGroundCell& InGroundCell, float GroundTileSize, float LayerHeight);
 
 	/** 返回该 Actor 对应的格子数据副本。 */
 	UFUNCTION(BlueprintPure, Category="移动城堡|棋盘格")

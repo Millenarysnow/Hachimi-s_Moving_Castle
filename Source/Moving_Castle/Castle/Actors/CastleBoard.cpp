@@ -285,6 +285,11 @@ bool ACastleBoard::SpawnInitialEnemies(FText& OutFailureReason)
 bool ACastleBoard::GenerateGround(FText& OutFailureReason)
 {
 	OutFailureReason = FText::GetEmpty();
+	if (!ValidateBoardDimensions(OutFailureReason))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 拒绝生成地面：%s"), *GetName(), *OutFailureReason.ToString());
+		return false;
+	}
 
 	if (GroundGeneratorClass == nullptr)
 	{
@@ -323,6 +328,11 @@ bool ACastleBoard::GenerateGround(FText& OutFailureReason)
 bool ACastleBoard::ApplyGroundGenerationResult(const FCastleGroundGenerationResult& Result, FText& OutFailureReason)
 {
 	OutFailureReason = FText::GetEmpty();
+	if (!ValidateBoardDimensions(OutFailureReason))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 拒绝接收地面结果：%s"), *GetName(), *OutFailureReason.ToString());
+		return false;
+	}
 
 	if (BuildingByCoordinate.Num() > 0)
 	{
@@ -1015,8 +1025,8 @@ void ACastleBoard::BuildGridCursorTarget(const FIntVector& Cell, const FVector& 
 	const ECastleGridFace Face = GetGridFaceFromNormal(LocalNormal);
 	FVector LocalPlaneCenter = LocalCellCenter;
 	FVector LocalPlaneScale(
-		CellSize * 0.94f / 100.0f,
-		CellSize * 0.94f / 100.0f,
+		GroundTileSize / 100.0f,
+		GroundTileSize / 100.0f,
 		2.0f / 100.0f);
 
 	// 指示器使用薄立方体模拟平面；根据命中面切换薄轴，并把其他轴吸附到当前格中心。
@@ -1029,12 +1039,12 @@ void ACastleBoard::BuildGridCursorTarget(const FIntVector& Cell, const FVector& 
 	case ECastleGridFace::PositiveX:
 	case ECastleGridFace::NegativeX:
 		LocalPlaneCenter.X = LocalImpactPoint.X;
-		LocalPlaneScale = FVector(2.0f / 100.0f, CellSize * 0.94f / 100.0f, LayerHeight * 0.94f / 100.0f);
+		LocalPlaneScale = FVector(2.0f / 100.0f, GroundTileSize / 100.0f, LayerHeight * 0.94f / 100.0f);
 		break;
 	case ECastleGridFace::PositiveY:
 	case ECastleGridFace::NegativeY:
 		LocalPlaneCenter.Y = LocalImpactPoint.Y;
-		LocalPlaneScale = FVector(CellSize * 0.94f / 100.0f, 2.0f / 100.0f, LayerHeight * 0.94f / 100.0f);
+		LocalPlaneScale = FVector(GroundTileSize / 100.0f, 2.0f / 100.0f, LayerHeight * 0.94f / 100.0f);
 		break;
 	default:
 		return;
@@ -1211,6 +1221,16 @@ ACastleBuildingBase* ACastleBoard::SpawnBuildingActor(const FCastleBuildingDescr
 		Minimum = Minimum.ComponentMin(Coordinate);
 		Maximum = Maximum.ComponentMax(Coordinate);
 	}
+	const FIntVector Dimensions = Maximum - Minimum + FIntVector(1, 1, 1);
+	const TSubclassOf<ACastleBuildingBase> BuildingClass = Descriptor.Definition->ResolveBuildingClassForDimensions(Descriptor.Level, Dimensions);
+	if (BuildingClass == nullptr)
+	{
+		OutFailureReason = FText::FromString(FString::Printf(
+			TEXT("建筑定义 %s 没有提供等级 %d 对应占格尺寸 (%d, %d, %d) 的生成类。"),
+			*Descriptor.Definition->DisplayName.ToString(), Descriptor.Level, Dimensions.X, Dimensions.Y, Dimensions.Z));
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘生成建筑失败：%s"), *OutFailureReason.ToString());
+		return nullptr;
+	}
 	// X/Y 位于占格范围中点，Z 从最低格中心下降半个层高；偏移跟随棋盘的旋转与缩放。
 	const FVector LocalBottomCenterOffset(
 		(Maximum.X - Minimum.X) * CellSize * 0.5f,
@@ -1230,13 +1250,14 @@ ACastleBuildingBase* ACastleBoard::SpawnBuildingActor(const FCastleBuildingDescr
 	// 生成等级蓝图自身，并显式保留它的根缩放；棋盘的缩放在此基础上叠乘。
 	SpawnParameters.TransformScaleMethod = ESpawnActorScaleMethod::MultiplyWithRoot;
 	FQuat SpawnRotation = GetActorQuat();
-	if (Descriptor.Level == 2 && Maximum.Y > Minimum.Y)
+	if ((Descriptor.Level == 2 && Dimensions == FIntVector(1, 2, 1))
+		|| (Descriptor.Level == 3 && Dimensions == FIntVector(1, 2, 2)))
 	{
 		// 标准二级蓝图沿 X 轴制作，沿 Y 合成时旋转整个建筑，不再依赖模型载体节点。
 		// 垂直两格的 X/Y 都相同，不能仅凭 X 相同误判为沿 Y；垂直合成保留模型直立朝向。
 		SpawnRotation *= FQuat(FVector::UpVector, HALF_PI);
 	}
-	ACastleBuildingBase* NewBuilding = GetWorld()->SpawnActor<ACastleBuildingBase>(Descriptor.GetBuildingClass(),
+	ACastleBuildingBase* NewBuilding = GetWorld()->SpawnActor<ACastleBuildingBase>(BuildingClass,
 		FTransform(SpawnRotation, SpawnLocation, GetActorScale3D()), SpawnParameters);
 	if (NewBuilding == nullptr)
 	{
@@ -1501,10 +1522,22 @@ ACastleBuildingBase* ACastleBoard::MergeBuildings(ACastleBuildingBase* First, AC
 	}
 
 	const int32 NextLevel = First->GetBuildingLevel() + 1;
-	const TSubclassOf<ACastleBuildingBase> NextBuildingClass = First->GetClassForLevel(NextLevel);
+	FIntVector MergedMinimum = MergedFootprint[0];
+	FIntVector MergedMaximum = MergedFootprint[0];
+	for (const FIntVector& Coordinate : MergedFootprint)
+	{
+		MergedMinimum = MergedMinimum.ComponentMin(Coordinate);
+		MergedMaximum = MergedMaximum.ComponentMax(Coordinate);
+	}
+	const FIntVector MergedDimensions = MergedMaximum - MergedMinimum + FIntVector(1, 1, 1);
+	const TSubclassOf<ACastleBuildingBase> NextBuildingClass = First->GetBuildingDefinition()
+		? First->GetBuildingDefinition()->ResolveBuildingClassForDimensions(NextLevel, MergedDimensions)
+		: nullptr;
 	if (NextBuildingClass == nullptr)
 	{
-		OutFailureReason = FText::FromString(TEXT("当前建筑族没有提供下一级具体 Actor 类。"));
+		OutFailureReason = FText::FromString(FString::Printf(
+			TEXT("当前建筑族没有提供等级 %d 对应占格尺寸 (%d, %d, %d) 的具体 Actor 类。"),
+			NextLevel, MergedDimensions.X, MergedDimensions.Y, MergedDimensions.Z));
 		return nullptr;
 	}
 
@@ -1621,6 +1654,30 @@ bool ACastleBoard::TryGetGroundCellAtPlane(const FIntVector& Coordinate, FCastle
 	}
 
 	return TryGetGroundCell(Coordinate, OutCell);
+}
+
+bool ACastleBoard::ValidateBoardDimensions(FText& OutFailureReason) const
+{
+	OutFailureReason = FText::GetEmpty();
+	const bool bValidGroundTileSize = FMath::IsFinite(GroundTileSize) && GroundTileSize > 1.0f && GroundTileSize <= 10000.0f;
+	const bool bValidGroundTileGap = FMath::IsFinite(GroundTileGap) && GroundTileGap >= 0.0f && GroundTileGap <= 1000.0f;
+	const bool bValidCellSize = FMath::IsFinite(CellSize) && CellSize > 0.0f;
+	const bool bValidLayerHeight = FMath::IsFinite(LayerHeight) && LayerHeight > 1.0f && LayerHeight <= 10000.0f;
+	const bool bValidWorldBaseHeight = FMath::IsFinite(WorldBaseHeight) && WorldBaseHeight >= 0.0f && WorldBaseHeight <= 10000.0f;
+	if (!bValidGroundTileSize || !bValidGroundTileGap || !bValidCellSize
+		|| !bValidLayerHeight || !bValidWorldBaseHeight)
+	{
+		OutFailureReason = FText::FromString(TEXT("棋盘格实体尺寸、间隙、中心距、层高或基准高度超出合法范围。"));
+		return false;
+	}
+	if (!FMath::IsNearlyEqual(CellSize, GroundTileSize + GroundTileGap, 0.01f))
+	{
+		OutFailureReason = FText::FromString(FString::Printf(
+			TEXT("棋盘中心距必须等于实体格边长加间隙：当前 %.3f != %.3f + %.3f。"),
+			CellSize, GroundTileSize, GroundTileGap));
+		return false;
+	}
+	return true;
 }
 
 bool ACastleBoard::TryResolvePlacementCoordinate(const FCastleGridCursorTarget& CursorTarget, FIntVector& OutCoordinate, FText& OutFailureReason) const
@@ -1911,7 +1968,7 @@ bool ACastleBoard::RebuildGroundVisualization(const TArray<FCastleGroundCell>& C
 		}
 
 		SpawnedTiles.Add(TileActor);
-		if (!TileActor->InitializeGroundCell(Cell, CellSize, LayerHeight))
+		if (!TileActor->InitializeGroundCell(Cell, GroundTileSize, LayerHeight))
 		{
 			OutFailureReason = FText::FromString(FString::Printf(TEXT("棋盘格 Actor 初始化失败，坐标 (%d, %d, %d)。"),
 				Cell.Coordinate.X, Cell.Coordinate.Y, Cell.Coordinate.Z));

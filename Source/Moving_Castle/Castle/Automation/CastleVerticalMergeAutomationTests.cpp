@@ -113,8 +113,13 @@ bool FCastleVerticalMergeShapesTest::RunTest(const FString& Parameters)
 			TestTrue(Context + TEXT("：锚点仍是最低层底面中心"),
 				Result->GetActorLocation().Equals(Board->GetActorTransform().TransformPosition(ExpectedLocal), 0.01f));
 			FQuat ExpectedRotation = Board->GetActorQuat();
-			if (Shape.Level == 2 && Maximum.Y == 1) { ExpectedRotation *= FQuat(FVector::UpVector, HALF_PI); }
-			TestTrue(Context + TEXT("：仅水平 Y 双格旋转模型，垂直不侧翻"), Result->GetActorQuat().Equals(ExpectedRotation, 0.001));
+			// 水平二级 Y 方向和三级 YZ 垂直平面都沿 +Z 旋转；XZ 垂直平面保持标准朝向。
+			if ((Shape.Level == 2 && Maximum.Y == 1)
+				|| (Shape.Level == 3 && Maximum.X == 0 && Maximum.Y == 1 && Maximum.Z == 1))
+			{
+				ExpectedRotation *= FQuat(FVector::UpVector, HALF_PI);
+			}
+			TestTrue(Context + TEXT("：按占格平面旋转模型，垂直类不发生侧翻"), Result->GetActorQuat().Equals(ExpectedRotation, 0.001));
 			TestTrue(Context + TEXT("：仍使用同一建筑定义"), Result->GetBuildingDefinition() == Definition);
 			TestTrue(Context + TEXT("：合并动画实际开始"), Result->BuildingMerge->bIsPlaying);
 			Result->BuildingMerge->TickComponent(100.0f, LEVELTICK_All, nullptr);
