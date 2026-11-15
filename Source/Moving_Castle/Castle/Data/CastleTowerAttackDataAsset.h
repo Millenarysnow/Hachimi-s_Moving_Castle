@@ -8,7 +8,7 @@
 
 class UMassEntityConfigAsset;
 
-/** 单个等级的塔攻击参数；每座塔每次触发会为待射队列增加一发。 */
+/** 单个等级的塔攻击参数；箭塔按装填数逐发发射，炮塔每次触发只发一枚全额伤害炮弹。 */
 USTRUCT(BlueprintType)
 struct MOVING_CASTLE_API FCastleTowerAttackLevelData
 {
@@ -22,7 +22,7 @@ struct MOVING_CASTLE_API FCastleTowerAttackLevelData
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "塔攻击|等级")
 	float AttacksPerSecond = 0.0f;
 
-	/** 每发追踪子弹命中时造成的伤害，必须为有限正数。 */
+	/** 箭塔固定单发伤害、炮塔每点数字的伤害倍率，必须为有限正数。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "塔攻击|等级")
 	float ProjectileDamage = 0.0f;
 

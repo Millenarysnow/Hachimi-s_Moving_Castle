@@ -112,7 +112,7 @@ namespace CastleBuildingTests
 			Entry.BuildingClass = Classes[Index];
 			Definition->Levels.Add(Entry);
 		}
-		if (Type == ECastleBuildingType::ArcherTower)
+		if (Type == ECastleBuildingType::ArcherTower || Type == ECastleBuildingType::CannonTower)
 		{
 			// 箭塔测试定义显式创建完整的攻击数据输入，不借助生产默认对象补齐配置。
 			UCastleTowerAttackDataAsset* AttackData = NewObject<UCastleTowerAttackDataAsset>(Definition);

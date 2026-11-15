@@ -39,19 +39,22 @@ protected:
 	/** 建筑销毁或合成替换时清空实例队列，避免旧建筑状态残留。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
-private:
-#if WITH_DEV_AUTOMATION_TESTS
-	/** 仅自动化测试直接推进组件计时；生产逻辑仍只由正常组件 Tick 驱动。 */
-	friend class FCastleTowerAttackQueueTest;
-#endif
-
 	/** 解析所属建筑、唯一攻击资产和精确等级；任何缺失都会报错并拒绝发射。 */
 	bool ResolveAttackConfiguration(const UCastleTowerAttackDataAsset*& OutDataAsset,
 		const FCastleTowerAttackLevelData*& OutLevelData) const;
 
 	/** 查找当前最近敌人并请求生成一发；返回 false 表示错误且该待射项仍保留。 */
-	bool FireOneShot(const UCastleTowerAttackDataAsset& DataAsset,
+	virtual bool FireOneShot(const UCastleTowerAttackDataAsset& DataAsset,
 		const FCastleTowerAttackLevelData& LevelData);
+
+	/** 箭塔传单发伤害、炮塔传入队时保存的全额伤害，索敌及 Mass 安全边界只有这一份实现。 */
+	bool FireProjectile(const UCastleTowerAttackDataAsset& DataAsset, const FCastleTowerAttackLevelData& LevelData, float Damage);
+
+private:
+#if WITH_DEV_AUTOMATION_TESTS
+	/** 仅自动化测试直接推进组件计时；生产逻辑仍只由正常组件 Tick 驱动。 */
+	friend class FCastleTowerAttackQueueTest;
+#endif
 
 	/** 建筑结束生命周期时清理待射状态和冷却时刻。 */
 	void ClearPendingShots();

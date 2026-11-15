@@ -252,6 +252,12 @@ bool UCastleTowerAttackEffectComponent::ResolveAttackConfiguration(const UCastle
 bool UCastleTowerAttackEffectComponent::FireOneShot(const UCastleTowerAttackDataAsset& DataAsset,
 	const FCastleTowerAttackLevelData& LevelData)
 {
+	return FireProjectile(DataAsset, LevelData, LevelData.ProjectileDamage);
+}
+
+bool UCastleTowerAttackEffectComponent::FireProjectile(const UCastleTowerAttackDataAsset& DataAsset,
+	const FCastleTowerAttackLevelData& LevelData, const float Damage)
+{
 	ACastleBuildingBase* Building = Cast<ACastleBuildingBase>(GetOwner());
 	if (!IsValid(Building))
 	{
@@ -294,12 +300,12 @@ bool UCastleTowerAttackEffectComponent::FireOneShot(const UCastleTowerAttackData
 	FCastleMassHomingProjectileSpawn Spawn;
 	Spawn.Origin = Origin;
 	Spawn.Target = Target;
-	Spawn.Damage = LevelData.ProjectileDamage;
+	Spawn.Damage = Damage;
 	TArray<FCastleMassUnitHandle> SpawnedProjectiles;
 	FText FailureReason;
 	if (!Units->SpawnHomingProjectiles(DataAsset.ProjectileConfiguration, { Spawn }, SpawnedProjectiles, FailureReason))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("箭塔 %s 生成追踪子弹失败，攻击资产=%s，原因=%s；待射数量保留。"),
+		UE_LOG(LogMoving_Castle, Error, TEXT("攻击塔 %s 生成追踪子弹失败，攻击资产=%s，原因=%s；待射数量保留。"),
 			*Building->GetName(), *DataAsset.GetPathName(), *FailureReason.ToString());
 		return false;
 	}

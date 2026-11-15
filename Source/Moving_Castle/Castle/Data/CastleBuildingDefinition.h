@@ -58,7 +58,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="建筑|变化动画")
 	TObjectPtr<UBuildingPartCatalog> PartCatalog;
 
-	/** 箭塔定义持有该塔族唯一的攻击参数；普通房间、农田和未接入攻击的建筑保持为空。 */
+	/** 箭塔、炮塔各持有本族唯一攻击参数；普通房间、农田和盾塔不配置攻击 DA。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="建筑|攻击")
 	TObjectPtr<UCastleTowerAttackDataAsset> AttackData;
 

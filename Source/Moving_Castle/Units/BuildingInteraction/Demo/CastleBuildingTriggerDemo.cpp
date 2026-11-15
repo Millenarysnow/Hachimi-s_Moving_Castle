@@ -6,6 +6,8 @@
 #include "CastleBuildings.h"
 #include "CastleMassSpawner.h"
 #include "CastleTowerAttackDataAsset.h"
+#include "CastleEconomyComponent.h"
+#include "Components/Building/Effects/Farm/CastleFarmEffectComponent.h"
 #include "CastleNavigationSubsystem.h"
 #include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Components/Building/Effects/CastleBuildingEffectComponent.h"
@@ -28,6 +30,8 @@
 ACastleBuildingTriggerDemo::ACastleBuildingTriggerDemo()
 {
 	PrimaryActorTick.bCanEverTick = true;
+	// 独立演示固定配置账户输入；没有“找不到玩家账户就创建替代账户”的条件分支。
+	DemoEconomy = CreateDefaultSubobject<UCastleEconomyComponent>(TEXT("DemoEconomy"));
 	SetRootComponent(CreateDefaultSubobject<USceneComponent>(TEXT("Root")));
 	// 楼板是唯一的实际导航几何。建筑白模在飞入后隐藏，让玩家能观察穿过逻辑区域的 NPC。
 	UStaticMeshComponent* Floor = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Floor"));
@@ -122,6 +126,13 @@ void ACastleBuildingTriggerDemo::BeginPlay()
 	if (!B->CreateDescriptor(1, ECastleTileColor::Red, 3, Card, Failure)) { Fail(Failure); return; }
 	Buildings.Add(Board->PlaceBuilding(FIntVector(2, 0, 0), Card, false, Failure));
 	if (!Buildings.Last()) { Fail(Failure); return; }
+	UCastleFarmEffectComponent* FarmEffect = Cast<UCastleFarmEffectComponent>(Buildings.Last()->BuildingEffect);
+	if (!FarmEffect || !DemoEconomy)
+	{
+		Fail(FText::FromString(TEXT("建筑触发演示的农田效果或显式 DemoEconomy 账户未配置。")));
+		return;
+	}
+	FarmEffect->EconomyOverride = DemoEconomy;
 
 	Route = GetWorld()->SpawnActorDeferred<ACastlePatrolRoute>(ACastlePatrolRoute::StaticClass(), GetActorTransform(), this);
 	Route->bAllowPlayerEditing = false;
@@ -202,7 +213,7 @@ void ACastleBuildingTriggerDemo::Tick(float DeltaSeconds)
 	if (DisplayedCountB != Buildings[1]->BuildingEffect->TriggerCount)
 	{
 		DisplayedCountB = Buildings[1]->BuildingEffect->TriggerCount;
-		CounterB->SetText(FText::FromString(FString::Printf(TEXT("B (1 cell): %lld"), DisplayedCountB)));
+		CounterB->SetText(FText::FromString(FString::Printf(TEXT("B (1 cell): %lld | Gold: %d"), DisplayedCountB, DemoEconomy->GetGold())));
 	}
 	if (IsValid(EnemySpawner) && EnemySpawner->SpawnedUnits.Num() == 1)
 	{

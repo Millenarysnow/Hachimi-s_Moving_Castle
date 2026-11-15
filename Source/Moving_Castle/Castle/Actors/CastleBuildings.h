@@ -86,7 +86,7 @@ class MOVING_CASTLE_API ACastleCannonTowerBuilding : public ACastleBuildingBase
 
 public:
 	/** 设置炮塔类别。 */
-	ACastleCannonTowerBuilding();
+	explicit ACastleCannonTowerBuilding(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 };
 
@@ -204,7 +204,7 @@ public:
 
 /**
  * 盾塔建筑族的抽象基类，与炮塔、农田共用放置、合成、回收和触发框架。
- * 当前阶段保留基础 BuildingEffect 的触发计数，不实现护盾、嘲讽、抵挡或反伤。
+ * 原生护盾组件通过世界子系统管理抵挡和反伤，表现位于功能分支，不能参与模型合并或导航。
  * 等级蓝图直接继承下方对应 C++ 类，美术和功能地板由蓝图显式配置。
  */
 UCLASS(Abstract, Blueprintable)
@@ -213,8 +213,15 @@ class MOVING_CASTLE_API ACastleShieldTowerBuilding : public ACastleBuildingBase
 	GENERATED_BODY()
 
 public:
-	/** 只设置盾塔类别，具体等级由各等级子类确定。 */
-	ACastleShieldTowerBuilding();
+	/** 替换唯一效果组件并显式创建护盾球体及文字；具体等级由等级子类确定。 */
+	explicit ACastleShieldTowerBuilding(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
+
+	/** D15 已授权的护盾表现，属于功能分支且始终无碰撞、无导航、排除合并。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="建筑|护盾")
+	TObjectPtr<UStaticMeshComponent> ShieldBubble;
+	/** 剩余抵挡次数的文字，与球体共用激活/破盾状态，不参与美术包围盒。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="建筑|护盾")
+	TObjectPtr<UTextRenderComponent> ShieldRemainingText;
 };
 
 /** 盾塔 1 级，占用一个网格，作为商店与开局卡牌的建筑类。 */

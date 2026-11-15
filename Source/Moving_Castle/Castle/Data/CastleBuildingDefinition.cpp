@@ -28,11 +28,11 @@ bool UCastleBuildingDefinition::ValidateConfiguration(FText& OutFailureReason) c
 		OutFailureReason = FText::FromString(TEXT("建筑类别无效，或普通房间配置了一级以外的等级。"));
 		return false;
 	}
-	if (BuildingType == ECastleBuildingType::ArcherTower)
+	if (BuildingType == ECastleBuildingType::ArcherTower || BuildingType == ECastleBuildingType::CannonTower)
 	{
 		if (!IsValid(AttackData))
 		{
-			OutFailureReason = FText::FromString(FString::Printf(TEXT("%s 没有配置箭塔攻击 Data Asset。"), *DisplayName.ToString()));
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("%s 没有配置攻击塔 Data Asset。"), *DisplayName.ToString()));
 			return false;
 		}
 		if (!AttackData->ValidateConfiguration(OutFailureReason))

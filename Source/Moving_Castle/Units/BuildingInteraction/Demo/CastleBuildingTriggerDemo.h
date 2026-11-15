@@ -10,6 +10,7 @@ class ACastleMassSpawner;
 class ACastlePatrolRoute;
 class UCameraComponent;
 class UTextRenderComponent;
+class UCastleEconomyComponent;
 
 	/** 直接运行的原生演示：箭塔、农田、共享巡逻 NPC 和会受伤的 Mass 敌人。 */
 UCLASS()
@@ -50,6 +51,10 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** 演示始终显式持有自己的测试账户，不依赖演示地图的默认玩家控制器，也不作为生产账户兜底。 */
+	UPROPERTY(VisibleAnywhere)
+	TObjectPtr<UCastleEconomyComponent> DemoEconomy;
+
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UCameraComponent> DemoCamera;
 

@@ -18,6 +18,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Components/Building/Effects/CastleBuildingEffectComponent.h"
 #include "Moving_Castle.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -593,6 +594,7 @@ void ACastleBoard::HandleBuildingDestroyed(AActor* Actor)
 {
 	const FScopedCastleNavigationChange NavigationChange(GetWorld(), this);
 	ACastleBuildingBase* Building = CastChecked<ACastleBuildingBase>(Actor);
+	Building->BuildingEffect->OnBoardUnregistered(*this);
 	if (auto* Triggers = GetWorld()->GetSubsystem<UCastleBuildingTriggerSubsystem>()) { Triggers->UnregisterBuilding(Building); }
 	ForgetPlacement(Building);
 	// 也覆盖关卡代码直接 Destroy 的中途取消；合并路径已先注销，不能删除新结果的坐标。
@@ -608,6 +610,7 @@ void ACastleBoard::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	{
 		if (ACastleBuildingBase* Building = Pair.Value.Get(); IsValid(Building))
 		{
+			Building->BuildingEffect->OnBoardUnregistered(*this);
 			// 流送移除棋盘时不留下无人管理的触发区域；多格重复清理由子系统保持幂等。
 			if (auto* Triggers = GetWorld()->GetSubsystem<UCastleBuildingTriggerSubsystem>()) { Triggers->UnregisterBuilding(Building); }
 			Building->AssemblyFlight->OnAssemblyFinishedNative.RemoveAll(this);
@@ -1152,6 +1155,7 @@ bool ACastleBoard::RegisterBuilding(ACastleBuildingBase* Building, FText& OutFai
 		BuildingByCoordinate.Add(Coordinate, Building);
 	}
 	Building->OnDestroyed.AddUniqueDynamic(this, &ACastleBoard::HandleBuildingDestroyed);
+	Building->BuildingEffect->OnBoardRegistered(*this);
 	return true;
 }
 
@@ -1175,6 +1179,7 @@ bool ACastleBoard::UnregisterBuilding(ACastleBuildingBase* Building, FText& OutF
 		}
 	}
 
+	Building->BuildingEffect->OnBoardUnregistered(*this);
 	if (auto* Triggers = GetWorld()->GetSubsystem<UCastleBuildingTriggerSubsystem>()) { Triggers->UnregisterBuilding(Building); }
 	for (const FIntVector& Coordinate : OccupiedCoordinates)
 	{

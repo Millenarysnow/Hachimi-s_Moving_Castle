@@ -13,6 +13,10 @@
 #include "Units/Mass/Projectiles/CastleMassHomingProjectileTrait.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/DataValidation.h"
+#include "MassVisualizationTrait.h"
+#include "MassRepresentationTypes.h"
+#include "Engine/StaticMesh.h"
+#include "Materials/MaterialInterface.h"
 
 #include <limits>
 
@@ -90,6 +94,10 @@ bool FCastleTowerAttackDataValidationTest::RunTest(const FString& Parameters)
 	ArcherDefinition->AttackData = nullptr;
 	TestFalse(TEXT("箭塔定义缺少攻击资产时明确失败"), ArcherDefinition->ValidateConfiguration(FailureReason));
 	UCastleBuildingDefinition* NormalRoomDefinition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::NormalRoom);
+	UCastleBuildingDefinition* CannonDefinition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::CannonTower);
+	TestTrue(TEXT("炮塔定义要求有效攻击数据"), CannonDefinition->ValidateConfiguration(FailureReason));
+	CannonDefinition->AttackData = nullptr;
+	TestFalse(TEXT("炮塔定义缺攻击 DA 明确失败"), CannonDefinition->ValidateConfiguration(FailureReason));
 	TestTrue(TEXT("普通房间定义允许没有塔攻击资产"), NormalRoomDefinition->AttackData == nullptr && NormalRoomDefinition->ValidateConfiguration(FailureReason));
 	return true;
 }
@@ -134,6 +142,46 @@ bool FCastleArcherTowerAttackAssetTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("单发伤害按等级递增"), Entry.ProjectileDamage, static_cast<float>((Index + 1) * 5 + 5));
 		TestEqual(TEXT("保持已查证的各等级实际半径"), Entry.AttackRadius, Entry.Level == 1 ? 3000.0f : static_cast<float>(1200 + (Index + 1) * 200));
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleCannonAttackAssetTest, "MovingCastle.BuildingEffects.CannonAttackAsset",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleCannonAttackAssetTest::RunTest(const FString& Parameters)
+{
+	auto* Definition = LoadObject<UCastleBuildingDefinition>(nullptr, TEXT("/Game/MovingCastle/Data/Buildings/DA_CannonTower.DA_CannonTower"));
+	if (!TestNotNull(TEXT("正式炮塔定义存在"), Definition)) { return false; }
+	FText Reason;
+	TestTrue(TEXT("炮塔五级定义与攻击配置有效"), Definition->ValidateConfiguration(Reason));
+	auto* Attack = Definition->AttackData.Get();
+	if (!TestNotNull(TEXT("正式炮塔引用专用攻击 DA"), Attack)) { return false; }
+	TestEqual(TEXT("炮塔专用攻击资产路径"), Attack->GetPathName(), FString(TEXT("/Game/MovingCastle/Data/Buildings/DA_CannonTowerAttack.DA_CannonTowerAttack")));
+	TestEqual(TEXT("炮塔发射偏移为260"), Attack->LaunchHeightOffset, 260.0f);
+	for (int32 Level = 1; Level <= 5; ++Level)
+	{
+		const auto* Row = Attack->FindLevel(Level);
+		if (!TestNotNull(TEXT("每个精确等级均存在"), Row)) { return false; }
+		TestEqual(TEXT("炮塔每秒一发"), Row->AttacksPerSecond, 1.0f);
+		TestEqual(TEXT("每点数字十点伤害"), Row->ProjectileDamage, 10.0f);
+		TestEqual(TEXT("炮塔射程2800"), Row->AttackRadius, 2800.0f);
+	}
+	auto* Config = Attack->ProjectileConfiguration.Get();
+	if (!TestNotNull(TEXT("专用炮弹 Mass 配置存在"), Config)) { return false; }
+	const auto* Projectile = Cast<UCastleMassHomingProjectileTrait>(Config->FindTrait(UCastleMassHomingProjectileTrait::StaticClass()));
+	if (!TestNotNull(TEXT("炮弹有追踪 Trait"), Projectile)) { return false; }
+	TestEqual(TEXT("炮弹速度1500"), Projectile->Movement.MaxSpeed, 1500.0f);
+	TestEqual(TEXT("炮弹半径24"), Projectile->Radius, 24.0f);
+	TestEqual(TEXT("炮弹寿命6秒"), Projectile->Lifetime, 6.0f);
+	const auto* Visual = Cast<UMassVisualizationTrait>(Config->FindTrait(UMassVisualizationTrait::StaticClass()));
+	if (!TestNotNull(TEXT("炮弹有实例化显示 Trait"), Visual)) { return false; }
+	const auto& Meshes = Visual->StaticMeshInstanceDesc.Meshes;
+	if (!TestEqual(TEXT("炮弹只有球体实例描述"), Meshes.Num(), 1)) { return false; }
+	TestTrue(TEXT("炮弹使用显式球体资源"), Meshes[0].Mesh && Meshes[0].Mesh->GetPathName() == TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+	if (!TestEqual(TEXT("炮弹显式覆盖深金橙材质"), Meshes[0].MaterialOverrides.Num(), 1)) { return false; }
+	FLinearColor Color;
+	TestTrue(TEXT("炮弹颜色参数存在且为深金橙色"), Meshes[0].MaterialOverrides[0]->GetVectorParameterValue(FMaterialParameterInfo(TEXT("EnemyColor")), Color)
+		&& Color.Equals(FLinearColor(0.9f, 0.32f, 0.035f)));
 	return true;
 }
 

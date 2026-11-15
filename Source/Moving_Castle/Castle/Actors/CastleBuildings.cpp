@@ -3,6 +3,14 @@
 #include "CastleBuildings.h"
 #include "Components/Building/Effects/Attack/CastleTowerAttackEffectComponent.h"
 #include "Components/Building/Effects/Farm/CastleFarmEffectComponent.h"
+#include "Components/Building/Effects/Attack/CastleCannonTowerAttackEffectComponent.h"
+#include "Components/Building/Effects/Shield/CastleShieldTowerEffectComponent.h"
+#include "Components/Building/BuildingGameplayRootComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Components/TextRenderComponent.h"
+#include "Engine/StaticMesh.h"
+#include "Materials/MaterialInterface.h"
+#include "UObject/ConstructorHelpers.h"
 
 ACastleNormalRoomBuilding::ACastleNormalRoomBuilding()
 {
@@ -43,7 +51,8 @@ ACastleArcherTowerLevel5::ACastleArcherTowerLevel5()
 	BuildingLevel = 5;
 }
 
-ACastleCannonTowerBuilding::ACastleCannonTowerBuilding()
+ACastleCannonTowerBuilding::ACastleCannonTowerBuilding(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UCastleCannonTowerAttackEffectComponent>(TEXT("BuildingEffect")))
 {
 	// 炮塔族的具体等级由等级子类构造函数设置，此处只设置类别。
 	BuildingType = ECastleBuildingType::CannonTower;
@@ -108,10 +117,36 @@ ACastleFarmLevel5::ACastleFarmLevel5()
 	BuildingLevel = 5;
 }
 
-ACastleShieldTowerBuilding::ACastleShieldTowerBuilding()
+ACastleShieldTowerBuilding::ACastleShieldTowerBuilding(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UCastleShieldTowerEffectComponent>(TEXT("BuildingEffect")))
 {
-	// 盾塔使用建筑基类原有的唯一效果组件，仅接入通用触发入口与计数。
+	// 子对象由类显式定义，效果执行时不临时补建缺失组件，不把球体当成建筑美术模型。
 	BuildingType = ECastleBuildingType::ShieldTower;
+	ShieldBubble = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ShieldBubble"));
+	ShieldBubble->SetupAttachment(GameplayRoot);
+	ShieldBubble->ComponentTags.Add(TEXT("MergeExclude"));
+	ShieldBubble->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	ShieldBubble->SetCanEverAffectNavigation(false);
+	ShieldBubble->SetCastShadow(false);
+	ShieldBubble->SetVisibility(false);
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> Sphere(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> ShieldMaterial(TEXT("/Game/MovingCastle/Data/Buildings/M_CastleShield.M_CastleShield"));
+	ShieldBubble->SetStaticMesh(Sphere.Object);
+	ShieldBubble->SetMaterial(0, ShieldMaterial.Object);
+	ShieldRemainingText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("ShieldRemainingText"));
+	ShieldRemainingText->SetupAttachment(GameplayRoot);
+	ShieldRemainingText->ComponentTags.Add(TEXT("MergeExclude"));
+	ShieldRemainingText->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	ShieldRemainingText->SetCanEverAffectNavigation(false);
+	ShieldRemainingText->SetHorizontalAlignment(EHTA_Center);
+	ShieldRemainingText->SetVerticalAlignment(EVRTA_TextCenter);
+	ShieldRemainingText->SetTextRenderColor(FColor::White);
+	ShieldRemainingText->SetWorldSize(180.0f);
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> CounterMaterial(TEXT("/Game/MovingCastle/Data/Buildings/M_CastleShieldCounter.M_CastleShieldCounter"));
+	ShieldRemainingText->SetTextMaterial(CounterMaterial.Object);
+	// 次数属于状态反馈，使用显式的双面透明文字材质，不让相邻大体积美术遮住数字。
+	ShieldRemainingText->SetRelativeRotation(FRotator(90.0f, 0.0f, 0.0f));
+	ShieldRemainingText->SetVisibility(false);
 }
 
 ACastleShieldTowerLevel1::ACastleShieldTowerLevel1()
@@ -140,7 +175,7 @@ ACastleShieldTowerLevel4::ACastleShieldTowerLevel4()
 
 ACastleShieldTowerLevel5::ACastleShieldTowerLevel5()
 {
-	// 五级与其他功能塔对齐预留类和资产，具体防御效果后续另行实现。
+	// 五级只固定身份；相连攻击塔翻倍由唯一原生护盾组件结算。
 	BuildingLevel = 5;
 }
 

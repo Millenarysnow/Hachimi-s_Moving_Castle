@@ -8,6 +8,7 @@
 #include "CastleShopComponent.h"
 #include "BuildingMergeComponent.h"
 #include "Components/Building/Effects/CastleBuildingEffectComponent.h"
+#include "Components/Building/Effects/Shield/CastleShieldTowerEffectComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
@@ -70,7 +71,7 @@ bool FCastleShieldTowerFrameworkTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("已购盾塔从真实背包放置"), First) || !CastleBuildingTests::CompletePlacement(First)) { AddError(Reason.ToString()); return false; }
 	TestEqual(TEXT("放置消费一张背包卡"), Board->PrototypeBackpack->GetItemCount(), 0);
 	if (!TestNotNull(TEXT("盾塔实际实例有统一效果组件"), First->BuildingEffect.Get())) { return false; }
-	TestEqual(TEXT("盾塔保留基础触发组件"), First->BuildingEffect->GetClass(), UCastleBuildingEffectComponent::StaticClass());
+	TestEqual(TEXT("盾塔使用原生护盾效果组件"), First->BuildingEffect->GetClass(), UCastleShieldTowerEffectComponent::StaticClass());
 	TestTrue(TEXT("盾塔可连续接收统一触发"), First->TriggerBuildingEffect(FCastleBuildingTriggerContext())
 		&& First->TriggerBuildingEffect(FCastleBuildingTriggerContext()));
 	TestEqual(TEXT("两次触发有可观察计数"), First->BuildingEffect->TriggerCount, int64(2));

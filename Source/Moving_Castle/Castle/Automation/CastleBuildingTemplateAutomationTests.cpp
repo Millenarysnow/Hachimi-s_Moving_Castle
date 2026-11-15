@@ -5,6 +5,7 @@
 #include "CastleBuildingTestUtilities.h"
 #include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Components/Building/Effects/CastleBuildingEffectComponent.h"
+#include "Components/Building/Effects/Shield/CastleShieldTowerEffectComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -98,9 +99,9 @@ bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("只有一个纯表现模型"), Visuals, 1);
 			if (Definition->BuildingType == ECastleBuildingType::ShieldTower)
 			{
-				// 盾塔当前只复用共同触发计数；不能误继承攻击组件或复制炮塔的攻击数据。
+				// 盾塔使用唯一的原生护盾组件；攻击 DA 仍只属于箭塔和炮塔。
 				if (!TestNotNull(TEXT("盾塔保留共同效果组件"), Building->BuildingEffect.Get())) { return false; }
-				TestEqual(TEXT("盾塔使用基础效果而非攻击实现"), Building->BuildingEffect->GetClass(), UCastleBuildingEffectComponent::StaticClass());
+				TestEqual(TEXT("盾塔使用原生护盾效果而非攻击实现"), Building->BuildingEffect->GetClass(), UCastleShieldTowerEffectComponent::StaticClass());
 				TestNull(TEXT("盾塔定义不配置攻击 DA"), Definition->AttackData.Get());
 				TestTrue(TEXT("盾塔接入统一触发入口"), Building->TriggerBuildingEffect(FCastleBuildingTriggerContext()));
 				TestEqual(TEXT("触发反馈来自建筑共同状态"), Building->BuildingEffect->TriggerCount, int64(1));
