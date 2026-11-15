@@ -1,5 +1,7 @@
 #include "CastleNavigationSubsystem.h"
 
+#include "Algo/BinarySearch.h"
+
 #include "AssemblyFlightComponent.h"
 #include "BuildingMergeComponent.h"
 #include "CastleLadderLinkComponent.h"
@@ -39,18 +41,22 @@ int32 FCastleSharedNavigationPath::FindPatrolLeg(double Distance) const
 	return Leg;
 }
 
-bool FCastleSharedNavigationPath::FindLadderRange(const double Distance, double& OutEndDist) const
+bool FCastleSharedNavigationPath::FindLadderRange(const double Distance, double& OutEndDist, FVector& OutFacingDirection) const
 {
-	// 梯子区间数量远小于采样点数量；小数组线性扫描可避免额外索引与 UObject 访问。
-	for (const FCastleLadderPathRange& Range : LadderRanges)
+	// 区间按集中采样顺序递增，单位只二分共享数值，不随梯子数量线性扫描整个闭环。
+	const int32 Next = Algo::UpperBoundBy(LadderRanges, Distance, &FCastleLadderPathRange::StartDist);
+	if (Next > 0)
 	{
+		const FCastleLadderPathRange& Range = LadderRanges[Next - 1];
 		if (Distance >= Range.StartDist && Distance < Range.EndDist)
 		{
 			OutEndDist = Range.EndDist;
+			OutFacingDirection = Range.FacingDirection;
 			return true;
 		}
 	}
-	OutEndDist = Distance;
+	OutEndDist = LadderRanges.IsValidIndex(Next) ? LadderRanges[Next].StartDist : Length;
+	OutFacingDirection = FVector::ZeroVector;
 	return false;
 }
 
@@ -83,14 +89,19 @@ bool FCastleSharedNavigationPath::FindClosestPatrolDistance(FVector Location, in
 
 namespace CastlePatrolNavigation
 {
-	/** 沿已求出的走廊采样高度。只读取本轮有效多边形，快照不保留会因重建过期的引用。 */
 	/** 梯子折线按真实三维距离采样，并只将梯底至梯顶的部分记录为攀爬区间。 */
-	bool AppendLadderPolyline(const TArray<FVector>& Points, const double Spacing,
+	bool AppendLadderPolyline(const TArray<FVector>& Points, const FVector& FacingDirection, const double Spacing,
 		FCastleSharedNavigationPath& OutPath, FText& OutFailure)
 	{
 		if (Points.Num() != 4)
 		{
 			OutFailure = FText::FromString(TEXT("合法梯子的三维通行折线必须包含楼板入口、梯底、梯顶和楼板出口四点。"));
+			return false;
+		}
+		const FVector HorizontalFacing = FacingDirection.GetSafeNormal2D();
+		if (HorizontalFacing.IsNearlyZero())
+		{
+			OutFailure = FText::FromString(TEXT("梯子组件必须具有可用的水平朝向，才能让单位直立面向梯面。"));
 			return false;
 		}
 		for (int32 Segment = 1; Segment < Points.Num(); ++Segment)
@@ -120,6 +131,7 @@ namespace CastlePatrolNavigation
 				FCastleLadderPathRange& Range = OutPath.LadderRanges.AddDefaulted_GetRef();
 				Range.StartDist = RangeStart;
 				Range.EndDist = OutPath.PatrolDistances.Last();
+				Range.FacingDirection = HorizontalFacing;
 			}
 		}
 		return true;
@@ -135,12 +147,10 @@ namespace CastlePatrolNavigation
 			const FVector Start = Corners[Corner - 1].Location;
 			const FVector End = Corners[Corner].Location;
 			const FNavPathPoint& SegmentStart = Corners[Corner - 1];
-			const bool bIsNavLink = Leg.IsPathSegmentANavLink(Corner - 1) || SegmentStart.CustomNavLinkId.IsValid()
-				|| Corners[Corner].CustomNavLinkId.IsValid();
+			const bool bIsNavLink = Leg.IsPathSegmentANavLink(Corner - 1) || SegmentStart.CustomNavLinkId.IsValid();
 			if (bIsNavLink)
 			{
-				const FNavLinkId LinkId = SegmentStart.CustomNavLinkId.IsValid()
-					? SegmentStart.CustomNavLinkId : Corners[Corner].CustomNavLinkId;
+				const FNavLinkId LinkId = SegmentStart.CustomNavLinkId;
 				INavLinkCustomInterface* RegisteredLink = LinkId.IsValid() ? Navigation.GetCustomLink(LinkId) : nullptr;
 				UCastleLadderLinkComponent* Ladder = Cast<UCastleLadderLinkComponent>(RegisteredLink);
 				if (!Ladder || Ladder->GetWorld() != Navigation.GetWorld() || !Ladder->IsRegistered()
@@ -155,42 +165,44 @@ namespace CastlePatrolNavigation
 					OutFailure = FText::FromString(FString::Printf(TEXT("梯子导航组件 %s 无法提供有效三维通行折线。"), *Ladder->GetPathName()));
 					return false;
 				}
-				if (!AppendLadderPolyline(Traversal, Spacing, OutPath, OutFailure)) { return false; }
+				// 上下行都面向同一梯面：下行折线已逆序，仍取原下层入口指向梯底的水平向量。
+				const FVector FacingDirection = End.Z > Start.Z ? Traversal[1] - Traversal[0] : Traversal[2] - Traversal[3];
+				if (!AppendLadderPolyline(Traversal, FacingDirection, Spacing, OutPath, OutFailure)) { return false; }
 			}
 			else
 			{
-			const int32 EndPoly = Leg.GetNodeRefIndex(Corners[Corner].NodeRef);
-			if (EndPoly < CorridorCursor) { OutFailure = FText::FromString(TEXT("巡逻路径走廊顺序无效，无法生成共享贴地采样。")); return false; }
-			const int32 Steps = FMath::Max(1, FMath::CeilToInt(FVector::Dist2D(Start, End) / Spacing));
-			for (int32 Step = 1; Step <= Steps; ++Step)
-			{
-				const FVector Sample = FMath::Lerp(Start, End, static_cast<double>(Step) / Steps);
-				double BestScore = TNumericLimits<double>::Max();
-				FVector BestPoint = FVector::ZeroVector;
-				int32 BestPoly = INDEX_NONE;
-				for (int32 Poly = CorridorCursor; Poly <= EndPoly; ++Poly)
+				const int32 EndPoly = Leg.GetNodeRefIndex(Corners[Corner].NodeRef);
+				if (EndPoly < CorridorCursor) { OutFailure = FText::FromString(TEXT("巡逻路径走廊顺序无效，无法生成共享贴地采样。")); return false; }
+				const int32 Steps = FMath::Max(1, FMath::CeilToInt(FVector::Dist2D(Start, End) / Spacing));
+				for (int32 Step = 1; Step <= Steps; ++Step)
 				{
-					FVector OnSurface;
-					if (!Mesh.GetClosestPointOnPoly(Leg.PathCorridor[Poly], Sample, OnSurface)) { continue; }
-					const double HorizontalSquared = FVector::DistSquared2D(Sample, OnSurface);
-					// 限制在求解器选中的折线上；高度以最近已走表面连续选择，防止吸到重叠楼层。
-					if (HorizontalSquared > 1.0) { continue; }
-					const double Score = HorizontalSquared * 1000000.0 + FMath::Square(OnSurface.Z - OutPath.PatrolPoints.Last().Z);
-					if (Score < BestScore) { BestScore = Score; BestPoint = OnSurface; BestPoly = Poly; }
+					const FVector Sample = FMath::Lerp(Start, End, static_cast<double>(Step) / Steps);
+					double BestScore = TNumericLimits<double>::Max();
+					FVector BestPoint = FVector::ZeroVector;
+					int32 BestPoly = INDEX_NONE;
+					for (int32 Poly = CorridorCursor; Poly <= EndPoly; ++Poly)
+					{
+						FVector OnSurface;
+						if (!Mesh.GetClosestPointOnPoly(Leg.PathCorridor[Poly], Sample, OnSurface)) { continue; }
+						const double HorizontalSquared = FVector::DistSquared2D(Sample, OnSurface);
+						// 限制在求解器选中的折线上；高度以最近已走表面连续选择，防止吸到重叠楼层。
+						if (HorizontalSquared > 1.0) { continue; }
+						const double Score = HorizontalSquared * 1000000.0 + FMath::Square(OnSurface.Z - OutPath.PatrolPoints.Last().Z);
+						if (Score < BestScore) { BestScore = Score; BestPoint = OnSurface; BestPoly = Poly; }
+					}
+					if (BestPoly == INDEX_NONE)
+					{
+						OutFailure = FText::FromString(TEXT("无法沿最短路走廊生成共享表面采样；未发布悬空或跨楼层直线路线。"));
+						return false;
+					}
+					CorridorCursor = BestPoly;
+					const double Span = FVector::Distance(OutPath.PatrolPoints.Last(), BestPoint);
+					if (Span > UE_DOUBLE_SMALL_NUMBER)
+					{
+						OutPath.PatrolPoints.Add(BestPoint);
+						OutPath.PatrolDistances.Add(OutPath.PatrolDistances.Last() + Span);
+					}
 				}
-				if (BestPoly == INDEX_NONE)
-				{
-					OutFailure = FText::FromString(TEXT("无法沿最短路走廊生成共享表面采样；未发布悬空或跨楼层直线路线。"));
-					return false;
-				}
-				CorridorCursor = BestPoly;
-				const double Span = FVector::Distance(OutPath.PatrolPoints.Last(), BestPoint);
-				if (Span > UE_DOUBLE_SMALL_NUMBER)
-				{
-					OutPath.PatrolPoints.Add(BestPoint);
-					OutPath.PatrolDistances.Add(OutPath.PatrolDistances.Last() + Span);
-				}
-			}
 			}
 		}
 		return true;

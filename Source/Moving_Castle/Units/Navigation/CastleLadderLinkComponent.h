@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Components/SceneComponent.h"
 #include "NavLinkCustomInterface.h"
+#include "AI/Navigation/NavRelevantInterface.h"
 #include "CastleLadderLinkComponent.generated.h"
 
 /**
@@ -10,7 +11,7 @@
  * 组件必须挂在 BuildingGameplayRoot 分支中，且仅在注册到所属世界的 NavigationSystem 后才有效。
  */
 UCLASS(ClassGroup=(Navigation), meta=(BlueprintSpawnableComponent))
-class MOVING_CASTLE_API UCastleLadderLinkComponent : public USceneComponent, public INavLinkCustomInterface
+class MOVING_CASTLE_API UCastleLadderLinkComponent : public USceneComponent, public INavLinkCustomInterface, public INavRelevantInterface
 {
 	GENERATED_BODY()
 
@@ -45,11 +46,16 @@ public:
 	virtual TSubclassOf<UNavArea> GetLinkAreaClass() const override;
 	virtual UObject* GetLinkOwner() const override;
 
+	/** 独立导航八叉树节点，仅导出本组件的双向连接，不导出美术碰撞。 */
+	virtual bool IsNavigationRelevant() const override;
+	virtual FBox GetNavigationBounds() const override;
+	virtual void GetNavigationData(FNavigationRelevantData& Data) const override;
+
 	virtual void OnRegister() override;
 	virtual void OnUnregister() override;
 
 private:
-	/** Link id 由 NavigationSystem 分配，仅在成功登记期间有效。 */
+	/** 组件先生成唯一 ID，再交给 NavigationSystem 登记；快照不保存这个可能随重注册改变的身份。 */
 	UPROPERTY(Transient)
 	FNavLinkId CustomLinkId;
 

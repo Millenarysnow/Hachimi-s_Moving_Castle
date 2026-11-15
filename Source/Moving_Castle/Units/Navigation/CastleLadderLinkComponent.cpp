@@ -1,5 +1,11 @@
 #include "CastleLadderLinkComponent.h"
 
+#include "Algo/Reverse.h"
+#include "AI/Navigation/NavigationRelevantData.h"
+#include "AI/NavigationSystemHelpers.h"
+#include "Components/Building/BuildingGameplayRootComponent.h"
+#include "NavAreas/NavArea_Default.h"
+
 #include "Engine/World.h"
 #include "Moving_Castle.h"
 #include "NavigationSystem.h"
@@ -9,6 +15,7 @@ UCastleLadderLinkComponent::UCastleLadderLinkComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
 	SetMobility(EComponentMobility::Movable);
+	bCanEverAffectNavigation = true;
 }
 
 bool UCastleLadderLinkComponent::ValidateGeometry(FText& OutFailure) const
@@ -56,10 +63,16 @@ bool UCastleLadderLinkComponent::GetTraversalPolyline(const bool bClimbingUp, TA
 void UCastleLadderLinkComponent::GetLinkData(FVector& LeftPt, FVector& RightPt, ENavLinkDirection::Type& Direction) const
 {
 	const AActor* Owner = GetOwner();
-	const FTransform OwnerTransform = Owner ? Owner->GetActorTransform() : FTransform::Identity;
+	// 导出接口要求真实所属 Actor；缺失时明确报错，不用单位变换替代配置。
+	if (!ensureMsgf(Owner, TEXT("梯子导航组件 %s 没有所属 Actor。"), *GetPathName()))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("梯子导航组件 %s 缺少所属 Actor，无法导出接驳点。"), *GetPathName());
+		return;
+	}
+	const FTransform OwnerTransform = Owner->GetActorTransform();
 	const FTransform ComponentTransform = GetComponentTransform();
-	LeftPt = OwnerTransform.InverseTransformPosition(ComponentTransform.TransformPosition(LadderBottomOffset));
-	RightPt = OwnerTransform.InverseTransformPosition(ComponentTransform.TransformPosition(LadderTopOffset));
+	LeftPt = OwnerTransform.InverseTransformPosition(ComponentTransform.TransformPosition(BottomStandOffset));
+	RightPt = OwnerTransform.InverseTransformPosition(ComponentTransform.TransformPosition(TopStandOffset));
 	Direction = ENavLinkDirection::BothWays;
 }
 
@@ -70,7 +83,7 @@ void UCastleLadderLinkComponent::GetSupportedAgents(FNavAgentSelector& OutSuppor
 
 TSubclassOf<UNavArea> UCastleLadderLinkComponent::GetLinkAreaClass() const
 {
-	return nullptr;
+	return UNavArea_Default::StaticClass();
 }
 
 UObject* UCastleLadderLinkComponent::GetLinkOwner() const
@@ -95,8 +108,11 @@ void UCastleLadderLinkComponent::OnRegister()
 		UE_LOG(LogMoving_Castle, Error, TEXT("梯子导航组件 %s 所属世界没有 NavigationSystem，无法注册双向连接。"), *GetPathName());
 		return;
 	}
+	// 动态连接由组件先生成唯一 ID，再向系统登记；RegisterCustomLink 不会补齐无效 ID。
+	CustomLinkId = FNavLinkId::GenerateUniqueId();
 	Navigation->RegisterCustomLink(*this);
 	RegisteredNavigation = Navigation;
+	FNavigationSystem::OnComponentRegistered(*this);
 	if (!CustomLinkId.IsValid())
 	{
 		RegisteredNavigation.Reset();
@@ -114,6 +130,7 @@ void UCastleLadderLinkComponent::OnRegister()
 
 void UCastleLadderLinkComponent::OnUnregister()
 {
+	FNavigationSystem::OnComponentUnregistered(*this);
 	if (UNavigationSystemV1* Navigation = RegisteredNavigation.Get())
 	{
 		Navigation->UnregisterCustomLink(*this);
@@ -131,4 +148,32 @@ void UCastleLadderLinkComponent::OnUnregister()
 		}
 	}
 	Super::OnUnregister();
+}
+
+bool UCastleLadderLinkComponent::IsNavigationRelevant() const
+{
+	return bLadderLinkEnabled && CustomLinkId.IsValid() && RegisteredNavigation.IsValid()
+		&& UBuildingGameplayRootComponent::IsInGameplayHierarchy(this);
+}
+
+FBox UCastleLadderLinkComponent::GetNavigationBounds() const
+{
+	FBox LinkBounds(ForceInit);
+	LinkBounds += GetComponentTransform().TransformPosition(BottomStandOffset);
+	LinkBounds += GetComponentTransform().TransformPosition(TopStandOffset);
+	return LinkBounds.ExpandBy(10.0);
+}
+
+void UCastleLadderLinkComponent::GetNavigationData(FNavigationRelevantData& Data) const
+{
+	if (!IsNavigationRelevant()) { return; }
+	FNavigationLink Link = INavLinkCustomInterface::GetModifier(this);
+	// 接驳点本身由调用方放在楼板上，禁止向下投影到其他楼层，也不扩大吸附范围掩盖错误配置。
+	Link.LeftProjectHeight = 0.0f;
+	Link.MaxFallDownLength = 0.0f;
+	Link.SnapRadius = 10.0f;
+	Link.bUseSnapHeight = true;
+	Link.SnapHeight = 20.0f;
+	const TArray<FNavigationLink> Links = {Link};
+	NavigationHelper::ProcessNavLinkAndAppend(&Data.Modifiers, GetOwner(), Links);
 }

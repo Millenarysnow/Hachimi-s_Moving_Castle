@@ -22,6 +22,10 @@ struct MOVING_CASTLE_API FCastleLadderPathRange
 
 	UPROPERTY(BlueprintReadOnly, Category="共享路线")
 	double EndDist = 0.0;
+
+	/** 梯子组件的水平朝向快照，使纯垂直采样方向仍能稳定面向梯面。 */
+	UPROPERTY(BlueprintReadOnly, Category="共享路线")
+	FVector FacingDirection = FVector::ForwardVector;
 };
 
 /** 全世界的一份路线快照。多个 NPC 可以持有同一个只读快照，各自记录路段进度。 */
@@ -87,8 +91,8 @@ struct MOVING_CASTLE_API FCastleSharedNavigationPath
 	/** 返回距离所在的玩家路段；不将采样点或转折点当作玩家路径点。 */
 	int32 FindPatrolLeg(double Distance) const;
 
-	/** 查询当前位置是否在任一梯子区间，并返回该区间末端距离。 */
-	bool FindLadderRange(double Distance, double& OutEndDist) const;
+	/** 二分查询梯子区间；返回当前梯子末端，或平地下一梯口/闭环终点的距离。 */
+	bool FindLadderRange(double Distance, double& OutEndDist, FVector& OutFacingDirection) const;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FCastleSharedPathChanged);
