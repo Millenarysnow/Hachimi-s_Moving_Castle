@@ -14,5 +14,20 @@ struct MOVING_CASTLE_API FCastleMassDeathSplitFragment : public FMassFragment
 	UPROPERTY() TWeakObjectPtr<UMassEntityConfigAsset> ChildConfiguration;
 	UPROPERTY() int32 SpawnCount = 3;
 	UPROPERTY() float SpawnSpreadRadius = 80.0f;
+	UPROPERTY() float BurstDuration = 0.35f;
+	UPROPERTY() float BurstArcHeight = 60.0f;
 	UPROPERTY() bool bHasSplit = false;
+};
+
+/** 子单位爆散期间由专用处理器拥有 Transform；落点后处理器移除该 Fragment。 */
+USTRUCT()
+struct MOVING_CASTLE_API FCastleMassSpawnBurstFragment : public FMassFragment
+{
+	GENERATED_BODY()
+
+	UPROPERTY() FVector Start = FVector::ZeroVector;
+	UPROPERTY() FVector Target = FVector::ZeroVector;
+	UPROPERTY() float Elapsed = 0.0f;
+	UPROPERTY() float Duration = 0.35f;
+	UPROPERTY() float ArcHeight = 60.0f;
 };

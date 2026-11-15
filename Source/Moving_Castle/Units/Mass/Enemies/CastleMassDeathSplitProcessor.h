@@ -17,3 +17,17 @@ protected:
 private:
 	FMassEntityQuery Query;
 };
+
+/** 只推进带爆散状态的幼骸，并在精确抵达落点后移除位移所有权 Fragment。 */
+UCLASS()
+class MOVING_CASTLE_API UCastleMassSpawnBurstProcessor : public UMassProcessor
+{
+	GENERATED_BODY()
+public:
+	UCastleMassSpawnBurstProcessor();
+protected:
+	virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
+	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+private:
+	FMassEntityQuery Query;
+};
