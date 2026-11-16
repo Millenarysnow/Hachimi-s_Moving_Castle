@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleBoard.h"
+#include "Castle/PCG/CastleBuildingPCGSubsystem.h"
 #include "Units/BuildingInteraction/CastleBuildingTriggerSubsystem.h"
 
 #include "CastleBackpackComponent.h"
@@ -97,6 +98,9 @@ ACastleBoard::ACastleBoard()
 	PrototypeBackpack = CreateDefaultSubobject<UCastleBackpackComponent>(TEXT("PrototypeBackpack"));
 
 	GroundGeneratorClass = UCastleRandomGroundGenerator::StaticClass();
+	// 项目初始规则是明确的资产配置；资产丢失时子系统拒绝更新，不生成替代规则。
+	static ConstructorHelpers::FObjectFinder<UCastlePCGRuleSetDataAsset> PCGRules(TEXT("/Game/MovingCastle/Data/DA_CastlePCGRuleSet.DA_CastlePCGRuleSet"));
+	PCGRuleSet = PCGRules.Object;
 
 	static ConstructorHelpers::FClassFinder<AActor> MainTowerBlueprint(
 		TEXT("/Game/MovingCastle/BP/BP_MainTower"));
@@ -490,6 +494,7 @@ ACastleBuildingBase* ACastleBoard::PlaceBuildingInternal(const FIntVector& Coord
 		NewBuilding->Destroy();
 		return nullptr;
 	}
+	if (auto* PCG = GetWorld()->GetSubsystem<UCastleBuildingPCGSubsystem>()) { PCG->ObserveBoard(this); }
 
 	if (GetWorld()->IsGameWorld())
 	{
@@ -551,6 +556,7 @@ void ACastleBoard::HandlePlacementFinished(UAssemblyFlightComponent* Flight, con
 	UE_LOG(LogMoving_Castle, Display, TEXT("放置飞入完成，开始检查合并 [%s]。"), *Building->GetName());
 	if (Request.bTryMerge) { ReadyMergeRequests.Add(Building, Request.Origin); }
 	ResolveReadyMerges();
+	OnLayoutCommitted.Broadcast(this, Request.Origin);
 }
 
 void ACastleBoard::ResolveReadyMerges()
@@ -608,10 +614,12 @@ void ACastleBoard::HandleBuildingDestroyed(AActor* Actor)
 	if (auto* Triggers = GetWorld()->GetSubsystem<UCastleBuildingTriggerSubsystem>()) { Triggers->UnregisterBuilding(Building); }
 	ForgetPlacement(Building);
 	// 也覆盖关卡代码直接 Destroy 的中途取消；合并路径已先注销，不能删除新结果的坐标。
+	bool bRemovedOccupancy = false;
 	for (const FIntVector& Coordinate : Building->GetOccupiedCoordinates())
 	{
-		if (GetBuildingAt(Coordinate) == Building) { BuildingByCoordinate.Remove(Coordinate); }
+		if (GetBuildingAt(Coordinate) == Building) { BuildingByCoordinate.Remove(Coordinate); bRemovedOccupancy = true; }
 	}
+	if (bRemovedOccupancy && !IsActorBeingDestroyed() && !GetWorld()->bIsTearingDown) { OnLayoutCommitted.Broadcast(this, Building->GetActorLocation()); }
 }
 
 void ACastleBoard::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -701,12 +709,13 @@ bool ACastleBoard::RemoveBuilding(ACastleBuildingBase* Building, FText& OutFailu
 		return false;
 	}
 
+	const FVector RemovalOrigin = bUseSharedVisualChangeOrigin ? VisualChangeOrigin : Building->GetActorLocation();
 	if (!Building->Destroy())
 	{
 		OutFailureReason = FText::FromString(TEXT("建筑已从棋盘索引移除，但 Actor 销毁失败。"));
 		return false;
 	}
-
+	OnLayoutCommitted.Broadcast(this, RemovalOrigin);
 	return true;
 }
 

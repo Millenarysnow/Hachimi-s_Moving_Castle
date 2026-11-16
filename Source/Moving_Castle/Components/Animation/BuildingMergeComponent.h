@@ -126,6 +126,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Building Merge|Playback")
 	bool StartChange(const TArray<AActor*>& Sources);
 
+	/** PCG 变更前捕获旧件到瞬态无碰撞 Actor；调用者在 StartChange 抓取后立即销毁载体。 */
+	AActor* CreateVisualSnapshot(FString& Error) const;
+
+	/** 动画隐藏原件时仍可读取稳定目标的作者可见性，供 PCG 缓存精确复原状态。 */
+	bool GetStableVisibility(const UPrimitiveComponent* Primitive) const;
+
 	/** 恢复仍存在的原件与来源，不重建已经由玩法销毁的旧建筑。 */
 	UFUNCTION(BlueprintCallable, Category="Building Merge|Playback")
 	void ResetMerge();
@@ -195,7 +201,7 @@ private:
 	FVector UpOwnerSpace = FVector::UpVector;
 	bool bCaptured = false;
 
-	bool CaptureActor(AActor* Actor, TArray<FPartSnapshot>& OutParts, FString& Error) const;
+	bool CaptureActor(AActor* Actor, TArray<FPartSnapshot>& OutParts, FString& Error, bool bCaptureOwnMotion = false) const;
 	bool BuildPlan(const TArray<FPartSnapshot>& Sources, const TArray<FPartSnapshot>& Targets, const FVector& Origin, FString& Error);
 	bool CreateVisual(FMergePart& Part, UStaticMeshComponent* Template);
 	void UpdatePart(FMergePart& Part);

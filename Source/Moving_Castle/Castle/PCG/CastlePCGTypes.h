@@ -50,6 +50,10 @@ struct MOVING_CASTLE_API FCastlePCGPartAnnotation
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="建筑PCG")
 	FIntVector LocalCellOffset = FIntVector::ZeroValue;
 
+	/** 护栏可覆盖同一面的两个格；其他语义件只覆盖一个格。偏移均相对建筑最小占格。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="建筑PCG")
+	TArray<FIntVector> CoveredCellOffsets;
+
 	/** 已计入建筑旋转的棋盘方位，避免沿 Y 放置时仍匹配原始模型 X 方位。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="建筑PCG")
 	ECastlePCGFace BoardFacing = ECastlePCGFace::None;
