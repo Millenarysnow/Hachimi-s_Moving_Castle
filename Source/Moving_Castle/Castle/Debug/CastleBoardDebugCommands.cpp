@@ -46,4 +46,24 @@ namespace CastleBoardDebug
     Max.X-Min.X+1, Max.Y-Min.Y+1, Min.X, Min.Y, Max.X, Max.Y) : Reason.ToString(), bSuccess);
   }
  }));
+ FAutoConsoleCommandWithWorldAndArgs Hidden(TEXT("CastleSetGroundHidden"), TEXT("CastleSetGroundHidden 1/0：隐藏/显示地块。"),
+ FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
+ {
+  if (Args.Num()!=1 || (Args[0]!=TEXT("0") && Args[0]!=TEXT("1")))
+  {
+   UE_LOG(LogMoving_Castle, Error, TEXT("用法：CastleSetGroundHidden 1 或 CastleSetGroundHidden 0。"));
+   Screen(TEXT("用法：CastleSetGroundHidden 1/0"), false);
+   return;
+  }
+  if (ACastleBoard* Board = FindUnique(World))
+  {
+   const bool bHidden = Args[0]==TEXT("1");
+   Board->SetGroundPresentationHidden(bHidden);
+   const bool bSuccess = Board->IsGroundPresentationHidden()==bHidden;
+   const FString Message = bSuccess ? (bHidden ? TEXT("地块已隐藏。") : TEXT("地块已显示。")) : TEXT("地块显隐切换失败，请检查日志。");
+   if (bSuccess) { UE_LOG(LogMoving_Castle, Display, TEXT("%s"), *Message); }
+   Screen(Message, bSuccess);
+  }
+ }));
+
 }

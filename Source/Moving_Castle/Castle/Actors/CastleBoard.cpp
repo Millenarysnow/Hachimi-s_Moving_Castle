@@ -407,6 +407,23 @@ bool ACastleBoard::ValidateGroundResult(const FCastleGroundGenerationResult& Res
 	return true;
 }
 
+void ACastleBoard::SetGroundPresentationHidden(const bool bHidden)
+{
+	if (bGroundPresentationHidden == bHidden) { return; }
+	// 先核对整份索引，损坏状态明确报错，不能静默略过丢失的地块。
+	for (const auto& Pair : GroundTiles)
+	{
+		if (!IsValid(Pair.Value))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 无法切换地块显隐：坐标 %s 的 Actor 已失效。"),
+				*GetName(), *Pair.Key.ToString());
+			return;
+		}
+	}
+	for (const auto& Pair : GroundTiles) { Pair.Value->SetGroundPresentationHidden(bHidden); }
+	bGroundPresentationHidden = bHidden;
+}
+
 void ACastleBoard::GetBoardExtent(FIntPoint& OutMin, FIntPoint& OutMax) const
 {
 	OutMin = FIntPoint(GridOrigin.X - ExpansionRings, GridOrigin.Y - ExpansionRings);
@@ -2101,6 +2118,7 @@ bool ACastleBoard::CreateGroundTileActors(const TArray<FCastleGroundCell>& Cells
 			}
 			return false;
 		}
+		TileActor->SetGroundPresentationHidden(bGroundPresentationHidden);
 		NewGroundTiles.Add(Cell.Coordinate, TileActor);
 	}
 

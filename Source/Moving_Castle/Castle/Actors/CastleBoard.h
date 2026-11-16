@@ -190,6 +190,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|棋盘")
 	bool ApplyGroundGenerationResult(const FCastleGroundGenerationResult& Result, FText& OutFailureReason);
 
+	/** 只控制地块表现和 Visibility 命中；重复设置同一状态没有副作用。 */
+	UFUNCTION(BlueprintCallable, Category="移动城堡|棋盘")
+	void SetGroundPresentationHidden(bool bHidden);
+
+	UFUNCTION(BlueprintPure, Category="移动城堡|棋盘")
+	bool IsGroundPresentationHidden() const { return bGroundPresentationHidden; }
+
 	/** 对称扩张一圈；数据或 Actor 创建失败时整次操作不提交。 */
 	UFUNCTION(BlueprintCallable, Category="移动城堡|棋盘")
 	bool ExpandBoard(FText& OutFailureReason);
@@ -287,6 +294,10 @@ protected:
 	/** 已提交的对称扩张圈数，只影响范围，不参与坐标到世界变换。 */
 	UPROPERTY(VisibleInstanceOnly, Category="棋盘|尺寸")
 	int32 ExpansionRings = 0;
+
+	/** 棋盘级表现状态，新生成地块必须继承。 */
+	UPROPERTY(VisibleInstanceOnly, Category="棋盘|地面")
+	bool bGroundPresentationHidden = false;
 
 	/** 管理器自己的根节点，为棋盘坐标提供 Actor 变换空间。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")

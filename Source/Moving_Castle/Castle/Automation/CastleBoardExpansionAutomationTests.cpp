@@ -8,6 +8,7 @@
 #include "CastleGroundTileActor.h"
 #include "CastleBoardExpansionTestGenerator.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/TextRenderComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -184,6 +185,51 @@ bool FCastleBoardOverhangTest::RunTest(const FString& Parameters)
  TestTrue(TEXT("扩张覆盖越界建筑列"), Board->ExpandBoard(Reason));
  TestTrue(TEXT("越界建筑下面新增地块"), Board->TryGetGroundCell(FIntVector(5,2,0), Ground));
  TestTrue(TEXT("扩张不移动建筑"), OutsideLocation.Equals(Outside[0]->GetActorLocation()));
+ return true;
+}
+
+/** 实际射线验证隐藏，同时校验隐藏扩张的新地块与显示恢复。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleBoardPresentationTest, "MovingCastle.Board.GroundPresentation",
+ EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FCastleBoardPresentationTest::RunTest(const FString& Parameters)
+{
+ const UWorld::InitializationValues Settings = UWorld::InitializationValues().AllowAudioPlayback(false)
+  .CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(false);
+ UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Settings);
+ if (!TestNotNull(TEXT("显隐测试世界"), World)) { return false; }
+ GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+ ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
+ ACastleBoard* Board = World->SpawnActor<ACastleBoard>();
+ Board->GridSize = FIntVector(5,5,8);
+ FText Reason;
+ if (!Board->GenerateGround(Reason)) { AddError(Reason.ToString()); return false; }
+ FCastleGridCursorTarget Target;
+ const FVector Center = Board->GetGridWorldLocation(FIntVector(0,0,0));
+ TestTrue(TEXT("显示状态真实射线命中"), Board->TryResolveGridCursorTarget(Center+FVector(0,0,600),Center-FVector(0,0,600),Target));
+ Board->SetGroundPresentationHidden(true);
+ Board->SetGroundPresentationHidden(true);
+ TestTrue(TEXT("隐藏状态可查询"), Board->IsGroundPresentationHidden());
+ TestFalse(TEXT("隐藏后真实射线不命中"), Board->TryResolveGridCursorTarget(Center+FVector(0,0,600),Center-FVector(0,0,600),Target));
+ TestTrue(TEXT("隐藏时允许扩张"), Board->ExpandBoard(Reason));
+ int32 Count=0;
+ for (TActorIterator<ACastleGroundTileActor> It(World); It; ++It)
+ {
+  ++Count;
+  TestFalse(TEXT("新旧格面都隐藏"), It->GetTileMeshComponent()->IsVisible());
+  TestFalse(TEXT("新旧数字牌都隐藏"), It->GetNumberPlateComponent()->IsVisible());
+  TestFalse(TEXT("新旧文字都隐藏"), It->GetNumberLabelComponent()->IsVisible());
+  TestTrue(TEXT("Visibility 响应忽略"), It->GetTileMeshComponent()->GetCollisionResponseToChannel(ECC_Visibility)==ECR_Ignore);
+  TestFalse(TEXT("导航资格不变"), It->GetTileMeshComponent()->CanEverAffectNavigation());
+ }
+ TestEqual(TEXT("隐藏不销毁任何地块"), Count, 49);
+ Board->SetGroundPresentationHidden(false);
+ for (TActorIterator<ACastleGroundTileActor> It(World); It; ++It)
+ {
+  TestTrue(TEXT("新旧格面恢复"), It->GetTileMeshComponent()->IsVisible());
+  TestTrue(TEXT("新旧数字牌恢复"), It->GetNumberPlateComponent()->IsVisible());
+  TestTrue(TEXT("新旧文字恢复"), It->GetNumberLabelComponent()->IsVisible());
+ }
+ TestTrue(TEXT("显示后真实射线恢复"), Board->TryResolveGridCursorTarget(Center+FVector(0,0,600),Center-FVector(0,0,600),Target));
  return true;
 }
 #endif
