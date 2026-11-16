@@ -34,6 +34,10 @@ struct MOVING_CASTLE_API FCastleMassMovementSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="移动", meta=(ClampMin="0.0", Units="cm/s"))
 	float MaxSpeed = 300.0f;
 
+	/** 梯子区间内的最大速度倍率；必须为有限数且位于 (0.01, 10.0]。 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="移动")
+	float LadderSpeedMultiplier = 1.0f;
+
 	/** 为 0 时直接使用期望速度。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="移动", meta=(ClampMin="0.0"))
 	float Acceleration = 1200.0f;

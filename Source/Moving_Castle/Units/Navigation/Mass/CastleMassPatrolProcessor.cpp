@@ -6,6 +6,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Mass/CastleMassPatrolFragments.h"
+#include "Mass/CastlePatrolMovement.h"
 #include "MassCommonFragments.h"
 #include "MassCommonTypes.h"
 #include "MassExecutionContext.h"
@@ -38,7 +39,8 @@ void UCastleMassPatrolProcessor::Execute(FMassEntityManager& EntityManager, FMas
 {
 	const auto Path = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>()->AcquireSharedPath();
 	TAtomic<int32> NewlyBlocked(0);
-	Query.ParallelForEachEntityChunk(Context, [Path, &NewlyBlocked](FMassExecutionContext& Chunk)
+	TAtomic<int32> InvalidLadderSettings(0);
+	Query.ParallelForEachEntityChunk(Context, [Path, &NewlyBlocked, &InvalidLadderSettings](FMassExecutionContext& Chunk)
 	{
 		const double DeltaTime = FMath::Max(0.0f, Chunk.GetDeltaTimeSeconds());
 		const auto Transforms = Chunk.GetMutableFragmentView<FTransformFragment>();
@@ -85,16 +87,11 @@ void UCastleMassPatrolProcessor::Execute(FMassEntityManager& EntityManager, FMas
 				Patrol.Speed = 0.0;
 				continue;
 			}
-			const double PreviousSpeed = FMath::Min(Patrol.Speed, static_cast<double>(Settings.MaxSpeed));
-			Patrol.Speed = Settings.Acceleration > 0.0f
-				? FMath::Min(static_cast<double>(Settings.MaxSpeed), Patrol.Speed + Settings.Acceleration * DeltaTime)
-				: Settings.MaxSpeed;
-			// 标量进度在拐角处也严格沿折线走，不把速度向量平滑成穿墙的弧线。
-			const double AcceleratingTime = Settings.Acceleration > 0.0f
-				? FMath::Min(DeltaTime, (Settings.MaxSpeed - PreviousSpeed) / Settings.Acceleration) : 0.0;
-			// 大时间步内可能先达到限速再匀速，按两部分积分，不能把整帧都当成加速区间。
-			const double Travel = PreviousSpeed * AcceleratingTime + 0.5 * Settings.Acceleration * AcceleratingTime * AcceleratingTime
-				+ Patrol.Speed * (DeltaTime - AcceleratingTime);
+			double Travel = 0.0;
+			if (!CastlePatrolMovement::Advance(*Path, Settings, Patrol.Distance, DeltaTime, Patrol.Speed, Travel))
+			{
+				++InvalidLadderSettings;
+			}
 			if (Path->Length > UE_DOUBLE_SMALL_NUMBER)
 			{
 				// 必须在版本重绑定完成后记录真实起点，且保留未取模的行进长度。
@@ -113,8 +110,29 @@ void UCastleMassPatrolProcessor::Execute(FMassEntityManager& EntityManager, FMas
 			Transform.SetLocation(Location);
 			Velocity = Direction * Patrol.Speed;
 			Patrol.Leg = Path->FindPatrolLeg(Patrol.Distance);
-			if (Settings.bKeepUpright) { Direction.Z = 0.0; }
-			if (!Direction.IsNearlyZero() && Settings.TurnRate > 0.0f)
+			double LadderEndDistance;
+			FVector LadderFacingDirection;
+			const bool bOnLadder = Path->FindLadderRange(Patrol.Distance, LadderEndDistance, LadderFacingDirection);
+			if (Settings.bKeepUpright || bOnLadder)
+			{
+				FRotator UprightRotation = Transform.Rotator();
+				UprightRotation.Pitch = 0.0f;
+				UprightRotation.Roll = 0.0f;
+				const FVector Facing = bOnLadder ? LadderFacingDirection : FVector(Direction.X, Direction.Y, 0.0);
+				if (!Facing.IsNearlyZero())
+				{
+					FRotator TargetRotation = Facing.Rotation();
+					TargetRotation.Pitch = 0.0f;
+					TargetRotation.Roll = 0.0f;
+					UprightRotation = Settings.TurnRate > 0.0f
+						? FMath::RInterpConstantTo(UprightRotation, TargetRotation, DeltaTime, Settings.TurnRate)
+						: TargetRotation;
+					UprightRotation.Pitch = 0.0f;
+					UprightRotation.Roll = 0.0f;
+				}
+				Transform.SetRotation(UprightRotation.Quaternion());
+			}
+			else if (!Direction.IsNearlyZero() && Settings.TurnRate > 0.0f)
 			{
 				Transform.SetRotation(FMath::RInterpConstantTo(Transform.Rotator(), Direction.Rotation(), DeltaTime, Settings.TurnRate).Quaternion());
 			}
@@ -126,5 +144,9 @@ void UCastleMassPatrolProcessor::Execute(FMassEntityManager& EntityManager, FMas
 		const FString Message = FString::Printf(TEXT("NPC 巡逻：%d 个单位距当前共享路段超过 50 cm，已停止。请将生成器设为沿共享路线生成，或调整路径点覆盖这些单位。"), NewlyBlocked.Load());
 		UE_LOG(LogMoving_Castle, Warning, TEXT("%s"), *Message);
 		if (GEngine) { GEngine->AddOnScreenDebugMessage(2026111101, 8.0f, FColor::Yellow, Message); }
+	}
+	if (InvalidLadderSettings.Load() > 0)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("NPC 巡逻：%d 个单位遇到非法梯子速度倍率；要求有限数且位于 (0.01, 10.0]，单位已停止。"), InvalidLadderSettings.Load());
 	}
 }
