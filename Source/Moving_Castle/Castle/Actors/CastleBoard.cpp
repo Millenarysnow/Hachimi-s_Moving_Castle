@@ -518,21 +518,36 @@ bool ACastleBoard::CanPlaceBuildingInternal(const FIntVector& Coordinate, const 
 		return false;
 	}
 
+	FIntPoint Min, Max;
+	GetBoardExtent(Min, Max);
 	const TArray<FIntVector> Footprint = BuildPlacementFootprint(Coordinate, Descriptor.Level);
 	for (const FIntVector& Cell : Footprint)
 	{
-		if (!IsCoordinateWithinBoard(Cell) || GetBuildingAt(Cell) != nullptr)
+		if (Cell.Z < GridOrigin.Z || Cell.Z >= GridOrigin.Z + GridSize.Z)
 		{
-			OutFailureReason = FText::FromString(TEXT("建筑占用范围超出棋盘，或其中有格子已被占用。"));
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("建筑高度超出棋盘 %d 层限制。"), GridSize.Z));
 			return false;
 		}
+		if (Cell.X < Min.X-MaxOverhangCells || Cell.X > Max.X+MaxOverhangCells
+			|| Cell.Y < Min.Y-MaxOverhangCells || Cell.Y > Max.Y+MaxOverhangCells)
+		{
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("最多伸出棋盘边界 %d 格。"), MaxOverhangCells));
+			return false;
+		}
+		if (GetBuildingAt(Cell) != nullptr)
+		{
+			OutFailureReason = FText::FromString(TEXT("建筑占用范围中有格子已被占用。"));
+			return false;
+		}
+		// 支撑仅约束棋盘内的格；跨界多格卡逐格判断，不能整卡豁免。
+		const bool bInsideXY = Cell.X >= Min.X && Cell.X <= Max.X && Cell.Y >= Min.Y && Cell.Y <= Max.Y;
 		FCastleGroundCell GroundCell;
-		if (Cell.Z == GridOrigin.Z && !TryGetGroundCellAtPlane(Cell, GroundCell))
+		if (bInsideXY && Cell.Z == GridOrigin.Z && !TryGetGroundCellAtPlane(Cell, GroundCell))
 		{
 			OutFailureReason = FText::FromString(TEXT("建筑占用范围中的地面尚未生成。"));
 			return false;
 		}
-		if (Cell.Z > GridOrigin.Z)
+		if (bInsideXY && Cell.Z > GridOrigin.Z)
 		{
 			const FIntVector Support = Cell - FIntVector(0, 0, 1);
 			// 四级卡自带的下层格也能支撑自身上层；其他底面仍必须有实际建筑支撑。
@@ -1065,6 +1080,7 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 			float BestDistanceSquared = TNumericLimits<float>::Max();
 			for (const FIntVector& OccupiedCoordinate : HitBuilding->GetOccupiedCoordinates())
 			{
+				if (GetBuildingAt(OccupiedCoordinate) != HitBuilding) { continue; }
 				const float DistanceSquared = FVector::DistSquared(HitResult.ImpactPoint, GetGridWorldLocation(OccupiedCoordinate));
 				if (DistanceSquared < BestDistanceSquared)
 				{
@@ -1101,7 +1117,7 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 
 void ACastleBoard::BuildGridCursorTarget(const FIntVector& Cell, const FVector& LocalImpactPoint, const FVector& LocalNormal, FCastleGridCursorTarget& OutTarget) const
 {
-	if (!IsCoordinateWithinBoard(Cell))
+	if (!IsCoordinateWithinBoard(Cell) && !IsValid(GetBuildingAt(Cell)))
 	{
 		return;
 	}
@@ -1781,7 +1797,7 @@ bool ACastleBoard::TryResolvePlacementCoordinate(const FCastleGridCursorTarget& 
 {
 	OutFailureReason = FText::GetEmpty();
 	const FIntVector FaceOffset = GetGridFaceOffset(CursorTarget.Face);
-	if (!CursorTarget.bValid || !IsCoordinateWithinBoard(CursorTarget.Cell) || FaceOffset == FIntVector::ZeroValue
+	if (!CursorTarget.bValid || FaceOffset == FIntVector::ZeroValue
 		|| CursorTarget.AdjacentCell != CursorTarget.Cell + FaceOffset)
 	{
 		OutFailureReason = FText::FromString(TEXT("放置失败：当前指向的格面无效，请重新对准棋盘。"));
@@ -1792,7 +1808,7 @@ bool ACastleBoard::TryResolvePlacementCoordinate(const FCastleGridCursorTarget& 
 	{
 		// 地块的顶面支撑首层建筑，落点仍是地块所在格；地块侧面不允许用于建造。
 		FCastleGroundCell GroundCell;
-		if (CursorTarget.Face != ECastleGridFace::Up || !TryGetGroundCellAtPlane(CursorTarget.Cell, GroundCell)
+		if (!IsCoordinateWithinBoard(CursorTarget.Cell) || CursorTarget.Face != ECastleGridFace::Up || !TryGetGroundCellAtPlane(CursorTarget.Cell, GroundCell)
 			|| GetBuildingAt(CursorTarget.Cell) != nullptr)
 		{
 			OutFailureReason = FText::FromString(TEXT("放置失败：指向的地面顶面已不可用，请重新选择。"));

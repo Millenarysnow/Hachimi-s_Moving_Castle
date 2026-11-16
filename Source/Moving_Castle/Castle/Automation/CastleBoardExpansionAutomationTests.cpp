@@ -3,6 +3,8 @@
 #include "Misc/AutomationTest.h"
 #include "CastleGroundGenerator.h"
 #include "CastleBoard.h"
+#include "CastleBuildingTestUtilities.h"
+#include "CastleBackpackComponent.h"
 #include "CastleGroundTileActor.h"
 #include "CastleBoardExpansionTestGenerator.h"
 #include "Components/StaticMeshComponent.h"
@@ -121,6 +123,67 @@ bool FCastleBoardExpansionRejectionTest::RunTest(const FString& Parameters)
   AddExpectedError(TEXT("非法棋盘配置"), EAutomationExpectedErrorFlags::Contains, 1);
   TestFalse(TEXT("非法配置拒绝生成"), Board->GenerateGround(Reason));
  }
+ return true;
+}
+
+/** 从真实建筑射线继续向外建造，并验证混合占格、高度和扩张覆盖。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleBoardOverhangTest, "MovingCastle.Board.OverhangPlacement",
+ EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FCastleBoardOverhangTest::RunTest(const FString& Parameters)
+{
+ const UWorld::InitializationValues Settings = UWorld::InitializationValues().AllowAudioPlayback(false)
+  .CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(false);
+ UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Settings);
+ if (!TestNotNull(TEXT("越界测试世界"), World)) { return false; }
+ GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+ ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
+ CastleBuildingTests::FScopedNativeBuildingModels Models(World);
+ ACastleBoard* Board = World->SpawnActor<ACastleBoard>();
+ Board->GridSize = FIntVector(5,5,8);
+ CastleBuildingTests::ConfigureBoard(Board);
+ FText Reason;
+ if (!TestTrue(TEXT("生成地面"), Board->GenerateGround(Reason))) { return false; }
+ FCastleGroundCell Ground;
+ Board->TryGetGroundCell(FIntVector(4,2,0), Ground);
+ FCastleBuildingDescriptor Card;
+ if (!Board->BuildingDefinitions[0]->CreateDescriptor(1, Ground.Color, Ground.Number, Card, Reason)) { return false; }
+ ACastleBuildingBase* Source = Board->PlaceBuilding(FIntVector(4,2,0), Card, false, Reason);
+ if (!TestNotNull(TEXT("放置边缘来源建筑"), Source) || !CastleBuildingTests::CompletePlacement(Source)) { return false; }
+ const auto ResolveOutward = [Board](ACastleBuildingBase* Building, FCastleGridCursorTarget& Target)
+ {
+  const FVector Center = Building->GetVisualBounds().GetCenter();
+  return Board->TryResolveGridCursorTarget(Center+FVector(Board->CellSize,0,0), Center, Target);
+ };
+ ACastleBuildingBase* Outside[2] = {};
+ for (int32 Step=0; Step<2; ++Step)
+ {
+  FCastleGridCursorTarget Target;
+  if (!TestTrue(TEXT("真实射线接受边缘或越界来源"), ResolveOutward(Source, Target))) { return false; }
+  TestTrue(TEXT("允许外围第 1/2 格"), Board->CanPlaceBuildingAtCursor(Target, Card, Reason));
+  // 使用正式背包入口，证明最终生成和扣牌仍保留建筑面来源。
+  int32 Slot;
+  if (!Board->PrototypeBackpack->TryAddItem(Card, Slot, Reason)) { return false; }
+  Source = Board->PlaceBackpackBuildingAtCursor(Target, Slot, Reason);
+  if (!TestNotNull(TEXT("实际生成越界建筑"), Source) || !CastleBuildingTests::CompletePlacement(Source)) { return false; }
+  Outside[Step] = Source;
+ }
+ FCastleGridCursorTarget Third;
+ TestTrue(TEXT("第三格仍能解析高亮候选"), ResolveOutward(Source, Third));
+ TestFalse(TEXT("第三格拒绝"), Board->CanPlaceBuildingAtCursor(Third, Card, Reason));
+ TestTrue(TEXT("第三格给出距离原因"), Reason.ToString().Contains(TEXT("最多伸出棋盘边界 2 格")));
+ TestFalse(TEXT("外围首层坐标入口没有地面不能放"), Board->CanPlaceBuilding(FIntVector(-1,2,0), Card, Reason));
+ TestFalse(TEXT("棋盘内悬空仍拒绝"), Board->CanPlaceBuilding(FIntVector(3,3,1), Card, Reason));
+ FCastleGridCursorTarget Top;
+ Top.bValid=true; Top.Cell=FIntVector(6,2,0); Top.Face=ECastleGridFace::Up; Top.AdjacentCell=FIntVector(6,2,1);
+ TestTrue(TEXT("外围建筑顶面允许上叠"), Board->CanPlaceBuildingAtCursor(Top, Card, Reason));
+ FCastleBuildingDescriptor Multi;
+ if (!Board->BuildingDefinitions[1]->CreateDescriptor(4, Card.Color, Card.Number, Multi, Reason)) { return false; }
+ Top.Cell=FIntVector(4,2,0); Top.AdjacentCell=FIntVector(4,2,1);
+ TestFalse(TEXT("跨界卡内部缺支撑不能被外围豁免"), Board->CanPlaceBuildingAtCursor(Top, Multi, Reason));
+ const FVector OutsideLocation = Outside[0]->GetActorLocation();
+ TestTrue(TEXT("扩张覆盖越界建筑列"), Board->ExpandBoard(Reason));
+ TestTrue(TEXT("越界建筑下面新增地块"), Board->TryGetGroundCell(FIntVector(5,2,0), Ground));
+ TestTrue(TEXT("扩张不移动建筑"), OutsideLocation.Equals(Outside[0]->GetActorLocation()));
  return true;
 }
 #endif
