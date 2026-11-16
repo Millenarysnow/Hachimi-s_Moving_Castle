@@ -1,6 +1,7 @@
 #include "CastleMassProcessors.h"
 
 #include "CastleMassFragments.h"
+#include "Enemies/CastleMassDeathSplitFragments.h"
 #include "Projectiles/CastleMassHomingProjectileFragments.h"
 #include "Projectiles/CastleMassEnemyProjectileFragments.h"
 #include "Mass/CastleMassPatrolFragments.h"
@@ -40,6 +41,7 @@ void UCastleMassMovementProcessor::ConfigureQueries(const TSharedRef<FMassEntity
 	Query.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FMassVelocityFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassMoveTargetFragment>(EMassFragmentAccess::ReadWrite);
+	Query.AddRequirement<FCastleMassSpawnBurstFragment>(EMassFragmentAccess::None, EMassFragmentPresence::None);
 	Query.AddRequirement<FCastleMassUnitFragment>(EMassFragmentAccess::ReadOnly);
 	Query.AddRequirement<FCastleMassPatrolFragment>(EMassFragmentAccess::ReadOnly, EMassFragmentPresence::Optional);
 	Query.AddConstSharedRequirement<FCastleMassMovementParameters>();
@@ -160,6 +162,7 @@ void UCastleMassAnimationProcessor::ConfigureQueries(const TSharedRef<FMassEntit
 	Query.AddTagRequirement<FCastleMassHumanoidTag>(EMassFragmentPresence::All);
 	Query.AddRequirement<FMassVelocityFragment>(EMassFragmentAccess::ReadOnly);
 	Query.AddRequirement<FCastleMassAnimationFragment>(EMassFragmentAccess::ReadWrite);
+	Query.AddRequirement<FCastleMassAttackAnimationFragment>(EMassFragmentAccess::ReadOnly);
 	Query.AddRequirement<FMassRepresentationAnimationFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddConstSharedRequirement<FCastleMassAnimationParameters>();
 }
@@ -171,15 +174,17 @@ void UCastleMassAnimationProcessor::Execute(FMassEntityManager& EntityManager, F
 		const float DeltaTime = FMath::Max(0.0f, Chunk.GetDeltaTimeSeconds());
 		const auto Velocities = Chunk.GetFragmentView<FMassVelocityFragment>();
 		const auto Animations = Chunk.GetMutableFragmentView<FCastleMassAnimationFragment>();
+		const auto AttackStates = Chunk.GetFragmentView<FCastleMassAttackAnimationFragment>();
 		const auto Representations = Chunk.GetMutableFragmentView<FMassRepresentationAnimationFragment>();
 		const auto& Parameters = Chunk.GetConstSharedFragment<FCastleMassAnimationParameters>();
 		for (FMassExecutionContext::FEntityIterator It = Chunk.CreateEntityIterator(); It; ++It)
 		{
 			FCastleMassAnimationFragment& Animation = Animations[It];
+			const bool bAttacking = AttackStates[It].bInAttackState && Parameters.AttackSequence != INDEX_NONE;
 			const bool bMoving = Velocities[It].Value.SizeSquared() > 1.0;
-			const int32 Sequence = bMoving ? Parameters.MoveSequence : Parameters.IdleSequence;
-			const float Length = FMath::Max(UE_SMALL_NUMBER, bMoving ? Parameters.MoveLength : Parameters.IdleLength);
-			const float PlayRate = bMoving ? Parameters.MovePlayRate : 1.0f;
+			const int32 Sequence = bAttacking ? Parameters.AttackSequence : (bMoving ? Parameters.MoveSequence : Parameters.IdleSequence);
+			const float Length = FMath::Max(UE_SMALL_NUMBER, bAttacking ? Parameters.AttackLength : (bMoving ? Parameters.MoveLength : Parameters.IdleLength));
+			const float PlayRate = bAttacking ? Parameters.AttackPlayRate : (bMoving ? Parameters.MovePlayRate : 1.0f);
 			const bool bChanged = Sequence != Animation.CurrentSequence;
 			Animation.Position = bChanged ? Animation.Phase * Length
 				: FMath::Fmod(Animation.Position + DeltaTime * PlayRate, Length);

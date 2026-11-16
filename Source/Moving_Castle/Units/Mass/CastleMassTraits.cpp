@@ -15,6 +15,7 @@
 #include "Engine/World.h"
 #include "Rendering/SkeletalMeshRenderData.h"
 #include "Materials/MaterialInterface.h"
+#include "Engine/SkeletalMesh.h"
 
 void UCastleMassUnitTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildContext, const UWorld& World) const
 {
@@ -147,6 +148,16 @@ void UCastleMassHumanoidVisualizationTrait::BuildTemplate(FMassEntityTemplateBui
 		Mesh.LocalTransform = MeshOffset;
 		Mesh.bCastShadows = bCastShadows;
 		Mesh.AnimationMinScreenSize = AnimationMinScreenSize;
+		// UE 提供器必须引用自己所驱动的网格；各提供器复用序列顺序和实体变换，骨骼跟随由离线蒙皮保证。
+		for (UAnimSequenceTransformProviderData* AdditionalProvider : AdditionalAnimationProviders)
+		{
+			FMassSkinnedMeshInstanceVisualizationMeshDesc& Attachment = SkinnedMeshInstanceDesc.Meshes.AddDefaulted_GetRef();
+			Attachment.Asset = AdditionalProvider ? AdditionalProvider->GetSkinnedAsset() : nullptr;
+			Attachment.TransformProvider = AdditionalProvider;
+			Attachment.LocalTransform = MeshOffset;
+			Attachment.bCastShadows = bCastShadows;
+			Attachment.AnimationMinScreenSize = AnimationMinScreenSize;
+		}
 	}
 	Super::BuildTemplate(BuildContext, World);
 
@@ -154,16 +165,23 @@ void UCastleMassHumanoidVisualizationTrait::BuildTemplate(FMassEntityTemplateBui
 	BuildContext.RequireFragment<FMassVelocityFragment>();
 	BuildContext.AddFragment<FMassRepresentationAnimationFragment>();
 	BuildContext.AddFragment<FCastleMassAnimationFragment>();
+	BuildContext.AddFragment<FCastleMassAttackAnimationFragment>();
 	FCastleMassAnimationParameters Parameters;
 	Parameters.IdleSequence = IdleSequence;
 	Parameters.MoveSequence = MoveSequence;
+	Parameters.AttackSequence = AttackSequence;
 	Parameters.MovePlayRate = MovePlayRate;
+	Parameters.AttackPlayRate = AttackPlayRate;
 	Parameters.BlendTime = BlendTime;
 	if (AnimationProvider && AnimationProvider->GetSequences().IsValidIndex(IdleSequence)
 		&& AnimationProvider->GetSequences().IsValidIndex(MoveSequence))
 	{
 		Parameters.IdleLength = AnimationProvider->GetSequencePlayLength(IdleSequence);
 		Parameters.MoveLength = AnimationProvider->GetSequencePlayLength(MoveSequence);
+		if (AttackSequence != INDEX_NONE && AnimationProvider->GetSequences().IsValidIndex(AttackSequence))
+		{
+			Parameters.AttackLength = AnimationProvider->GetSequencePlayLength(AttackSequence);
+		}
 	}
 	BuildContext.AddConstSharedFragment(UE::Mass::Utils::GetEntityManagerChecked(World).GetOrCreateConstSharedFragment(Parameters));
 }
@@ -176,6 +194,8 @@ bool UCastleMassHumanoidVisualizationTrait::ValidateTemplate(const FMassEntityTe
 		&& AnimationProvider->GetSequences().IsValidIndex(IdleSequence)
 		&& AnimationProvider->GetSequences().IsValidIndex(MoveSequence)
 		&& FMath::IsFinite(MovePlayRate) && MovePlayRate > 0.0f
+		&& (AttackSequence == INDEX_NONE || AnimationProvider->GetSequences().IsValidIndex(AttackSequence))
+		&& FMath::IsFinite(AttackPlayRate) && AttackPlayRate > 0.0f && AttackPlayRate <= 10.0f
 		&& FMath::IsFinite(BlendTime) && BlendTime >= 0.0f && !MeshOffset.ContainsNaN()
 		&& FMath::IsFinite(AnimationMinScreenSize);
 	for (int32 Slot = 0; Slot < MaterialOverrides.Num(); ++Slot)
@@ -190,7 +210,7 @@ bool UCastleMassHumanoidVisualizationTrait::ValidateTemplate(const FMassEntityTe
 	{
 		const USkinnedAsset* Asset = AnimationProvider->GetSkinnedAsset();
 		const FSkeletalMeshRenderData* RenderData = Asset->GetResourceForRendering();
-		if (RenderData && !RenderData->HasUnifiedBoneMap())
+		if (!RenderData || !RenderData->HasUnifiedBoneMap())
 		{
 			UE_LOG(LogMoving_Castle, Error, TEXT("Mass 骨骼网格 %s 需要开启 Optimize for Instancing 并重新构建。"), *Asset->GetPathName());
 			bValid = false;
@@ -201,6 +221,63 @@ bool UCastleMassHumanoidVisualizationTrait::ValidateTemplate(const FMassEntityTe
 			{
 				bValid = false;
 				break;
+			}
+		}
+		const USkeletalMesh* MainMesh = Cast<USkeletalMesh>(Asset);
+		if (!MainMesh)
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("Mass 显示配置 %s 的主网格 %s 必须是骨骼网格。"), *GetPathName(), *GetPathNameSafe(Asset));
+			bValid = false;
+		}
+		// 空覆盖数组明确保留原材质，但原网格的材质槽仍必须有效，不能显示默认棋盘格。
+		if (MainMesh && MaterialOverrides.IsEmpty())
+		{
+			for (const FSkeletalMaterial& Material : MainMesh->GetMaterials())
+			{
+				if (!IsValid(Material.MaterialInterface))
+				{
+					UE_LOG(LogMoving_Castle, Error, TEXT("Mass 主网格 %s 的材质槽 %s 引用为空。"), *MainMesh->GetPathName(), *Material.MaterialSlotName.ToString());
+					bValid = false;
+				}
+			}
+		}
+		for (UAnimSequenceTransformProviderData* AdditionalProvider : AdditionalAnimationProviders)
+		{
+			USkeletalMesh* AdditionalMesh = AdditionalProvider ? Cast<USkeletalMesh>(AdditionalProvider->GetSkinnedAsset()) : nullptr;
+			bool bMeshValid = MainMesh && IsValid(AdditionalProvider) && AdditionalProvider->IsEnabled()
+				&& IsValid(AdditionalMesh) && AdditionalMesh->GetSkeleton() == MainMesh->GetSkeleton();
+			const FSkeletalMeshRenderData* AdditionalRenderData = AdditionalMesh ? AdditionalMesh->GetResourceForRendering() : nullptr;
+			bMeshValid = bMeshValid && AdditionalRenderData && AdditionalRenderData->HasUnifiedBoneMap();
+			if (bMeshValid)
+			{
+				// Mass 向同一实体所有网格提交相同序列索引和时间；不一致会让武器与手部错位。
+				const auto& MainSequences = AnimationProvider->GetSequences();
+				const auto& ExtraSequences = AdditionalProvider->GetSequences();
+				bMeshValid = MainSequences.Num() == ExtraSequences.Num();
+				for (int32 Sequence = 0; bMeshValid && Sequence < MainSequences.Num(); ++Sequence)
+				{
+					bMeshValid = MainSequences[Sequence].Sequence == ExtraSequences[Sequence].Sequence
+						&& MainSequences[Sequence].PlayRate == ExtraSequences[Sequence].PlayRate
+						&& MainSequences[Sequence].Position == ExtraSequences[Sequence].Position;
+				}
+				const FReferenceSkeleton& MainBones = MainMesh->GetRefSkeleton();
+				const FReferenceSkeleton& ExtraBones = AdditionalMesh->GetRefSkeleton();
+				bMeshValid = bMeshValid && MainBones.GetNum() == ExtraBones.GetNum();
+				for (int32 Bone = 0; bMeshValid && Bone < MainBones.GetNum(); ++Bone)
+				{
+					bMeshValid = MainBones.GetBoneName(Bone) == ExtraBones.GetBoneName(Bone)
+						&& MainBones.GetParentIndex(Bone) == ExtraBones.GetParentIndex(Bone)
+						&& MainBones.GetRefBonePose()[Bone].Equals(ExtraBones.GetRefBonePose()[Bone]);
+				}
+				for (const FSkeletalMaterial& Material : AdditionalMesh->GetMaterials())
+				{
+					bMeshValid = bMeshValid && IsValid(Material.MaterialInterface);
+				}
+			}
+			if (!bMeshValid)
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("Mass 附属提供器 %s（网格 %s）与主网格 %s 不兼容：需相同参考骨架与序列、有效材质和 Optimize for Instancing。"), *GetPathNameSafe(AdditionalProvider), *GetPathNameSafe(AdditionalMesh), *GetPathNameSafe(MainMesh));
+				bValid = false;
 			}
 		}
 	}

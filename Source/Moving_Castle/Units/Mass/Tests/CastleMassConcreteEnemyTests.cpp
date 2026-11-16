@@ -21,6 +21,11 @@
 #include "Enemies/CastleMassDeathSplitProcessor.h"
 #include "Enemies/CastleMassDeathSplitTrait.h"
 #include "Enemies/CastleMassDeathSplitFragments.h"
+#include "Enemies/CastleMassEnemyLaserAttackProcessor.h"
+#include "Enemies/CastleMassEnemyLaserAttackTrait.h"
+#include "Enemies/CastleMassEnemyLaserAttackFragments.h"
+#include "Enemies/CastleMassEnemyLaserBeamSubsystem.h"
+#include "Enemies/CastleMassEnemyLaserVisualizationProcessor.h"
 #include "Projectiles/CastleMassEnemyProjectileProcessor.h"
 #include "Projectiles/CastleMassEnemyProjectileTrait.h"
 #include "Projectiles/CastleMassEnemyProjectileFragments.h"
@@ -238,11 +243,19 @@ bool FCastleDeathSplitTest::RunTest(const FString& Parameters)
 	FWorld Scope;
 	auto* Pup = Config<UCastleMassEnemyTrait>();
 	CastChecked<UCastleMassEnemyTrait>(Pup->GetMutableConfig().FindMutableTrait(UCastleMassEnemyTrait::StaticClass()))->MaxHealth = 20;
+	auto* PupLaser = NewObject<UCastleMassEnemyLaserAttackTrait>(Pup);
+	PupLaser->BeamMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+	PupLaser->BeamMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/MovingCastle/Mass/M_MassEnemyTint"));
+	Pup->GetMutableConfig().AddTrait(*PupLaser);
 	auto* Giant = Config<UCastleMassEnemyTrait>();
 	CastChecked<UCastleMassEnemyTrait>(Giant->GetMutableConfig().FindMutableTrait(UCastleMassEnemyTrait::StaticClass()))->MaxHealth = 120;
 	Giant->GetMutableConfig().AddTrait(*NewObject<UCastleMassMeleeAttackTrait>(Giant));
 	auto* Split = NewObject<UCastleMassDeathSplitTrait>(Giant);
 	Split->ChildConfiguration = Pup;
+	Split->SpawnCount = 6;
+	Split->SpawnSpreadRadius = 180.0f;
+	Split->BurstDuration = 0.35f;
+	Split->BurstArcHeight = 60.0f;
 	Giant->GetMutableConfig().AddTrait(*Split);
 	TArray<FCastleMassUnitHandle> Enemies;
 	FText Reason;
@@ -253,14 +266,34 @@ bool FCastleDeathSplitTest::RunTest(const FString& Parameters)
 	Step<UCastleMassDeathSplitProcessor>(Scope, 0);
 	Step<UCastleMassDeathSplitProcessor>(Scope, 0);
 	auto Children = Living<FCastleMassEnemyTag>(Scope);
-	if (!TestEqual(TEXT("只分裂一次且恰好三只幼骸"), Children.Num(), 3)) { return false; }
+	if (!TestEqual(TEXT("只分裂一次且恰好六只幼骸"), Children.Num(), 6)) { return false; }
+	Step<UCastleMassSpawnBurstProcessor>(Scope, 0.175f);
 	for (const auto& Child : Children)
 	{
+		const auto BurstBefore = Scope.Manager().GetFragmentDataChecked<FCastleMassSpawnBurstFragment>(Child.Entity);
+		const FVector Before = Scope.Manager().GetFragmentDataChecked<FTransformFragment>(Child.Entity).GetTransform().GetLocation();
+		Scope.Manager().GetFragmentDataChecked<FCastleMassMoveTargetFragment>(Child.Entity).bHasTarget = true;
+		Scope.Manager().GetFragmentDataChecked<FCastleMassMoveTargetFragment>(Child.Entity).Target = FVector(9999,0,0);
+		Step<UCastleMassMovementProcessor>(Scope,0.1f);
+		Step<UCastleMassEnemyLaserAttackProcessor>(Scope,0.1f);
+		TestTrue(TEXT("爆散期间普通移动不抢占位置"), Scope.Manager().GetFragmentDataChecked<FTransformFragment>(Child.Entity).GetTransform().GetLocation().Equals(Before));
+		TestEqual(TEXT("爆散期间激光不结算伤害"), Scope.Manager().GetFragmentDataChecked<FCastleMassEnemyLaserAttackFragment>(Child.Entity).AttackCount, 0);
+		TestTrue(TEXT("爆散期间激光不改写移动目标"), Scope.Manager().GetFragmentDataChecked<FCastleMassMoveTargetFragment>(Child.Entity).Target.Equals(FVector(9999,0,0)));
+		TestTrue(TEXT("爆散目标仍为原圆周落点"), Scope.Manager().GetFragmentDataChecked<FCastleMassSpawnBurstFragment>(Child.Entity).Target.Equals(BurstBefore.Target));
 		FCastleMassUnitSnapshot Snapshot;
 		Scope.Units().GetUnitSnapshot(Child, Snapshot);
-		TestTrue(TEXT("幼骸在死亡位置周围 80 cm 圆周"), FMath::IsNearlyEqual(FVector::Dist2D(Snapshot.Transform.GetLocation(), FVector(100, 0, 0)), 80.0));
+		TestTrue(TEXT("半程爆散已达到最大弧高"), FMath::IsNearlyEqual(Snapshot.Transform.GetLocation().Z, 60.0, 0.01));
+		TestTrue(TEXT("半程水平位移到半径一半"), FMath::IsNearlyEqual(FVector::Dist2D(Snapshot.Transform.GetLocation(), FVector(100, 0, 0)), 90.0, 0.01));
 		TestEqual(TEXT("幼骸继承自己的生命"), Snapshot.Health, 20.0f);
 		TestNull(TEXT("幼骸没有递归分裂状态"), Scope.Manager().GetFragmentDataPtr<FCastleMassDeathSplitFragment>(Child.Entity));
+	}
+	Step<UCastleMassSpawnBurstProcessor>(Scope, 0.175f);
+	for (const auto& Child : Children)
+	{
+		const FVector Location = Scope.Manager().GetFragmentDataChecked<FTransformFragment>(Child.Entity).GetTransform().GetLocation();
+		TestTrue(TEXT("爆散结束精确到达 180 cm 水平圆环"), FMath::IsNearlyEqual(FVector::Dist2D(Location, FVector(100, 0, 0)), 180.0, 0.01));
+		TestEqual(TEXT("爆散落地回到母体高度"), Location.Z, 0.0);
+		TestNull(TEXT("落地后移除位移独占状态"), Scope.Manager().GetFragmentDataPtr<FCastleMassSpawnBurstFragment>(Child.Entity));
 	}
 	Step<UCastleMassLifetimeProcessor>(Scope, 0);
 	TestFalse(TEXT("巨骸在分裂之后被生命周期回收"), Scope.Units().IsUnitValid(Enemies[0]));
@@ -272,7 +305,135 @@ bool FCastleDeathSplitTest::RunTest(const FString& Parameters)
 	if (!Scope.Units().SpawnUnits(Giant, {FTransform::Identity}, Enemies, Reason)) { return false; }
 	Scope.Units().ApplyImmediateDamageToEnemy(Enemies[0], 120);
 	Step<UCastleMassDeathSplitProcessor>(Scope, 0);
-	TestEqual(TEXT("普通伤害死亡同样生成三只"), Living<FCastleMassEnemyTag>(Scope).Num(), 3);
+	TestEqual(TEXT("普通伤害死亡同样生成六只"), Living<FCastleMassEnemyTag>(Scope).Num(), 6);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleAttackAnimationTest, "MovingCastle.Mass.OptionalAttackAnimation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleAttackAnimationTest::RunTest(const FString& Parameters)
+{
+	using namespace CastleMassConcreteTests;
+	FWorld Scope;
+	// 复用既有测试骨架，令攻击和普通移动使用不同索引，隔离正式怪物资产装配的影响。
+	for (bool bHasAttackSequence : {false, true})
+	{
+		auto* Asset = Config<UCastleMassEnemyTrait>();
+		Asset->GetMutableConfig().AddTrait(*NewObject<UMassLODCollectorTrait>(Asset));
+		auto* Visual = NewObject<UCastleMassHumanoidVisualizationTrait>(Asset);
+		Visual->AnimationProvider = LoadObject<UAnimSequenceTransformProviderData>(nullptr, TEXT("/Game/MovingCastle/Mass/ATP_MassHumanoid"));
+		Visual->MoveSequence = 0;
+		Visual->AttackSequence = bHasAttackSequence ? 1 : INDEX_NONE;
+		Visual->AttackPlayRate = 1.5f;
+		Asset->GetMutableConfig().AddTrait(*Visual);
+		TArray<FCastleMassUnitHandle> Handles;
+		FText Reason;
+		if (!Scope.Units().SpawnUnits(Asset, {FTransform::Identity}, Handles, Reason)) { AddError(Reason.ToString()); return false; }
+		const auto Entity = Handles[0].Entity;
+		Scope.Manager().GetFragmentDataChecked<FMassVelocityFragment>(Entity).Value = FVector(100,0,0);
+		Scope.Manager().GetFragmentDataChecked<FCastleMassAttackAnimationFragment>(Entity).bInAttackState = true;
+		Step<UCastleMassAnimationProcessor>(Scope, 0.1f);
+		const auto& Data = Scope.Manager().GetFragmentDataChecked<FMassRepresentationAnimationFragment>(Entity).AnimData;
+		TestEqual(TEXT("可选攻击槽优先于速度，无攻击槽仍走普通移动"), Data.SequenceIndex, bHasAttackSequence ? 1 : 0);
+		if (bHasAttackSequence) { TestEqual(TEXT("攻击倍率提交到表示"), Data.PlayRate, 1.5f); }
+		TestTrue(TEXT("攻击动作循环播放"), Data.LoopMode == EAnimSequenceTrackLoopMode::Loop);
+		Scope.Manager().GetFragmentDataChecked<FCastleMassAttackAnimationFragment>(Entity).bInAttackState = false;
+		Step<UCastleMassAnimationProcessor>(Scope, 0.1f);
+		TestEqual(TEXT("退出攻击态恢复移动"), Data.SequenceIndex, 0);
+		Scope.Manager().GetFragmentDataChecked<FMassVelocityFragment>(Entity).Value = FVector::ZeroVector;
+		Step<UCastleMassAnimationProcessor>(Scope, 0.1f);
+		TestEqual(TEXT("停止后恢复待机"), Data.SequenceIndex, Visual->IdleSequence);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleMonsterInvalidConfigurationTest, "MovingCastle.Mass.MonsterInvalidConfigurations",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleMonsterInvalidConfigurationTest::RunTest(const FString& Parameters)
+{
+	using namespace CastleMassConcreteTests;
+	FWorld Scope;
+	// 配置错误必须在模板校验时明确拒绝；每个案例使用独立配置，避免模板缓存影响结论。
+	AddExpectedError(TEXT("trait-specific validation failed"), EAutomationExpectedErrorFlags::Contains, 6);
+	AddExpectedError(TEXT("Mass Entity Template validation:"), EAutomationExpectedErrorFlags::Contains, 6);
+	AddExpectedError(TEXT("死亡分裂配置无效"), EAutomationExpectedErrorFlags::Contains, 4);
+	for (int32 Case = 0; Case < 4; ++Case)
+	{
+		auto* Asset = Config<UCastleMassEnemyTrait>();
+		auto* Split = NewObject<UCastleMassDeathSplitTrait>(Asset);
+		Split->ChildConfiguration = Config<UCastleMassEnemyTrait>();
+		if (Case == 0) { Split->SpawnCount = 65; }
+		if (Case == 1) { Split->SpawnSpreadRadius = 0; }
+		if (Case == 2) { Split->BurstDuration = 0; }
+		if (Case == 3) { Split->BurstArcHeight = -1; }
+		Asset->GetMutableConfig().AddTrait(*Split);
+		TestFalse(TEXT("非法圆环或爆散参数拒绝模板"), Asset->GetMutableConfig().ValidateEntityTemplate(*Scope.World));
+	}
+	AddExpectedError(TEXT("敌方激光配置无效"), EAutomationExpectedErrorFlags::Contains, 1);
+	auto* LaserAsset = Config<UCastleMassEnemyTrait>();
+	LaserAsset->GetMutableConfig().AddTrait(*NewObject<UCastleMassEnemyLaserAttackTrait>(LaserAsset));
+	TestFalse(TEXT("缺激光网格与材质明确拒绝"), LaserAsset->GetMutableConfig().ValidateEntityTemplate(*Scope.World));
+	AddExpectedError(TEXT("Mass 人形动画配置无效"), EAutomationExpectedErrorFlags::Contains, 1);
+	auto* VisualAsset = Config<UCastleMassEnemyTrait>();
+	VisualAsset->GetMutableConfig().AddTrait(*NewObject<UMassLODCollectorTrait>(VisualAsset));
+	auto* Visual = NewObject<UCastleMassHumanoidVisualizationTrait>(VisualAsset);
+	Visual->AnimationProvider = LoadObject<UAnimSequenceTransformProviderData>(nullptr,TEXT("/Game/MovingCastle/Mass/ATP_MassHumanoid"));
+	Visual->AttackSequence = 999;
+	VisualAsset->GetMutableConfig().AddTrait(*Visual);
+	TestFalse(TEXT("越界攻击序列明确拒绝"), VisualAsset->GetMutableConfig().ValidateEntityTemplate(*Scope.World));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleEnemyLaserTest, "MovingCastle.Mass.EnemyLaserShieldAndCleanup",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleEnemyLaserTest::RunTest(const FString& Parameters)
+{
+	using namespace CastleMassConcreteTests;
+	FWorld Scope;
+	auto* Asset = Config<UCastleMassEnemyTrait>();
+	auto* Laser = NewObject<UCastleMassEnemyLaserAttackTrait>(Asset);
+	Laser->BeamMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+	Laser->BeamMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/MovingCastle/Mass/M_MassEnemyTint"));
+	if (!TestNotNull(TEXT("测试光束网格可用"), Laser->BeamMesh.Get()) || !TestNotNull(TEXT("测试光束材质可用"), Laser->BeamMaterial.Get())) { return false; }
+	Asset->GetMutableConfig().AddTrait(*Laser);
+	TArray<FCastleMassUnitHandle> Enemies;
+	FText Reason;
+	if (!Scope.Units().SpawnUnits(Asset, {FTransform(FVector(600.0f, 0.0f, 0.0f))}, Enemies, Reason)) { AddError(Reason.ToString()); return false; }
+	const uint64 ShieldId = Scope.Shields().UpsertActiveShield(Scope.Tower, FVector::ZeroVector, 1500.0f, 3, 7.0f);
+	Step<UCastleMassEnemyLaserAttackProcessor>(Scope, 0.0f);
+	Step<UCastleMassEnemyLaserVisualizationProcessor>(Scope, 0.0f);
+	auto* State = Scope.Manager().GetFragmentDataPtr<FCastleMassEnemyLaserAttackFragment>(Enemies[0].Entity);
+	TestTrue(TEXT("进入射程后进入攻击态"), State && State->bInAttackRange);
+	int64 Blocks = 0;
+	TestTrue(TEXT("首次进入射程立即扣除护盾抵挡次数"), Scope.Shields().GetShieldRemainingBlocks(Scope.Tower, Blocks));
+	TestEqual(TEXT("首次激光已立即结算"), Blocks, int64(2));
+	TestEqual(TEXT("光束实例显示"), Scope.World->GetSubsystem<UCastleMassEnemyLaserBeamSubsystem>()->GetActiveBeamCount(), 1);
+	Step<UCastleMassEnemyLaserAttackProcessor>(Scope, 0.5f);
+	TestTrue(TEXT("间隔未到护盾仍激活"), Scope.Shields().GetShieldRemainingBlocks(Scope.Tower, Blocks));
+	TestEqual(TEXT("半间隔后剩余次数不变"), Blocks, int64(2));
+	Step<UCastleMassEnemyLaserAttackProcessor>(Scope, 0.5f);
+	Scope.Shields().GetShieldRemainingBlocks(Scope.Tower, Blocks);
+	TestEqual(TEXT("达到一秒间隔后第二次结算"), Blocks, int64(1));
+	TestTrue(TEXT("护盾激活 ID 有效"), ShieldId != 0);
+	TestTrue(TEXT("死亡伤害成功"), Scope.Units().ApplyImmediateDamageToEnemy(Enemies[0], 1000.0f));
+	// 伤害发生在 Movement 之后时，显示收尾仍须在同帧清掉光束。
+	Step<UCastleMassEnemyLaserVisualizationProcessor>(Scope, 0.0f);
+	TestEqual(TEXT("幼骸死亡当帧移除光束实例"), Scope.World->GetSubsystem<UCastleMassEnemyLaserBeamSubsystem>()->GetActiveBeamCount(), 0);
+	Scope.Shields().DeactivateShield(Scope.Tower);
+	if (!Scope.Units().SpawnUnits(Asset, {FTransform(FVector(600, 0, 0))}, Enemies, Reason)) { AddError(Reason.ToString()); return false; }
+	Step<UCastleMassEnemyLaserAttackProcessor>(Scope, 0.0f);
+	Step<UCastleMassEnemyLaserVisualizationProcessor>(Scope, 0.0f);
+	TestEqual(TEXT("无盾时首击主塔"), Scope.Tower->CurrentHealth, 995.0f);
+	Scope.Manager().DestroyEntity(Enemies[0].Entity);
+	TestEqual(TEXT("直接销毁实体 Observer 立即回收最后一束"), Scope.World->GetSubsystem<UCastleMassEnemyLaserBeamSubsystem>()->GetActiveBeamCount(), 0);
+	if (!Scope.Units().SpawnUnits(Asset, {FTransform(FVector(600, 0, 0))}, Enemies, Reason)) { return false; }
+	Scope.Shields().UpsertActiveShield(Scope.Tower, FVector::ZeroVector, 1500, 1, 200);
+	Step<UCastleMassEnemyLaserAttackProcessor>(Scope, 0.0f);
+	Step<UCastleMassEnemyLaserVisualizationProcessor>(Scope, 0.0f);
+	TestEqual(TEXT("致死反伤当帧无光束"), Scope.World->GetSubsystem<UCastleMassEnemyLaserBeamSubsystem>()->GetActiveBeamCount(), 0);
 	return true;
 }
 
@@ -384,11 +545,12 @@ bool FCastleConcreteEnemyAssetTest::RunTest(const FString& Parameters)
 	const float Healths[] = {120, 20, 55, 12};
 	const float Speeds[] = {140, 300, 240, 420};
 	const float Radii[] = {55, 28, 38, 22};
-	const float Scales[] = {1.5f, 0.75f, 1.1f, 0.6f};
-	const FLinearColor ExpectedColors[] = {{0.85f, 0.18f, 0.05f}, {1, 0.55f, 0.08f}, {0.12f, 0.8f, 0.45f}, {0.38f, 0.15f, 0.9f}};
-	const float Damages[] = {40, 8, 15, 4};
+	const float Scales[] = {1.35f, 0.65f, 1.1f, 0.6f};
+	const TCHAR* MeshNames[] = {TEXT("BeholderSK"), TEXT("BeholderSK"), TEXT("FlyingDemonSK"), TEXT("SpecterSK")};
+	const TCHAR* AttackNames[] = {TEXT("Beholder_Attack01Anim"), TEXT("Beholder_Attack02RPTAnim"), TEXT("FlyingDemon_Attack01Anim"), TEXT("Specter_Attack01Anim")};
+	const float Damages[] = {40, 5, 15, 4};
 	const float Intervals[] = {2, 1, 1.25f, 0.8f};
-	const float Ranges[] = {180, 140, 2200, 130};
+	const float Ranges[] = {180, 800, 2200, 130};
 	auto* Base = LoadObject<UMassEntityConfigAsset>(nullptr, TEXT("/Game/MovingCastle/Mass/DA_MassEnemyBase"));
 	for (int32 Index = 0; Index < 4; ++Index)
 	{
@@ -403,13 +565,24 @@ bool FCastleConcreteEnemyAssetTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("正式兵种半径"), Unit->Radius, Radii[Index]);
 		TestTrue(TEXT("正式兵种模型比例"), Visual->MeshOffset.GetScale3D().Equals(FVector(Scales[Index])));
 		const auto* Mesh = CastChecked<USkeletalMesh>(Visual->AnimationProvider->GetSkinnedAsset());
+		TestEqual(TEXT("使用指定正式怪物网格"), Mesh->GetName(), FString(MeshNames[Index]));
+		TestTrue(TEXT("网格朝向转换为实体 +X"), Visual->MeshOffset.Rotator().Equals(FRotator(0,-90,0),0.01f));
+		if (!TestTrue(TEXT("攻击序列索引有效"), Visual->AnimationProvider->GetSequences().IsValidIndex(Visual->AttackSequence))) { return false; }
+		TestEqual(TEXT("攻击动作使用指南指定序列"), Visual->AnimationProvider->GetSequences()[Visual->AttackSequence].Sequence->GetName(), FString(AttackNames[Index]));
 		if (!TestEqual(TEXT("完整覆盖网格所有材质槽"), Visual->MaterialOverrides.Num(), Mesh->GetMaterials().Num()) || Visual->MaterialOverrides.IsEmpty()) { return false; }
 		for (const auto& Material : Visual->MaterialOverrides) { TestNotNull(TEXT("材质引用有效"), Material.Get()); }
 		Colors.Add(Visual->MaterialOverrides[0]);
-		FLinearColor ActualColor;
-		TestTrue(TEXT("颜色参数存在"), Visual->MaterialOverrides[0]->GetVectorParameterValue(FMaterialParameterInfo(TEXT("EnemyColor")), ActualColor));
-		TestTrue(TEXT("颜色符合正式配置"), ActualColor.Equals(ExpectedColors[Index]));
-		if (Index == 2)
+		if (Index == 1)
+		{
+			const auto* Attack = CastChecked<UCastleMassEnemyLaserAttackTrait>(Asset->FindTrait(UCastleMassEnemyLaserAttackTrait::StaticClass()));
+			TestEqual(TEXT("激光伤害"), Attack->AttackDamage, Damages[Index]);
+			TestEqual(TEXT("激光间隔"), Attack->AttackInterval, Intervals[Index]);
+			TestEqual(TEXT("激光射程"), Attack->AttackRange, Ranges[Index]);
+			TestNotNull(TEXT("光束网格"), Attack->BeamMesh.Get());
+			TestNotNull(TEXT("发光材质"), Attack->BeamMaterial.Get());
+			TestNull(TEXT("激光兵不装配近战"), Asset->FindTrait(UCastleMassMeleeAttackTrait::StaticClass()));
+		}
+		else if (Index == 2)
 		{
 			const auto* Attack = CastChecked<UCastleMassEnemyRangedAttackTrait>(Asset->FindTrait(UCastleMassEnemyRangedAttackTrait::StaticClass()));
 			TestEqual(TEXT("远程伤害"), Attack->AttackDamage, Damages[Index]);
@@ -427,12 +600,12 @@ bool FCastleConcreteEnemyAssetTest::RunTest(const FString& Parameters)
 		TArray<FCastleMassUnitHandle> Handles;
 		FText Reason;
 		TestTrue(TEXT("正式资产通过模板校验并可生成"), Scope.Units().SpawnUnits(Asset, {FTransform(FVector(1000, Index * 200, 0))}, Handles, Reason));
-		if (TestEqual(TEXT("构建出的骨骼批次描述有效"), Visual->SkinnedMeshInstanceDesc.Meshes.Num(), 1))
+		if (TestEqual(TEXT("Specter 包含主体与剑两份骨骼描述"), Visual->SkinnedMeshInstanceDesc.Meshes.Num(), Index == 3 ? 2 : 1))
 		{
 			TestTrue(TEXT("Trait 把覆盖传递到引擎批次描述"), Visual->SkinnedMeshInstanceDesc.Meshes[0].MaterialOverrides == Visual->MaterialOverrides);
 		}
 	}
-	TestEqual(TEXT("四色兵种材质互不相同"), Colors.Num(), 4);
+	TestEqual(TEXT("巨骸幼骸异色，其余保留原包材质"), Colors.Num(), 3);
 	auto* Pup = LoadObject<UMassEntityConfigAsset>(nullptr, TEXT("/Game/MovingCastle/Mass/DA_MassEnemy_LavaPup"));
 	TestNull(TEXT("正式幼骸不再分裂"), Pup->FindTrait(UCastleMassDeathSplitTrait::StaticClass()));
 	auto* Projectile = LoadObject<UMassEntityConfigAsset>(nullptr, TEXT("/Game/MovingCastle/Mass/DA_MassEnemyMiasmaProjectile"));

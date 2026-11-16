@@ -3,6 +3,7 @@
 #include "CastleMainTowerComponent.h"
 #include "CastleMassEnemyRangedAttackFragments.h"
 #include "CastleMassFragments.h"
+#include "CastleMassDeathSplitFragments.h"
 #include "CastleMassProcessors.h"
 #include "CastleMassUnitSubsystem.h"
 #include "Engine/World.h"
@@ -27,10 +28,12 @@ void UCastleMassEnemyRangedAttackProcessor::ConfigureQueries(const TSharedRef<FM
 {
 	Query.AddTagRequirement<FCastleMassEnemyTag>(EMassFragmentPresence::All);
 	Query.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
+	Query.AddRequirement<FCastleMassSpawnBurstFragment>(EMassFragmentAccess::None, EMassFragmentPresence::None);
 	Query.AddRequirement<FMassVelocityFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassMoveTargetFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassUnitFragment>(EMassFragmentAccess::ReadOnly);
 	Query.AddRequirement<FCastleMassEnemyRangedAttackFragment>(EMassFragmentAccess::ReadWrite);
+	Query.AddRequirement<FCastleMassAttackAnimationFragment>(EMassFragmentAccess::ReadWrite, EMassFragmentPresence::Optional);
 }
 
 void UCastleMassEnemyRangedAttackProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
@@ -45,6 +48,7 @@ void UCastleMassEnemyRangedAttackProcessor::Execute(FMassEntityManager& EntityMa
 		const auto Velocities = Chunk.GetMutableFragmentView<FMassVelocityFragment>();
 		const auto Targets = Chunk.GetMutableFragmentView<FCastleMassMoveTargetFragment>();
 		const auto Attacks = Chunk.GetMutableFragmentView<FCastleMassEnemyRangedAttackFragment>();
+		const auto Animations = Chunk.GetMutableFragmentView<FCastleMassAttackAnimationFragment>();
 		for (FMassExecutionContext::FEntityIterator It = Chunk.CreateEntityIterator(); It; ++It)
 		{
 			if (Units[It].Health <= 0.0f) { continue; }
@@ -64,11 +68,13 @@ void UCastleMassEnemyRangedAttackProcessor::Execute(FMassEntityManager& EntityMa
 				Attack.bInAttackRange = false;
 				Targets[It] = FCastleMassMoveTargetFragment();
 				Velocities[It].Value = FVector::ZeroVector;
+				if (!Animations.IsEmpty()) { Animations[It].bInAttackState = false; }
 				continue;
 			}
 			Attack.bInAttackRange = FVector::DistSquared(Origin, TargetLocation) <= FMath::Square(static_cast<double>(Attack.AttackRange));
 			if (!Attack.bInAttackRange)
 			{
+				if (!Animations.IsEmpty()) { Animations[It].bInAttackState = false; }
 				Targets[It].Target = TargetLocation;
 				Targets[It].DesiredVelocity = FVector::ZeroVector;
 				Targets[It].bHasTarget = true;
@@ -76,6 +82,7 @@ void UCastleMassEnemyRangedAttackProcessor::Execute(FMassEntityManager& EntityMa
 			}
 			Targets[It] = FCastleMassMoveTargetFragment();
 			Velocities[It].Value = FVector::ZeroVector;
+			if (!Animations.IsEmpty()) { Animations[It].bInAttackState = true; }
 			Attack.AttackCooldown = FMath::Max(0.0f, Attack.AttackCooldown - Chunk.GetDeltaTimeSeconds());
 			if (Attack.AttackCooldown > 0.0f) { continue; }
 			FCastleMassEnemyProjectileSpawn Launch;

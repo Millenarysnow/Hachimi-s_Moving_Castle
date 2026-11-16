@@ -6,9 +6,13 @@
 #include "CastleMassFragments.h"
 #include "CastleMassTraits.h"
 #include "CastleMassUnitSubsystem.h"
+#include "Animation/AnimSequenceTransformProviderData.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Components/InstancedSkinnedMeshComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
+#include "Enemies/CastleMassEnemyLaserAttackFragments.h"
+#include "Enemies/CastleMassEnemyLaserBeamSubsystem.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -27,7 +31,7 @@
 
 namespace CastleConcreteRuntimeTests
 {
-	/** 在已有棋盘的 TestMap1 中验收控制台、四色骨骼批次和反伤分裂，不手工调用 Processor。 */
+	/** 在已有棋盘的 TestMap1 中验收控制台、怪物主体/剑的真实动画批次和反伤分裂，不手工调用 Processor。 */
 	class FConcreteEnemiesCommand : public IAutomationLatentCommand
 	{
 	public:
@@ -87,14 +91,32 @@ namespace CastleConcreteRuntimeTests
 			if (Stage == 1)
 			{
 				TSet<UMaterialInterface*> RenderedColors;
+				int32 SpecterBodies = 0, SpecterSwords = 0;
 				for (TObjectIterator<UInstancedSkinnedMeshComponent> It; It; ++It)
 				{
 					if (It->GetWorld() != World || It->GetInstanceCount() == 0 || !Colors.Contains(It->GetMaterial(0))) { continue; }
-					Test->TestNotNull(TEXT("四色批次已建立真实渲染代理"), It->GetSceneProxy());
-					Test->TestTrue(TEXT("两个可见材质槽均使用颜色覆盖"), It->GetMaterial(0) == It->GetMaterial(1));
+					Test->TestNotNull(TEXT("怪物批次已建立真实渲染代理"), It->GetSceneProxy());
 					RenderedColors.Add(It->GetMaterial(0));
+					const FString MeshName = It->GetSkinnedAsset()->GetName();
+					if (MeshName == TEXT("SpecterSK") || MeshName == TEXT("SKM_SpecterSword"))
+					{
+						// 不能只验证剑存在：实际提供器必须驱动自身网格，且每个实例已收到移动动画轨道。
+						const auto* Provider = Cast<UAnimSequenceTransformProviderDataInstance>(It->GetTransformProvider());
+						if (!Test->TestNotNull(TEXT("主体与剑均使用实例动画提供器"), Provider)) { return true; }
+						Test->TestTrue(TEXT("提供器网格与实际组件完全一致"), Provider->GetSkinnedAsset() == It->GetSkinnedAsset());
+						for (int32 Instance = 0; Instance < It->GetInstanceCount(); ++Instance)
+						{
+							int32 Track = INDEX_NONE;
+							Test->TestTrue(TEXT("主体与剑均已分配动画轨道"), It->GetInstanceAnimationIndex(It->GetInstanceId(Instance), Track));
+							Test->TestEqual(TEXT("主体与剑同步使用移动序列"), Provider->GetSequenceIndex(Track, 0), 1);
+						}
+						if (MeshName == TEXT("SpecterSK")) { SpecterBodies += It->GetInstanceCount(); }
+						else { SpecterSwords += It->GetInstanceCount(); }
+					}
 				}
-				Test->TestEqual(TEXT("真实调度提交四种独立颜色批次"), RenderedColors.Num(), 4);
+				Test->TestEqual(TEXT("真实调度提交巨骸幼骸异色和原包材质批次"), RenderedColors.Num(), 3);
+				Test->TestEqual(TEXT("每只群虫都有一把参与真实渲染的剑"), SpecterSwords, Spawners[3]->SpawnedUnits.Num());
+				Test->TestEqual(TEXT("主体与剑实例数量一致"), SpecterBodies, SpecterSwords);
 				for (const auto& Handle : Handles)
 				{
 					Test->TestTrue(TEXT("刷怪实体仍存活"), Units->IsUnitValid(Handle));
@@ -115,6 +137,8 @@ namespace CastleConcreteRuntimeTests
 				Stage = 3;
 				return false;
 			}
+			if (Stage == 3)
+			{
 			Test->TestFalse(TEXT("真实调度按序完成反伤死亡与巨骸回收"), Units->IsUnitValid(Giant));
 			int32 Pups = 0;
 			FMassEntityQuery Query(Manager.AsShared());
@@ -135,9 +159,51 @@ namespace CastleConcreteRuntimeTests
 					}
 				}
 			});
-			Test->TestEqual(TEXT("一只原有幼骸加三只自动分裂幼骸"), Pups, 4);
+			Test->TestEqual(TEXT("一只原有幼骸加六只自动分裂幼骸"), Pups, 7);
 			World->GetSubsystem<UCastleShieldTowerSubsystem>()->DeactivateShield(Controller);
-			Units->DespawnUnits(Children);
+			FVector Center;
+			if (!Test->TestTrue(TEXT("激光渲染验收仍有存活主塔"), World->GetSubsystem<UCastleMainTowerSubsystem>()->GetMainTowerTargetLocation(Center))) { return true; }
+			// 将已经正常落地的七只幼骸排入主塔射程，之后由真实调度建立光束和攻击动画。
+			for (int32 Index = 0; Index < Children.Num(); ++Index)
+			{
+				Manager.GetFragmentDataChecked<FTransformFragment>(Children[Index].Entity).GetMutableTransform().SetLocation(Center + FVector(600, Index * 60 - 180, 0));
+			}
+			Camera->SetActorLocation(Center + FVector(1100,-1000,600));
+			Camera->SetActorRotation((Center + FVector(300,0,100) - Camera->GetActorLocation()).Rotation());
+			NextCheck = FPlatformTime::Seconds() + 0.5;
+			Stage = 4;
+			return false;
+			}
+			if (Stage == 4)
+			{
+				Test->TestEqual(TEXT("真实调度为七只幼骸显示七束激光"), World->GetSubsystem<UCastleMassEnemyLaserBeamSubsystem>()->GetActiveBeamCount(), 7);
+				int32 RenderedBeams = 0;
+				for (TObjectIterator<UInstancedStaticMeshComponent> It; It; ++It)
+				{
+					if (It->GetWorld() != World || !It->GetStaticMesh() || It->GetStaticMesh()->GetName() != TEXT("SM_EnemyLaserBeam")) { continue; }
+					RenderedBeams += It->GetInstanceCount();
+					Test->TestNotNull(TEXT("激光批次已建立真实渲染代理"), It->GetSceneProxy());
+				}
+				Test->TestEqual(TEXT("七束激光均进入真实渲染批次"), RenderedBeams, 7);
+				for (const auto& Child : Children)
+				{
+					if (!Test->TestTrue(TEXT("激光幼骸仍存活"), Units->IsUnitValid(Child))) { return true; }
+					Test->TestTrue(TEXT("幼骸已进入持续攻击态"), Manager.GetFragmentDataChecked<FCastleMassEnemyLaserAttackFragment>(Child.Entity).bInAttackRange);
+					Test->TestEqual(TEXT("幼骸实际提交02RPT攻击序列"), Manager.GetFragmentDataChecked<FMassRepresentationAnimationFragment>(Child.Entity).AnimData.SequenceIndex, 3);
+				}
+				FScreenshotRequest::RequestScreenshot(FPaths::Combine(FPlatformProcess::UserTempDir(), TEXT("moving_castle_w2_17/EnemyLasers.png")), false, false);
+				NextCheck = FPlatformTime::Seconds() + 0.3;
+				Stage = 5;
+				return false;
+			}
+			if (Stage == 5)
+			{
+				for (const auto& Child : Children) { Units->ApplyImmediateDamageToEnemy(Child, 1000); }
+				NextCheck = FPlatformTime::Seconds() + 0.2;
+				Stage = 6;
+				return false;
+			}
+			Test->TestEqual(TEXT("所有幼骸死亡后真实渲染光束全部清空"), World->GetSubsystem<UCastleMassEnemyLaserBeamSubsystem>()->GetActiveBeamCount(), 0);
 			for (ACastleMassEnemySpawner* Spawner : Spawners) { Spawner->Destroy(); }
 			Camera->Destroy();
 			return true;

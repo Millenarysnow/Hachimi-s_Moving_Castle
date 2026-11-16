@@ -17,6 +17,8 @@ void UCastleMassDeathSplitTrait::BuildTemplate(FMassEntityTemplateBuildContext& 
 	State.ChildConfiguration = ChildConfiguration.Get();
 	State.SpawnCount = SpawnCount;
 	State.SpawnSpreadRadius = SpawnSpreadRadius;
+	State.BurstDuration = BurstDuration;
+	State.BurstArcHeight = BurstArcHeight;
 }
 
 bool UCastleMassDeathSplitTrait::ValidateTemplate(const FMassEntityTemplateBuildContext& BuildContext,
@@ -24,10 +26,13 @@ bool UCastleMassDeathSplitTrait::ValidateTemplate(const FMassEntityTemplateBuild
 {
 	const bool bValid = Super::ValidateTemplate(BuildContext, World, OutTraitRequirements)
 		&& IsValid(ChildConfiguration) && ChildConfiguration->FindTrait(UCastleMassEnemyTrait::StaticClass())
-		&& SpawnCount > 0 && FMath::IsFinite(SpawnSpreadRadius) && SpawnSpreadRadius >= 0.0f;
+		&& SpawnCount >= 1 && SpawnCount <= 64
+		&& FMath::IsFinite(SpawnSpreadRadius) && SpawnSpreadRadius > 0.0f && SpawnSpreadRadius <= 5000.0f
+		&& FMath::IsFinite(BurstDuration) && BurstDuration > 0.0f && BurstDuration <= 5.0f
+		&& FMath::IsFinite(BurstArcHeight) && BurstArcHeight >= 0.0f && BurstArcHeight <= 1000.0f;
 	if (!bValid)
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("死亡分裂配置无效：%s，子配置 %s 必须是敌人配置，数量为正且散布半径有限非负。"), *GetPathName(), *GetPathNameSafe(ChildConfiguration));
+		UE_LOG(LogMoving_Castle, Error, TEXT("死亡分裂配置无效：%s，子配置 %s 必须是敌人配置，数量须在 [1,64]、半径在 (0,5000] cm、时长在 (0,5] s、弧高在 [0,1000] cm。"), *GetPathName(), *GetPathNameSafe(ChildConfiguration));
 	}
 	return bValid;
 }

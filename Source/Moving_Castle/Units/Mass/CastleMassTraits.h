@@ -8,6 +8,7 @@
 
 class UAnimSequenceTransformProviderData;
 class UMaterialInterface;
+class USkeletalMesh;
 
 /** 三类单位的公共组成。具体行为用 Tag 查询扩展，不为单个单位分配 UObject。 */
 UCLASS(Abstract)
@@ -97,15 +98,27 @@ public:
 	UPROPERTY(EditAnywhere, Category="人形动画|材质")
 	TArray<TObjectPtr<UMaterialInterface>> MaterialOverrides;
 
+	/** 每个提供器显式指定一份附属骨骼网格；参考骨架和序列顺序须与主体完全一致，供同实体同步驱动。 */
+	UPROPERTY(EditAnywhere, Category="人形动画|附属网格")
+	TArray<TObjectPtr<UAnimSequenceTransformProviderData>> AdditionalAnimationProviders;
+
 	UPROPERTY(EditAnywhere, Category="人形动画", meta=(ClampMin="0"))
 	int32 IdleSequence = 0;
 
 	UPROPERTY(EditAnywhere, Category="人形动画", meta=(ClampMin="0"))
 	int32 MoveSequence = 1;
 
+	/** 可选攻击序列；INDEX_NONE 表示该单位没有攻击动作。 */
+	UPROPERTY(EditAnywhere, Category="人形动画", meta=(ClampMin="-1"))
+	int32 AttackSequence = INDEX_NONE;
+
 	/** 移动序列的固定播放倍率，在切换到该序列时提交给 GPU。 */
 	UPROPERTY(EditAnywhere, Category="人形动画", meta=(ClampMin="0.01"))
 	float MovePlayRate = 1.0f;
+
+	/** 攻击序列的固定播放倍率。 */
+	UPROPERTY(EditAnywhere, Category="人形动画", meta=(ClampMin="0.01", ClampMax="10.0"))
+	float AttackPlayRate = 1.0f;
 
 	UPROPERTY(EditAnywhere, Category="人形动画", meta=(ClampMin="0.0", Units="s"))
 	float BlendTime = 0.15f;

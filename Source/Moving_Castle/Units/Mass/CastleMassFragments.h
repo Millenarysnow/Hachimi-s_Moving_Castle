@@ -113,6 +113,15 @@ struct MOVING_CASTLE_API FCastleMassAnimationParameters : public FMassConstShare
 	float MovePlayRate = 1.0f;
 
 	UPROPERTY()
+	int32 AttackSequence = INDEX_NONE;
+
+	UPROPERTY()
+	float AttackLength = 1.0f;
+
+	UPROPERTY()
+	float AttackPlayRate = 1.0f;
+
+	UPROPERTY()
 	float BlendTime = 0.15f;
 };
 
@@ -130,4 +139,15 @@ struct MOVING_CASTLE_API FCastleMassAnimationFragment : public FMassFragment
 
 	UPROPERTY()
 	int32 CurrentSequence = INDEX_NONE;
+
+};
+
+/** 由任一攻击能力写入，供通用动画处理器切换待机、移动和攻击序列。 */
+USTRUCT()
+struct MOVING_CASTLE_API FCastleMassAttackAnimationFragment : public FMassFragment
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	bool bInAttackState = false;
 };
