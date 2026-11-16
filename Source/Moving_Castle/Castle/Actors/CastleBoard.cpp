@@ -453,6 +453,17 @@ bool ACastleBoard::ExpandBoard(FText& OutFailureReason)
 	FCastleGroundGenerationResult Current;
 	Current.Cells = GeneratedGroundCells;
 	if (!ValidateGroundResult(Current, Min, Max, OutFailureReason)) { return Reject(OutFailureReason.ToString()); }
+	if (GetWorld())
+	{
+		if (GroundTiles.Num() != GeneratedGroundCells.Num())
+		{ return Reject(TEXT("已有地块 Actor 索引数量与地面数据不一致。")); }
+		for (const FCastleGroundCell& Cell : GeneratedGroundCells)
+		{
+			const auto* Tile = GroundTiles.Find(Cell.Coordinate);
+			if (!Tile || !IsValid(Tile->Get()))
+			{ return Reject(FString::Printf(TEXT("已有地块 Actor 缺失或失效，坐标 %s。"), *Cell.Coordinate.ToString())); }
+		}
+	}
 	if (!GroundGeneratorClass) { return Reject(TEXT("GroundGeneratorClass 未配置。")); }
 	UCastleGroundGenerator* Generator = NewObject<UCastleGroundGenerator>(this, GroundGeneratorClass);
 	if (!Generator) { return Reject(TEXT("GroundGeneratorClass 无法创建生成器。")); }
