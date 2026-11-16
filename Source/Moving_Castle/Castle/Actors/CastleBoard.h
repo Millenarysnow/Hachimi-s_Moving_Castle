@@ -45,7 +45,7 @@ public:
 	/** 构造函数设置默认棋盘尺寸、网格间距和随机生成策略。 */
 	ACastleBoard();
 
-	/** 棋盘 X/Y 平面尺寸和允许的垂直层数。地面只生成在 Z=0。 */
+	/** 起始 X/Y 尺寸和垂直层数；运行时扩张不修改它，世界坐标映射始终固定。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸")
 	FIntVector GridSize = FIntVector(10, 10, 8);
 
@@ -263,6 +263,10 @@ public:
 	bool TryResolveGridCursorTarget(const FVector& RayStart, const FVector& RayEnd, FCastleGridCursorTarget& OutTarget) const;
 
 protected:
+	/** 已提交的对称扩张圈数，只影响范围，不参与坐标到世界变换。 */
+	UPROPERTY(VisibleInstanceOnly, Category="棋盘|尺寸")
+	int32 ExpansionRings = 0;
+
 	/** 管理器自己的根节点，为棋盘坐标提供 Actor 变换空间。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "占位可视化")
 	TObjectPtr<USceneComponent> SceneRoot;

@@ -411,8 +411,8 @@ bool ACastleBoard::TryGetGroundCell(const FIntVector& Coordinate, FCastleGroundC
 bool ACastleBoard::IsCoordinateWithinBoard(const FIntVector& Coordinate) const
 {
 	const FIntVector RelativeCoordinate = Coordinate - GridOrigin;
-	return RelativeCoordinate.X >= 0 && RelativeCoordinate.X < GridSize.X
-		&& RelativeCoordinate.Y >= 0 && RelativeCoordinate.Y < GridSize.Y
+	return RelativeCoordinate.X >= -ExpansionRings && RelativeCoordinate.X < GridSize.X + ExpansionRings
+		&& RelativeCoordinate.Y >= -ExpansionRings && RelativeCoordinate.Y < GridSize.Y + ExpansionRings
 		&& RelativeCoordinate.Z >= 0 && RelativeCoordinate.Z < GridSize.Z;
 }
 
