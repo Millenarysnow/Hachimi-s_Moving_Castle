@@ -12,6 +12,7 @@
 #include "CastleBuildingBase.h"
 #include "CastleNavigationSubsystem.h"
 #include "Blueprint/UserWidget.h"
+#include "Castle/UI/Director/CastleDirectorWidgets.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -321,9 +322,13 @@ bool UCastleDirectorSubsystem::EnsurePresentation(FText& OutReason)
 	HUDWidget = CreateWidget<UUserWidget>(Controller, Config->HUDWidgetClass);
 	RewardWidget = CreateWidget<UUserWidget>(Controller, Config->RewardWidgetClass);
 	GameOverWidget = CreateWidget<UUserWidget>(Controller, Config->GameOverWidgetClass);
-	if (!HUDWidget || !RewardWidget || !GameOverWidget)
+	if (!Cast<UCastleDirectorHUDWidget>(HUDWidget) || !Cast<UCastleRewardChoiceWidget>(RewardWidget) || !Cast<UCastleGameOverWidget>(GameOverWidget)
+		|| !Cast<UCastleDirectorHUDWidget>(HUDWidget)->HasRequiredBindings()
+		|| !Cast<UCastleRewardChoiceWidget>(RewardWidget)->HasRequiredBindings()
+		|| !Cast<UCastleGameOverWidget>(GameOverWidget)->HasRequiredBindings())
 	{
-		OutReason = FText::FromString(TEXT("界面创建失败：请检查三个 WBP 类和 BindWidget 控件。"));
+		OutReason = FText::FromString(FString::Printf(TEXT("界面创建或绑定失败：HUD=%s，Reward=%s，GameOver=%s；请检查父类和必需 BindWidget 控件。"),
+			*GetPathNameSafe(Config->HUDWidgetClass.Get()), *GetPathNameSafe(Config->RewardWidgetClass.Get()), *GetPathNameSafe(Config->GameOverWidgetClass.Get())));
 		return false;
 	}
 	HUDWidget->AddToViewport(10);
@@ -346,7 +351,11 @@ void UCastleDirectorSubsystem::UpdatePresentation()
 
 FText UCastleDirectorSubsystem::GetRewardLabel(const ECastleDirectorReward Reward) const
 {
-	if (!Config || !Tower) { return FText::FromString(TEXT("奖励数据未就绪")); }
+	if (!IsValid(Config) || !IsValid(Tower))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演奖励标签读取失败：配置 %s 或主塔组件 %s 已失效。"), *GetPathNameSafe(Config), *GetPathNameSafe(Tower));
+		return FText::FromString(TEXT("奖励数据无效，详见错误日志。"));
+	}
 	if (Reward == ECastleDirectorReward::Experience)
 	{
 		return FText::FromString(FString::Printf(TEXT("经验 +%d（Lv%d %d/%d）"), Config->RewardExp, Level, Experience, Config->ExpPerLevel));
@@ -355,12 +364,20 @@ FText UCastleDirectorSubsystem::GetRewardLabel(const ECastleDirectorReward Rewar
 	{
 		return FText::FromString(FString::Printf(TEXT("回血 +%.0f（%.0f/%.0f）"), Tower->MaxHealth * Config->HealFraction, Tower->CurrentHealth, Tower->MaxHealth));
 	}
-	return FText::FromString(TEXT("开启商店（免费换一批新商品）"));
+	if (Reward == ECastleDirectorReward::Shop) { return FText::FromString(TEXT("开启商店（免费换一批新商品）")); }
+	UE_LOG(LogMoving_Castle, Error, TEXT("导演奖励标签读取失败：配置 %s 收到未知奖励类型 %d。"), *GetPathNameSafe(Config), static_cast<int32>(Reward));
+	return FText::FromString(TEXT("奖励类型无效，详见错误日志。"));
 }
 
 FString UCastleDirectorSubsystem::GetHUDSummary() const
 {
-	if (!bRunning || !Config || !Controller || !Tower) { return FString(); }
+	if (!bRunning) { return FString(); }
+	if (!IsValid(Config) || !IsValid(Controller) || !IsValid(Tower))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演 HUD 读取失败：配置 %s、控制器 %s 或主塔 %s 已失效。"),
+			*GetPathNameSafe(Config), *GetPathNameSafe(Controller), *GetPathNameSafe(Tower));
+		return TEXT("导演 HUD 数据无效，详见错误日志。");
+	}
 	if (!IsValid(Board) || !IsValid(Board->PrototypeBackpack))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("导演 HUD 房间计数失败：棋盘 %s 或其背包失效。"), *GetPathNameSafe(Board));

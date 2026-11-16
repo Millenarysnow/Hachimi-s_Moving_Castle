@@ -16,6 +16,7 @@
 #include "MassEntityConfigAsset.h"
 #include "Engine/StaticMesh.h"
 #include "Blueprint/UserWidget.h"
+#include "Castle/UI/Director/CastleDirectorWidgets.h"
 #include "Engine/World.h"
 #include "Misc/ScopeExit.h"
 #include <limits>
@@ -317,9 +318,9 @@ bool FCastleDirectorFoundationTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("缺失资产和界面配置拒绝启动"), Config->ValidateConfig(Reason));
 	Config->NodeMesh = GetMutableDefault<UStaticMesh>();
 	Config->NPCConfiguration = GetMutableDefault<UMassEntityConfigAsset>();
-	Config->HUDWidgetClass = UUserWidget::StaticClass();
-	Config->RewardWidgetClass = UUserWidget::StaticClass();
-	Config->GameOverWidgetClass = UUserWidget::StaticClass();
+	Config->HUDWidgetClass = UCastleDirectorHUDWidget::StaticClass();
+	Config->RewardWidgetClass = UCastleRewardChoiceWidget::StaticClass();
+	Config->GameOverWidgetClass = UCastleGameOverWidget::StaticClass();
 	TestTrue(TEXT("完整有效配置通过校验"), Config->ValidateConfig(Reason));
 	Config->NodeCountMin = 1;
 	TestFalse(TEXT("非法节点范围拒绝启动"), Config->ValidateConfig(Reason));

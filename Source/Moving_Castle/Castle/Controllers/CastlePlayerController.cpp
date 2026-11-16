@@ -339,12 +339,15 @@ void ACastlePlayerController::SetDirectorModalState(const bool bRewardOpen, cons
 	bRewardInputActive = bRewardOpen;
 	bGameOverInputActive = bGameOverOpen;
 	DirectorFocusWidget = FocusWidget;
-	RefreshModalInput();
+	// 界面种类接力时即使总输入锁不变，也需要刷新最终焦点和输入模式。
+	RefreshModalInput(true);
 }
 
-void ACastlePlayerController::RefreshModalInput()
+void ACastlePlayerController::RefreshModalInput(const bool bForceRefresh)
 {
 	const bool bNewOpen = Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive;
+	// 普通商店的购买/刷新通知不改变开关，沿用旧行为，不重设模式或抢回焦点。
+	if (bNewOpen == bModalInputActive && !bForceRefresh) { return; }
 	if (bNewOpen != bModalInputActive)
 	{
 		bModalInputActive = bNewOpen;

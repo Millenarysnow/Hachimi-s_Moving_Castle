@@ -121,7 +121,7 @@ protected:
 	void HandleShopChanged();
 
 	/** 从商店和导演界面最终状态计算鼠标、输入模式及忽略计数。 */
-	void RefreshModalInput();
+	void RefreshModalInput(bool bForceRefresh = false);
 
 	/** 统一把收支、选牌和商店失败原因写入日志及屏幕，保证无资源时也有反馈。 */
 	void ShowGameplayMessage(const FString& Message, bool bSuccess) const;

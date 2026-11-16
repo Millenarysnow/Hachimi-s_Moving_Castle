@@ -8,7 +8,9 @@
 
 class UMassEntityConfigAsset;
 class UStaticMesh;
-class UUserWidget;
+class UCastleDirectorHUDWidget;
+class UCastleRewardChoiceWidget;
+class UCastleGameOverWidget;
 
 /** 导演系统单局配置；资产只保存可调参数，流程行为由 C++ 子系统执行。 */
 UCLASS(BlueprintType)
@@ -80,13 +82,13 @@ public:
 
 	/** 三类界面使用 WBP 子类，仅绑定 C++ 基类的控件，不包含蓝图逻辑。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|界面")
-	TSubclassOf<UUserWidget> HUDWidgetClass;
+	TSubclassOf<UCastleDirectorHUDWidget> HUDWidgetClass;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|界面")
-	TSubclassOf<UUserWidget> RewardWidgetClass;
+	TSubclassOf<UCastleRewardChoiceWidget> RewardWidgetClass;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|界面")
-	TSubclassOf<UUserWidget> GameOverWidgetClass;
+	TSubclassOf<UCastleGameOverWidget> GameOverWidgetClass;
 
 	/** 检查所有阶段 1 配置；失败时写明资产名称、字段和值，不修正配置。 */
 	bool ValidateConfig(FText& OutFailureReason) const;

@@ -5,6 +5,7 @@
 #include "MassEntityConfigAsset.h"
 #include "Engine/StaticMesh.h"
 #include "Blueprint/UserWidget.h"
+#include "Castle/UI/Director/CastleDirectorWidgets.h"
 #include "Moving_Castle.h"
 
 bool UCastleDirectorConfigDataAsset::ValidateConfig(FText& OutFailureReason) const
