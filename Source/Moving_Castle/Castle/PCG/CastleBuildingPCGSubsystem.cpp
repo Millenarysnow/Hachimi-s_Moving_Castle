@@ -96,6 +96,15 @@ bool UCastleBuildingPCGSubsystem::RecomputeInternal(ACastleBoard* Board, const F
 	{
 		// 不完整飞入不参与语义场，这是明确的业务谓词，不能读取动画中的半装配模型。
 		if (!Building->bHasCompletedPlacement) { continue; }
+		if (Building->GetBuildingLevel() == 5)
+		{
+			// LV5仍以单格参与其他建筑的占用邻接，但它复用LV4八格模型，禁止猜测部件覆盖关系。
+			UE_LOG(LogMoving_Castle, Warning,
+				TEXT("建筑 %s（%s）为五级正式占格与专属模型尚未接通，跳过本期 PCG 语义提取与部件替换。"),
+				*Building->GetPathName(), *Building->GetClass()->GetPathName());
+			for (const auto& Cell : Building->GetOccupiedCoordinates()) { Occupancy.Add(Cell, Building); }
+			continue;
+		}
 		Buildings.Add(Building);
 		for (const auto& Cell : Building->GetOccupiedCoordinates()) { Occupancy.Add(Cell, Building); }
 	}
