@@ -53,6 +53,23 @@ bool UCastleMainTowerComponent::ApplyDamage(const float Damage)
 	return true;
 }
 
+bool UCastleMainTowerComponent::ApplyHealing(const float Amount)
+{
+	if (!FMath::IsFinite(Amount) || Amount < 0.0f || !FMath::IsFinite(MaxHealth) || MaxHealth <= 0.0f
+		|| !FMath::IsFinite(CurrentHealth) || CurrentHealth <= 0.0f || CurrentHealth > MaxHealth)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("主塔回血失败：组件 %s 的回血量必须是有限非负数，且主塔生命状态和 MaxHealth 必须有效。"), *GetPathName());
+		return false;
+	}
+
+	const float PreviousHealth = CurrentHealth;
+	CurrentHealth = FMath::Min(MaxHealth, CurrentHealth + Amount);
+	OnHealthChanged.Broadcast(PreviousHealth, CurrentHealth, PreviousHealth - CurrentHealth);
+	UE_LOG(LogMoving_Castle, Display, TEXT("主塔恢复 %.2f 点生命：%.2f / %.2f。"),
+		CurrentHealth - PreviousHealth, CurrentHealth, MaxHealth);
+	return true;
+}
+
 FVector UCastleMainTowerComponent::GetTargetLocation() const
 {
 	const AActor* Owner = GetOwner();

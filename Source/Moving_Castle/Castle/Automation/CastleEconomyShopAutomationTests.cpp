@@ -11,8 +11,14 @@
 #include "CastleCardPricing.h"
 #include "CastleEconomyComponent.h"
 #include "CastleShopComponent.h"
+#include "CastleMainTowerComponent.h"
+#include "Castle/Director/CastleDirectorConfigDataAsset.h"
+#include "MassEntityConfigAsset.h"
+#include "Engine/StaticMesh.h"
+#include "Blueprint/UserWidget.h"
 #include "Engine/World.h"
 #include "Misc/ScopeExit.h"
+#include <limits>
 
 /** 验证收入、支出、免费操作、非法负数和溢出都具有明确且无副作用的结果。 */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleEconomyTest, "MovingCastle.Logic.Economy",
@@ -238,6 +244,123 @@ bool FCastleShopGenerationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("数字和等级参与测试买价"), Price, 21);
 	ICastleCardPricing::Execute_TryCalculatePrice(Pricing, Archer, ECastleCardPriceKind::Sell, Price, Reason);
 	TestEqual(TEXT("卖价为买价一半向下取整"), Price, 10);
+	return true;
+}
+
+/** 验证奖励免费换批复用事务且不扣款，非法房间上限和无效配置均显式拒绝。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDirectorFoundationTest, "MovingCastle.Logic.DirectorFoundation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleDirectorFoundationTest::RunTest(const FString& Parameters)
+{
+	AddExpectedError(TEXT("房间上限设置失败：收到无效值"), EAutomationExpectedErrorFlags::Contains, 1);
+	AddExpectedError(TEXT("主塔回血失败"), EAutomationExpectedErrorFlags::Contains, 2);
+	AddExpectedError(TEXT("字段 NodeMesh 值 None 无效"), EAutomationExpectedErrorFlags::Contains, 1);
+	AddExpectedError(TEXT("字段 NodeCountMin/NodeCountMax"), EAutomationExpectedErrorFlags::Contains, 1);
+	AddExpectedError(TEXT("奖励换批失败"), EAutomationExpectedErrorFlags::Contains, 1);
+	AddExpectedError(TEXT("商店奖励初始化失败"), EAutomationExpectedErrorFlags::Contains, 1);
+	ACastleBoard* Board = NewObject<ACastleBoard>();
+	CastleBuildingTests::ConfigureBoard(Board);
+	UCastleEconomyComponent* Economy = NewObject<UCastleEconomyComponent>();
+	UCastleShopComponent* Shop = NewObject<UCastleShopComponent>();
+	FText Reason;
+	TestTrue(TEXT("商店初始化"), Shop->InitializeShop(Economy, Board, Reason));
+	TestTrue(TEXT("奖励免费整批换牌成功"), Shop->TryRefreshOffersForReward(Reason));
+	TestFalse(TEXT("奖励换批本身不擅自打开商店"), Shop->IsShopOpen());
+	TestTrue(TEXT("商店打开"), Shop->TryOpenShop(Reason));
+	TestEqual(TEXT("奖励换牌不扣除金币"), Economy->GetGold(), 0);
+	TestEqual(TEXT("奖励换牌生成完整六件商品"), Shop->GetOffers().Num(), 6);
+	// 对照商店推进完全相同次数；失败后重试必须与它逐槽一致，而非只保留旧数量。
+	UCastleShopComponent* Twin = NewObject<UCastleShopComponent>();
+	Twin->InitializeShop(Economy, Board, Reason);
+	Twin->TryRefreshOffersForReward(Reason);
+	const TArray<FCastleShopOffer> PreviousOffers = Shop->GetOffers();
+	const auto PreviousDefinitions = Board->BuildingDefinitions;
+	Board->BuildingDefinitions.Reset();
+	TestFalse(TEXT("无商品池时奖励换批拒绝"), Shop->TryRefreshOffersForReward(Reason));
+	TestEqual(TEXT("失败仍保留完整旧商品"), Shop->GetOffers().Num(), PreviousOffers.Num());
+	for (int32 Index = 0; Index < PreviousOffers.Num(); ++Index)
+	{
+		TestEqual(TEXT("失败保留每槽数字"), Shop->GetOffers()[Index].Descriptor.Number, PreviousOffers[Index].Descriptor.Number);
+		TestEqual(TEXT("失败保留每槽颜色"), Shop->GetOffers()[Index].Descriptor.Color, PreviousOffers[Index].Descriptor.Color);
+		TestEqual(TEXT("失败保留每槽报价"), Shop->GetOffers()[Index].Price, PreviousOffers[Index].Price);
+	}
+	Board->BuildingDefinitions = PreviousDefinitions;
+	TestTrue(TEXT("修复商品池后奖励换批成功"), Shop->TryRefreshOffersForReward(Reason));
+	Twin->TryRefreshOffersForReward(Reason);
+	for (int32 Index = 0; Index < 6; ++Index)
+	{
+		TestEqual(TEXT("失败不消耗正式随机流数字"), Shop->GetOffers()[Index].Descriptor.Number, Twin->GetOffers()[Index].Descriptor.Number);
+		TestEqual(TEXT("失败不消耗正式随机流颜色"), Shop->GetOffers()[Index].Descriptor.Color, Twin->GetOffers()[Index].Descriptor.Color);
+	}
+	TestFalse(TEXT("非正房间上限被拒绝"), Shop->TrySetRoomLimit(0, Reason));
+	TestEqual(TEXT("非法上限不改写现值"), Shop->RoomLimit, 30);
+	TestTrue(TEXT("有效房间上限可以设置"), Shop->TrySetRoomLimit(15, Reason));
+	TestEqual(TEXT("房間上限写入新值"), Shop->RoomLimit, 15);
+
+	UCastleMainTowerComponent* Tower = NewObject<UCastleMainTowerComponent>();
+	Tower->MaxHealth = 100.0f;
+	TestTrue(TEXT("主塔生命初始化"), Tower->InitializeHealth());
+	TestTrue(TEXT("主塔受到伤害"), Tower->ApplyDamage(40.0f));
+	const int32 AttackCountBeforeHealing = Tower->AttackCount;
+	TestTrue(TEXT("主塔可以回血"), Tower->ApplyHealing(25.0f));
+	TestEqual(TEXT("回血增加生命"), Tower->CurrentHealth, 85.0f);
+	TestEqual(TEXT("回血不增加攻击次数"), Tower->AttackCount, AttackCountBeforeHealing);
+	TestTrue(TEXT("超出上限的回血成功且封顶"), Tower->ApplyHealing(50.0f));
+	TestEqual(TEXT("生命不超过最大值"), Tower->CurrentHealth, 100.0f);
+	TestEqual(TEXT("过量回血不增加攻击次数"), Tower->AttackCount, AttackCountBeforeHealing);
+	TestFalse(TEXT("负回血拒绝"), Tower->ApplyHealing(-1.0f));
+	TestFalse(TEXT("非有限回血拒绝"), Tower->ApplyHealing(std::numeric_limits<float>::infinity()));
+	TestEqual(TEXT("失败回血保留生命"), Tower->CurrentHealth, 100.0f);
+
+	UCastleDirectorConfigDataAsset* Config = NewObject<UCastleDirectorConfigDataAsset>();
+	TestFalse(TEXT("缺失资产和界面配置拒绝启动"), Config->ValidateConfig(Reason));
+	Config->NodeMesh = GetMutableDefault<UStaticMesh>();
+	Config->NPCConfiguration = GetMutableDefault<UMassEntityConfigAsset>();
+	Config->HUDWidgetClass = UUserWidget::StaticClass();
+	Config->RewardWidgetClass = UUserWidget::StaticClass();
+	Config->GameOverWidgetClass = UUserWidget::StaticClass();
+	TestTrue(TEXT("完整有效配置通过校验"), Config->ValidateConfig(Reason));
+	Config->NodeCountMin = 1;
+	TestFalse(TEXT("非法节点范围拒绝启动"), Config->ValidateConfig(Reason));
+	TestTrue(TEXT("配置错误明确写出字段名"), Reason.ToString().Contains(TEXT("NodeCountMin/NodeCountMax")));
+	Config->NodeCountMin = 2;
+	// 逐个改变单一字段，错误数固定，证明校验不是只覆盖节点数量一个分支。
+	AddExpectedError(TEXT("配置资产"), EAutomationExpectedErrorFlags::Contains, 8);
+	Config->NodeHeightOffset = std::numeric_limits<float>::infinity();
+	TestFalse(TEXT("无限高度拒绝"), Config->ValidateConfig(Reason));
+	Config->NodeHeightOffset = 1200.0f;
+	Config->NodeMeshScale = 0.0f;
+	TestFalse(TEXT("零网格缩放拒绝"), Config->ValidateConfig(Reason));
+	Config->NodeMeshScale = 4.0f;
+	Config->NPCCount = 129;
+	TestFalse(TEXT("超出NPC数量上限拒绝"), Config->ValidateConfig(Reason));
+	Config->NPCCount = 8;
+	Config->EliteEveryNSteps = 1;
+	TestFalse(TEXT("非法精英间隔拒绝"), Config->ValidateConfig(Reason));
+	Config->EliteEveryNSteps = 5;
+	Config->NodeArcDegrees = 181.0f;
+	TestFalse(TEXT("超出圆弧角度拒绝"), Config->ValidateConfig(Reason));
+	Config->NodeArcDegrees = 60.0f;
+	Config->HealFraction = 1.1f;
+	TestFalse(TEXT("超出回血比例拒绝"), Config->ValidateConfig(Reason));
+	Config->HealFraction = 0.3f;
+	Config->ExpPerLevel = 0;
+	TestFalse(TEXT("零升级经验拒绝"), Config->ValidateConfig(Reason));
+	Config->ExpPerLevel = 100;
+	Config->RoomLimitPerLevel = -1;
+	TestFalse(TEXT("负房间上限增量拒绝"), Config->ValidateConfig(Reason));
+	Config->RoomLimitPerLevel = 5;
+	UCastleShopComponent* RewardShop = NewObject<UCastleShopComponent>();
+	Board->BuildingDefinitions.Reset();
+	TestFalse(TEXT("首个商店奖励初始化失败明确拒绝"), RewardShop->TryOpenForReward(Economy, Board, Reason));
+	TestFalse(TEXT("失败不留下已初始化状态"), RewardShop->IsInitialized());
+	TestFalse(TEXT("失败不打开商店"), RewardShop->IsShopOpen());
+	TestEqual(TEXT("失败不留下商品"), RewardShop->GetOffers().Num(), 0);
+	Board->BuildingDefinitions = PreviousDefinitions;
+	TestTrue(TEXT("修复配置后完整奖励事务成功"), RewardShop->TryOpenForReward(Economy, Board, Reason));
+	TestTrue(TEXT("奖励事务打开商店"), RewardShop->IsShopOpen());
+	TestEqual(TEXT("奖励事务仍不扣金币"), Economy->GetGold(), 0);
 	return true;
 }
 

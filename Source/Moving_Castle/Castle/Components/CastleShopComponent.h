@@ -79,6 +79,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|商店")
 	bool TryRefreshOffers(FText& OutFailureReason);
 
+	/** 奖励专用免费整批换牌；失败时商品和正式随机流均保持不变。 */
+	bool TryRefreshOffersForReward(FText& OutFailureReason);
+
+	/** 奖励事务：在临时状态中初始化（如需）、免费换批并打开，全部成功后才提交。 */
+	bool TryOpenForReward(UCastleEconomyComponent* InEconomy, ACastleBoard* InBoard, FText& OutFailureReason);
+
+	/** 修改房间总上限；非正数配置拒绝并保留原值。 */
+	bool TrySetRoomLimit(int32 NewRoomLimit, FText& OutFailureReason);
+
 	/** 购买前校验售罄、余额、背包和全局容量，失败不扣费也不移走商品。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|商店")
 	bool TryBuyOffer(int32 OfferIndex, FText& OutFailureReason);
@@ -119,6 +128,9 @@ private:
 
 	/** 在临时随机流中完整生成六张商品，调用失败不影响已展示的数据。 */
 	bool GenerateOffers(FRandomStream& Stream, TArray<FCastleShopOffer>& OutOffers, FText& OutFailureReason) const;
+
+	/** 付费刷新和奖励刷新共用候选生成及提交事务。 */
+	bool RefreshOffersInternal(bool bFree, FText& OutFailureReason);
 
 	/** 定价接口唯一调用边界，额外拒绝策略返回的负价。 */
 	bool CalculatePrice(const FCastleBuildingDescriptor& Descriptor, bool bSelling, int32& OutPrice, FText& OutFailureReason) const;

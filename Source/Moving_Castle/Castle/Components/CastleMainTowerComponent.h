@@ -57,6 +57,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|主塔")
 	bool ApplyDamage(float Damage);
 
+	/** 按指定生命值回血；不改变 AttackCount，并用负伤害广播实际恢复量。 */
+	UFUNCTION(BlueprintCallable, Category = "移动城堡|主塔")
+	bool ApplyHealing(float Amount);
+
 	/** 返回敌人应该追踪的世界空间目标点。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|主塔")
 	FVector GetTargetLocation() const;
