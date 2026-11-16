@@ -102,7 +102,7 @@ bool ACastleBuildingBase::InitializeBuilding(const FCastleBuildingDescriptor& De
 		UE_LOG(LogMoving_Castle, Error, TEXT("建筑初始化失败：%s"), *Reason.ToString());
 		return false;
 	}
-	if (Descriptor.GetBuildingClass() != GetClass() || Descriptor.Level != BuildingLevel || Descriptor.GetBuildingType() != BuildingType)
+	if (Descriptor.Level != BuildingLevel || Descriptor.GetBuildingType() != BuildingType)
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("建筑初始化失败：Data Asset 的生成类、类别或等级与实际 Actor 不一致。"));
 		return false;
@@ -122,6 +122,23 @@ bool ACastleBuildingBase::InitializeBuilding(const FCastleBuildingDescriptor& De
 			return false;
 		}
 		UniqueCoordinates.Add(Coordinate);
+	}
+	FIntVector Minimum = InOccupiedCoordinates[0];
+	FIntVector Maximum = InOccupiedCoordinates[0];
+	for (const FIntVector& Coordinate : InOccupiedCoordinates)
+	{
+		Minimum = Minimum.ComponentMin(Coordinate);
+		Maximum = Maximum.ComponentMax(Coordinate);
+	}
+	const FIntVector Dimensions = Maximum - Minimum + FIntVector(1, 1, 1);
+	const TSubclassOf<ACastleBuildingBase> ExpectedClass = Descriptor.Definition->ResolveBuildingClassForDimensions(BuildingLevel, Dimensions);
+	if (ExpectedClass == nullptr || ExpectedClass != GetClass())
+	{
+		UE_LOG(LogMoving_Castle, Error,
+			TEXT("建筑初始化失败：定义 %s 的等级 %d 与占格尺寸 (%d, %d, %d) 不匹配实际类 %s。"),
+			*Descriptor.Definition->DisplayName.ToString(), BuildingLevel, Dimensions.X, Dimensions.Y, Dimensions.Z,
+			*GetClass()->GetPathName());
+		return false;
 	}
 
 	// 保存资产身份，后续升级、回收和再次放置都不重新推断建筑种类。

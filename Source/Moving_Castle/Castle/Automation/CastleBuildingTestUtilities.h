@@ -110,6 +110,12 @@ namespace CastleBuildingTests
 			FCastleBuildingLevelDefinition Entry;
 			Entry.Level = Index + 1;
 			Entry.BuildingClass = Classes[Index];
+			// 测试定义也显式提供二级、三级垂直类，覆盖正式定义的强校验；
+			// 原生测试使用同一等级 C++ 类作为模型夹具，不引入未存在的测试蓝图。
+			if (Index == 1 || Index == 2)
+			{
+				Entry.VerticalBuildingClass = Classes[Index];
+			}
 			Definition->Levels.Add(Entry);
 		}
 		if (Type == ECastleBuildingType::ArcherTower || Type == ECastleBuildingType::CannonTower)

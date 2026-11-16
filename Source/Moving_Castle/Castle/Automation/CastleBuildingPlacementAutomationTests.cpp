@@ -37,6 +37,9 @@ bool FCastleBuildingBottomCenterPlacementTest::RunTest(const FString& Parameters
 	Board->GridOrigin = FIntVector(4, -3, 2);
 	Board->GridSize = FIntVector(2, 2, 3);
 	Board->CellSize = 600.0f;
+	// 本用例故意使用非默认格距验证变换；实体格面与间隙也须显式组成同一个中心距。
+	Board->GroundTileSize = 580.0f;
+	Board->GroundTileGap = 20.0f;
 	Board->LayerHeight = 400.0f;
 	Board->WorldBaseHeight = 300.0f;
 	UCastleBuildingDefinition* Definition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::ArcherTower);

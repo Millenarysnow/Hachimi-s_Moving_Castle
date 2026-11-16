@@ -139,6 +139,9 @@ bool FCastleBuildingTriggerRegistrationTest::RunTest(const FString& Parameters)
 	ACastleBoard* Board = World->SpawnActor<ACastleBoard>();
 	Board->GridSize = FIntVector(2, 1, 1);
 	Board->CellSize = 20;
+	// 夹具使用 20 厘米中心距；显式配置 18 厘米格面和 2 厘米间隙，满足棋盘模数一致性。
+	Board->GroundTileSize = 18;
+	Board->GroundTileGap = 2;
 	Board->LayerHeight = 10;
 	Board->WorldBaseHeight = 5;
 	UCastleBuildingDefinition* Definition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::ArcherTower);

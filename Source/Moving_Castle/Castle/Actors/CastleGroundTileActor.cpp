@@ -78,9 +78,9 @@ ACastleGroundTileActor::ACastleGroundTileActor()
 	}
 }
 
-bool ACastleGroundTileActor::InitializeGroundCell(const FCastleGroundCell& InGroundCell, const float CellSize, const float LayerHeight)
+bool ACastleGroundTileActor::InitializeGroundCell(const FCastleGroundCell& InGroundCell, const float GroundTileSize, const float LayerHeight)
 {
-	if (bInitialized || CellSize <= 0.0f || LayerHeight <= 0.0f
+	if (bInitialized || GroundTileSize <= 0.0f || LayerHeight <= 0.0f
 		|| PrototypeCubeMesh == nullptr || PrototypeMaterial == nullptr
 		|| TileMesh == nullptr || NumberPlate == nullptr || NumberLabel == nullptr)
 	{
@@ -97,7 +97,9 @@ bool ACastleGroundTileActor::InitializeGroundCell(const FCastleGroundCell& InGro
 	PlateMaterial->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.015f, 0.015f, 0.02f, 1.0f));
 
 	GroundCell = InGroundCell;
-	TileMesh->SetRelativeScale3D(FVector(CellSize / 100.0f * 0.92f, CellSize / 100.0f * 0.92f, 0.12f));
+	// 立方体基础网格边长为 100 cm；棋盘把实体格面精确缩放为 500 cm，
+	// 相邻中心距由棋盘的 20 cm 间隙额外提供，不再用经验比例缩小地块。
+	TileMesh->SetRelativeScale3D(FVector(GroundTileSize / 100.0f, GroundTileSize / 100.0f, 0.12f));
 	TileMesh->SetStaticMesh(PrototypeCubeMesh);
 	TileMesh->SetMaterial(0, TileMaterial);
 	TileMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
@@ -112,12 +114,12 @@ bool ACastleGroundTileActor::InitializeGroundCell(const FCastleGroundCell& InGro
 	const float NumberPlateHalfHeight = 100.0f * 0.035f * 0.5f;
 	const float NumberPlateCenterHeight = TileHalfHeight + NumberPlateHalfHeight + 1.0f;
 	NumberPlate->SetRelativeLocation(FVector(0.0f, 0.0f, NumberPlateCenterHeight));
-	NumberPlate->SetRelativeScale3D(FVector(CellSize / 100.0f * 0.62f, CellSize / 100.0f * 0.62f, 0.035f));
+	NumberPlate->SetRelativeScale3D(FVector(GroundTileSize / 100.0f * 0.62f, GroundTileSize / 100.0f * 0.62f, 0.035f));
 	NumberPlate->SetStaticMesh(PrototypeCubeMesh);
 	NumberPlate->SetMaterial(0, PlateMaterial);
 	NumberPlate->SetVisibility(true, true);
 
-	NumberLabel->SetWorldSize(CellSize * 0.32f);
+	NumberLabel->SetWorldSize(GroundTileSize * 0.32f);
 	NumberLabel->SetXScale(1.15f);
 	NumberLabel->SetYScale(1.15f);
 	NumberLabel->SetText(FText::AsNumber(InGroundCell.Number));

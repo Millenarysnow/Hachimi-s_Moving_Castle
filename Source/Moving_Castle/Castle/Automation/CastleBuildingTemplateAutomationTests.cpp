@@ -1,4 +1,4 @@
-// 使用正式炮塔、农田与盾塔资产验证等级映射、双组件结构及放置后的碰撞边界。
+// 使用正式刀盾系列资产验证等级映射、独立拆件、分组层级及功能楼板碰撞边界。
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -41,7 +41,7 @@ bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 	FText Reason;
 	if (!TestTrue(TEXT("配置所有等级的支撑地面"), Board->ApplyGroundGenerationResult(Ground, Reason))) { return false; }
 
-	for (const TCHAR* Family : { TEXT("NormalRoom"), TEXT("CannonTower"), TEXT("Farm"), TEXT("ShieldTower") })
+	for (const TCHAR* Family : { TEXT("NormalRoom"), TEXT("ArcherTower"), TEXT("CannonTower"), TEXT("Farm"), TEXT("ShieldTower") })
 	{
 		const FString DefinitionPath = FString::Printf(TEXT("/Game/MovingCastle/Data/Buildings/DA_%s.DA_%s"), Family, Family);
 		UCastleBuildingDefinition* Definition = LoadObject<UCastleBuildingDefinition>(nullptr, *DefinitionPath);
@@ -83,20 +83,34 @@ bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 					TestTrue(TEXT("地板直接挂在功能根下"), Mesh->GetAttachParent() == Building->GameplayRoot);
 					TestEqual(TEXT("功能地板保留普通房间模板的实体碰撞"), Mesh->GetCollisionEnabled(), ECollisionEnabled::QueryAndPhysics);
 					TestEqual(TEXT("功能地板继续阻挡 Pawn"), Mesh->GetCollisionResponseToChannel(ECC_Pawn), ECR_Block);
+					TestEqual(TEXT("功能地板忽略选中射线"), Mesh->GetCollisionResponseToChannel(ECC_Visibility), ECR_Ignore);
+					TestTrue(TEXT("功能地板保留导航参与开关"), Mesh->CanEverAffectNavigation());
+					TestTrue(TEXT("功能格面为 500×500 厘米"), Mesh->GetRelativeScale3D().Equals(FVector(5, 5, 0.05)));
 				}
 				else
 				{
 					++Visuals;
-					TestTrue(TEXT("表现组件直接挂在视觉根下"), Mesh->GetAttachParent() == Building->GetRootComponent());
-					TestEqual(TEXT("初始化与飞入后表现组件仍无碰撞"), Mesh->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
+					const USceneComponent* Group = Mesh->GetAttachParent();
+					TestTrue(TEXT("每个美术拆件经 BuildingMeshGroup 挂在视觉根下"), Group != nullptr
+						&& Group->GetFName() == TEXT("BuildingMeshGroup") && Group->GetAttachParent() == Building->GetRootComponent());
+					TestEqual(TEXT("美术只参与选中查询"), Mesh->GetCollisionEnabled(), ECollisionEnabled::QueryOnly);
+					TestEqual(TEXT("美术阻挡选中射线"), Mesh->GetCollisionResponseToChannel(ECC_Visibility), ECR_Block);
+					TestEqual(TEXT("美术不阻挡 Pawn"), Mesh->GetCollisionResponseToChannel(ECC_Pawn), ECR_Ignore);
 					TestFalse(TEXT("表现组件不参与导航"), Mesh->CanEverAffectNavigation());
-					TestTrue(TEXT("表现组件保持模板配置的局部位置"), Mesh->GetRelativeLocation().Equals(FVector(0, 0, 320)));
+					TestFalse(TEXT("Actor 导航边界排除美术"), Building->IsComponentRelevantForNavigation(Mesh));
+					TestTrue(TEXT("拆件保持导入后的局部原点"), Mesh->GetRelativeLocation().Equals(FVector::ZeroVector));
 					TestTrue(TEXT("表现组件保持模板配置的单位缩放"), Mesh->GetRelativeScale3D().Equals(FVector::OneVector));
 				}
 			}
-			TestEqual(TEXT("蓝图恰好新增两个网格组件"), AuthoredMeshes, 2);
-			TestEqual(TEXT("只有一个功能地板"), Floors, 1);
-			TestEqual(TEXT("只有一个纯表现模型"), Visuals, 1);
+			// 件数来自各 FBX 的独立 Geometry，五级复用 LV4 美术但功能仍是单格。
+			const int32 StandardCounts[] = { 9, 18, 29, 71, 71 };
+			const int32 ShieldCounts[] = { 10, 20, 33, 75, 75 };
+			const int32 ExpectedVisuals = bNormalRoom ? 9 : (Definition->BuildingType == ECastleBuildingType::ShieldTower
+				? ShieldCounts[Level - 1] : StandardCounts[Level - 1]);
+			const int32 ExpectedFloors = ACastleBuildingBase::GetExpectedFootprintCellCount(Level);
+			TestEqual(TEXT("全部拆件与功能格面均保留"), AuthoredMeshes, ExpectedVisuals + ExpectedFloors);
+			TestEqual(TEXT("每个占格配置一个功能格面"), Floors, ExpectedFloors);
+			TestEqual(TEXT("美术独立件数与源 FBX 一致"), Visuals, ExpectedVisuals);
 			if (Definition->BuildingType == ECastleBuildingType::ShieldTower)
 			{
 				// 盾塔使用唯一的原生护盾组件；攻击 DA 仍只属于箭塔和炮塔。

@@ -29,6 +29,13 @@ struct MOVING_CASTLE_API FCastleBuildingLevelDefinition
 	/** 此等级最终生成的 C++ 或蓝图类；类别和等级必须与所属定义一致。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "等级")
 	TSubclassOf<ACastleBuildingBase> BuildingClass;
+
+	/**
+	 * 该等级用于垂直合成形状的专用类；仅功能塔的二级和三级需要配置。
+	 * 垂直类仍必须继承同等级 C++ 建筑类，不能用其他等级或其他建筑族替代。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "等级")
+	TSubclassOf<ACastleBuildingBase> VerticalBuildingClass;
 };
 
 /**
@@ -64,6 +71,13 @@ public:
 
 	/** 查找准确等级，不把缺失等级替换为其他等级或其他建筑。 */
 	const FCastleBuildingLevelDefinition* FindLevel(int32 InLevel) const;
+
+	/**
+	 * 按实际占格尺寸解析最终生成类。
+	 * 二级/三级垂直形状使用 VerticalBuildingClass，其他合法形状使用 BuildingClass；
+	 * 尺寸不属于该等级允许的完整占用形状时返回空类并由调用方报告错误。
+	 */
+	TSubclassOf<ACastleBuildingBase> ResolveBuildingClassForDimensions(int32 InLevel, const FIntVector& Dimensions) const;
 
 	/** 校验名称、连续等级和最终生成类；模型实例的完整性由实际生成时严格检查。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑定义")
