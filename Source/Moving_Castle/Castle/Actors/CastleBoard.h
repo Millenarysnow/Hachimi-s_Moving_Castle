@@ -7,6 +7,10 @@
 #include "CastleGameplayTypes.h"
 #include "CastleBoard.generated.h"
 
+class UCastlePCGRuleSetDataAsset;
+/** 一次放置/连续合成/移除已提交后的通用事件，消费者自行处理派生布局。 */
+DECLARE_MULTICAST_DELEGATE_TwoParams(FCastleBoardLayoutCommitted, ACastleBoard*, FVector);
+
 class ACastleBuildingBase;
 class ACastleGroundTileActor;
 class ACastleMassEnemySpawner;
@@ -34,6 +38,10 @@ class MOVING_CASTLE_API ACastleBoard : public AActor
 	GENERATED_BODY()
 
 public:
+	/** 显式规则资产，缺少配置时 PCG 子系统公开报错并拒绝替换。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="棋盘|PCG")
+	TObjectPtr<UCastlePCGRuleSetDataAsset> PCGRuleSet;
+	FCastleBoardLayoutCommitted OnLayoutCommitted;
 	/** 构造函数设置默认棋盘尺寸、网格间距和随机生成策略。 */
 	ACastleBoard();
 

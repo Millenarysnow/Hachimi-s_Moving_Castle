@@ -42,7 +42,7 @@ void UBuildingMergeComponent::BeginPlay()
 	}
 }
 
-bool UBuildingMergeComponent::CaptureActor(AActor* Actor, TArray<FPartSnapshot>& OutParts, FString& Error) const
+bool UBuildingMergeComponent::CaptureActor(AActor* Actor, TArray<FPartSnapshot>& OutParts, FString& Error, const bool bCaptureOwnMotion) const
 {
 	if (const UAssemblyFlightComponent* Flight = Actor->FindComponentByClass<UAssemblyFlightComponent>(); Flight && Flight->bIsPlaying)
 	{
@@ -52,7 +52,7 @@ bool UBuildingMergeComponent::CaptureActor(AActor* Actor, TArray<FPartSnapshot>&
 	TArray<UStaticMeshComponent*> Meshes;
 	Actor->GetComponents<UStaticMeshComponent>(Meshes, false);
 	const UBuildingMergeComponent* PreviousTransition = Actor->FindComponentByClass<UBuildingMergeComponent>();
-	if (PreviousTransition == this || !PreviousTransition || !PreviousTransition->bIsPlaying)
+	if ((PreviousTransition == this && !bCaptureOwnMotion) || !PreviousTransition || !PreviousTransition->bIsPlaying)
 	{
 		PreviousTransition = nullptr;
 	}
@@ -303,6 +303,60 @@ bool UBuildingMergeComponent::StartMerge(const TArray<AActor*>& Sources)
 {
 	if (Sources.Num() < 2) { return FailMerge(TEXT("合并至少需要两个源 Actor。")); }
 	return StartChange(Sources);
+}
+
+bool UBuildingMergeComponent::GetStableVisibility(const UPrimitiveComponent* Primitive) const
+{
+	for (const FPrimitiveState& State : TargetStates)
+	{
+		if (State.Primitive.Get() == Primitive && bCaptured) { return State.bVisible; }
+	}
+	return Primitive && Primitive->IsVisible();
+}
+
+AActor* UBuildingMergeComponent::CreateVisualSnapshot(FString& Error) const
+{
+	TArray<FPartSnapshot> Snapshots;
+	if (!CaptureActor(GetOwner(), Snapshots, Error, true)) { return nullptr; }
+	FActorSpawnParameters Params;
+	Params.ObjectFlags |= RF_Transient;
+	AActor* Carrier = GetWorld()->SpawnActor<AActor>(AActor::StaticClass(), GetOwner()->GetActorTransform(), Params);
+	if (!Carrier) { Error = TEXT("旧件瞬态快照 Actor 创建失败。"); return nullptr; }
+	USceneComponent* Root = NewObject<USceneComponent>(Carrier);
+	Carrier->SetRootComponent(Root);
+	Carrier->AddInstanceComponent(Root);
+	Root->RegisterComponent();
+	Carrier->SetActorTransform(GetOwner()->GetActorTransform());
+	UBuildingMergeComponent* Pending = NewObject<UBuildingMergeComponent>(Carrier);
+	Carrier->AddInstanceComponent(Pending);
+	// 载体只提供快照，不运行自己的动画或导航观察。CaptureActor 仍可读取等待件元数据。
+	Pending->bIsPlaying = true;
+	for (const FPartSnapshot& Snapshot : Snapshots)
+	{
+		UStaticMeshComponent* Copy = NewObject<UStaticMeshComponent>(Carrier, NAME_None, RF_Transient);
+		Copy->SetupAttachment(Root);
+		Copy->SetMobility(EComponentMobility::Movable);
+		Copy->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Copy->SetCanEverAffectNavigation(false);
+		Copy->SetGenerateOverlapEvents(false);
+		Copy->SetStaticMesh(Snapshot.Mesh->GetStaticMesh());
+		Copy->ComponentTags = Snapshot.Mesh->ComponentTags;
+		for (int32 Index = 0; Index < Snapshot.Mesh->GetNumMaterials(); ++Index) { Copy->SetMaterial(Index, Snapshot.Mesh->GetMaterial(Index)); }
+		Copy->SetCastShadow(Snapshot.Mesh->CastShadow);
+		Carrier->AddInstanceComponent(Copy);
+		Copy->RegisterComponent();
+		Copy->SetWorldTransform(Snapshot.WorldTransform);
+		Copy->SetVisibility(!Snapshot.bPendingArrival);
+		if (Snapshot.bPendingArrival)
+		{
+			FMergePart& Part = Pending->Parts.AddDefaulted_GetRef();
+			Part.Visual = Copy;
+			Part.Motion = EPartMotion::Arrive;
+			Part.Delay = Snapshot.RemainingDelay;
+			Part.InitialRelative = Snapshot.WorldTransform.GetRelativeTransform(Carrier->GetActorTransform());
+		}
+	}
+	return Carrier;
 }
 
 bool UBuildingMergeComponent::StartChange(const TArray<AActor*>& Sources)

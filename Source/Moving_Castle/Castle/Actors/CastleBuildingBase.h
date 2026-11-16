@@ -17,6 +17,7 @@ class UBuildingMergeComponent;
 class UAssemblyFlightComponent;
 class UBuildingGameplayRootComponent;
 class UCastleBuildingEffectComponent;
+class UCastleBuildingPCGComponent;
 
 /**
  * 所有可放置建筑的共同 Actor 基类。
@@ -31,6 +32,9 @@ class MOVING_CASTLE_API ACastleBuildingBase : public ABuildingNavigationActor, p
 	GENERATED_BODY()
 
 public:
+	/** 原生语义组件持有原件快照与动态变体，蓝图不承载 PCG 规则逻辑。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="建筑|PCG")
+	TObjectPtr<UCastleBuildingPCGComponent> BuildingPCG;
 	/** 创建逻辑根节点、功能分组和通用建筑标签，不创建替代美术模型。 */
 	explicit ACastleBuildingBase(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 

@@ -3,6 +3,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "CastleBuildingTestUtilities.h"
+#include "NavigationSystem.h"
 #include "CastleBackpackComponent.h"
 #include "BuildingMergeComponent.h"
 #include "Engine/Engine.h"
@@ -16,9 +17,14 @@ namespace CastleVerticalMergeTests
 	UWorld* MakeWorld()
 	{
 		const UWorld::InitializationValues Settings = UWorld::InitializationValues().AllowAudioPlayback(false)
-			.CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(false);
+			.CreatePhysicsScene(true).CreateNavigation(true).CreateAISystem(false).ShouldSimulatePhysics(false);
 		UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Settings);
-		if (World != nullptr) { GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World); }
+		if (World != nullptr)
+        {
+            GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+            // 三维合成夹具现在同时覆盖PCG梯子生命周期，显式创建导航输入。
+            check(FNavigationSystem::GetCurrent<UNavigationSystemV1>(World)->GetDefaultNavDataInstance(FNavigationSystem::Create));
+        }
 		return World;
 	}
 

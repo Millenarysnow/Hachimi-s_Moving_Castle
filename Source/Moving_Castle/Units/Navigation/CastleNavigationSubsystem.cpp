@@ -147,10 +147,29 @@ namespace CastlePatrolNavigation
 			const FVector Start = Corners[Corner - 1].Location;
 			const FVector End = Corners[Corner].Location;
 			const FNavPathPoint& SegmentStart = Corners[Corner - 1];
-			const bool bIsNavLink = Leg.IsPathSegmentANavLink(Corner - 1) || SegmentStart.CustomNavLinkId.IsValid();
+			FNavLinkId LinkId = SegmentStart.CustomNavLinkId;
+			// 当查询点正落在接驳锚点时，Recast 简化后的首/末角点可能不带 CustomNavLinkId。
+			// 连接身份仍存在于本次求解的走廊多边形中；只承认走廊证据及精确两端匹配，
+			// 不从世界里找附近梯子，也不能把普通跨层直线误当成有效连接。
+			for (const NavNodeRef Poly : Leg.PathCorridor)
+			{
+				const FNavLinkId CorridorLinkId = Mesh.GetNavLinkUserId(Poly);
+				if (!CorridorLinkId.IsValid()) { continue; }
+				FVector A, B;
+				if (!Mesh.GetLinkEndPoints(Poly, A, B)) { continue; }
+				auto MatchesAnchor = [](const FVector& Point, const FVector& Anchor)
+				{
+					return FVector::DistSquared2D(Point, Anchor) < 1.0 && FMath::Abs(Point.Z - Anchor.Z) <= 20.0;
+				};
+				if ((MatchesAnchor(Start, A) && MatchesAnchor(End, B)) || (MatchesAnchor(Start, B) && MatchesAnchor(End, A)))
+				{
+					LinkId = CorridorLinkId;
+					break;
+				}
+			}
+			const bool bIsNavLink = Leg.IsPathSegmentANavLink(Corner - 1) || LinkId.IsValid();
 			if (bIsNavLink)
 			{
-				const FNavLinkId LinkId = SegmentStart.CustomNavLinkId;
 				INavLinkCustomInterface* RegisteredLink = LinkId.IsValid() ? Navigation.GetCustomLink(LinkId) : nullptr;
 				UCastleLadderLinkComponent* Ladder = Cast<UCastleLadderLinkComponent>(RegisteredLink);
 				if (!Ladder || Ladder->GetWorld() != Navigation.GetWorld() || !Ladder->IsRegistered()

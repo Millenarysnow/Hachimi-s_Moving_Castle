@@ -4,6 +4,7 @@
 
 #include "CastleBuildingDefinition.h"
 #include "CastleBoard.h"
+#include "Castle/PCG/CastleBuildingPCGComponent.h"
 #include "BuildingMergeComponent.h"
 #include "AssemblyFlightComponent.h"
 #include "Components/Building/BuildingGameplayRootComponent.h"
@@ -23,6 +24,7 @@ ACastleBuildingBase::ACastleBuildingBase(const FObjectInitializer& ObjectInitial
 	: Super(ObjectInitializer)
 {
 	BuildingEffect = CreateDefaultSubobject<UCastleBuildingEffectComponent>(TEXT("BuildingEffect"));
+	BuildingPCG = CreateDefaultSubobject<UCastleBuildingPCGComponent>(TEXT("BuildingPCG"));
 	// 建筑逻辑和模型组件现在位于同一个 Actor；VisualRoot 只提供统一的组件根节点。
 	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
 	SetRootComponent(VisualRoot);

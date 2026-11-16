@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
 #include "CastleBuildingTestUtilities.h"
+#include "NavigationSystem.h"
 #include "CastleEconomyComponent.h"
 #include "CastleMassTraits.h"
 #include "CastleMassUnitSubsystem.h"
@@ -51,9 +52,11 @@ namespace CastleBuildingLevelTests
 		explicit FWorld(FAutomationTestBase* InTest) : Test(InTest)
 		{
 			const auto Settings = UWorld::InitializationValues().AllowAudioPlayback(false).RequiresHitProxies(false)
-				.CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(false).SetTransactional(false);
+				.CreatePhysicsScene(true).CreateNavigation(true).CreateAISystem(false).ShouldSimulatePhysics(false).SetTransactional(false);
 			World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Settings);
 			GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+            // PCG上下邻接会注册真实梯子，夹具必须显式提供动态Recast数据。
+            check(FNavigationSystem::GetCurrent<UNavigationSystemV1>(World)->GetDefaultNavDataInstance(FNavigationSystem::Create));
 			Models = MakeUnique<CastleBuildingTests::FScopedNativeBuildingModels>(World);
 			Board = World->SpawnActor<ACastleBoard>();
 			Board->GridSize = FIntVector(12, 10, 10);
@@ -77,7 +80,9 @@ namespace CastleBuildingLevelTests
 		~FWorld()
 		{
 			Models.Reset();
-			World->DestroyWorld(false);
+			// 显式进入世界关闭状态，让梯子注销不再向已退出的Recast数据请求刷新。
+            World->BeginTearingDown();
+            World->DestroyWorld(false);
 			GEngine->DestroyWorldContext(World);
 		}
 

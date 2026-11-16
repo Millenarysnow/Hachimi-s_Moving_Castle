@@ -101,6 +101,8 @@ void ACastleBuildingTriggerDemo::BeginPlay()
 	Level2.Level = 2;
 	Level2.BuildingClass = LoadClass<ACastleBuildingBase>(nullptr,
 		TEXT("/Game/MovingCastle/BP/BP_ArcherTower_lv2.BP_ArcherTower_lv2_C"));
+	Level2.VerticalBuildingClass = LoadClass<ACastleBuildingBase>(nullptr,
+		TEXT("/Game/MovingCastle/BP/BP_ArcherTower_lv2_vertical.BP_ArcherTower_lv2_vertical_C"));
 	A->Levels = {Level1, Level2};
 	UCastleBuildingDefinition* B = NewObject<UCastleBuildingDefinition>(Board);
 	B->DisplayName = FText::FromString(TEXT("演示单格农田"));
