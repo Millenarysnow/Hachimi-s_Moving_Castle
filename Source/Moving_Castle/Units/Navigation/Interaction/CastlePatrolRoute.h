@@ -30,6 +30,9 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 	bool IsEditing() const { return bEditing; }
 
+	/** 开战只取消草稿和输入占用，不提交、不清除正式路线。 */
+	void CancelEditingDraft();
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

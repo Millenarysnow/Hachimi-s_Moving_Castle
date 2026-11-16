@@ -18,6 +18,8 @@
 #include "CastleMainTowerComponent.h"
 #include "CastleMassEnemySpawner.h"
 #include "MassEntityConfigAsset.h"
+#include "Castle/Director/CastleDirectorSubsystem.h"
+#include "Blueprint/UserWidget.h"
 
 ACastlePlayerController::ACastlePlayerController()
 {
@@ -75,9 +77,15 @@ void ACastlePlayerController::Tick(float DeltaSeconds)
 
 	if (IsLocalController())
 	{
-		if (!Shop->IsShopOpen())
+		FText EditReason;
+		if (!Shop->IsShopOpen() && IsDirectorEditingAllowed(EditReason))
 		{
 			UpdateGridCursor();
+		}
+		else
+		{
+			CurrentGridCursorTarget = FCastleGridCursorTarget();
+			if (GridCursor) { GridCursor->HideCursor(); }
 		}
 		// 出售和放置会使数组槽位前移，空包无选中，有牌时把索引保持在有效范围。
 		if (ActiveBoard != nullptr && ActiveBoard->PrototypeBackpack != nullptr)
@@ -266,6 +274,8 @@ void ACastlePlayerController::SelectBackpackSlot(int32 SlotIndex)
 
 void ACastlePlayerController::PlacePrototypeBuildingAtCursor()
 {
+	FText EditReason;
+	if (!IsDirectorEditingAllowed(EditReason)) { ShowDirectorMessage(EditReason); return; }
 	// UI 使用鼠标时绝不继续向世界发送左键放置，避免购买同时误放建筑。
 	if (Shop->IsShopOpen())
 	{
@@ -291,6 +301,9 @@ void ACastlePlayerController::ToggleShop()
 		Shop->CloseShop();
 		return;
 	}
+	FText AccessReason;
+	if (const UCastleDirectorSubsystem* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
+		Director && !Director->IsShopAccessAllowed(AccessReason)) { ShowDirectorMessage(AccessReason); return; }
 	if (ActiveBoard == nullptr)
 	{
 		FindActiveBoard();
@@ -304,21 +317,61 @@ void ACastlePlayerController::ToggleShop()
 
 void ACastlePlayerController::HandleShopChanged()
 {
-	const bool bNewOpen = Shop->IsShopOpen();
-	if (bNewOpen == bShopInputActive)
+	RefreshModalInput();
+}
+
+bool ACastlePlayerController::IsDirectorEditingAllowed(FText& OutReason) const
+{
+	const UCastleDirectorSubsystem* Director = GetWorld() ? GetWorld()->GetSubsystem<UCastleDirectorSubsystem>() : nullptr;
+	OutReason = FText::GetEmpty();
+	return !Director || Director->IsEditingAllowed(OutReason);
+}
+
+void ACastlePlayerController::ShowDirectorMessage(const FText& Message) const
+{
+	ShowGameplayMessage(Message.ToString(), false);
+}
+
+void ACastlePlayerController::SetDirectorModalState(const bool bRewardOpen, const bool bGameOverOpen, UUserWidget* FocusWidget)
+{
+	// 所有模态入口共享同一商店事件处理器，重复接线不会叠加监听者。
+	Shop->OnShopChanged.AddUniqueDynamic(this, &ACastlePlayerController::HandleShopChanged);
+	bRewardInputActive = bRewardOpen;
+	bGameOverInputActive = bGameOverOpen;
+	DirectorFocusWidget = FocusWidget;
+	RefreshModalInput();
+}
+
+void ACastlePlayerController::RefreshModalInput()
+{
+	const bool bNewOpen = Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive;
+	if (bNewOpen != bModalInputActive)
 	{
-		return;
+		bModalInputActive = bNewOpen;
+		// 只由本方法持有一份忽略计数；奖励和商店交接绝不各自重复增减。
+		SetIgnoreMoveInput(bNewOpen);
+		SetIgnoreLookInput(bNewOpen);
 	}
-	bShopInputActive = bNewOpen;
 	bShowMouseCursor = bNewOpen;
-	// Ignore 标志只在状态切换时设置，避免多次购买把内部忽略计数不断叠加。
-	SetIgnoreMoveInput(bNewOpen);
-	SetIgnoreLookInput(bNewOpen);
-	if (bNewOpen)
+	// 游戏结束会在本帧暂停世界，必须立即清理目标，不能等下一帧控制器 Tick。
+	FText EditReason;
+	if (bNewOpen || !IsDirectorEditingAllowed(EditReason))
+	{
+		CurrentGridCursorTarget = FCastleGridCursorTarget();
+		if (GridCursor) { GridCursor->HideCursor(); }
+	}
+	if (bGameOverInputActive)
+	{
+		FInputModeUIOnly Mode;
+		if (DirectorFocusWidget) { Mode.SetWidgetToFocus(DirectorFocusWidget->TakeWidget()); }
+		SetInputMode(Mode);
+	}
+	else if (bNewOpen)
 	{
 		FInputModeGameAndUI Mode;
 		Mode.SetHideCursorDuringCapture(false);
 		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+		if (bRewardInputActive && DirectorFocusWidget) { Mode.SetWidgetToFocus(DirectorFocusWidget->TakeWidget()); }
 		SetInputMode(Mode);
 		CurrentGridCursorTarget = FCastleGridCursorTarget();
 		if (GridCursor != nullptr)

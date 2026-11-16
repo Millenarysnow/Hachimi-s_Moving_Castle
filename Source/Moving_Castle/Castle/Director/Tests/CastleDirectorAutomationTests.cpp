@@ -11,6 +11,7 @@
 #include "CastleBackpackComponent.h"
 #include "CastleBuildingTestUtilities.h"
 #include "Engine/World.h"
+#include "EngineGlobals.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/OutputDeviceNull.h"
 
@@ -133,4 +134,38 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 	}
 	return true;
 }
+/** 连续开启/关闭奖励和商店时，两种输入忽略计数都必须完整归零。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDirectorModalInputTest, "MovingCastle.Director.ModalInput",
+ EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FCastleDirectorModalInputTest::RunTest(const FString& Parameters)
+{
+	// 该独立测试世界不跑整张地图 BeginPlay；显式允许 Actor 动态事件，使商店正式通知链路可执行。
+	TGuardValue<bool> AllowActorEvents(GAllowActorScriptExecutionInEditor, true);
+ const UWorld::InitializationValues Init = UWorld::InitializationValues().AllowAudioPlayback(false)
+  .CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(false);
+ UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Init);
+ if (!TestNotNull(TEXT("创建输入测试世界"), World)) { return false; }
+ ON_SCOPE_EXIT { World->DestroyWorld(false); };
+ ACastleBoard* Board = World->SpawnActor<ACastleBoard>();
+ CastleBuildingTests::ConfigureBoard(Board);
+ ACastlePlayerController* Controller = World->SpawnActor<ACastlePlayerController>();
+ FText Reason;
+ Controller->SetDirectorModalState(true, false, nullptr);
+ TestTrue(TEXT("奖励打开忽略移动"), Controller->IsMoveInputIgnored());
+ TestTrue(TEXT("奖励打开忽略视角"), Controller->IsLookInputIgnored());
+ Controller->SetDirectorModalState(true, false, nullptr);
+ TestTrue(TEXT("奖励期间商店事务打开"), Controller->GetShop()->TryOpenForReward(Controller->GetEconomy(), Board, Reason));
+ Controller->SetDirectorModalState(false, false, nullptr);
+ TestTrue(TEXT("奖励关闭但商店仍打开时移动仍锁定"), Controller->IsMoveInputIgnored());
+ Controller->GetShop()->CloseShop();
+ TestFalse(TEXT("奖励到商店再关闭后移动归零"), Controller->IsMoveInputIgnored());
+ TestFalse(TEXT("奖励到商店再关闭后视角归零"), Controller->IsLookInputIgnored());
+ Controller->SetDirectorModalState(true, false, nullptr);
+ Controller->SetDirectorModalState(false, false, nullptr);
+ TestFalse(TEXT("单独奖励关闭移动归零"), Controller->IsMoveInputIgnored());
+ TestFalse(TEXT("单独奖励关闭视角归零"), Controller->IsLookInputIgnored());
+ return true;
+}
+
+
 #endif

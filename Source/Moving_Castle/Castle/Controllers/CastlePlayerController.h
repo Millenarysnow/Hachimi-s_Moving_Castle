@@ -13,6 +13,7 @@ class UCastleEconomyComponent;
 class UCastleShopComponent;
 class ACastleMassSpawner;
 class ACastleMassEnemySpawner;
+class UUserWidget;
 
 /**
  * 移动城堡的自有玩家控制器。
@@ -54,6 +55,15 @@ public:
 	/** B 键切换商店；首次打开初始化商品，关闭后恢复中心指针建造。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|商店")
 	void ToggleShop();
+
+	/** 导演界面与商店共用单一输入状态，避免 IgnoreInput 计数叠加或遗漏恢复。 */
+	void SetDirectorModalState(bool bRewardOpen, bool bGameOverOpen, UUserWidget* FocusWidget);
+
+	/** 查询导演编辑权限；未运行导演的世界保持原有行为。 */
+	bool IsDirectorEditingAllowed(FText& OutReason) const;
+
+	/** 对外显示流程门控原因，输入拒绝必须可见。 */
+	void ShowDirectorMessage(const FText& Message) const;
 
 	/** 测试控制台命令：CastleAddGold 100，通过账户接口发放金币并显示操作结果。 */
 	UFUNCTION(Exec)
@@ -110,6 +120,9 @@ protected:
 	UFUNCTION()
 	void HandleShopChanged();
 
+	/** 从商店和导演界面最终状态计算鼠标、输入模式及忽略计数。 */
+	void RefreshModalInput();
+
 	/** 统一把收支、选牌和商店失败原因写入日志及屏幕，保证无资源时也有反馈。 */
 	void ShowGameplayMessage(const FString& Message, bool bSuccess) const;
 
@@ -124,9 +137,13 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "经济", meta = (ClampMin = "0"))
 	int32 InitialGold = 100;
 
-	/** 当前选中的实际背包槽位和已经应用到输入系统的商店状态。 */
+	/** 当前选中的实际背包槽位，以及已经应用到输入系统的模态界面总状态。 */
 	int32 SelectedBackpackIndex = 0;
-	bool bShopInputActive = false;
+	bool bModalInputActive = false;
+	bool bRewardInputActive = false;
+	bool bGameOverInputActive = false;
+	UPROPERTY(Transient)
+	TObjectPtr<UUserWidget> DirectorFocusWidget;
 
 	/** 当前关卡的棋盘实例。 */
 	UPROPERTY(Transient)

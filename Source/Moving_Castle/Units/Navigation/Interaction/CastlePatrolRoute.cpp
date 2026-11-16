@@ -65,7 +65,14 @@ bool ACastlePatrolRoute::SetWorldWaypoints(const TArray<FVector>& Waypoints, FTe
 bool ACastlePatrolRoute::CanEdit() const
 {
 	const auto* Controller = Cast<ACastlePlayerController>(GetWorld()->GetFirstPlayerController());
-	return bOwnsRoute && bAllowPlayerEditing && (!Controller || !Controller->GetShop()->IsShopOpen());
+	FText Reason;
+	return bOwnsRoute && bAllowPlayerEditing && (!Controller || (!Controller->GetShop()->IsShopOpen() && Controller->IsDirectorEditingAllowed(Reason)));
+}
+
+void ACastlePatrolRoute::CancelEditingDraft()
+{
+	SetEditing(false);
+	DraftWaypoints.Reset();
 }
 
 void ACastlePatrolRoute::SetEditing(bool bNewEditing)
@@ -80,6 +87,9 @@ void ACastlePatrolRoute::SetEditing(bool bNewEditing)
 
 void ACastlePatrolRoute::ToggleEditing()
 {
+	const auto* Controller = Cast<ACastlePlayerController>(GetWorld()->GetFirstPlayerController());
+	FText Reason;
+	if (Controller && !Controller->IsDirectorEditingAllowed(Reason)) { ShowMessage(Reason.ToString(), false); return; }
 	if (!CanEdit()) { return; }
 	if (bEditing)
 	{
@@ -155,7 +165,7 @@ void ACastlePatrolRoute::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 	// 打开商店时退出草稿模式并释放左键，保证购买/放置输入不会被巡逻编辑截获。
-	if (bEditing && !CanEdit()) { SetEditing(false); }
+	if (bEditing && !CanEdit()) { CancelEditingDraft(); }
 	if (!bShowRoute || !bOwnsRoute) { return; }
 	const auto* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
 	const auto Path = Navigation->AcquireSharedPath();

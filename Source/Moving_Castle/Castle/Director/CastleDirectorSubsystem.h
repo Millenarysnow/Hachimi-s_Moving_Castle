@@ -95,6 +95,5 @@ private:
 	bool bShopPermission = false;
 	bool bApplyingReward = false;
 	bool bAutomation = false;
-	bool bModalInputActive = false;
 	uint64 LastNodeSelectionFrame = MAX_uint64;
 };

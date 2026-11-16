@@ -340,30 +340,8 @@ void UCastleDirectorSubsystem::UpdatePresentation()
 	if (HUDWidget) { HUDWidget->SetVisibility(ESlateVisibility::HitTestInvisible); }
 	if (RewardWidget) { RewardWidget->SetVisibility(Phase == ECastleDirectorPhase::Reward ? ESlateVisibility::Visible : ESlateVisibility::Collapsed); }
 	if (GameOverWidget) { GameOverWidget->SetVisibility(Phase == ECastleDirectorPhase::GameOver ? ESlateVisibility::Visible : ESlateVisibility::Collapsed); }
-	const bool bModal = Phase == ECastleDirectorPhase::Reward || Phase == ECastleDirectorPhase::GameOver;
-	if (bModalInputActive != bModal)
-	{
-		bModalInputActive = bModal;
-		Controller->SetIgnoreMoveInput(bModal);
-		Controller->SetIgnoreLookInput(bModal);
-	}
-	const bool bShopOpen = Controller->GetShop()->IsShopOpen();
-	Controller->bShowMouseCursor = bModal || bShopOpen;
-	if (Phase == ECastleDirectorPhase::GameOver)
-	{
-		FInputModeUIOnly Mode;
-		Mode.SetWidgetToFocus(GameOverWidget->TakeWidget());
-		Controller->SetInputMode(Mode);
-	}
-	else if (bModal || bShopOpen)
-	{
-		FInputModeGameAndUI Mode;
-		Mode.SetHideCursorDuringCapture(false);
-		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-		if (bModal) { Mode.SetWidgetToFocus(RewardWidget->TakeWidget()); }
-		Controller->SetInputMode(Mode);
-	}
-	else { FInputModeGameOnly Mode; Controller->SetInputMode(Mode); }
+	Controller->SetDirectorModalState(Phase == ECastleDirectorPhase::Reward, Phase == ECastleDirectorPhase::GameOver,
+		Phase == ECastleDirectorPhase::GameOver ? GameOverWidget.Get() : RewardWidget.Get());
 }
 
 FText UCastleDirectorSubsystem::GetRewardLabel(const ECastleDirectorReward Reward) const
@@ -407,7 +385,7 @@ void UCastleDirectorSubsystem::Deinitialize()
 	if (Tower) { Tower->OnHealthChanged.RemoveDynamic(this, &UCastleDirectorSubsystem::HandleTowerHealthChanged); }
 	DestroyNodes();
 	for (UUserWidget* Widget : {HUDWidget.Get(), RewardWidget.Get(), GameOverWidget.Get()}) { if (Widget) { Widget->RemoveFromParent(); } }
-	if (bModalInputActive && IsValid(Controller)) { Controller->SetIgnoreMoveInput(false); Controller->SetIgnoreLookInput(false); }
+	if (IsValid(Controller)) { Controller->SetDirectorModalState(false, false, nullptr); }
 	bRunning = false;
 	Super::Deinitialize();
 }
