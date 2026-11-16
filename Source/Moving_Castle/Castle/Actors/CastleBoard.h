@@ -192,7 +192,7 @@ public:
 
 	/** 只控制地块表现和 Visibility 命中；重复设置同一状态没有副作用。 */
 	UFUNCTION(BlueprintCallable, Category="移动城堡|棋盘")
-	void SetGroundPresentationHidden(bool bHidden);
+	void SetGroundPresentationHidden(bool bInHidden);
 
 	UFUNCTION(BlueprintPure, Category="移动城堡|棋盘")
 	bool IsGroundPresentationHidden() const { return bGroundPresentationHidden; }

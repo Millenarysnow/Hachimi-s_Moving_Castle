@@ -407,9 +407,9 @@ bool ACastleBoard::ValidateGroundResult(const FCastleGroundGenerationResult& Res
 	return true;
 }
 
-void ACastleBoard::SetGroundPresentationHidden(const bool bHidden)
+void ACastleBoard::SetGroundPresentationHidden(const bool bInHidden)
 {
-	if (bGroundPresentationHidden == bHidden) { return; }
+	if (bGroundPresentationHidden == bInHidden) { return; }
 	// 先核对整份索引，损坏状态明确报错，不能静默略过丢失的地块。
 	for (const auto& Pair : GroundTiles)
 	{
@@ -420,8 +420,8 @@ void ACastleBoard::SetGroundPresentationHidden(const bool bHidden)
 			return;
 		}
 	}
-	for (const auto& Pair : GroundTiles) { Pair.Value->SetGroundPresentationHidden(bHidden); }
-	bGroundPresentationHidden = bHidden;
+	for (const auto& Pair : GroundTiles) { Pair.Value->SetGroundPresentationHidden(bInHidden); }
+	bGroundPresentationHidden = bInHidden;
 }
 
 void ACastleBoard::GetBoardExtent(FIntPoint& OutMin, FIntPoint& OutMax) const
@@ -1261,9 +1261,14 @@ bool ACastleBoard::RegisterBuilding(ACastleBuildingBase* Building, FText& OutFai
 	TSet<FIntVector> UniqueCoordinates;
 	for (const FIntVector& Coordinate : OccupiedCoordinates)
 	{
-		if (!IsCoordinateWithinBoard(Coordinate))
+		// 登记与放置使用同一允许范围；合成与回收再放置也不能退回旧棋盘边界。
+		FIntPoint Min, Max;
+		GetBoardExtent(Min, Max);
+		if (Coordinate.X < Min.X-MaxOverhangCells || Coordinate.X > Max.X+MaxOverhangCells
+			|| Coordinate.Y < Min.Y-MaxOverhangCells || Coordinate.Y > Max.Y+MaxOverhangCells
+			|| Coordinate.Z < GridOrigin.Z || Coordinate.Z >= GridOrigin.Z+GridSize.Z)
 		{
-			OutFailureReason = FText::FromString(TEXT("建筑占用坐标超出棋盘边界。"));
+			OutFailureReason = FText::FromString(TEXT("建筑占用坐标超出允许的棋盘越界范围或层高。"));
 			return false;
 		}
 

@@ -131,11 +131,11 @@ bool ACastleGroundTileActor::InitializeGroundCell(const FCastleGroundCell& InGro
 	return true;
 }
 
-void ACastleGroundTileActor::SetGroundPresentationHidden(const bool bHidden)
+void ACastleGroundTileActor::SetGroundPresentationHidden(const bool bInHidden)
 {
  // 只改表现与专用射线通道，不重建网格，不触碰任何导航设置。
- TileMesh->SetVisibility(!bHidden);
- NumberPlate->SetVisibility(!bHidden);
- NumberLabel->SetVisibility(!bHidden);
- TileMesh->SetCollisionResponseToChannel(ECC_Visibility, bHidden ? ECR_Ignore : ECR_Block);
+ TileMesh->SetVisibility(!bInHidden);
+ NumberPlate->SetVisibility(!bInHidden);
+ NumberLabel->SetVisibility(!bInHidden);
+ TileMesh->SetCollisionResponseToChannel(ECC_Visibility, bInHidden ? ECR_Ignore : ECR_Block);
 }

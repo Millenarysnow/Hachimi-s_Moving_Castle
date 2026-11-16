@@ -5,6 +5,7 @@
 #include "CastleBoard.h"
 #include "CastleBuildingTestUtilities.h"
 #include "CastleBackpackComponent.h"
+#include "Castle/PCG/CastleBuildingPCGRule.h"
 #include "CastleGroundTileActor.h"
 #include "CastleBoardExpansionTestGenerator.h"
 #include "Components/StaticMeshComponent.h"
@@ -173,6 +174,9 @@ bool FCastleBoardOverhangTest::RunTest(const FString& Parameters)
  ACastleBoard* Board = World->SpawnActor<ACastleBoard>();
  Board->GridSize = FIntVector(5,5,8);
  CastleBuildingTests::ConfigureBoard(Board);
+ // 本组验证棋盘边界，不构建梯子：显式复制正式资产配置，仅选用平面规则。
+ Board->PCGRuleSet = DuplicateObject<UCastlePCGRuleSetDataAsset>(Board->PCGRuleSet, Board);
+ Board->PCGRuleSet->Rules = { NewObject<UCastlePCGPlanarRule>(Board->PCGRuleSet) };
  FText Reason;
  if (!TestTrue(TEXT("生成地面"), Board->GenerateGround(Reason))) { return false; }
  FCastleGroundCell Ground;
