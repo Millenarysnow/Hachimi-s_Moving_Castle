@@ -13,6 +13,32 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "Misc/ScopeExit.h"
+#include "HAL/IConsoleManager.h"
+#include "NavigationSystem.h"
+#include "NavigationData.h"
+#include "Moving_Castle.h"
+
+namespace CastleBoardValidation
+{
+ /** 验收专用原生命令：完整 RebuildAll 后同步等待，不把异步派发耗时冒充构建耗时。 */
+ FAutoConsoleCommandWithWorldAndArgs RebuildTiming(TEXT("CastleBoardTestRebuildNavigation"), TEXT("自动化验收专用：测量完整导航重建。"),
+ FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
+ {
+  UNavigationSystemV1* Nav = FNavigationSystem::GetCurrent<UNavigationSystemV1>(World);
+  ANavigationData* Data = Nav ? Nav->GetDefaultNavDataInstance(FNavigationSystem::DontCreate) : nullptr;
+  if (!Nav || !Data)
+  {
+   UE_LOG(LogMoving_Castle, Error, TEXT("W2_NAV_REBUILD_FAILED：世界没有导航系统或已有导航数据。"));
+   return;
+  }
+  const double Start=FPlatformTime::Seconds();
+  // 该地图要求已有 Recast；直接重建已有导航数据，不触发缺失数据的自动创建。
+  Data->RebuildAll();
+  Data->EnsureBuildCompletion();
+  UE_LOG(LogMoving_Castle, Display, TEXT("W2_NAV_REBUILD_SECONDS=%.6f"), FPlatformTime::Seconds()-Start);
+ }));
+}
+
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleGroundCoordinateStableTest, "MovingCastle.Board.CoordinateStableGround",
  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
