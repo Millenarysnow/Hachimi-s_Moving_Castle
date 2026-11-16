@@ -7,6 +7,9 @@
 #include "CastleGameplayTypes.h"
 #include "CastleBoard.generated.h"
 
+class ACastleBoard;
+/** 新范围及外围地块完整提交后广播，监听者可以立即查询新范围。 */
+DECLARE_MULTICAST_DELEGATE_OneParam(FCastleBoardExpanded, ACastleBoard*);
 class UCastlePCGRuleSetDataAsset;
 /** 一次放置/连续合成/移除已提交后的通用事件，消费者自行处理派生布局。 */
 DECLARE_MULTICAST_DELEGATE_TwoParams(FCastleBoardLayoutCommitted, ACastleBoard*, FVector);
@@ -48,6 +51,14 @@ public:
 	/** 起始 X/Y 尺寸和垂直层数；运行时扩张不修改它，世界坐标映射始终固定。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸")
 	FIntVector GridSize = FIntVector(10, 10, 8);
+
+	/** 可扩张的单边上限；配置非法时明确拒绝，不夹紧。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="棋盘|尺寸")
+	int32 MaxBoardSize = 15;
+
+	/** 当前 XY 范围以外允许依附建筑伸出的格数。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="棋盘|尺寸")
+	int32 MaxOverhangCells = 2;
 
 	/** 棋盘网格原点，地面生成结果和放置坐标都使用同一坐标系。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸")
@@ -179,6 +190,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|棋盘")
 	bool ApplyGroundGenerationResult(const FCastleGroundGenerationResult& Result, FText& OutFailureReason);
 
+	/** 对称扩张一圈；数据或 Actor 创建失败时整次操作不提交。 */
+	UFUNCTION(BlueprintCallable, Category="移动城堡|棋盘")
+	bool ExpandBoard(FText& OutFailureReason);
+
+	/** 当前 XY 闭区间；与固定世界坐标映射原点分离。 */
+	UFUNCTION(BlueprintPure, Category="移动城堡|棋盘")
+	void GetBoardExtent(FIntPoint& OutMin, FIntPoint& OutMax) const;
+
+	FCastleBoardExpanded OnBoardExpanded;
+
 	/** 查询一个坐标对应的地面数据。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
 	bool TryGetGroundCell(const FIntVector& Coordinate, FCastleGroundCell& OutCell) const;
@@ -288,6 +309,13 @@ protected:
 
 	/** 批量生成独立格子 Actor；只有整批成功后才替换现有棋盘格。 */
 	bool RebuildGroundVisualization(const TArray<FCastleGroundCell>& Cells, FText& OutFailureReason);
+
+	/** 仅准备新 Actor，调用方在全批成功后提交索引；失败销毁本批临时 Actor。 */
+	bool CreateGroundTileActors(const TArray<FCastleGroundCell>& Cells,
+		TMap<FIntVector, TObjectPtr<ACastleGroundTileActor>>& OutTiles, FText& OutFailureReason);
+
+	/** 校验指定闭区间的完整地面数据，既用于整盘替换也用于扩张候选。 */
+	bool ValidateGroundResult(const FCastleGroundGenerationResult& Result, FIntPoint Min, FIntPoint Max, FText& OutFailureReason) const;
 
 	/** 销毁本管理器生成的全部地面格 Actor，并清空坐标索引。 */
 	void DestroyGroundTileActors();

@@ -321,8 +321,10 @@ bool ACastleBoard::GenerateGround(FText& OutFailureReason)
 	}
 
 	FCastleGroundGenerationRequest Request;
-	Request.GridSize = GridSize;
-	Request.Origin = GridOrigin;
+	FIntPoint Min, Max;
+	GetBoardExtent(Min, Max);
+	Request.GridSize = FIntVector(Max.X-Min.X+1, Max.Y-Min.Y+1, GridSize.Z);
+	Request.Origin = FIntVector(Min.X, Min.Y, GridOrigin.Z);
 	Request.Seed = GroundSeed;
 
 	const FCastleGroundGenerationResult Result = Generator->GenerateGround(Request);
@@ -350,7 +352,24 @@ bool ACastleBoard::ApplyGroundGenerationResult(const FCastleGroundGenerationResu
 		return false;
 	}
 
-	const int64 ExpectedCellCount = static_cast<int64>(GridSize.X) * static_cast<int64>(GridSize.Y);
+	FIntPoint Min, Max;
+	GetBoardExtent(Min, Max);
+	if (!ValidateGroundResult(Result, Min, Max, OutFailureReason)) { return false; }
+
+	// 数据和 Actor 都准备完成后才提交新地面，失败时保留原棋盘状态。
+	const FScopedCastleNavigationChange NavigationChange(GetWorld(), this);
+	if (!RebuildGroundVisualization(Result.Cells, OutFailureReason))
+	{
+		return false;
+	}
+	GeneratedGroundCells = Result.Cells;
+	return true;
+}
+
+bool ACastleBoard::ValidateGroundResult(const FCastleGroundGenerationResult& Result, const FIntPoint Min,
+	const FIntPoint Max, FText& OutFailureReason) const
+{
+	const int64 ExpectedCellCount = static_cast<int64>(Max.X - Min.X + 1) * (Max.Y - Min.Y + 1);
 	if (Result.Cells.Num() != ExpectedCellCount)
 	{
 		OutFailureReason = FText::FromString(FString::Printf(TEXT("地面结果数量不完整：需要 %lld 个，实际收到 %d 个。"), ExpectedCellCount, Result.Cells.Num()));
@@ -362,7 +381,8 @@ bool ACastleBoard::ApplyGroundGenerationResult(const FCastleGroundGenerationResu
 
 	for (const FCastleGroundCell& Cell : Result.Cells)
 	{
-		if (!IsCoordinateWithinBoard(Cell.Coordinate) || Cell.Coordinate.Z != GridOrigin.Z)
+		if (Cell.Coordinate.X < Min.X || Cell.Coordinate.X > Max.X
+			|| Cell.Coordinate.Y < Min.Y || Cell.Coordinate.Y > Max.Y || Cell.Coordinate.Z != GridOrigin.Z)
 		{
 			OutFailureReason = FText::FromString(FString::Printf(TEXT("地面结果包含越界或非地面层坐标 (%d, %d, %d)。"), Cell.Coordinate.X, Cell.Coordinate.Y, Cell.Coordinate.Z));
 			return false;
@@ -384,13 +404,74 @@ bool ACastleBoard::ApplyGroundGenerationResult(const FCastleGroundGenerationResu
 		}
 	}
 
-	// 数据和 Actor 都准备完成后才提交新地面，失败时保留原棋盘状态。
-	const FScopedCastleNavigationChange NavigationChange(GetWorld(), this);
-	if (!RebuildGroundVisualization(Result.Cells, OutFailureReason))
+	return true;
+}
+
+void ACastleBoard::GetBoardExtent(FIntPoint& OutMin, FIntPoint& OutMax) const
+{
+	OutMin = FIntPoint(GridOrigin.X - ExpansionRings, GridOrigin.Y - ExpansionRings);
+	OutMax = FIntPoint(GridOrigin.X + GridSize.X - 1 + ExpansionRings, GridOrigin.Y + GridSize.Y - 1 + ExpansionRings);
+}
+
+bool ACastleBoard::ExpandBoard(FText& OutFailureReason)
+{
+	OutFailureReason = FText::GetEmpty();
+	// 所有拒绝都发生在提交之前；既不临时改尺寸，也不重建已有 Actor。
+	const auto Reject = [this, &OutFailureReason](const FString& Reason)
 	{
+		OutFailureReason = FText::FromString(Reason);
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 拒绝扩张：%s"), *GetName(), *Reason);
+		return false;
+	};
+	if (!ValidateBoardDimensions(OutFailureReason)) { return Reject(OutFailureReason.ToString()); }
+	FIntPoint Min, Max;
+	GetBoardExtent(Min, Max);
+	if (Max.X - Min.X + 3 > MaxBoardSize || Max.Y - Min.Y + 3 > MaxBoardSize)
+	{
+		OutFailureReason = FText::FromString(FString::Printf(TEXT("当前尺寸 %d×%d，已达上限 %d×%d，不能再扩张一圈。"),
+			Max.X-Min.X+1, Max.Y-Min.Y+1, MaxBoardSize, MaxBoardSize));
+		UE_LOG(LogMoving_Castle, Warning, TEXT("棋盘 %s：%s"), *GetName(), *OutFailureReason.ToString());
 		return false;
 	}
-	GeneratedGroundCells = Result.Cells;
+	FCastleGroundGenerationResult Current;
+	Current.Cells = GeneratedGroundCells;
+	if (!ValidateGroundResult(Current, Min, Max, OutFailureReason)) { return Reject(OutFailureReason.ToString()); }
+	if (!GroundGeneratorClass) { return Reject(TEXT("GroundGeneratorClass 未配置。")); }
+	UCastleGroundGenerator* Generator = NewObject<UCastleGroundGenerator>(this, GroundGeneratorClass);
+	if (!Generator) { return Reject(TEXT("GroundGeneratorClass 无法创建生成器。")); }
+	FCastleGroundGenerationRequest Request;
+	Request.Origin = FIntVector(Min.X-1, Min.Y-1, GridOrigin.Z);
+	Request.GridSize = FIntVector(Max.X-Min.X+3, Max.Y-Min.Y+3, GridSize.Z);
+	Request.Seed = GroundSeed;
+	const auto Candidate = Generator->GenerateGround(Request);
+	if (!ValidateGroundResult(Candidate, Min-FIntPoint(1,1), Max+FIntPoint(1,1), OutFailureReason))
+	{ return Reject(OutFailureReason.ToString()); }
+	for (const auto& Old : GeneratedGroundCells)
+	{
+		FCastleGroundCell New;
+		if (!Candidate.FindCell(Old.Coordinate, New) || New.Color != Old.Color || New.Number != Old.Number)
+		{
+			return Reject(FString::Printf(TEXT("生成器 %s 改变已有地块 (%d, %d, %d) 的颜色或数字。"),
+				*GroundGeneratorClass->GetName(), Old.Coordinate.X, Old.Coordinate.Y, Old.Coordinate.Z));
+		}
+	}
+	TArray<FCastleGroundCell> Added;
+	for (const auto& Cell : Candidate.Cells)
+	{
+		// 明确的增量集合：旧范围已逐格校验，仅对外围格创建 Actor。
+		if (Cell.Coordinate.X < Min.X || Cell.Coordinate.X > Max.X || Cell.Coordinate.Y < Min.Y || Cell.Coordinate.Y > Max.Y)
+		{ Added.Add(Cell); }
+	}
+	TMap<FIntVector, TObjectPtr<ACastleGroundTileActor>> NewTiles;
+	if (!CreateGroundTileActors(Added, NewTiles, OutFailureReason)) { return Reject(OutFailureReason.ToString()); }
+	// 地块从不参与导航，因此扩张不能发起导航版本变化或让共享巡逻路线失效。
+	GroundTiles.Append(NewTiles);
+	GeneratedGroundCells.Append(Added);
+	++ExpansionRings;
+	GetBoardExtent(Min, Max);
+	UE_LOG(LogMoving_Castle, Display, TEXT("棋盘 %s 扩张成功：范围 (%d,%d)～(%d,%d)，尺寸 %d×%d。"),
+		*GetName(), Min.X, Min.Y, Max.X, Max.Y, Max.X-Min.X+1, Max.Y-Min.Y+1);
+	OnBoardExpanded.Broadcast(this);
 	return true;
 }
 
@@ -1668,6 +1749,13 @@ bool ACastleBoard::TryGetGroundCellAtPlane(const FIntVector& Coordinate, FCastle
 bool ACastleBoard::ValidateBoardDimensions(FText& OutFailureReason) const
 {
 	OutFailureReason = FText::GetEmpty();
+	if (GridSize.X < 1 || GridSize.Y < 1 || GridSize.Z < 1 || MaxBoardSize < GridSize.X
+		|| MaxBoardSize < GridSize.Y || MaxBoardSize > 64 || MaxOverhangCells < 0 || MaxOverhangCells > 8)
+	{
+		OutFailureReason = FText::FromString(FString::Printf(TEXT("非法棋盘配置：GridSize=(%d,%d,%d)，MaxBoardSize=%d（须不小于起始 XY 且不大于 64），MaxOverhangCells=%d（须为 0～8）。"),
+			GridSize.X, GridSize.Y, GridSize.Z, MaxBoardSize, MaxOverhangCells));
+		return false;
+	}
 	const bool bValidGroundTileSize = FMath::IsFinite(GroundTileSize) && GroundTileSize > 1.0f && GroundTileSize <= 10000.0f;
 	const bool bValidGroundTileGap = FMath::IsFinite(GroundTileGap) && GroundTileGap >= 0.0f && GroundTileGap <= 1000.0f;
 	const bool bValidCellSize = FMath::IsFinite(CellSize) && CellSize > 0.0f;
@@ -1942,6 +2030,16 @@ int32 ACastleBoard::FindPrototypeCardIndex(const FCastleBuildingDescriptor& Desc
 
 bool ACastleBoard::RebuildGroundVisualization(const TArray<FCastleGroundCell>& Cells, FText& OutFailureReason)
 {
+	TMap<FIntVector, TObjectPtr<ACastleGroundTileActor>> NewTiles;
+	if (!CreateGroundTileActors(Cells, NewTiles, OutFailureReason)) { return false; }
+	DestroyGroundTileActors();
+	GroundTiles = MoveTemp(NewTiles);
+	return true;
+}
+
+bool ACastleBoard::CreateGroundTileActors(const TArray<FCastleGroundCell>& Cells,
+	TMap<FIntVector, TObjectPtr<ACastleGroundTileActor>>& OutTiles, FText& OutFailureReason)
+{
 	OutFailureReason = FText::GetEmpty();
 	if (GetWorld() == nullptr)
 	{
@@ -1990,10 +2088,7 @@ bool ACastleBoard::RebuildGroundVisualization(const TArray<FCastleGroundCell>& C
 		NewGroundTiles.Add(Cell.Coordinate, TileActor);
 	}
 
-	DestroyGroundTileActors();
-	GroundTiles = MoveTemp(NewGroundTiles);
-	UE_LOG(LogMoving_Castle, Log, TEXT("棋盘管理器已创建 %d 个独立地面格 Actor，单格间距 %.1f 厘米，层高 %.1f 厘米。"),
-		GroundTiles.Num(), CellSize, LayerHeight);
+	OutTiles = MoveTemp(NewGroundTiles);
 	return true;
 }
 
