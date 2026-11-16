@@ -1859,6 +1859,18 @@ bool ACastleBoard::HasPlacementMatch(const FIntVector& Coordinate, const FCastle
 		CursorTarget = &SupportTarget;
 	}
 
+	// 任何外围占格都要求建筑面来源；地面匹配不能让跨界多格卡绕过 D9。
+	if (CursorTarget->bGroundSurface)
+	{
+		for (const FIntVector& Cell : BuildPlacementFootprint(Coordinate, Descriptor.Level))
+		{
+			if (!IsCoordinateWithinBoard(Cell))
+			{
+				OutFailureReason = FText::FromString(TEXT("棋盘外的占用格必须依附建筑面放置，不能使用地面作为匹配来源。"));
+				return false;
+			}
+		}
+	}
 	FIntVector ResolvedCoordinate;
 	if (!TryResolvePlacementCoordinate(*CursorTarget, ResolvedCoordinate, OutFailureReason)) { return false; }
 	if (ResolvedCoordinate != Coordinate)

@@ -181,6 +181,26 @@ bool FCastleBoardOverhangTest::RunTest(const FString& Parameters)
  if (!Board->BuildingDefinitions[1]->CreateDescriptor(4, Card.Color, Card.Number, Multi, Reason)) { return false; }
  Top.Cell=FIntVector(4,2,0); Top.AdjacentCell=FIntVector(4,2,1);
  TestFalse(TEXT("跨界卡内部缺支撑不能被外围豁免"), Board->CanPlaceBuildingAtCursor(Top, Multi, Reason));
+ // 三级卡横跨边界：来源是内侧建筑的外侧面，外围格无需支撑，内部格仍逐格验证。
+ FCastleBuildingDescriptor Level2;
+ if (!Board->BuildingDefinitions[1]->CreateDescriptor(2, Card.Color, Card.Number, Level2, Reason)) { return false; }
+ TestFalse(TEXT("首层跨界多格卡不能从地面坐标入口伸出"), Board->CanPlaceBuilding(FIntVector(4,4,0), Level2, Reason));
+ FCastleGridCursorTarget Cross;
+ Cross.bValid=true; Cross.Cell=FIntVector(4,2,0); Cross.Face=ECastleGridFace::PositiveY; Cross.AdjacentCell=FIntVector(4,3,0);
+ TestTrue(TEXT("建筑面来源的首层跨界多格卡合法"), Board->CanPlaceBuildingAtCursor(Cross, Level2, Reason));
+ ACastleBuildingBase* Upper = Outside[1];
+ for (int32 Z=1; Z<8; ++Z)
+ {
+  FCastleGridCursorTarget Up;
+  Up.bValid=true; Up.Cell=FIntVector(6,2,Z-1); Up.Face=ECastleGridFace::Up; Up.AdjacentCell=FIntVector(6,2,Z);
+  int32 Slot;
+  if (!Board->PrototypeBackpack->TryAddItem(Card, Slot, Reason)) { return false; }
+  Upper=Board->PlaceBackpackBuildingAtCursor(Up,Slot,Reason);
+  if (!TestNotNull(TEXT("外围逐层叠到第八层"), Upper) || !CastleBuildingTests::CompletePlacement(Upper)) { return false; }
+ }
+ FCastleGridCursorTarget TooHigh;
+ TooHigh.bValid=true; TooHigh.Cell=FIntVector(6,2,7); TooHigh.Face=ECastleGridFace::Up; TooHigh.AdjacentCell=FIntVector(6,2,8);
+ TestFalse(TEXT("第九层拒绝"), Board->CanPlaceBuildingAtCursor(TooHigh,Card,Reason));
  const FVector OutsideLocation = Outside[0]->GetActorLocation();
  TestTrue(TEXT("扩张覆盖越界建筑列"), Board->ExpandBoard(Reason));
  TestTrue(TEXT("越界建筑下面新增地块"), Board->TryGetGroundCell(FIntVector(5,2,0), Ground));
