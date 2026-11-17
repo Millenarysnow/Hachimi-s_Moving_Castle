@@ -70,13 +70,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "1.0", Units = "cm"))
 	float GroundTileSize = 500.0f;
 
-	/** 相邻棋盘格实体之间的水平间隙（厘米）。 */
+	/** 美术地块之间保留 15 厘米间隙；多格建筑功能地板的位置也必须采用该间隙对应的中心距。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "0.0", ClampMax = "1000.0", Units = "cm"))
-	float GroundTileGap = 20.0f;
+	float GroundTileGap = 15.0f;
 
 	/** 相邻 X/Y 网格中心之间的距离（厘米），必须等于 GroundTileSize + GroundTileGap。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "1.0", Units = "cm"))
-	float CellSize = 520.0f;
+	float CellSize = 515.0f;
 
 	/** 相邻垂直层的距离（厘米）；与外部建筑 FBX 的 560 厘米层高保持一致。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|尺寸", meta = (ClampMin = "1.0", Units = "cm"))

@@ -26,6 +26,10 @@ bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 	GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
 	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
 	ACastleBoard* Board = World->SpawnActor<ACastleBoard>();
+	// 锁定美术的实体边长和格间距，防止原生默认值与蓝图楼板各自回到旧尺寸。
+	TestTrue(TEXT("棋盘单块美术地面保持 500 厘米"), FMath::IsNearlyEqual(Board->GroundTileSize, 500.0f));
+	TestTrue(TEXT("棋盘地面间隙匹配美术的 15 厘米"), FMath::IsNearlyEqual(Board->GroundTileGap, 15.0f));
+	TestTrue(TEXT("棋盘相邻格中心距为 515 厘米"), FMath::IsNearlyEqual(Board->CellSize, 515.0f));
 	Board->GridSize = FIntVector(2, 2, 2);
 	FCastleGroundGenerationResult Ground;
 	for (int32 X = 0; X < 2; ++X)
@@ -68,6 +72,31 @@ bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("逻辑占用遵循各等级原规则"), Building->GetOccupiedCoordinates().Num(),
 				ACastleBuildingBase::GetExpectedFootprintCellCount(Level));
 			TestNull(TEXT("实际实例不再有原生占位组件"), Building->GetDefaultSubobjectByName(TEXT("PrototypeMesh")));
+			// 从逻辑占格推导世界空间楼板中心，再反算为建筑局部空间；这样也覆盖绕 Z 轴旋转的竖向合成蓝图。
+			// 建筑锚点位于最低占格的底面中心；五厘米厚的楼板中心低于对应层面 2.5 厘米。
+			const TArray<FIntVector>& OccupiedCoordinates = Building->GetOccupiedCoordinates();
+			if (!TestFalse(TEXT("正式建筑至少占用一个逻辑格"), OccupiedCoordinates.IsEmpty())) { return false; }
+			TArray<FVector> ExpectedGameplayFloorLocations;
+			TArray<FVector> ExpectedGameplayFloorScales;
+			for (const FIntVector& Coordinate : OccupiedCoordinates)
+			{
+				// 同一建筑内部的功能碰撞须覆盖格缝；每侧各承担半个间隙，外周边界仍与 500 厘米美术格面一致。
+				const float NegativeXExtension = OccupiedCoordinates.Contains(Coordinate + FIntVector(-1, 0, 0)) ? Board->GroundTileGap * 0.5f : 0.0f;
+				const float PositiveXExtension = OccupiedCoordinates.Contains(Coordinate + FIntVector(1, 0, 0)) ? Board->GroundTileGap * 0.5f : 0.0f;
+				const float NegativeYExtension = OccupiedCoordinates.Contains(Coordinate + FIntVector(0, -1, 0)) ? Board->GroundTileGap * 0.5f : 0.0f;
+				const float PositiveYExtension = OccupiedCoordinates.Contains(Coordinate + FIntVector(0, 1, 0)) ? Board->GroundTileGap * 0.5f : 0.0f;
+				const FVector FloorCenterWorld = Board->GetGridWorldLocation(Coordinate)
+					+ Board->GetActorTransform().TransformVector(FVector(
+						(PositiveXExtension - NegativeXExtension) * 0.5f,
+						(PositiveYExtension - NegativeYExtension) * 0.5f,
+						-Board->LayerHeight * 0.5f - 2.5f));
+				ExpectedGameplayFloorLocations.Add(Building->GetActorTransform().InverseTransformPosition(FloorCenterWorld));
+				const FVector LocalXAxis = Building->GetActorTransform().InverseTransformVector(Board->GetActorTransform().TransformVector(
+					FVector(Board->GroundTileSize + NegativeXExtension + PositiveXExtension, 0.0f, 0.0f)));
+				const FVector LocalYAxis = Building->GetActorTransform().InverseTransformVector(Board->GetActorTransform().TransformVector(
+					FVector(0.0f, Board->GroundTileSize + NegativeYExtension + PositiveYExtension, 0.0f)));
+				ExpectedGameplayFloorScales.Add((LocalXAxis.GetAbs() + LocalYAxis.GetAbs() + FVector(0.0f, 0.0f, 5.0f)) / 100.0f);
+			}
 			TArray<UStaticMeshComponent*> Meshes;
 			Building->GetComponents<UStaticMeshComponent>(Meshes);
 			int32 AuthoredMeshes = 0;
@@ -85,7 +114,27 @@ bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 					TestEqual(TEXT("功能地板继续阻挡 Pawn"), Mesh->GetCollisionResponseToChannel(ECC_Pawn), ECR_Block);
 					TestEqual(TEXT("功能地板忽略选中射线"), Mesh->GetCollisionResponseToChannel(ECC_Visibility), ECR_Ignore);
 					TestTrue(TEXT("功能地板保留导航参与开关"), Mesh->CanEverAffectNavigation());
-					TestTrue(TEXT("功能格面为 500×500 厘米"), Mesh->GetRelativeScale3D().Equals(FVector(5, 5, 0.05)));
+					// 每个预期中心只能匹配一次，同时发现重叠楼板、缺失楼板与旧的 520 厘米摆放。
+					const int32 MatchingFloorIndex = ExpectedGameplayFloorLocations.IndexOfByPredicate(
+						[Mesh](const FVector& ExpectedLocation)
+						{
+							return ExpectedLocation.Equals(Mesh->GetRelativeLocation(), 0.01f);
+						});
+					if (MatchingFloorIndex == INDEX_NONE)
+					{
+						FString ExpectedLocations;
+						for (const FVector& ExpectedLocation : ExpectedGameplayFloorLocations)
+						{
+							ExpectedLocations += ExpectedLocation.ToString() + TEXT(" ");
+						}
+						AddError(FString::Printf(TEXT("蓝图 %s 的功能地板 %s 实际局部坐标 %s；尚未匹配的局部坐标为 %s。"),
+							*BuildingClass->GetPathName(), *Mesh->GetName(), *Mesh->GetRelativeLocation().ToString(), *ExpectedLocations));
+						return false;
+					}
+					TestTrue(TEXT("功能楼板只向同建筑内部邻格延伸半缝，外周保持美术格面边界"),
+						Mesh->GetRelativeScale3D().Equals(ExpectedGameplayFloorScales[MatchingFloorIndex], 0.0001f));
+					ExpectedGameplayFloorLocations.RemoveAt(MatchingFloorIndex);
+					ExpectedGameplayFloorScales.RemoveAt(MatchingFloorIndex);
 				}
 				else
 				{
@@ -110,6 +159,7 @@ bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 			const int32 ExpectedFloors = ACastleBuildingBase::GetExpectedFootprintCellCount(Level);
 			TestEqual(TEXT("全部拆件与功能格面均保留"), AuthoredMeshes, ExpectedVisuals + ExpectedFloors);
 			TestEqual(TEXT("每个占格配置一个功能格面"), Floors, ExpectedFloors);
+			TestEqual(TEXT("所有逻辑占格都具有对应中心位置的功能地板"), ExpectedGameplayFloorLocations.Num(), 0);
 			TestEqual(TEXT("美术独立件数与源 FBX 一致"), Visuals, ExpectedVisuals);
 			if (Definition->BuildingType == ECastleBuildingType::ShieldTower)
 			{

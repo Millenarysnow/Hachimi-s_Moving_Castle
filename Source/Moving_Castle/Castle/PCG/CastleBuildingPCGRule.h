@@ -84,7 +84,7 @@ public:
 	/** 功能桥与封闭功能面的厚度，顶面保持在真实楼层高度。 */
 	UPROPERTY(EditAnywhere, Category="建筑PCG")
 	double FloorThickness = 10.0;
-	/** 不可通行邻接的隐藏阻挡墙高度，不能只依靠 20cm 间隙阻止 Recast 连通。 */
+	/** 不可通行邻接的隐藏阻挡墙高度，不能只依靠 15cm 间隙阻止 Recast 连通。 */
 	UPROPERTY(EditAnywhere, Category="建筑PCG")
 	double BarrierHeight = 200.0;
 	/** 开启后以空间噪声择一，否则取 X/Y/Z 字典序首格。 */
