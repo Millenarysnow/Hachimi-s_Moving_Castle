@@ -24,6 +24,26 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogCastleMassHomingProjectile, Log, All);
 
+bool UCastleMassUnitSubsystem::CountEnemyEntities(int32& OutCount) const
+{
+	OutCount = 0;
+	FMassEntityManager* Manager = GetManager();
+	if (!Manager || Manager->IsProcessing())
+	{
+		UE_LOG(LogCastleMassHomingProjectile, Error, TEXT("CountEnemyEntities：世界 %s，必须在游戏线程且 Mass 未处理时查询。"), *GetNameSafe(GetWorld()));
+		return false;
+	}
+	// 不要求 Health Fragment，更不按生命过滤：销毁命令尚未冲刷的母体仍要阻止误清场。
+	FMassEntityQuery Query(Manager->AsShared());
+	Query.AddTagRequirement<FCastleMassEnemyTag>(EMassFragmentPresence::All);
+	FMassExecutionContext Context(*Manager, 0.0f, false);
+	Query.ForEachEntityChunk(Context, [&OutCount](FMassExecutionContext& Chunk)
+	{
+		OutCount += Chunk.GetNumEntities();
+	});
+	return true;
+}
+
 bool UCastleMassUnitSubsystem::GetNPCFarmBuff(const FCastleMassUnitHandle& NPC, float& OutBonusNumber) const
 {
 	OutBonusNumber = 0.0f;

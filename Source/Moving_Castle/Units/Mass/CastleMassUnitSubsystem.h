@@ -16,6 +16,12 @@ class MOVING_CASTLE_API UCastleMassUnitSubsystem : public UWorldSubsystem
 {
 	GENERATED_BODY()
 public:
+	/**
+	 * 战斗清场专用：统计本世界所有 EnemyTag 实体，包括已死但尚未回收者及分裂子体。
+	 * 只能在游戏线程且 Mass 未处理时查询；失败输出 Error，不以零冒充成功结果。
+	 */
+	bool CountEnemyEntities(int32& OutCount) const;
+
 	/** 游戏线程向本世界存活 NPC 同步累加有限正数；允许游戏线程 Processor，失败写 Error。 */
 	bool AddNPCFarmBuff(const FCastleMassUnitHandle& NPC, float DeltaBonus);
 	/** 游戏线程同步读取存活 NPC 的农田增益；允许游戏线程 Processor，失败输出零并写 Error。 */

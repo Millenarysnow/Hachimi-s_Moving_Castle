@@ -3,6 +3,7 @@
 #include "CastleGroundGenerator.h"
 
 #include "Moving_Castle.h"
+#include "Castle/PCG/CastleDeterministicPCGNoise.h"
 
 FCastleGroundGenerationResult UCastleGroundGenerator::GenerateGround_Implementation(const FCastleGroundGenerationRequest& Request) const
 {
@@ -60,8 +61,7 @@ FCastleGroundGenerationResult UCastleRandomGroundGenerator::GenerateGround_Imple
 		return Result;
 	}
 
-	// FRandomStream 保证同一请求种子产生完全一致的结果，便于复现布局和调试放置规则。
-	FRandomStream RandomStream(Request.Seed);
+	// 每格独立采样，固定通道字符串只参与稳定字符哈希，不依赖棋盘宽度或遍历顺序。
 	Result.Cells.Reserve(Request.GridSize.X * Request.GridSize.Y);
 
 	for (int32 Y = 0; Y < Request.GridSize.Y; ++Y)
@@ -72,9 +72,12 @@ FCastleGroundGenerationResult UCastleRandomGroundGenerator::GenerateGround_Imple
 			Cell.Coordinate = Request.Origin + FIntVector(X, Y, 0);
 
 			// 所有格子统一生成五色 1～9 数字，包含棋盘原点。
-			const int32 ColorIndex = RandomStream.RandRange(0, FunctionalColors.Num() - 1);
+			const FIntVector SampleCell(Cell.Coordinate.X, Cell.Coordinate.Y, 0);
+			const int32 ColorIndex = FMath::FloorToInt(UCastleDeterministicPCGNoise::SampleNoiseValue(
+				Request.Seed, SampleCell, TEXT("GroundColor")) * FunctionalColors.Num());
 			Cell.Color = FunctionalColors[ColorIndex];
-			Cell.Number = RandomStream.RandRange(MinNumber, MaxNumber);
+			Cell.Number = MinNumber + FMath::FloorToInt(UCastleDeterministicPCGNoise::SampleNoiseValue(
+				Request.Seed, SampleCell, TEXT("GroundNumber")) * (MaxNumber - MinNumber + 1));
 
 			Result.Cells.Add(Cell);
 		}
