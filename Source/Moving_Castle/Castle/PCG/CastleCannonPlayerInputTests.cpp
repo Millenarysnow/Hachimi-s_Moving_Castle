@@ -73,8 +73,6 @@ namespace CastleCannonPlayerInputTests
 			}
 			if (Stage==14)
 			{
-				if (!FirstProjected||!SecondProjected)
-				{ Test->AddExpectedMessage(TEXT("NPC 导航："),ELogVerbosity::Warning,EAutomationExpectedMessageFlags::Contains,1,false); }
 				Press(EKeys::Enter); Stage=15; return false;
 			}
 			if (Stage==15)
@@ -87,11 +85,15 @@ namespace CastleCannonPlayerInputTests
 				const bool bLoop=Path&&Path->bValid&&Path->bClosedLoop;
 				Test->AddInfo(FString::Printf(TEXT("W1_INPUT Family=%s Scenario=%s Project=(%d,%d) ValidLoop=%d LastFailure=%s"),
 					Families[Family],Scenarios[Scenario],FirstProjected,SecondProjected,bLoop,*Nav->LastFailure.ToString()));
-				if (FirstProjected&&SecondProjected) { Test->TestTrue(TEXT("实际楼内可投影取点跨界闭环"),bLoop); }
+				// 屋顶命中与投影状态只作为诊断输出；D7 将取点修复交给 W4，
+				// 这里不能把当前屋顶行为固化成失败期望。楼内两点仍必须形成有效闭环。
+				if (FirstProjected&&SecondProjected)
+				{
+					Test->TestTrue(TEXT("实际楼内可投影取点跨界闭环"),bLoop);
+				}
 				else
 				{
-					Test->TestFalse(TEXT("不可投影美术点使整条路线失败"),bLoop);
-					Test->TestFalse(TEXT("失败给出LastFailure"),Nav->LastFailure.IsEmpty());
+					Test->AddInfo(TEXT("屋顶或美术件取点投影状态仅作诊断，不作为本测试失败条件。"));
 				}
 				Nav->ClearSharedRoute(); ++Scenario;
 				if (Scenario<3) { BeginScenario(); return false; }
