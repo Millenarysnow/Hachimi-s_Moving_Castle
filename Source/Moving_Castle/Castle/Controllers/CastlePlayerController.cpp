@@ -343,6 +343,12 @@ void ACastlePlayerController::SetDirectorModalState(const bool bRewardOpen, cons
 	RefreshModalInput(true);
 }
 
+void ACastlePlayerController::HideDirectorEditingPresentation()
+{
+	CurrentGridCursorTarget = FCastleGridCursorTarget();
+	if (IsValid(GridCursor)) { GridCursor->HideCursor(); }
+}
+
 void ACastlePlayerController::RefreshModalInput(const bool bForceRefresh)
 {
 	const bool bNewOpen = Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive;

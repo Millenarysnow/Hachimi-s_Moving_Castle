@@ -33,6 +33,10 @@ public:
 	/** 开战只取消草稿和输入占用，不提交、不清除正式路线。 */
 	void CancelEditingDraft();
 
+	/** 与视口放点共用：建筑命中格按底面锚点取本层楼板；其他顶面保持实际命中位置。 */
+	static bool TryResolveWaypointFromRay(UWorld* World, const FVector& RayStart, const FVector& RayEnd,
+		FVector& OutPoint, FText& OutFailureReason);
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

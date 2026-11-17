@@ -6,6 +6,7 @@
 #include "Engine/StaticMesh.h"
 #include "Blueprint/UserWidget.h"
 #include "Castle/UI/Director/CastleDirectorWidgets.h"
+#include "Castle/Combat/CastleCombatConfigDataAsset.h"
 #include "Moving_Castle.h"
 
 bool UCastleDirectorConfigDataAsset::ValidateConfig(FText& OutFailureReason) const
@@ -46,5 +47,6 @@ bool UCastleDirectorConfigDataAsset::ValidateConfig(FText& OutFailureReason) con
 	if (!RewardWidgetClass) { return Reject(TEXT("RewardWidgetClass"), TEXT("None")); }
 	if (!GameOverWidgetClass) { return Reject(TEXT("GameOverWidgetClass"), TEXT("None")); }
 	if (!NodeLabelWidgetClass) { return Reject(TEXT("NodeLabelWidgetClass"), TEXT("None")); }
+	if (!IsValid(CombatConfig)) { return Reject(TEXT("CombatConfig"), TEXT("None")); }
 	return true;
 }

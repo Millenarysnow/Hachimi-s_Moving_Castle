@@ -59,6 +59,9 @@ public:
 	/** 导演界面与商店共用单一输入状态，避免 IgnoreInput 计数叠加或遗漏恢复。 */
 	void SetDirectorModalState(bool bRewardOpen, bool bGameOverOpen, UUserWidget* FocusWidget);
 
+	/** 开战事务准备时立即清除高亮，避免等下一帧控制器 Tick 才撤下旧建造目标。 */
+	void HideDirectorEditingPresentation();
+
 	/** 查询导演编辑权限；未运行导演的世界保持原有行为。 */
 	bool IsDirectorEditingAllowed(FText& OutReason) const;
 

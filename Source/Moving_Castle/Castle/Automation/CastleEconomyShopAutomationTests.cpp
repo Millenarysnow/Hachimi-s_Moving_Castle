@@ -17,6 +17,7 @@
 #include "Engine/StaticMesh.h"
 #include "Blueprint/UserWidget.h"
 #include "Castle/UI/Director/CastleDirectorWidgets.h"
+#include "Castle/Combat/CastleCombatConfigDataAsset.h"
 #include "Engine/World.h"
 #include "Misc/ScopeExit.h"
 #include <limits>
@@ -325,6 +326,9 @@ bool FCastleDirectorFoundationTest::RunTest(const FString& Parameters)
 	Config->NodeLabelWidgetClass = nullptr;
 	TestFalse(TEXT("缺少NodeLabelWidgetClass拒绝启动"), Config->ValidateConfig(Reason));
 	Config->NodeLabelWidgetClass = UCastleDirectorNodeLabelWidget::StaticClass();
+	AddExpectedError(TEXT("字段 CombatConfig 值 None 无效"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestFalse(TEXT("缺战斗配置拒绝启动"), Config->ValidateConfig(Reason));
+	Config->CombatConfig = LoadObject<UCastleCombatConfigDataAsset>(nullptr, TEXT("/Game/MovingCastle/Data/Combat/DA_CombatConfig.DA_CombatConfig"));
 	TestTrue(TEXT("完整有效配置通过校验"), Config->ValidateConfig(Reason));
 	Config->NodeCountMin = 1;
 	TestFalse(TEXT("非法节点范围拒绝启动"), Config->ValidateConfig(Reason));

@@ -12,6 +12,7 @@ class UCastleDirectorHUDWidget;
 class UCastleRewardChoiceWidget;
 class UCastleGameOverWidget;
 class UCastleDirectorNodeLabelWidget;
+class UCastleCombatConfigDataAsset;
 
 /** 导演系统单局配置；资产只保存可调参数，流程行为由 C++ 子系统执行。 */
 UCLASS(BlueprintType)
@@ -95,6 +96,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|界面")
 	TSubclassOf<UCastleDirectorNodeLabelWidget> NodeLabelWidgetClass;
 
-	/** 检查所有阶段 1 配置；失败时写明资产名称、字段和值，不修正配置。 */
+	/** 战斗子系统的正式配置；缺失时整局拒绝启动，不创建替代战斗。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|战斗")
+	TObjectPtr<UCastleCombatConfigDataAsset> CombatConfig;
+
+	/** 检查导演全部必需配置；失败时写明资产名称、字段和值，不修正配置。 */
 	bool ValidateConfig(FText& OutFailureReason) const;
 };

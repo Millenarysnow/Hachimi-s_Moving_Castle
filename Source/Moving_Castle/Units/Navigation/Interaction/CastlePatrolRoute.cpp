@@ -11,6 +11,8 @@
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Moving_Castle.h"
+#include "Castle/Actors/CastleBoard.h"
+#include "Castle/Actors/CastleBuildingBase.h"
 
 ACastlePatrolRoute::ACastlePatrolRoute()
 {
@@ -99,7 +101,7 @@ void ACastlePatrolRoute::ToggleEditing()
 	}
 	DraftWaypoints = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>()->GetRequestedWaypoints();
 	SetEditing(true);
-	ShowMessage(TEXT("巡逻编辑：瞄准楼板/地面后左键添加路径点；Backspace 撤回，Enter 一次提交完整闭环，Delete 清空，P 取消。"), true);
+	ShowMessage(TEXT("巡逻编辑：瞄准建筑楼顶或地面后左键添加路径点；建筑取本层楼内地板；Backspace 撤回，Enter 提交完整闭环，Delete 清空，P 取消。"), true);
 }
 
 void ACastlePatrolRoute::AddPointAtViewCenter()
@@ -114,23 +116,67 @@ void ACastlePatrolRoute::AddPointAtViewCenter()
 		ShowMessage(TEXT("当前视口无法生成中心射线。"), false);
 		return;
 	}
-	FCollisionQueryParams Params(SCENE_QUERY_STAT(CastlePatrolPlacement), true);
-	Params.AddIgnoredActor(this);
-	if (Controller->GetPawn()) { Params.AddIgnoredActor(Controller->GetPawn()); }
-	FHitResult Hit;
-	// 直接读取建筑实际碰撞，不用棋盘方块中心代替多层楼板的落点。
-	if (!GetWorld()->LineTraceSingleByChannel(Hit, Origin, Origin + Direction * 100000.0, ECC_Visibility, Params) || Hit.ImpactNormal.Z < 0.5)
+	FVector Point;
+	FText Failure;
+	if (!TryResolveWaypointFromRay(GetWorld(), Origin, Origin + Direction * 100000.0, Point, Failure))
 	{
-		ShowMessage(TEXT("请瞄准可行走楼板或地面顶面后放置路径点。"), false);
+		ShowMessage(Failure.ToString(), false);
 		return;
 	}
-	if (!DraftWaypoints.IsEmpty() && DraftWaypoints.Last().Equals(Hit.ImpactPoint, 1.0))
+	if (!DraftWaypoints.IsEmpty() && DraftWaypoints.Last().Equals(Point, 1.0))
 	{
 		ShowMessage(TEXT("新路径点与上一点重合，请选择不同位置。"), false);
 		return;
 	}
-	DraftWaypoints.Add(Hit.ImpactPoint);
+	DraftWaypoints.Add(Point);
 	ShowMessage(FString::Printf(TEXT("已放置草稿路径点 %d，Enter 后统一求解全部路段。"), DraftWaypoints.Num()), true);
+}
+
+bool ACastlePatrolRoute::TryResolveWaypointFromRay(UWorld* World, const FVector& RayStart, const FVector& RayEnd,
+	FVector& OutPoint, FText& OutFailureReason)
+{
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(CastlePatrolPlacement), true);
+	if (!World)
+	{
+		OutFailureReason = FText::FromString(TEXT("巡逻放点失败：World 无效。"));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
+		return false;
+	}
+	if (APlayerController* Controller = World->GetFirstPlayerController())
+	{
+		if (Controller->GetPawn()) { Params.AddIgnoredActor(Controller->GetPawn()); }
+	}
+	FHitResult Hit;
+	if (!World->LineTraceSingleByChannel(Hit, RayStart, RayEnd, ECC_Visibility, Params))
+	{
+		OutFailureReason = FText::FromString(TEXT("请瞄准建筑或可行走地面顶面后放置路径点。"));
+		return false;
+	}
+	if (ACastleBuildingBase* Building = Cast<ACastleBuildingBase>(Hit.GetActor()))
+	{
+		// 保留棋盘已有的“命中建筑最近占用格”语义，多层建筑的楼顶命中落到对应上层。
+		// 格心减半层高就是建筑底面锚点；几厘米楼板厚度交给原有 NavMesh 投影，不查碰撞补高度。
+		for (TActorIterator<ACastleBoard> It(World); It; ++It)
+		{
+			FCastleGridCursorTarget Target;
+			if (It->GetPlacedBuildings().Contains(Building) && It->TryResolveGridCursorTarget(RayStart, RayEnd, Target) && !Target.bGroundSurface)
+			{
+				OutPoint = It->GetGridWorldLocation(Target.Cell) - It->GetActorTransform().TransformVector(FVector(0, 0, It->LayerHeight * 0.5));
+				return true;
+			}
+		}
+		OutFailureReason = FText::FromString(FString::Printf(TEXT("建筑 %s 无法通过棋盘解析命中占用格，拒绝巡逻放点。"), *Building->GetPathName()));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
+		return false;
+	}
+	// 地块和其他场景碰撞仍使用原有顶面规则，不把没有建筑的命中改造成虚拟楼板。
+	if (Hit.ImpactNormal.Z < 0.5)
+	{
+		OutFailureReason = FText::FromString(TEXT("请瞄准可行走楼板或地面顶面后放置路径点。"));
+		return false;
+	}
+	OutPoint = Hit.ImpactPoint;
+	return true;
 }
 
 void ACastlePatrolRoute::UndoPoint()

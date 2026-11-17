@@ -4,6 +4,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "Castle/Director/CastleDirectorTypes.h"
+#include "Castle/Combat/CastleCombatTypes.h"
 #include "CastleDirectorSubsystem.generated.h"
 
 class ACastleBoard;
@@ -12,6 +13,8 @@ class ACastlePlayerController;
 class UCastleDirectorConfigDataAsset;
 class UCastleMainTowerComponent;
 class UUserWidget;
+class UCastleCombatSubsystem;
+class ACastleMassSpawner;
 
 /** 原生阶段事件不承担流程决策，界面和输入只监听最终状态。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCastleDirectorPhaseChanged, ECastleDirectorPhase);
@@ -27,6 +30,7 @@ public:
 	virtual void Tick(float DeltaTime) override;
 	virtual TStatId GetStatId() const override;
 	virtual void Deinitialize() override;
+	virtual void OnWorldEndPlay(UWorld& InWorld) override;
 
 	/** 导演未运行时保留旧行为；运行时严格按阶段门控。 */
 	bool IsRunning() const { return bRunning; }
@@ -54,13 +58,17 @@ public:
 	FCastleDirectorPhaseChanged OnDirectorPhaseChanged;
 
 #if WITH_DEV_AUTOMATION_TESTS
-	/** 测试专用接线：仅自动化可驱动尚未接入战斗系统的阶段。 */
+	/** 测试专用接线：仅自动化可隔离验证奖励和输入，不暴露给游戏入口。 */
 	void ConfigureForAutomation(UCastleDirectorConfigDataAsset* InConfig, ACastleBoard* InBoard,
 		ACastlePlayerController* InController, UCastleMainTowerComponent* InTower);
 	bool SetPhaseForAutomation(ECastleDirectorPhase NewPhase);
 #endif
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FCastleDirectorBattleIntegrationTest;
+	friend class FDirectorBattleScenario;
+#endif
 	/** 启动只尝试一次；配置、场景或资产错误通过日志和屏幕明确失败。 */
 	void TryAutoStart();
 	bool StartDirector(FText& OutReason);
@@ -71,6 +79,12 @@ private:
 	void ShowMessage(const FText& Message, bool bError);
 	bool EnsurePresentation(FText& OutReason);
 	void UpdatePresentation();
+	/** 节点重叠只入队；实际开战、NPC 回收都在 Mass 未处理的游戏线程边界执行。 */
+	bool TryStartSelectedBattle(ACastleDirectorNodeActor* Node, FText& OutReason);
+	bool RecallBattleNPCs(FText& OutReason);
+	void HandleBattleCleared(ECastleBattleKind Kind, int32 Ordinal);
+	void HandleBattleFailed(ECastleBattleKind Kind, int32 Ordinal, const FText& Reason);
+	void UnbindCombatEvents();
 
 	UFUNCTION()
 	void HandleTowerHealthChanged(float PreviousHealth, float CurrentHealth, float Damage);
@@ -84,6 +98,17 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UUserWidget> HUDWidget;
 	UPROPERTY(Transient) TObjectPtr<UUserWidget> RewardWidget;
 	UPROPERTY(Transient) TObjectPtr<UUserWidget> GameOverWidget;
+	/** 一次选择只保存弱引用，原节点销毁或游戏结束后不能重新触发开战。 */
+	TWeakObjectPtr<ACastleDirectorNodeActor> PendingNode;
+	UPROPERTY(Transient) TObjectPtr<UCastleCombatSubsystem> Combat;
+	UPROPERTY(Transient) TObjectPtr<ACastleMassSpawner> BattleNPCSpawner;
+	FDelegateHandle BattleClearedHandle;
+	FDelegateHandle BattleFailedHandle;
+	/** 普通、精英分别累计；只有整场开战提交成功后增加。 */
+	int32 NormalBattles = 0;
+	int32 EliteBattles = 0;
+	ECastleBattleKind ActiveBattleKind = ECastleBattleKind::Normal;
+	int32 ActiveBattleOrdinal = 0;
 	ECastleDirectorPhase Phase = ECastleDirectorPhase::Inactive;
 	FText StatusMessage;
 	FText GameOverFailure;

@@ -18,6 +18,12 @@
 #include "EngineUtils.h"
 #include "Kismet/GameplayStatics.h"
 #include "Moving_Castle.h"
+#include "Castle/Combat/CastleCombatSubsystem.h"
+#include "Units/Mass/CastleMassSpawner.h"
+#include "Units/Mass/CastleMassUnitSubsystem.h"
+#include "Units/Navigation/Interaction/CastlePatrolRoute.h"
+#include "MassEntitySubsystem.h"
+#include "MassEntityConfigAsset.h"
 
 bool UCastleDirectorSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) const
 {
@@ -34,6 +40,14 @@ void UCastleDirectorSubsystem::Tick(const float DeltaTime)
 	Super::Tick(DeltaTime);
 	// Tickable 对象在初始化后即可 Tick；只在世界真正开始游戏后执行一次启动尝试。
 	if (!bStartAttempted && GetWorld()->HasBegunPlay()) { TryAutoStart(); }
+	if (PendingNode.IsValid())
+	{
+		// 回调可能由 Mass 处理中的碰撞触发；直到世界子系统 Tick 才消费唯一选择。
+		ACastleDirectorNodeActor* Selected = PendingNode.Get();
+		PendingNode.Reset();
+		FText Reason;
+		TryStartSelectedBattle(Selected, Reason);
+	}
 }
 
 void UCastleDirectorSubsystem::TryAutoStart()
@@ -75,6 +89,12 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 		return false;
 	}
 	if (!Config->ValidateConfig(OutReason)) { return false; }
+	Combat = GetWorld()->GetSubsystem<UCastleCombatSubsystem>();
+	if (!IsValid(Combat) || !Combat->InitializeCombat(Config->CombatConfig, OutReason))
+	{
+		if (!IsValid(Combat)) { OutReason = FText::FromString(TEXT("本世界缺少 CastleCombatSubsystem。")); }
+		return false;
+	}
 	int32 BoardCount = 0;
 	for (TActorIterator<ACastleBoard> It(GetWorld()); It; ++It) { Board = *It; ++BoardCount; }
 	FCastleGroundCell Ground;
@@ -104,6 +124,8 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 	ClearedSteps = 0;
 	bShopPermission = false;
 	bRunning = true;
+	BattleClearedHandle = Combat->OnBattleCleared.AddUObject(this, &UCastleDirectorSubsystem::HandleBattleCleared);
+	BattleFailedHandle = Combat->OnBattleFailed.AddUObject(this, &UCastleDirectorSubsystem::HandleBattleFailed);
 	Controller->GetShop()->CloseShop();
 	Nodes = MoveTemp(Candidates);
 	Tower->OnHealthChanged.AddUniqueDynamic(this, &UCastleDirectorSubsystem::HandleTowerHealthChanged);
@@ -214,20 +236,138 @@ bool UCastleDirectorSubsystem::IsShopAccessAllowed(FText& OutReason) const
 
 void UCastleDirectorSubsystem::HandleNodeTouched(ACastleDirectorNodeActor* Node)
 {
-	if (!bRunning || Phase != ECastleDirectorPhase::Editing || !Nodes.Contains(Node) || LastNodeSelectionFrame == GFrameCounter) { return; }
+	if (!bRunning || Phase != ECastleDirectorPhase::Editing || !Nodes.Contains(Node) || PendingNode.IsValid() || LastNodeSelectionFrame == GFrameCounter) { return; }
 	LastNodeSelectionFrame = GFrameCounter;
+	PendingNode = Node;
+}
+
+bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* Node, FText& OutReason)
+{
+	if (!bRunning || Phase != ECastleDirectorPhase::Editing || !IsValid(Node) || !Nodes.Contains(Node))
+	{
+		OutReason = FText::FromString(TEXT("节点选择已失效或当前阶段不是编辑。"));
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演开战拒绝：节点 %s，%s"), *GetPathNameSafe(Node), *OutReason.ToString());
+		return false;
+	}
 	UE_LOG(LogMoving_Castle, Display, TEXT("选择导演节点 %s：第 %d 关，类型 %d。"), *GetPathNameSafe(Node), GetNextStep(), static_cast<int32>(Node->GetKind()));
 	UCastleNavigationSubsystem* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
 	const auto Path = Navigation->AcquireSharedPath();
 	if (!Path || !Path->bValid || !Path->bClosedLoop)
 	{
 		const FString Reason = Navigation->LastFailure.IsEmpty() ? TEXT("路线未就绪") : Navigation->LastFailure.ToString();
-		ShowMessage(FText::FromString(TEXT("无法开战：") + Reason), false);
+		OutReason = FText::FromString(TEXT("无法开战：") + Reason);
+		ShowMessage(OutReason, false);
 		UE_LOG(LogMoving_Castle, Warning, TEXT("%s"), *StatusMessage.ToString());
+		return false;
+	}
+	const auto Reject = [this, &OutReason](const FString& Reason)
+	{
+		OutReason = FText::FromString(Reason);
+		ShowMessage(OutReason, true);
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演开战失败：配置 %s，%s"), *GetPathNameSafe(Config), *Reason);
+		return false;
+	};
+	auto* Mass = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
+	if (!Mass || Mass->GetEntityManager().IsProcessing()) { return Reject(TEXT("Mass 不可用或正在处理，拒绝本次选择。")); }
+	if (!IsValid(Board) || !IsValid(Controller) || !IsValid(Combat) || !IsValid(Config) || IsValid(BattleNPCSpawner))
+	{
+		return Reject(TEXT("棋盘、控制器、战斗系统、配置无效，或上场 NPC 尚未回收。"));
+	}
+	const ECastleBattleKind Kind = Node->GetKind() == ECastleDirectorNodeKind::Elite ? ECastleBattleKind::Elite : ECastleBattleKind::Normal;
+	const int32 PreviousCount = Kind == ECastleBattleKind::Elite ? EliteBattles : NormalBattles;
+	if (PreviousCount == MAX_int32) { return Reject(TEXT("本类战斗序号溢出。")); }
+	const bool bPreviousPermission = bShopPermission;
+	const bool bShopWasOpen = Controller->GetShop()->IsShopOpen();
+	Controller->GetShop()->CloseShop();
+	bShopPermission = false;
+	for (TActorIterator<ACastlePatrolRoute> It(GetWorld()); It; ++It) { It->CancelEditingDraft(); }
+	Controller->HideDirectorEditingPresentation();
+	Board->SetGroundPresentationHidden(true);
+	// 生成器禁用 BeginPlay 自动生成，显式调用以便同步核对完整批次数量。
+	BattleNPCSpawner = GetWorld()->SpawnActorDeferred<ACastleMassSpawner>(ACastleMassSpawner::StaticClass(), FTransform::Identity,
+		nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	bool bNPCsReady = false;
+	if (IsValid(BattleNPCSpawner))
+	{
+		BattleNPCSpawner->Configuration = Config->NPCConfiguration;
+		BattleNPCSpawner->Count = Config->NPCCount;
+		BattleNPCSpawner->bSpawnOnBeginPlay = false;
+		BattleNPCSpawner->bFollowSharedPatrolRoute = true;
+		BattleNPCSpawner->FinishSpawning(FTransform::Identity);
+		bNPCsReady = BattleNPCSpawner->SpawnUnits() && BattleNPCSpawner->SpawnedUnits.Num() == Config->NPCCount;
+	}
+	FText Failure;
+	if (!bNPCsReady || !Combat->StartBattle(Kind, PreviousCount + 1, Failure))
+	{
+		if (!bNPCsReady)
+		{
+			Failure = FText::FromString(FString::Printf(TEXT("NPC 配置 %s：期望 %d 个单位，实际 %d；生成未完整成功。"),
+				*GetPathNameSafe(Config->NPCConfiguration), Config->NPCCount, IsValid(BattleNPCSpawner) ? BattleNPCSpawner->SpawnedUnits.Num() : 0));
+		}
+		FText CleanupFailure;
+		const bool bRecalled = RecallBattleNPCs(CleanupFailure);
+		Board->SetGroundPresentationHidden(false);
+		bShopPermission = bPreviousPermission;
+		if (bShopWasOpen) { Controller->ToggleShop(); }
+		return Reject(Failure.ToString() + (bRecalled ? FString() : TEXT("；NPC 回收失败：") + CleanupFailure.ToString()));
+	}
+	ActiveBattleKind = Kind;
+	ActiveBattleOrdinal = PreviousCount + 1;
+	if (Kind == ECastleBattleKind::Elite) { ++EliteBattles; } else { ++NormalBattles; }
+	DestroyNodes();
+	SetPhase(ECastleDirectorPhase::Battle);
+	ShowMessage(FText::FromString(TEXT("战斗进行中")), false);
+	UE_LOG(LogMoving_Castle, Display, TEXT("导演开战提交：第 %d 关，本类第 %d 场，沿闭环派出 %d 个 NPC。"), GetNextStep(), ActiveBattleOrdinal, Config->NPCCount);
+	return true;
+}
+
+bool UCastleDirectorSubsystem::RecallBattleNPCs(FText& OutReason)
+{
+	if (!BattleNPCSpawner) { return true; }
+	auto* Mass = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
+	if (!IsValid(BattleNPCSpawner) || !Mass || Mass->GetEntityManager().IsProcessing())
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("生成器 %s 无效或 Mass 正在处理，不能回收 NPC。"), *GetPathNameSafe(BattleNPCSpawner)));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+		return false;
+	}
+	const int32 Count = BattleNPCSpawner->SpawnedUnits.Num();
+	// Spawner 的 void 回收接口不能报告失败；在同一批句柄上调用原生 bool 接口并确认提交。
+	// 零句柄表示生成尚未开始；有句柄时必须成功提交死亡回收，不能丢掉失败批次。
+	if (Count > 0 && !GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>()->DespawnUnits(BattleNPCSpawner->SpawnedUnits))
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("NPC生成器 %s 的批量回收请求被拒绝。"), *BattleNPCSpawner->GetPathName()));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+		return false;
+	}
+	BattleNPCSpawner->SpawnedUnits.Reset();
+	BattleNPCSpawner->Destroy();
+	BattleNPCSpawner = nullptr;
+	UE_LOG(LogMoving_Castle, Display, TEXT("导演已回收 %d 个 NPC 并销毁本场生成器。"), Count);
+	return true;
+}
+
+void UCastleDirectorSubsystem::HandleBattleCleared(const ECastleBattleKind Kind, const int32 Ordinal)
+{
+	if (!bRunning || Phase != ECastleDirectorPhase::Battle || Kind != ActiveBattleKind || Ordinal != ActiveBattleOrdinal)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演拒绝非法或重复清场通知：阶段 %d，收到类型 %d/序号 %d，预期 %d/%d。"),
+			static_cast<int32>(Phase), static_cast<int32>(Kind), Ordinal, static_cast<int32>(ActiveBattleKind), ActiveBattleOrdinal);
 		return;
 	}
-	ShowMessage(FText::FromString(TEXT("战斗系统尚未接入（阶段 2）")), true);
-	UE_LOG(LogMoving_Castle, Error, TEXT("战斗系统尚未接入（阶段 2）"));
+	FText Failure;
+	if (!RecallBattleNPCs(Failure)) { EnterGameOver(FText::FromString(TEXT("战斗系统出错：") + Failure.ToString())); return; }
+	++ClearedSteps;
+	SetPhase(ECastleDirectorPhase::Reward);
+	ShowMessage(FText::FromString(TEXT("通关奖励：请选择一项")), false);
+	UE_LOG(LogMoving_Castle, Display, TEXT("导演清场：已通过 %d 关，进入三选一，地块保持隐藏。"), ClearedSteps);
+}
+
+void UCastleDirectorSubsystem::HandleBattleFailed(const ECastleBattleKind Kind, const int32 Ordinal, const FText& Reason)
+{
+	UE_LOG(LogMoving_Castle, Error, TEXT("导演收到战斗失败：配置 %s，类型 %d，序号 %d，%s"),
+		*GetPathNameSafe(Config), static_cast<int32>(Kind), Ordinal, *Reason.ToString());
+	EnterGameOver(FText::FromString(TEXT("战斗系统出错：") + Reason.ToString()));
 }
 
 bool UCastleDirectorSubsystem::TryChooseReward(const ECastleDirectorReward Reward, FText& OutReason)
@@ -286,6 +426,7 @@ bool UCastleDirectorSubsystem::TryChooseReward(const ECastleDirectorReward Rewar
 	bShopPermission = Reward == ECastleDirectorReward::Shop;
 	// 到此奖励已经完整提交，才发布编辑阶段并让候选节点进入世界交互。
 	Nodes = MoveTemp(Candidates);
+	Board->SetGroundPresentationHidden(false);
 	SetPhase(ECastleDirectorPhase::Editing);
 	for (ACastleDirectorNodeActor* Candidate : Nodes) { Candidate->ActivateNode(); }
 	ShowMessage(FText::FromString(TEXT("飞向节点进入下一关")), false);
@@ -311,6 +452,7 @@ void UCastleDirectorSubsystem::EnterGameOver(const FText& Failure)
 {
 	if (Phase == ECastleDirectorPhase::GameOver) { return; }
 	GameOverFailure = Failure;
+	PendingNode.Reset();
 	Controller->GetShop()->CloseShop();
 	bShopPermission = false;
 	DestroyNodes();
@@ -409,15 +551,47 @@ FString UCastleDirectorSubsystem::GetHUDSummary() const
 	}
 	const TCHAR* PhaseText = Phase == ECastleDirectorPhase::Editing ? TEXT("编辑中") : Phase == ECastleDirectorPhase::Battle
 		? TEXT("战斗中") : Phase == ECastleDirectorPhase::Reward ? TEXT("选择奖励") : TEXT("游戏结束");
-	return FString::Printf(TEXT("%s · 第 %d 关 %s\n主塔 Lv%d · 经验 %d/%d · 房间 %d/%d\n主塔生命 %.0f/%.0f"),
-		PhaseText, GetNextStep(), GetNodeKindForStep(*Config, GetNextStep()) == ECastleDirectorNodeKind::Elite ? TEXT("精英") : TEXT("普通"),
+	const int32 DisplayStep = Phase == ECastleDirectorPhase::Reward ? ClearedSteps : GetNextStep();
+	FString Summary = FString::Printf(TEXT("%s · 第 %d 关 %s\n主塔 Lv%d · 经验 %d/%d · 房间 %d/%d\n主塔生命 %.0f/%.0f"),
+		PhaseText, DisplayStep, GetNodeKindForStep(*Config, DisplayStep) == ECastleDirectorNodeKind::Elite ? TEXT("精英") : TEXT("普通"),
 		Level, Experience, Config->ExpPerLevel, OwnedRooms, Controller->GetShop()->RoomLimit, Tower->CurrentHealth, Tower->MaxHealth);
+	if (Phase == ECastleDirectorPhase::Battle)
+	{
+		int32 Enemies = 0, PendingGroups = 0;
+		if (!IsValid(Combat) || !Combat->GetBattleProgress(Enemies, PendingGroups))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("导演 HUD 读取战斗进度失败：战斗系统 %s。"), *GetPathNameSafe(Combat));
+			return Summary + TEXT("\n剩余敌人数读取失败，详见日志。");
+		}
+		Summary += FString::Printf(TEXT("\n剩余敌人 %d · 待出场组 %d"), Enemies, PendingGroups);
+	}
+	return Summary;
+}
+
+void UCastleDirectorSubsystem::UnbindCombatEvents()
+{
+	if (IsValid(Combat))
+	{
+		Combat->OnBattleCleared.Remove(BattleClearedHandle);
+		Combat->OnBattleFailed.Remove(BattleFailedHandle);
+	}
+}
+
+void UCastleDirectorSubsystem::OnWorldEndPlay(UWorld& InWorld)
+{
+	// 世界结束时 Mass 自己释放实体；不要在子系统析构顺序不确定时再次派发 Despawn。
+	UnbindCombatEvents();
+	PendingNode.Reset();
+	BattleNPCSpawner = nullptr;
+	bRunning = false;
+	Super::OnWorldEndPlay(InWorld);
 }
 
 void UCastleDirectorSubsystem::Deinitialize()
 {
 	// 先移除外部生命事件，再销毁当前世界的节点和界面，避免关卡重载后遗留回调。
 	if (Tower) { Tower->OnHealthChanged.RemoveDynamic(this, &UCastleDirectorSubsystem::HandleTowerHealthChanged); }
+	UnbindCombatEvents();
 	DestroyNodes();
 	for (UUserWidget* Widget : {HUDWidget.Get(), RewardWidget.Get(), GameOverWidget.Get()}) { if (Widget) { Widget->RemoveFromParent(); } }
 	if (IsValid(Controller)) { Controller->SetDirectorModalState(false, false, nullptr); }
