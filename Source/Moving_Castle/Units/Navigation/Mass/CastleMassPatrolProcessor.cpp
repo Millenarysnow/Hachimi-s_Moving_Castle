@@ -58,7 +58,7 @@ void UCastleMassPatrolProcessor::Execute(FMassEntityManager& EntityManager, FMas
 			++Traversal.MovementSerial;
 			Traversal.PathRevision = INDEX_NONE;
 			Traversal.TravelDistance = 0.0;
-			if (!Patrol.bEnabled || Units[It].Health <= 0.0f) { continue; }
+			if (!Patrol.bEnabled || Patrol.bSupportJourney || Units[It].Health <= 0.0f) { continue; }
 			FTransform& Transform = Transforms[It].GetMutableTransform();
 			FVector& Velocity = Velocities[It].Value;
 			Targets[It] = FCastleMassMoveTargetFragment();
@@ -88,7 +88,9 @@ void UCastleMassPatrolProcessor::Execute(FMassEntityManager& EntityManager, FMas
 				continue;
 			}
 			double Travel = 0.0;
-			if (!CastlePatrolMovement::Advance(*Path, Settings, Patrol.Distance, DeltaTime, Patrol.Speed, Travel))
+			FCastleMassMovementSettings EffectiveSettings = Settings;
+			EffectiveSettings.MaxSpeed *= Units[It].SupportMovementMultiplier;
+			if (!CastlePatrolMovement::Advance(*Path, EffectiveSettings, Patrol.Distance, DeltaTime, Patrol.Speed, Travel))
 			{
 				++InvalidLadderSettings;
 			}

@@ -60,7 +60,9 @@ void UCastleMassMovementProcessor::Execute(FMassEntityManager& EntityManager, FM
 		const auto Patrols = Chunk.GetFragmentView<FCastleMassPatrolFragment>();
 		for (FMassExecutionContext::FEntityIterator It = Chunk.CreateEntityIterator(); It; ++It)
 		{
-			if (Units[It].Health <= 0.0f || (!Patrols.IsEmpty() && Patrols[It].bEnabled)) { continue; }
+			if (Units[It].Health <= 0.0f || (!Patrols.IsEmpty() && (Patrols[It].bEnabled || Patrols[It].bSupportJourney))) { continue; }
+			const float Rate = Units[It].SupportMovementMultiplier;
+			const float MaxSpeed = Settings.MaxSpeed * Rate;
 			FTransform& Transform = Transforms[It].GetMutableTransform();
 			FVector& Velocity = Velocities[It].Value;
 			FCastleMassMoveTargetFragment& Target = Targets[It];
@@ -74,16 +76,18 @@ void UCastleMassMovementProcessor::Execute(FMassEntityManager& EntityManager, FM
 				continue;
 			}
 
-			FVector Desired = Target.DesiredVelocity.GetClampedToMaxSize(Settings.MaxSpeed);
+			FVector Desired = (Target.DesiredVelocity * Rate).GetClampedToMaxSize(MaxSpeed);
 			if (Target.bHasTarget)
 			{
 				const float Speed = Settings.Acceleration > 0.0f
-					? FMath::Min(Settings.MaxSpeed, FMath::Sqrt(2.0f * Settings.Acceleration * static_cast<float>(FMath::Max(0.0, Distance - Settings.AcceptanceRadius))))
-					: Settings.MaxSpeed;
+					? FMath::Min(MaxSpeed, FMath::Sqrt(2.0f * Settings.Acceleration * static_cast<float>(FMath::Max(0.0, Distance - Settings.AcceptanceRadius))))
+					: MaxSpeed;
 				Desired = ToTarget.GetSafeNormal() * Speed;
 			}
 			Velocity = Settings.Acceleration > 0.0f
 				? FMath::VInterpConstantTo(Velocity, Desired, DeltaTime, Settings.Acceleration) : Desired;
+			// 减速结算后的首帧就受新上限约束，不等原速度自然降下来。
+			if (Rate < 1.0f) { Velocity = Velocity.GetClampedToMaxSize(MaxSpeed); }
 			const FVector Step = Velocity * DeltaTime;
 			// 跨过目标平面时钳制位置，避免大帧间隔或高速单位在目标两侧振荡。
 			if (Target.bHasTarget && FVector::DotProduct(Step, ToTarget.GetSafeNormal()) >= Distance)

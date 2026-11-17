@@ -40,6 +40,9 @@ public:
 
 	/** 并行检测结束后在游戏线程执行；校验快照与登记版本，再按每个 NPC 的行走顺序派发。 */
 	void DispatchEntries(const FCastleBuildingTriggerPath& Path, TConstArrayView<FCastleBuildingEntryEvent> Events);
+	/** 一次性路线复用相同空间裁剪，但不占用共享闭环的缓存或版本。 */
+	bool CompileTemporaryPath(const FCastleSharedNavigationPath& Path, FCastleBuildingTriggerPath& Out, FText& OutReason) const;
+	bool IsTemporaryPathCurrent(const FCastleBuildingTriggerPath& Path) const;
 
 	/** 缓存命中时不递增，供验证预处理成本没有随 NPC 数量增长。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="建筑|进入触发")

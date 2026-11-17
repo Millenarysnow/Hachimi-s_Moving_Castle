@@ -11,6 +11,8 @@ struct MOVING_CASTLE_API FCastleMassPatrolFragment : public FMassFragment
 
 	/** 通过生成器或批量 FollowSharedPatrolRoute 显式启用；普通直线移动不会被巡逻抢占。 */
 	bool bEnabled = false;
+	/** 临时集结路线拥有本轮移动，巡逻距离和原移动目标均暂停。 */
+	bool bSupportJourney = false;
 	bool bBlocked = false;
 	int32 PathRevision = INDEX_NONE;
 	int32 RouteRevision = INDEX_NONE;

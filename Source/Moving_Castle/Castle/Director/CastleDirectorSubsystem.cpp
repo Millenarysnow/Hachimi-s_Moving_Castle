@@ -1,5 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #include "CastleDirectorSubsystem.h"
+#include "Castle/Support/CastleSupportTowerSubsystem.h"
 
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
@@ -332,6 +333,11 @@ bool UCastleDirectorSubsystem::RecallBattleNPCs(FText& OutReason)
 		return false;
 	}
 	const int32 Count = BattleNPCSpawner->SpawnedUnits.Num();
+	if (!GetWorld()->GetSubsystem<UCastleSupportTowerSubsystem>()->EndBattleSupport())
+	{
+		OutReason = FText::FromString(TEXT("支援塔的本场增援或飞行对象未能回收。"));
+		return false;
+	}
 	// Spawner 的 void 回收接口不能报告失败；在同一批句柄上调用原生 bool 接口并确认提交。
 	// 零句柄表示生成尚未开始；有句柄时必须成功提交死亡回收，不能丢掉失败批次。
 	if (Count > 0 && !GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>()->DespawnUnits(BattleNPCSpawner->SpawnedUnits))

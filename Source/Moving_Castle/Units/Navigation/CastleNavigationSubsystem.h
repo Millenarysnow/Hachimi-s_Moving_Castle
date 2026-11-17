@@ -143,6 +143,9 @@ public:
 	UFUNCTION(BlueprintPure, Category="移动城堡|NPC导航")
 	bool IsNavigationReady() const;
 
+	/** 只为一次性调动生成贴地路线；不覆盖玩家闭环、不注册新全局请求。 */
+	bool BuildTemporaryPath(TConstArrayView<FVector> Waypoints, FCastleSharedNavigationPath& OutPath, FText& OutReason);
+
 	/** 全世界未结束的变化数量，包含嵌套操作；稳定场景不轮询建筑或动画组件。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="导航状态")
 	int32 ActiveChangeCount = 0;

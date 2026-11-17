@@ -438,6 +438,67 @@ FCastleSharedNavigationPath UCastleNavigationSubsystem::GetSharedPath() const
 	return Path ? *Path : FCastleSharedNavigationPath();
 }
 
+bool UCastleNavigationSubsystem::BuildTemporaryPath(TConstArrayView<FVector> Waypoints,
+	FCastleSharedNavigationPath& OutPath, FText& OutReason)
+{
+	OutPath = FCastleSharedNavigationPath();
+	OutReason = FText::GetEmpty();
+	UNavigationSystemV1* Navigation = nullptr;
+	ANavigationData* Data = nullptr;
+	if (!IsInGameThread() || Waypoints.Num() < 2 || !IsNavigationReady())
+	{
+		OutReason = FText::FromString(TEXT("临时调动需要游戏线程、至少两个路径点及稳定的 NavMesh。"));
+		return false;
+	}
+	if (!ValidateNavigation(Navigation, Data, OutReason)) { return false; }
+	const ARecastNavMesh* Mesh = Cast<ARecastNavMesh>(Data);
+	if (!Mesh)
+	{
+		OutReason = FText::FromString(TEXT("临时调动缺少 Recast 走廊，不能使用直线。"));
+		return false;
+	}
+	FCastleSharedNavigationPath Candidate;
+	Candidate.NavigationRevision = NavigationRevision;
+	for (const FVector& Waypoint : Waypoints)
+	{
+		FNavLocation Projected;
+		// 仅吸附到导航表面高度；水平偏离意味着真实落点/接驳点不可达，不能用旁边楼层或走廊替代。
+		if (Waypoint.ContainsNaN() || !Navigation->ProjectPointToNavigation(Waypoint, Projected, ProjectionExtent, Data)
+			|| FVector::DistSquared2D(Waypoint, Projected.Location) > FMath::Square(5.0))
+		{
+			OutReason = FText::FromString(FString::Printf(TEXT("临时调动点 %s 不在可行走表面。"), *Waypoint.ToCompactString()));
+			return false;
+		}
+		Candidate.Waypoints.Add(Projected.Location);
+	}
+	Candidate.PatrolPoints.Add(Candidate.Waypoints[0]);
+	Candidate.PatrolDistances.Add(0.0);
+	Candidate.WaypointDistances.Add(0.0);
+	for (int32 Index = 1; Index < Candidate.Waypoints.Num(); ++Index)
+	{
+		const FVector Start = Candidate.Waypoints[Index - 1];
+		const FVector End = Candidate.Waypoints[Index];
+		// 已在落点时本段是一段零距离真实行程；没有理由要求 NPC 先离开落点再回来。
+		if (Start.Equals(End, 0.01)) { Candidate.WaypointDistances.Add(Candidate.PatrolDistances.Last()); continue; }
+		FPathFindingQuery Query(this, *Data, Start, End);
+		Query.SetAllowPartialPaths(false);
+		++PathQueryCount;
+		const FPathFindingResult Result = Navigation->FindPathSync(Query);
+		const FNavMeshPath* Corridor = Result.IsSuccessful() && Result.Path.IsValid() && !Result.Path->IsPartial()
+			? Result.Path->CastPath<FNavMeshPath>() : nullptr;
+		if (!Corridor || !CastlePatrolNavigation::AppendSurfaceSamples(*Mesh, *Navigation, *Corridor, PatrolSampleSpacing, Candidate, OutReason))
+		{
+			if (OutReason.IsEmpty()) { OutReason = FText::FromString(TEXT("没有完整可走的集结或接回路线。")); }
+			return false;
+		}
+		Candidate.WaypointDistances.Add(Candidate.PatrolDistances.Last());
+	}
+	Candidate.Length = Candidate.PatrolDistances.Last();
+	Candidate.bValid = true;
+	OutPath = MoveTemp(Candidate);
+	return true;
+}
+
 void UCastleNavigationSubsystem::CalculateSharedPath()
 {
 	UNavigationSystemV1* Navigation;

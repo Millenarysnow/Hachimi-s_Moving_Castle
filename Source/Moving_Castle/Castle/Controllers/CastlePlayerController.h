@@ -37,8 +37,11 @@ public:
 		return CurrentGridCursorTarget;
 	}
 
-	/** 直接使用当前中心指针目标放置样例卡，供输入绑定和后续 UI 调用。 */
+	/** 左键先处理准星命中的气球，未命中才按当前网格目标处理建筑放置。 */
 	void PlacePrototypeBuildingAtCursor();
+
+	/** 执行左键射线的气球分支；命中即消费此次点击，返回值单独表示是否成功投放。 */
+	bool TryPopBalloonFromRay(const FVector& Start, const FVector& End, bool& bOutConsumed);
 
 	/** 当前玩家的独立金币账户，奖励和资源建筑可通过此入口接入收支。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|经济")

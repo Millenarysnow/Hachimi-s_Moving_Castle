@@ -10,5 +10,5 @@ namespace CastlePatrolMovement
 	 * 非法梯子倍率返回 false，并将速度设为零；已在合法楼板上到达梯口的距离仍可正常消费。
 	 */
 	bool Advance(const FCastleSharedNavigationPath& Path, const FCastleMassMovementSettings& Settings,
-		double StartDistance, double DeltaTime, double& InOutSpeed, double& OutTravel);
+		double StartDistance, double DeltaTime, double& InOutSpeed, double& OutTravel, bool bStopAtEnd = false);
 }

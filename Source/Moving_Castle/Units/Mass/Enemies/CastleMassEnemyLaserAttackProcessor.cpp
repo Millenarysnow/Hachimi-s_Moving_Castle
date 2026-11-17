@@ -14,6 +14,7 @@
 #include "MassMovementFragments.h"
 #include "Moving_Castle.h"
 #include "Subsystems/CastleShieldTowerSubsystem.h"
+#include "Castle/Support/CastleSupportTowerSubsystem.h"
 
 UCastleMassEnemyLaserAttackProcessor::UCastleMassEnemyLaserAttackProcessor() : Query(*this)
 {
@@ -41,8 +42,14 @@ void UCastleMassEnemyLaserAttackProcessor::Execute(FMassEntityManager& EntityMan
 	UWorld* World = GetWorld();
 	UCastleShieldTowerSubsystem* Shields = World ? World->GetSubsystem<UCastleShieldTowerSubsystem>() : nullptr;
 	UCastleMainTowerSubsystem* Main = World ? World->GetSubsystem<UCastleMainTowerSubsystem>() : nullptr;
+	UCastleSupportTowerSubsystem* Support = World ? World->GetSubsystem<UCastleSupportTowerSubsystem>() : nullptr;
+	if (!Support)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 激光索敌失败：世界 %s 缺少支援塔子系统。"), *GetPathNameSafe(World));
+		return;
+	}
 	bool bAnyMissingTarget = false;
-	Query.ForEachEntityChunk(Context, [this, World, Shields, Main, &bAnyMissingTarget](FMassExecutionContext& Chunk)
+	Query.ForEachEntityChunk(Context, [this, World, Shields, Main, Support, &bAnyMissingTarget](FMassExecutionContext& Chunk)
 	{
 		const float DeltaTime = FMath::Max(0.0f, Chunk.GetDeltaTimeSeconds());
 		const auto Transforms = Chunk.GetMutableFragmentView<FTransformFragment>();
@@ -63,10 +70,13 @@ void UCastleMassEnemyLaserAttackProcessor::Execute(FMassEntityManager& EntityMan
 			FTransform& Transform = Transforms[It].GetMutableTransform();
 			const FVector Origin = Transform.GetLocation();
 			FVector TargetLocation = FVector::ZeroVector;
+			// 光束的终点和伤害都使用同一帧选择的气球目标。
+			uint64 BalloonId = 0;
+			const bool bBalloonTarget = Support->FindBalloonTarget(Origin, BalloonId, TargetLocation);
 			uint64 ShieldId = 0;
-			const bool bShieldTarget = Shields && Shields->FindNearestActiveShield(Origin, Attack.AttackRange, false, ShieldId, TargetLocation);
-			const bool bTowerTarget = !bShieldTarget && Main && Main->GetMainTowerTargetLocation(TargetLocation);
-			if (!bShieldTarget && !bTowerTarget)
+			const bool bShieldTarget = !bBalloonTarget && Shields && Shields->FindNearestActiveShield(Origin, Attack.AttackRange, false, ShieldId, TargetLocation);
+			const bool bTowerTarget = !bBalloonTarget && !bShieldTarget && Main && Main->GetMainTowerTargetLocation(TargetLocation);
+			if (!bBalloonTarget && !bShieldTarget && !bTowerTarget)
 			{
 				bAnyMissingTarget = true;
 				Attack.bInAttackRange = false;
@@ -108,9 +118,9 @@ void UCastleMassEnemyLaserAttackProcessor::Execute(FMassEntityManager& EntityMan
 			Attacker.World = World;
 			Attacker.Entity = Chunk.GetEntity(It);
 			int64 RemainingBlocks = 0;
-			const bool bApplied = bShieldTarget
-				? Shields->ApplyAttackToShield(ShieldId, Attacker, RemainingBlocks)
-				: Main->ApplyMainTowerDamage(Attack.AttackDamage);
+			const bool bApplied = bBalloonTarget ? Support->DamageBalloon(BalloonId, Attack.AttackDamage)
+				: (bShieldTarget ? Shields->ApplyAttackToShield(ShieldId, Attacker, RemainingBlocks)
+					: Main->ApplyMainTowerDamage(Attack.AttackDamage));
 			if (bApplied)
 			{
 				++Attack.AttackCount;

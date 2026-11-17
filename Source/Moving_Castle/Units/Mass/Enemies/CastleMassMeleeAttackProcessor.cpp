@@ -12,6 +12,7 @@
 #include "MassMovementFragments.h"
 #include "Moving_Castle.h"
 #include "Subsystems/CastleShieldTowerSubsystem.h"
+#include "Castle/Support/CastleSupportTowerSubsystem.h"
 
 UCastleMassMeleeAttackProcessor::UCastleMassMeleeAttackProcessor() : Query(*this)
 {
@@ -40,8 +41,14 @@ void UCastleMassMeleeAttackProcessor::Execute(FMassEntityManager& EntityManager,
 	UCastleMainTowerSubsystem* TowerSubsystem = GetWorld() != nullptr
 		? GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>() : nullptr;
 	UCastleShieldTowerSubsystem* Shields = GetWorld()->GetSubsystem<UCastleShieldTowerSubsystem>();
+	UCastleSupportTowerSubsystem* Support = GetWorld()->GetSubsystem<UCastleSupportTowerSubsystem>();
+	if (!Support)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 近战索敌失败：世界 %s 缺少支援塔子系统。"), *GetPathNameSafe(GetWorld()));
+		return;
+	}
 	bool bAnyMissingTarget = false;
-	Query.ForEachEntityChunk(Context, [this, TowerSubsystem, Shields, &bAnyMissingTarget](FMassExecutionContext& Chunk)
+	Query.ForEachEntityChunk(Context, [this, TowerSubsystem, Shields, Support, &bAnyMissingTarget](FMassExecutionContext& Chunk)
 	{
 		const float DeltaTime = FMath::Max(0.0f, Chunk.GetDeltaTimeSeconds());
 		const auto Transforms = Chunk.GetFragmentView<FTransformFragment>();
@@ -56,10 +63,13 @@ void UCastleMassMeleeAttackProcessor::Execute(FMassEntityManager& EntityManager,
 			if (Units[It].Health <= 0.0f) { continue; }
 			FCastleMassMeleeAttackFragment& Melee = Melees[It];
 			FVector TargetLocation;
+			// 在气球的仇恨圈内优先追气球；没有气球时沿用近战护盾吸引及主塔规则。
+			uint64 BalloonId = 0;
+			const bool bBalloonTarget = Support->FindBalloonTarget(Transforms[It].GetTransform().GetLocation(), BalloonId, TargetLocation);
 			uint64 ShieldId = 0;
-			const bool bShieldTarget = Shields->FindNearestActiveShield(
+			const bool bShieldTarget = !bBalloonTarget && Shields->FindNearestActiveShield(
 				Transforms[It].GetTransform().GetLocation(), MAX_flt, true, ShieldId, TargetLocation);
-			const bool bHasTarget = bShieldTarget || (TowerSubsystem && TowerSubsystem->GetMainTowerTargetLocation(TargetLocation));
+			const bool bHasTarget = bBalloonTarget || bShieldTarget || (TowerSubsystem && TowerSubsystem->GetMainTowerTargetLocation(TargetLocation));
 			if (!bHasTarget)
 			{
 				bAnyMissingTarget = true;
@@ -97,8 +107,10 @@ void UCastleMassMeleeAttackProcessor::Execute(FMassEntityManager& EntityManager,
 			Attacker.World = GetWorld();
 			Attacker.Entity = Chunk.GetEntity(It);
 			int64 RemainingBlocks = 0;
-			if (bShieldTarget ? Shields->ApplyAttackToShield(ShieldId, Attacker, RemainingBlocks)
-				: TowerSubsystem->ApplyMainTowerDamage(Melee.AttackDamage))
+			const bool bApplied = bBalloonTarget ? Support->DamageBalloon(BalloonId, Melee.AttackDamage)
+				: (bShieldTarget ? Shields->ApplyAttackToShield(ShieldId, Attacker, RemainingBlocks)
+					: TowerSubsystem->ApplyMainTowerDamage(Melee.AttackDamage));
+			if (bApplied)
 			{
 				++Melee.AttackCount;
 				Melee.AttackCooldown = Melee.AttackInterval;

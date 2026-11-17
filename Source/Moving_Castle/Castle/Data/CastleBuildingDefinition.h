@@ -9,6 +9,7 @@
 
 class UBuildingPartCatalog;
 class UCastleTowerAttackDataAsset;
+class UCastleSupportTowerData;
 
 /**
  * 同一种建筑的一级配置。
@@ -68,6 +69,10 @@ public:
 	/** 箭塔、炮塔各持有本族唯一攻击参数；普通房间、农田和盾塔不配置攻击 DA。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="建筑|攻击")
 	TObjectPtr<UCastleTowerAttackDataAsset> AttackData;
+
+	/** 蜂巢塔、气球空投塔必须显式绑定各自需要的战斗参数；不读取箭塔攻击参数。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="建筑|支援")
+	TObjectPtr<UCastleSupportTowerData> SupportData;
 
 	/** 查找准确等级，不把缺失等级替换为其他等级或其他建筑。 */
 	const FCastleBuildingLevelDefinition* FindLevel(int32 InLevel) const;

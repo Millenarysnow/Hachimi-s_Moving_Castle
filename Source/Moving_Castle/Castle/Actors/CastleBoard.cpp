@@ -1037,6 +1037,46 @@ bool ACastleBoard::GetConnectedBuildings(const ACastleBuildingBase* Source, cons
 	return true;
 }
 
+bool ACastleBoard::GetFaceAdjacentBuildings(const ACastleBuildingBase* Source, const bool bRequirePassage,
+	TArray<ACastleBuildingBase*>& OutBuildings) const
+{
+	OutBuildings.Reset();
+	if (!ValidateEffectQuerySource(Source)) { return false; }
+	TMap<ACastleBuildingBase*, FIntVector> NeighborCells;
+	auto CellLess = [](const FIntVector& A, const FIntVector& B)
+	{
+		return A.X != B.X ? A.X < B.X : (A.Y != B.Y ? A.Y < B.Y : A.Z < B.Z);
+	};
+	for (const FIntVector& Cell : Source->GetOccupiedCoordinates())
+	{
+		TArray<FIntVector> Neighbors;
+		GetFaceNeighborCoordinates(Cell, Neighbors);
+		for (const FIntVector& Neighbor : Neighbors)
+		{
+			const auto* Entry = BuildingByCoordinate.Find(Neighbor);
+			if (!Entry || Entry->Get() == Source) { continue; }
+			ACastleBuildingBase* Building = Entry->Get();
+			if (!IsValid(Building))
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s：建筑 %s 邻格 %s 的占用索引失效。"),
+					*GetPathName(), *Source->GetPathName(), *Neighbor.ToString());
+				return false;
+			}
+			// 未落成不会参与联动。通行查询只接纳同色贯通或同号门/梯；炮击邻接不要求通行。
+			if (!Building->CanReceiveBuildingTrigger() || (bRequirePassage && Building->GetBuildingColor() != Source->GetBuildingColor()
+				&& Building->GetBuildingNumber() != Source->GetBuildingNumber())) { continue; }
+			const FIntVector* Previous = NeighborCells.Find(Building);
+			if (!Previous || CellLess(Neighbor, *Previous)) { NeighborCells.Add(Building, Neighbor); }
+		}
+	}
+	NeighborCells.GenerateKeyArray(OutBuildings);
+	OutBuildings.Sort([&](const ACastleBuildingBase& A, const ACastleBuildingBase& B)
+	{
+		return CellLess(NeighborCells.FindChecked(const_cast<ACastleBuildingBase*>(&A)), NeighborCells.FindChecked(const_cast<ACastleBuildingBase*>(&B)));
+	});
+	return true;
+}
+
 FVector ACastleBoard::GetGridWorldLocation(const FIntVector& Coordinate) const
 {
 	const FIntVector RelativeCoordinate = Coordinate - GridOrigin;

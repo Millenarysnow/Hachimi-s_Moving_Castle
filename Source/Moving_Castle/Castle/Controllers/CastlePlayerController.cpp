@@ -19,6 +19,8 @@
 #include "CastleMassEnemySpawner.h"
 #include "MassEntityConfigAsset.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
+#include "Castle/Support/CastleSupportFlightActors.h"
+#include "Castle/Support/CastleSupportTowerSubsystem.h"
 #include "Blueprint/UserWidget.h"
 
 ACastlePlayerController::ACastlePlayerController()
@@ -272,15 +274,42 @@ void ACastlePlayerController::SelectBackpackSlot(int32 SlotIndex)
 		*Descriptor.Definition->DisplayName.ToString(), Descriptor.Number), true);
 }
 
+bool ACastlePlayerController::TryPopBalloonFromRay(const FVector& Start, const FVector& End, bool& bOutConsumed)
+{
+	bOutConsumed = false;
+	FHitResult Hit;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(CastleBalloonClick), false, GetPawn());
+	if (!GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params)) { return false; }
+	const ACastleSupplyBalloon* Balloon = Cast<ACastleSupplyBalloon>(Hit.GetActor());
+	if (!Balloon) { return false; }
+	bOutConsumed = true;
+	// 即使非法落点导致投放失败，这次输入也只属于气球，不允许同一下左键误放建筑。
+	return GetWorld()->GetSubsystem<UCastleSupportTowerSubsystem>()->PopBalloon(Balloon->GetTargetId());
+}
+
 void ACastlePlayerController::PlacePrototypeBuildingAtCursor()
 {
-	FText EditReason;
-	if (!IsDirectorEditingAllowed(EditReason)) { ShowDirectorMessage(EditReason); return; }
 	// UI 使用鼠标时绝不继续向世界发送左键放置，避免购买同时误放建筑。
-	if (Shop->IsShopOpen())
+	if (Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive)
 	{
 		return;
 	}
+	// 气球点击属于战斗操作，在构筑门控前消费；同一次左键不会同时放置房间。
+	int32 Width = 0, Height = 0;
+	GetViewportSize(Width, Height);
+	FVector Origin, Direction;
+	if (Width > 0 && Height > 0 && DeprojectScreenPositionToWorld(Width * 0.5f, Height * 0.5f, Origin, Direction))
+	{
+		bool bConsumed;
+		const bool bPopped = TryPopBalloonFromRay(Origin, Origin + Direction * GridCursorTraceDistance, bConsumed);
+		if (bConsumed)
+		{
+			if (!bPopped) { ShowDirectorMessage(FText::FromString(TEXT("气球无法完成空投，请检查 Output Log。"))); }
+			return;
+		}
+	}
+	FText EditReason;
+	if (!IsDirectorEditingAllowed(EditReason)) { ShowDirectorMessage(EditReason); return; }
 	if (ActiveBoard == nullptr)
 	{
 		FindActiveBoard();

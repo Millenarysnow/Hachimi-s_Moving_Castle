@@ -270,6 +270,10 @@ public:
 	bool GetConnectedBuildings(const ACastleBuildingBase* Source, const TArray<ACastleBuildingBase*>& Candidates,
 		TArray<ACastleBuildingBase*>& OutBuildings) const;
 
+	/** 按六面查询已落成邻居，按占格坐标排序；通行模式与同色或同号的 PCG 接口一致。 */
+	bool GetFaceAdjacentBuildings(const ACastleBuildingBase* Source, bool bRequirePassage,
+		TArray<ACastleBuildingBase*>& OutBuildings) const;
+
 	/** 原生联动通知不保存历史或去重 NPC；同一次进入只由建筑接口广播一次。 */
 	FCastleBoardBuildingTriggered OnBuildingTriggered;
 

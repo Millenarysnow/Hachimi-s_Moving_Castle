@@ -302,10 +302,12 @@ bool UCastleMassUnitSubsystem::SpawnEnemyProjectiles(UMassEntityConfigAsset* Con
 	for (const auto& Spawn : Spawns)
 	{
 		const bool bShield = Spawn.ShieldId != 0;
+		const bool bBalloon = Spawn.BalloonId != 0;
 		const bool bTower = Spawn.TargetTower.IsValid();
 		if (Spawn.Origin.ContainsNaN() || !FMath::IsFinite(Spawn.Damage) || Spawn.Damage < 0.0f
 			|| Spawn.Attacker.World.Get() != GetWorld() || !Spawn.Attacker.Entity.IsSet()
-			|| bShield == bTower || (bTower && Spawn.TargetTower->GetWorld() != GetWorld()))
+			|| static_cast<int32>(bShield) + static_cast<int32>(bBalloon) + static_cast<int32>(bTower) != 1
+			|| (bTower && Spawn.TargetTower->GetWorld() != GetWorld()))
 		{
 			return Reject(TEXT("发射点、非负伤害、攻击者世界或互斥锁定目标无效，整批拒绝。"));
 		}
@@ -465,8 +467,8 @@ bool UCastleMassUnitSubsystem::MoveUnitsTo(const TArray<FCastleMassUnitHandle>& 
 			if (!Manager.IsEntityActive(Handle)) { continue; }
 			const auto* Unit = Manager.GetFragmentDataPtr<FCastleMassUnitFragment>(Handle);
 			if (!Unit || Unit->Kind == ECastleMassUnitKind::Projectile) { continue; }
-			// 显式移动命令解除巡逻，保证同一实体同一帧只有一个移动系统负责位移。
-			if (auto* Patrol = Manager.GetFragmentDataPtr<FCastleMassPatrolFragment>(Handle)) { Patrol->bEnabled = false; }
+			// 显式移动命令解除巡逻及空投临时调动，保持同一实体只有一个位移所有者。
+			if (auto* Patrol = Manager.GetFragmentDataPtr<FCastleMassPatrolFragment>(Handle)) { Patrol->bEnabled = Patrol->bSupportJourney = false; }
 			auto& Target = Manager.GetFragmentDataChecked<FCastleMassMoveTargetFragment>(Handle);
 			Target.Target = Destination;
 			Target.bHasTarget = true;
@@ -518,7 +520,7 @@ bool UCastleMassUnitSubsystem::SetUnitsVelocity(const TArray<FCastleMassUnitHand
 		for (const FMassEntityHandle Handle : Handles)
 		{
 			if (!Manager.IsEntityActive(Handle) || !Manager.GetFragmentDataPtr<FCastleMassUnitFragment>(Handle)) { continue; }
-			if (auto* Patrol = Manager.GetFragmentDataPtr<FCastleMassPatrolFragment>(Handle)) { Patrol->bEnabled = false; }
+			if (auto* Patrol = Manager.GetFragmentDataPtr<FCastleMassPatrolFragment>(Handle)) { Patrol->bEnabled = Patrol->bSupportJourney = false; }
 			auto& Target = Manager.GetFragmentDataChecked<FCastleMassMoveTargetFragment>(Handle);
 			Target.bHasTarget = false;
 			Target.DesiredVelocity = Velocity;
@@ -540,7 +542,7 @@ bool UCastleMassUnitSubsystem::StopUnits(const TArray<FCastleMassUnitHandle>& Un
 		for (const FMassEntityHandle Handle : Handles)
 		{
 			if (!Manager.IsEntityActive(Handle) || !Manager.GetFragmentDataPtr<FCastleMassUnitFragment>(Handle)) { continue; }
-			if (auto* Patrol = Manager.GetFragmentDataPtr<FCastleMassPatrolFragment>(Handle)) { Patrol->bEnabled = false; }
+			if (auto* Patrol = Manager.GetFragmentDataPtr<FCastleMassPatrolFragment>(Handle)) { Patrol->bEnabled = Patrol->bSupportJourney = false; }
 			Manager.GetFragmentDataChecked<FCastleMassMoveTargetFragment>(Handle) = FCastleMassMoveTargetFragment();
 			Manager.GetFragmentDataChecked<FMassVelocityFragment>(Handle).Value = FVector::ZeroVector;
 		}

@@ -6,6 +6,7 @@
 #include "Castle/Data/CastleBuildingDefinition.h"
 #include "Castle/Actors/CastleBuildings.h"
 #include "Castle/Actors/CastleBoard.h"
+#include "Castle/Support/CastleSupportTowerSubsystem.h"
 #include "CastleMassUnitSubsystem.h"
 #include "Engine/World.h"
 #include "MassEntitySubsystem.h"
@@ -177,9 +178,23 @@ void UCastleTowerAttackEffectComponent::TickComponent(const float DeltaTime, con
 	{
 		NextShotWorldTime = CurrentWorldTime;
 	}
+	const auto* Building = CastChecked<ACastleBuildingBase>(GetOwner());
+	const auto* Support = World->GetSubsystem<UCastleSupportTowerSubsystem>();
+	if (!Support)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("塔 %s 无法读取射速：当前世界缺少支援塔子系统。"), *Building->GetPathName());
+		bWaitingForExternalRetry = true;
+		return;
+	}
+	const float Rate = Building->GetBuildingType() == ECastleBuildingType::ArcherTower ? Support->GetArcherRateMultiplier(*Building) : 1.0f;
+	if (Rate != CooldownRateMultiplier && NextShotWorldTime > CurrentWorldTime)
+	{
+		NextShotWorldTime = CurrentWorldTime + (NextShotWorldTime - CurrentWorldTime) * CooldownRateMultiplier / Rate;
+	}
+	CooldownRateMultiplier = Rate;
 	while (PendingShotCount > 0 && CurrentWorldTime + KINDA_SMALL_NUMBER >= NextShotWorldTime)
 	{
-		const double FollowingShotWorldTime = NextShotWorldTime + IntervalSeconds;
+		const double FollowingShotWorldTime = NextShotWorldTime + IntervalSeconds / Rate;
 		if (!FMath::IsFinite(FollowingShotWorldTime))
 		{
 			UE_LOG(LogMoving_Castle, Error, TEXT("塔攻击下一发冷却时间溢出，攻击资产=%s，等级=%d。"),
@@ -300,7 +315,14 @@ bool UCastleTowerAttackEffectComponent::FireProjectile(const UCastleTowerAttackD
 	FCastleMassHomingProjectileSpawn Spawn;
 	Spawn.Origin = Origin;
 	Spawn.Target = Target;
-	Spawn.Damage = Damage;
+	// 红色空投影响发射时攻击力，已经射出的箭/炮弹保持逐发锁定伤害。
+	const auto* Support = GetWorld()->GetSubsystem<UCastleSupportTowerSubsystem>();
+	if (!Support)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("塔 %s 无法发射：当前世界缺少支援塔子系统。"), *Building->GetPathName());
+		return false;
+	}
+	Spawn.Damage = Damage * Support->GetTowerDamageMultiplier(*Building);
 	TArray<FCastleMassUnitHandle> SpawnedProjectiles;
 	FText FailureReason;
 	if (!Units->SpawnHomingProjectiles(DataAsset.ProjectileConfiguration, { Spawn }, SpawnedProjectiles, FailureReason))
@@ -316,6 +338,7 @@ void UCastleTowerAttackEffectComponent::ClearPendingShots()
 {
 	PendingShotCount = 0;
 	NextShotWorldTime = -1.0;
+	CooldownRateMultiplier = 1.0f;
 	bWaitingForExternalRetry = false;
 	SetComponentTickEnabled(false);
 }

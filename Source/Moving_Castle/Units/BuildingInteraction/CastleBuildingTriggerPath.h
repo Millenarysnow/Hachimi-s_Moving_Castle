@@ -29,6 +29,7 @@ struct MOVING_CASTLE_API FCastleBuildingTriggerPath
 	int32 PathRevision = INDEX_NONE;
 	uint64 RegistryRevision = 0;
 	double Length = 0.0;
+	bool bClosedLoop = true;
 	TArray<FCastleBuildingEntryMarker> Entries;
 
 	/** 沿精确折线裁剪区域；相邻区间及闭环首尾的同次停留不重复生成标记。 */

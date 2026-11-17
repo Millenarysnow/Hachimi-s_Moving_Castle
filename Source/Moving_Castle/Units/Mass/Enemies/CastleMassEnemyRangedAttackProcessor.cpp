@@ -15,6 +15,7 @@
 #include "MassMovementFragments.h"
 #include "Moving_Castle.h"
 #include "Subsystems/CastleShieldTowerSubsystem.h"
+#include "Castle/Support/CastleSupportTowerSubsystem.h"
 
 UCastleMassEnemyRangedAttackProcessor::UCastleMassEnemyRangedAttackProcessor() : Query(*this)
 {
@@ -40,8 +41,14 @@ void UCastleMassEnemyRangedAttackProcessor::Execute(FMassEntityManager& EntityMa
 {
 	UCastleShieldTowerSubsystem* Shields = GetWorld()->GetSubsystem<UCastleShieldTowerSubsystem>();
 	UCastleMainTowerSubsystem* Main = GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>();
+	UCastleSupportTowerSubsystem* Support = GetWorld()->GetSubsystem<UCastleSupportTowerSubsystem>();
+	if (!Support)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 远程索敌失败：世界 %s 缺少支援塔子系统。"), *GetPathNameSafe(GetWorld()));
+		return;
+	}
 	bool bAnyMissing = false;
-	Query.ForEachEntityChunk(Context, [this, Shields, Main, &bAnyMissing](FMassExecutionContext& Chunk)
+	Query.ForEachEntityChunk(Context, [this, Shields, Main, Support, &bAnyMissing](FMassExecutionContext& Chunk)
 	{
 		const auto Transforms = Chunk.GetFragmentView<FTransformFragment>();
 		const auto Units = Chunk.GetFragmentView<FCastleMassUnitFragment>();
@@ -55,9 +62,12 @@ void UCastleMassEnemyRangedAttackProcessor::Execute(FMassEntityManager& EntityMa
 			auto& Attack = Attacks[It];
 			const FVector Origin = Transforms[It].GetTransform().GetLocation();
 			FVector TargetLocation;
+			// 仇恨距离和武器射程相互独立：获选气球即使尚未进入射程也会被追踪。
+			uint64 BalloonId = 0;
+			const bool bBalloonTarget = Support->FindBalloonTarget(Origin, BalloonId, TargetLocation);
 			uint64 ShieldId = 0;
-			const bool bShieldTarget = Shields->FindNearestActiveShield(Origin, Attack.AttackRange, false, ShieldId, TargetLocation);
-			if (!bShieldTarget && !Main->GetMainTowerTargetLocation(TargetLocation))
+			const bool bShieldTarget = !bBalloonTarget && Shields->FindNearestActiveShield(Origin, Attack.AttackRange, false, ShieldId, TargetLocation);
+			if (!bBalloonTarget && !bShieldTarget && !Main->GetMainTowerTargetLocation(TargetLocation))
 			{
 				bAnyMissing = true;
 				if (!bLoggedMissingTargets)
@@ -90,8 +100,9 @@ void UCastleMassEnemyRangedAttackProcessor::Execute(FMassEntityManager& EntityMa
 			Launch.Attacker.World = GetWorld();
 			Launch.Attacker.Entity = Chunk.GetEntity(It);
 			Launch.ShieldId = ShieldId;
+			Launch.BalloonId = BalloonId;
 			Launch.Damage = Attack.AttackDamage;
-			if (!bShieldTarget) { Launch.TargetTower = Main->GetRegisteredMainTower(); }
+			if (!bBalloonTarget && !bShieldTarget) { Launch.TargetTower = Main->GetRegisteredMainTower(); }
 			UMassEntityConfigAsset* Configuration = Attack.ProjectileConfiguration.Get();
 			TWeakObjectPtr<UWorld> World = GetWorld();
 			// 结构性创建只能发生在安全边界，发射原点和目标保持本次决策的值，不重新索敌。

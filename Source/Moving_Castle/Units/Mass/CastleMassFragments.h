@@ -39,6 +39,9 @@ struct MOVING_CASTLE_API FCastleMassUnitFragment : public FMassFragment
 
 	UPROPERTY()
 	float Age = 0.0f;
+
+	/** 空投系统只修改此倍率；计时结束恢复中性值，不改共享模板移速。 */
+	float SupportMovementMultiplier = 1.0f;
 };
 
 USTRUCT()

@@ -37,7 +37,9 @@ enum class ECastleBuildingType : uint8
 	ArcherTower UMETA(DisplayName = "箭塔"),
 	CannonTower UMETA(DisplayName = "炮塔"),
 	Farm UMETA(DisplayName = "农田"),
-	ShieldTower UMETA(DisplayName = "盾塔")
+	ShieldTower UMETA(DisplayName = "盾塔"),
+	BeeHive UMETA(DisplayName = "蜂巢塔"),
+	BalloonTower UMETA(DisplayName = "气球空投塔")
 };
 
 /**

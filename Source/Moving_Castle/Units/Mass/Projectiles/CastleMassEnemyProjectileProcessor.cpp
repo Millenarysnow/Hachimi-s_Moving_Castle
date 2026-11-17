@@ -12,6 +12,7 @@
 #include "MassMovementFragments.h"
 #include "Moving_Castle.h"
 #include "Subsystems/CastleShieldTowerSubsystem.h"
+#include "Castle/Support/CastleSupportTowerSubsystem.h"
 
 UCastleMassEnemyProjectileProcessor::UCastleMassEnemyProjectileProcessor() : Query(*this)
 {
@@ -44,7 +45,13 @@ void UCastleMassEnemyProjectileProcessor::Execute(FMassEntityManager& EntityMana
 	}
 	UCastleShieldTowerSubsystem* Shields = GetWorld()->GetSubsystem<UCastleShieldTowerSubsystem>();
 	UCastleMainTowerSubsystem* Main = GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>();
-	Query.ForEachEntityChunk(Context, [Shields, Main, DeltaTime](FMassExecutionContext& Chunk)
+	UCastleSupportTowerSubsystem* Support = GetWorld()->GetSubsystem<UCastleSupportTowerSubsystem>();
+	if (!Support)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("敌方追踪弹世界 %s 缺少支援塔子系统，拒绝结算。"), *GetPathNameSafe(GetWorld()));
+		return;
+	}
+	Query.ForEachEntityChunk(Context, [Shields, Main, Support, DeltaTime](FMassExecutionContext& Chunk)
 	{
 		const auto Launches = Chunk.GetFragmentView<FCastleMassEnemyProjectileFragment>();
 		const auto Projectiles = Chunk.GetMutableFragmentView<FCastleMassProjectileFragment>();
@@ -58,7 +65,18 @@ void UCastleMassEnemyProjectileProcessor::Execute(FMassEntityManager& EntityMana
 			if (Units[It].Health <= 0.0f) { continue; }
 			const auto& Launch = Launches[It].Launch;
 			FVector TargetLocation;
-			if (Launch.ShieldId != 0)
+			if (Launch.BalloonId != 0)
+			{
+				if (!Support->GetBalloonTarget(Launch.BalloonId, TargetLocation))
+				{
+					// 气球已破裂是已锁定投射物的正常终态，不能穿透后改打货箱或主塔。
+					UE_LOG(LogMoving_Castle, Display, TEXT("敌方弹 %d 的气球 %llu 已离场，结束追踪。"), Chunk.GetEntity(It).Index, Launch.BalloonId);
+					Units[It].Health = 0.0f;
+					Velocities[It].Value = FVector::ZeroVector;
+					continue;
+				}
+			}
+			else if (Launch.ShieldId != 0)
 			{
 				if (!Shields->GetActiveShieldLocation(Launch.ShieldId, TargetLocation))
 				{
@@ -102,11 +120,13 @@ void UCastleMassEnemyProjectileProcessor::Execute(FMassEntityManager& EntityMana
 			if (FMath::PointDistToSegmentSquared(TargetLocation, Projectile.PreviousLocation, Transform.GetLocation()) <= FMath::Square(static_cast<double>(Radii[It].Radius)))
 			{
 				int64 Remaining = 0;
-				const bool bApplied = Launch.ShieldId != 0 ? Shields->ApplyAttackToShield(Launch.ShieldId, Launch.Attacker, Remaining)
-					: Main->ApplyMainTowerDamage(Projectile.Damage);
+				const bool bApplied = Launch.BalloonId != 0 ? Support->DamageBalloon(Launch.BalloonId, Projectile.Damage)
+					: (Launch.ShieldId != 0 ? Shields->ApplyAttackToShield(Launch.ShieldId, Launch.Attacker, Remaining)
+						: Main->ApplyMainTowerDamage(Projectile.Damage));
 				if (!bApplied)
 				{
-					UE_LOG(LogMoving_Castle, Error, TEXT("敌方追踪弹 %d 命中结算失败，护盾 %llu，主塔 %s。"), Chunk.GetEntity(It).Index, Launch.ShieldId, *GetPathNameSafe(Launch.TargetTower.Get()));
+					UE_LOG(LogMoving_Castle, Error, TEXT("敌方追踪弹 %d 命中结算失败，气球 %llu，护盾 %llu，主塔 %s。"),
+						Chunk.GetEntity(It).Index, Launch.BalloonId, Launch.ShieldId, *GetPathNameSafe(Launch.TargetTower.Get()));
 				}
 				Units[It].Health = 0.0f;
 				Velocities[It].Value = FVector::ZeroVector;

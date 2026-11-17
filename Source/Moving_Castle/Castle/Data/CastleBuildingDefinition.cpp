@@ -4,6 +4,7 @@
 
 #include "CastleBuildingBase.h"
 #include "CastleTowerAttackDataAsset.h"
+#include "Castle/Support/CastleSupportTowerData.h"
 #include "Misc/DataValidation.h"
 
 const FCastleBuildingLevelDefinition* UCastleBuildingDefinition::FindLevel(int32 InLevel) const
@@ -51,7 +52,7 @@ bool UCastleBuildingDefinition::ValidateConfiguration(FText& OutFailureReason) c
 		return false;
 	}
 	// 普通房间保持单级，功能建筑仍严格校验连续等级。
-	if (BuildingType > ECastleBuildingType::ShieldTower || (BuildingType == ECastleBuildingType::NormalRoom && Levels.Num() != 1))
+	if (BuildingType > ECastleBuildingType::BalloonTower || (BuildingType == ECastleBuildingType::NormalRoom && Levels.Num() != 1))
 	{
 		OutFailureReason = FText::FromString(TEXT("建筑类别无效，或普通房间配置了一级以外的等级。"));
 		return false;
@@ -67,6 +68,17 @@ bool UCastleBuildingDefinition::ValidateConfiguration(FText& OutFailureReason) c
 		{
 			return false;
 		}
+	}
+
+	if (BuildingType == ECastleBuildingType::BeeHive || BuildingType == ECastleBuildingType::BalloonTower)
+	{
+		// 四级为这两类塔的完整配置；资产缺级或没绑定数据时拒绝购买、预览和放置。
+		if (Levels.Num() != 4 || !IsValid(SupportData))
+		{
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("支援塔定义 %s 必须配置四个等级和支援数据资产。"), *GetPathName()));
+			return false;
+		}
+		if (!SupportData->ValidateFor(BuildingType, OutFailureReason)) { return false; }
 	}
 
 	TSet<int32> SeenLevels;
@@ -93,10 +105,7 @@ bool UCastleBuildingDefinition::ValidateConfiguration(FText& OutFailureReason) c
 
 		// 功能塔二级和三级必须显式提供垂直类；缺失时直接拒绝配置，
 		// 防止垂直合成静默退回水平模型或生成占位对象。
-		const bool bRequiresVerticalClass = BuildingType == ECastleBuildingType::ArcherTower
-			|| BuildingType == ECastleBuildingType::CannonTower
-			|| BuildingType == ECastleBuildingType::Farm
-			|| BuildingType == ECastleBuildingType::ShieldTower;
+		const bool bRequiresVerticalClass = BuildingType != ECastleBuildingType::NormalRoom;
 		if (bRequiresVerticalClass && (Entry.Level == 2 || Entry.Level == 3))
 		{
 			if (Entry.VerticalBuildingClass == nullptr || Entry.VerticalBuildingClass->HasAnyClassFlags(CLASS_Abstract))

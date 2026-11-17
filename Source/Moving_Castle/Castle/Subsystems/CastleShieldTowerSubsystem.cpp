@@ -1,4 +1,7 @@
 #include "CastleShieldTowerSubsystem.h"
+#include "CastleBuildingBase.h"
+#include "Castle/Support/CastleSupportTowerSubsystem.h"
+#include "Components/ActorComponent.h"
 
 #include "CastleMassFragments.h"
 #include "CastleMassUnitSubsystem.h"
@@ -132,7 +135,21 @@ bool UCastleShieldTowerSubsystem::ApplyAttackToShield(uint64 ShieldId, const FCa
 	FActiveShield* Shield = ActiveShields.Find(ShieldId);
 	if (!Shield || !Shield->Owner.IsValid() || Shield->RemainingBlocks <= 0) { return false; }
 	UObject* Owner = Shield->Owner.Get();
-	const float ReflectDamage = Shield->ReflectDamage;
+	float ReflectDamage = Shield->ReflectDamage;
+	// 红色为空投落地时入圈的塔提供攻击加成；护盾挡击次数不受影响，仅反伤随攻击力变化。
+	if (const auto* Effect = Cast<UActorComponent>(Owner))
+	{
+		if (const auto* Tower = Cast<ACastleBuildingBase>(Effect->GetOwner()))
+		{
+			const auto* Support = GetWorld()->GetSubsystem<UCastleSupportTowerSubsystem>();
+			if (!Support)
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("盾塔 %s 受击结算失败：缺少支援塔子系统。"), *Tower->GetPathName());
+				return false;
+			}
+			ReflectDamage *= Support->GetTowerDamageMultiplier(*Tower);
+		}
+	}
 	OutRemainingBlocksAfterHit = --Shield->RemainingBlocks;
 	// 先完成注册表变更，再广播，委托里即使重启护盾也不会被旧命中的注销覆盖。
 	if (OutRemainingBlocksAfterHit == 0) { ActiveShields.Remove(ShieldId); }

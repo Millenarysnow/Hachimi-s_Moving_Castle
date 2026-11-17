@@ -157,7 +157,8 @@ void UCastleMassSpawnBurstProcessor::Execute(FMassEntityManager& EntityManager, 
 				UE_LOG(LogMoving_Castle, Error, TEXT("幼骸爆散状态无效：实体 %d 的起止点、时长或弧高非法。"), Chunk.GetEntity(It).Index);
 				continue;
 			}
-			Burst.Elapsed = FMath::Min(Burst.Duration, Burst.Elapsed + DeltaTime);
+			// 爆散中的幼骸若被空投减速，仍沿原抛物线，只改变它的时间进度。
+			Burst.Elapsed = FMath::Min(Burst.Duration, Burst.Elapsed + DeltaTime * Units[It].SupportMovementMultiplier);
 			const float Alpha = Burst.Elapsed / Burst.Duration;
 			const float Arc = 4.0f * Burst.ArcHeight * Alpha * (1.0f - Alpha);
 			FTransform& Transform = Transforms[It].GetMutableTransform();

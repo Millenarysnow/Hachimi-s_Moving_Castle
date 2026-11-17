@@ -4,7 +4,7 @@
 #include "CastleMassTypes.h"
 
 bool CastlePatrolMovement::Advance(const FCastleSharedNavigationPath& Path, const FCastleMassMovementSettings& Settings,
-	const double StartDistance, const double DeltaTime, double& InOutSpeed, double& OutTravel)
+	const double StartDistance, const double DeltaTime, double& InOutSpeed, double& OutTravel, const bool bStopAtEnd)
 {
 	OutTravel = 0.0;
 	if (Path.Length <= UE_DOUBLE_SMALL_NUMBER) { InOutSpeed = 0.0; return true; }
@@ -39,6 +39,8 @@ bool CastlePatrolMovement::Advance(const FCastleSharedNavigationPath& Path, cons
 		InOutSpeed = Acceleration > 0.0 ? FMath::Min(Limit, Speed + Acceleration * StepTime) : Limit;
 		// 到达边界时使用精确累计距离，避免浮点误差让下一轮停留在同一边界前反复积分。
 		OutTravel += StepTime >= BoundaryTime ? Span : StepDistance;
+		// 空投临时路线只走一次；抵达终点后不消费余下时间重复行走。
+		if (bStopAtEnd && StepTime >= BoundaryTime && Boundary == Path.Length) { InOutSpeed = 0.0; break; }
 		Cursor = StepTime >= BoundaryTime ? (Boundary == Path.Length ? 0.0 : Boundary) : Cursor + StepDistance;
 		RemainingTime -= StepTime;
 	}

@@ -61,6 +61,8 @@ private:
 
 	/** 下一发允许发射的世界游戏时间；负值表示该塔还没有发射过。队列清空时保留该时刻。 */
 	double NextShotWorldTime = -1.0;
+	/** 下一发冷却使用的射速倍率；变更时按未完成比例换算，不能重新开始整轮冷却。 */
+	float CooldownRateMultiplier = 1.0f;
 
 	/** 配置或 Mass 接口失败后保留待射项，等待新触发再次尝试，避免逐帧重复报错。 */
 	bool bWaitingForExternalRetry = false;

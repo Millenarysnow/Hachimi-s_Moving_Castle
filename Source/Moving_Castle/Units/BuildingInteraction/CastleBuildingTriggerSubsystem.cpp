@@ -91,6 +91,29 @@ TSharedPtr<const FCastleBuildingTriggerPath, ESPMode::ThreadSafe> UCastleBuildin
 	return CachedPath;
 }
 
+bool UCastleBuildingTriggerSubsystem::CompileTemporaryPath(const FCastleSharedNavigationPath& Path,
+	FCastleBuildingTriggerPath& Out, FText& OutReason) const
+{
+	check(IsInGameThread() && !Path.bClosedLoop);
+	TArray<FCastleBuildingTriggerRegion> Regions;
+	for (const auto& Pair : Buildings)
+	{
+		const ACastleBuildingBase* Building = Pair.Value.Building.Get();
+		if (!IsValid(Building))
+		{
+			OutReason = FText::FromString(FString::Printf(TEXT("临时路线读取到已失效的建筑登记 %llu。"), Pair.Key));
+			return false;
+		}
+		if (Building->CanReceiveBuildingTrigger()) { Regions.Add(Pair.Value.Region); }
+	}
+	return FCastleBuildingTriggerPath::Compile(Path, RegistryRevision, Regions, Out, OutReason);
+}
+
+bool UCastleBuildingTriggerSubsystem::IsTemporaryPathCurrent(const FCastleBuildingTriggerPath& Path) const
+{
+	return !Path.bClosedLoop && RegistryRevision == Path.RegistryRevision;
+}
+
 void UCastleBuildingTriggerSubsystem::DispatchEntries(const FCastleBuildingTriggerPath& Path,
 	const TConstArrayView<FCastleBuildingEntryEvent> Events)
 {
@@ -99,9 +122,12 @@ void UCastleBuildingTriggerSubsystem::DispatchEntries(const FCastleBuildingTrigg
 	for (const FCastleBuildingEntryEvent& Event : Events)
 	{
 		// 效果回调可能销毁或合成建筑；每条消息重新核对登记版本，不继续消费过期批次。
-		const auto CurrentPath = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>()->AcquireSharedPath();
-		if (RegistryRevision != Path.RegistryRevision || !CurrentPath || !CurrentPath->bValid
-			|| CurrentPath->PathRevision != Path.PathRevision) { return; }
+		if (RegistryRevision != Path.RegistryRevision) { return; }
+		if (Path.bClosedLoop)
+		{
+			const auto CurrentPath = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>()->AcquireSharedPath();
+			if (!CurrentPath || !CurrentPath->bValid || CurrentPath->PathRevision != Path.PathRevision) { return; }
+		}
 		const FRegistration* Registration = Buildings.Find(Event.BuildingId);
 		ACastleBuildingBase* Building = Registration ? Registration->Building.Get() : nullptr;
 		FCastleBuildingTriggerContext Context;

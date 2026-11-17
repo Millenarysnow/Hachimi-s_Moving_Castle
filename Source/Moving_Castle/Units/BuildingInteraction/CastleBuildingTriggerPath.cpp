@@ -45,15 +45,16 @@ bool FCastleBuildingTriggerPath::Compile(const FCastleSharedNavigationPath& Path
 	using namespace CastleBuildingTriggerPath;
 	OutPath = FCastleBuildingTriggerPath();
 	OutFailure = FText::GetEmpty();
-	if (!Path.bValid || !Path.bClosedLoop || !FMath::IsFinite(Path.Length) || Path.Length < 0.0
+	if (!Path.bValid || !FMath::IsFinite(Path.Length) || Path.Length < 0.0
 		|| Path.PatrolPoints.IsEmpty() || Path.PatrolPoints.Num() != Path.PatrolDistances.Num())
 	{
-		OutFailure = FText::FromString(TEXT("建筑进入编译需要有效闭环及完整的贴地采样距离。"));
+		OutFailure = FText::FromString(TEXT("建筑进入编译需要有效路线及完整的贴地采样距离。"));
 		return false;
 	}
 	OutPath.PathRevision = Path.PathRevision;
 	OutPath.RegistryRevision = InRegistryRevision;
 	OutPath.Length = Path.Length;
+	OutPath.bClosedLoop = Path.bClosedLoop;
 	if (Path.Length <= UE_DOUBLE_SMALL_NUMBER) { return true; }
 	for (const FCastleBuildingTriggerRegion& Region : Regions)
 	{
@@ -84,7 +85,7 @@ bool FCastleBuildingTriggerPath::Compile(const FCastleSharedNavigationPath& Path
 			}
 			else { Merged.Add(Interval); }
 		}
-		const bool bContinuousAcrossSeam = !Merged.IsEmpty() && Merged[0].Start <= UE_DOUBLE_SMALL_NUMBER
+		const bool bContinuousAcrossSeam = Path.bClosedLoop && !Merged.IsEmpty() && Merged[0].Start <= UE_DOUBLE_SMALL_NUMBER
 			&& Merged.Last().End >= Path.Length - UE_DOUBLE_SMALL_NUMBER;
 		for (int32 Index = 0; Index < Merged.Num(); ++Index)
 		{
@@ -113,11 +114,21 @@ void FCastleBuildingTriggerPath::ForEachEntry(const double StartDistance, const 
 	// 二分跳过本帧起点及之前的标记；停在进入边界后，下一帧不会再次消费相同标记。
 	int32 Index = Algo::UpperBoundBy(Entries, StartDistance, &FCastleBuildingEntryMarker::Distance);
 	double LapBase = 0.0;
-	if (Index == Entries.Num()) { Index = 0; LapBase = Length; }
+	if (Index == Entries.Num())
+	{
+		if (!bClosedLoop) { return; }
+		Index = 0;
+		LapBase = Length;
+	}
 	const double End = StartDistance + TravelDistance;
 	while (LapBase + Entries[Index].Distance <= End)
 	{
 		Visitor(Entries[Index]);
-		if (++Index == Entries.Num()) { Index = 0; LapBase += Length; }
+		if (++Index == Entries.Num())
+		{
+			if (!bClosedLoop) { return; }
+			Index = 0;
+			LapBase += Length;
+		}
 	}
 }
