@@ -7,6 +7,25 @@ class UTextBlock;
 class UButton;
 class UCastleDirectorSubsystem;
 
+/** 屏幕空间节点标签的纯表现基类；文字和颜色来自节点 Actor 的 C++ 状态。 */
+UCLASS(Abstract)
+class MOVING_CASTLE_API UCastleDirectorNodeLabelWidget : public UUserWidget
+{
+	GENERATED_BODY()
+
+public:
+	/** 验证正式 WBP 已绑定文本控件，缺失时节点生成失败。 */
+	bool HasRequiredBindings() const;
+	/** 设置普通或精英节点的简体中文名称和颜色。 */
+	bool SetNodeLabel(const FText& Text, const FLinearColor& Color);
+	/** 读取已绑定标签的实际文字和颜色；绑定失效时记录错误并返回失败。 */
+	bool TryGetNodeLabel(FText& OutText, FLinearColor& OutColor) const;
+
+protected:
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UTextBlock> LabelText;
+};
+
 /** HUD 的布局完全来自 WBP；C++ 只读取导演状态并更新绑定文本。 */
 UCLASS(Abstract)
 class MOVING_CASTLE_API UCastleDirectorHUDWidget : public UUserWidget

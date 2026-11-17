@@ -6,6 +6,35 @@
 #include "Engine/World.h"
 #include "Moving_Castle.h"
 
+bool UCastleDirectorNodeLabelWidget::HasRequiredBindings() const
+{
+	return IsValid(LabelText);
+}
+
+bool UCastleDirectorNodeLabelWidget::SetNodeLabel(const FText& Text, const FLinearColor& Color)
+{
+	if (!IsValid(LabelText))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("节点标签WBP %s 缺少必需控件 LabelText。"), *GetClass()->GetPathName());
+		return false;
+	}
+	LabelText->SetText(Text);
+	LabelText->SetColorAndOpacity(FSlateColor(Color));
+	return true;
+}
+
+bool UCastleDirectorNodeLabelWidget::TryGetNodeLabel(FText& OutText, FLinearColor& OutColor) const
+{
+	if (!IsValid(LabelText))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("读取节点标签失败：WBP %s 缺少必需控件 LabelText。"), *GetClass()->GetPathName());
+		return false;
+	}
+	OutText = LabelText->GetText();
+	OutColor = LabelText->GetColorAndOpacity().GetSpecifiedColor();
+	return true;
+}
+
 void UCastleDirectorHUDWidget::NativeTick(const FGeometry& Geometry, const float DeltaTime)
 {
  Super::NativeTick(Geometry, DeltaTime);

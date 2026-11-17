@@ -45,5 +45,6 @@ bool UCastleDirectorConfigDataAsset::ValidateConfig(FText& OutFailureReason) con
 	if (!HUDWidgetClass) { return Reject(TEXT("HUDWidgetClass"), TEXT("None")); }
 	if (!RewardWidgetClass) { return Reject(TEXT("RewardWidgetClass"), TEXT("None")); }
 	if (!GameOverWidgetClass) { return Reject(TEXT("GameOverWidgetClass"), TEXT("None")); }
+	if (!NodeLabelWidgetClass) { return Reject(TEXT("NodeLabelWidgetClass"), TEXT("None")); }
 	return true;
 }

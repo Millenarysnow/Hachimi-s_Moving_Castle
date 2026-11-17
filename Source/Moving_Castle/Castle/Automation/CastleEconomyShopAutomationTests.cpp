@@ -258,6 +258,7 @@ bool FCastleDirectorFoundationTest::RunTest(const FString& Parameters)
 	AddExpectedError(TEXT("主塔回血失败"), EAutomationExpectedErrorFlags::Contains, 2);
 	AddExpectedError(TEXT("字段 NodeMesh 值 None 无效"), EAutomationExpectedErrorFlags::Contains, 1);
 	AddExpectedError(TEXT("字段 NodeCountMin/NodeCountMax"), EAutomationExpectedErrorFlags::Contains, 1);
+	AddExpectedError(TEXT("字段 NodeLabelWidgetClass 值 None 无效"), EAutomationExpectedErrorFlags::Contains, 1);
 	AddExpectedError(TEXT("奖励换批失败"), EAutomationExpectedErrorFlags::Contains, 1);
 	AddExpectedError(TEXT("商店奖励初始化失败"), EAutomationExpectedErrorFlags::Contains, 1);
 	ACastleBoard* Board = NewObject<ACastleBoard>();
@@ -321,6 +322,9 @@ bool FCastleDirectorFoundationTest::RunTest(const FString& Parameters)
 	Config->HUDWidgetClass = UCastleDirectorHUDWidget::StaticClass();
 	Config->RewardWidgetClass = UCastleRewardChoiceWidget::StaticClass();
 	Config->GameOverWidgetClass = UCastleGameOverWidget::StaticClass();
+	Config->NodeLabelWidgetClass = nullptr;
+	TestFalse(TEXT("缺少NodeLabelWidgetClass拒绝启动"), Config->ValidateConfig(Reason));
+	Config->NodeLabelWidgetClass = UCastleDirectorNodeLabelWidget::StaticClass();
 	TestTrue(TEXT("完整有效配置通过校验"), Config->ValidateConfig(Reason));
 	Config->NodeCountMin = 1;
 	TestFalse(TEXT("非法节点范围拒绝启动"), Config->ValidateConfig(Reason));

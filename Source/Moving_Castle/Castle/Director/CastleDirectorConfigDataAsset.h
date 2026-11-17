@@ -11,6 +11,7 @@ class UStaticMesh;
 class UCastleDirectorHUDWidget;
 class UCastleRewardChoiceWidget;
 class UCastleGameOverWidget;
+class UCastleDirectorNodeLabelWidget;
 
 /** 导演系统单局配置；资产只保存可调参数，流程行为由 C++ 子系统执行。 */
 UCLASS(BlueprintType)
@@ -80,7 +81,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|成长", meta = (ClampMin = "0.01", ClampMax = "1.0"))
 	float HealFraction = 0.3f;
 
-	/** 三类界面使用 WBP 子类，仅绑定 C++ 基类的控件，不包含蓝图逻辑。 */
+	/** 四类界面均使用 WBP 子类，仅绑定 C++ 基类控件，不包含蓝图逻辑。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|界面")
 	TSubclassOf<UCastleDirectorHUDWidget> HUDWidgetClass;
 
@@ -89,6 +90,10 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|界面")
 	TSubclassOf<UCastleGameOverWidget> GameOverWidgetClass;
+
+	/** 节点屏幕空间中文标签，必须绑定 LabelText；不会回退到离线字体。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|界面")
+	TSubclassOf<UCastleDirectorNodeLabelWidget> NodeLabelWidgetClass;
 
 	/** 检查所有阶段 1 配置；失败时写明资产名称、字段和值，不修正配置。 */
 	bool ValidateConfig(FText& OutFailureReason) const;

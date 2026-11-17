@@ -156,8 +156,26 @@ bool UCastleDirectorSubsystem::PrepareNodes(const int32 Step, TArray<TObjectPtr<
 			OutReason = FText::FromString(FString::Printf(TEXT("节点生成失败：第 %d 个 Actor 无法创建。"), Index + 1));
 			return false;
 		}
-		Node->Configure(*Config, Step, GetNodeKindForStep(*Config, Step));
+		if (!Node->Configure(*Config, Step, GetNodeKindForStep(*Config, Step)))
+		{
+			Node->Destroy();
+			for (ACastleDirectorNodeActor* Candidate : OutNodes) { Candidate->Destroy(); }
+			OutNodes.Reset();
+			OutReason = FText::FromString(FString::Printf(TEXT("节点标签配置失败：第 %d 个节点的配置资产 %s 无效。"), Index + 1, *Config->GetPathName()));
+			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+			return false;
+		}
 		Node->FinishSpawning(Transform);
+		if (!Node->IsLabelReady())
+		{
+			Node->Destroy();
+			for (ACastleDirectorNodeActor* Candidate : OutNodes) { Candidate->Destroy(); }
+			OutNodes.Reset();
+			OutReason = FText::FromString(FString::Printf(TEXT("节点标签实例化失败：第 %d 个节点的WBP %s 缺失或绑定无效。"),
+				Index + 1, *GetPathNameSafe(Config->NodeLabelWidgetClass.Get())));
+			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+			return false;
+		}
 		OutNodes.Add(Node);
 	}
 	return true;

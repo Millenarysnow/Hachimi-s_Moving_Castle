@@ -6,7 +6,6 @@
 #include "Castle/Director/CastleDirectorSettings.h"
 #include "Castle/UI/Director/CastleDirectorWidgets.h"
 #include "Blueprint/UserWidget.h"
-#include "Engine/Font.h"
 #include "Engine/World.h"
 
 /** 重载正式资产并创建实例，不能只用 WidgetTree 的名字清单冒充 BindWidget 已成功。 */
@@ -29,17 +28,23 @@ bool FCastleDirectorAssetsTest::RunTest(const FString& Parameters)
 	UCastleDirectorHUDWidget* HUD = CreateWidget<UCastleDirectorHUDWidget>(World, Config->HUDWidgetClass);
 	UCastleRewardChoiceWidget* Reward = CreateWidget<UCastleRewardChoiceWidget>(World, Config->RewardWidgetClass);
 	UCastleGameOverWidget* GameOver = CreateWidget<UCastleGameOverWidget>(World, Config->GameOverWidgetClass);
+	UCastleDirectorNodeLabelWidget* NodeLabel = CreateWidget<UCastleDirectorNodeLabelWidget>(World, Config->NodeLabelWidgetClass);
 	TestTrue(TEXT("HUD必需控件均绑定到C++字段"), HUD && HUD->HasRequiredBindings());
 	TestTrue(TEXT("奖励必需控件均绑定到C++字段"), Reward && Reward->HasRequiredBindings());
 	TestTrue(TEXT("结束界面必需控件均绑定到C++字段"), GameOver && GameOver->HasRequiredBindings());
-	// 此处只输出默认离线字库的实际证据，不把缺字当作已解决的中文标签验收。
-	UFont* Font = LoadObject<UFont>(nullptr, TEXT("/Engine/EngineFonts/RobotoDistanceField.RobotoDistanceField"));
-	if (TestNotNull(TEXT("字体查证必须加载实际默认离线字库"), Font))
+	TestTrue(TEXT("节点标签必需LabelText绑定到C++字段"), NodeLabel && NodeLabel->HasRequiredBindings());
+	if (NodeLabel && NodeLabel->HasRequiredBindings())
 	{
-		const bool bHasChinese = Font->IsRemapped ? Font->CharRemap.Contains(static_cast<uint16>(TEXT('普')))
-			: Font->Characters.IsValidIndex(static_cast<int32>(TEXT('普')));
-		AddInfo(FString::Printf(TEXT("默认节点字体 %s 的中文字形“普”覆盖=%s，IsRemapped=%d，字形数=%d。"),
-			*Font->GetPathName(), bHasChinese ? TEXT("true") : TEXT("false"), Font->IsRemapped, Font->Characters.Num()));
+		const FText ExpectedText = FText::FromString(TEXT("精英战斗 · 第 5 关"));
+		FText ActualText;
+		FLinearColor ActualColor;
+		TestTrue(TEXT("精英标签写入文字"), NodeLabel->SetNodeLabel(ExpectedText, FLinearColor::Red));
+		TestTrue(TEXT("精英标签读取成功"), NodeLabel->TryGetNodeLabel(ActualText, ActualColor));
+		TestEqual(TEXT("屏幕空间标签显示正确关卡文字"), ActualText.ToString(), ExpectedText.ToString());
+		TestTrue(TEXT("精英标签使用红色"), ActualColor.Equals(FLinearColor::Red));
+		NodeLabel->SetNodeLabel(FText::FromString(TEXT("普通战斗 · 第 1 关")), FLinearColor::White);
+		TestTrue(TEXT("普通标签读取成功"), NodeLabel->TryGetNodeLabel(ActualText, ActualColor));
+		TestTrue(TEXT("普通标签使用白色"), ActualColor.Equals(FLinearColor::White));
 	}
 	return true;
 }
