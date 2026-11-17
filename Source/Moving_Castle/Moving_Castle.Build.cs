@@ -28,6 +28,7 @@ public class Moving_Castle : ModuleRules
 			"MassLOD",
 			"MassRepresentation",
 			"UMG",
+			"DeveloperSettings",
 			"Slate",
 			"SlateCore"
 		});

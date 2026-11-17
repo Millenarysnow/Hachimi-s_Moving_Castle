@@ -9,6 +9,7 @@
 #include "CastleCardPricing.h"
 #include "CastleEconomyComponent.h"
 #include "Moving_Castle.h"
+#include "UObject/StrongObjectPtr.h"
 
 UCastleShopComponent::UCastleShopComponent()
 {
@@ -167,7 +168,87 @@ bool UCastleShopComponent::ValidateTrade(FText& OutFailureReason) const
 
 bool UCastleShopComponent::TryRefreshOffers(FText& OutFailureReason)
 {
-	if (!ValidateTrade(OutFailureReason) || !Economy->CanSpendGold(RefreshCost, OutFailureReason))
+	return RefreshOffersInternal(false, OutFailureReason);
+}
+
+bool UCastleShopComponent::TryRefreshOffersForReward(FText& OutFailureReason)
+{
+	return RefreshOffersInternal(true, OutFailureReason);
+}
+
+bool UCastleShopComponent::TryOpenForReward(UCastleEconomyComponent* InEconomy, ACastleBoard* InBoard, FText& OutFailureReason)
+{
+	OutFailureReason = FText::GetEmpty();
+	if (bTrading || bOpen)
+	{
+		OutFailureReason = FText::FromString(TEXT("商店奖励失败：商店正在交易或已经打开。"));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s：%s"), *GetPathName(), *OutFailureReason.ToString());
+		return false;
+	}
+	if (bInitialized && (Economy != InEconomy || Board != InBoard))
+	{
+		OutFailureReason = FText::FromString(TEXT("商店奖励失败：已初始化商店不能更换账户或棋盘。"));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s：%s"), *GetPathName(), *OutFailureReason.ToString());
+		return false;
+	}
+	// 候选组件没有表现层监听者；初始化或出牌失败不会污染正式商店的任何状态。
+	TGuardValue<bool> Guard(bTrading, true);
+	TStrongObjectPtr<UCastleShopComponent> Candidate(NewObject<UCastleShopComponent>());
+	Candidate->PricingStrategyClass = PricingStrategyClass;
+	Candidate->RandomSeed = RandomSeed;
+	Candidate->RefreshCost = RefreshCost;
+	Candidate->RoomLimit = RoomLimit;
+	if (bInitialized)
+	{
+		Candidate->Economy = Economy;
+		Candidate->Board = Board;
+		Candidate->Backpack = Backpack;
+		Candidate->PricingStrategy = PricingStrategy;
+		Candidate->RandomStream = RandomStream;
+		Candidate->bInitialized = true;
+	}
+	else if (!Candidate->InitializeShop(InEconomy, InBoard, OutFailureReason))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s 商店奖励初始化失败：%s"), *GetPathName(), *OutFailureReason.ToString());
+		return false;
+	}
+	if (!Candidate->TryRefreshOffersForReward(OutFailureReason)) { return false; }
+	Economy = Candidate->Economy;
+	Board = Candidate->Board;
+	Backpack = Candidate->Backpack;
+	PricingStrategy = Candidate->PricingStrategy;
+	Offers = MoveTemp(Candidate->Offers);
+	RandomStream = Candidate->RandomStream;
+	bInitialized = true;
+	bOpen = true;
+	OnShopChanged.Broadcast();
+	return true;
+}
+
+bool UCastleShopComponent::TrySetRoomLimit(const int32 NewRoomLimit, FText& OutFailureReason)
+{
+	OutFailureReason = FText::GetEmpty();
+	if (NewRoomLimit < 1)
+	{
+		OutFailureReason = FText::FromString(TEXT("房间上限设置失败：总房间上限必须为正数。"));
+		UE_LOG(LogMoving_Castle, Error, TEXT("房间上限设置失败：收到无效值 %d，组件 %s。"), NewRoomLimit, *GetPathName());
+		return false;
+	}
+	RoomLimit = NewRoomLimit;
+	return true;
+}
+
+bool UCastleShopComponent::RefreshOffersInternal(const bool bFree, FText& OutFailureReason)
+{
+	OutFailureReason = FText::GetEmpty();
+	// 奖励在界面打开前准备商品；付费刷新仍严格要求商店已打开。
+	if (bFree && (!bInitialized || bTrading || !IsValid(Economy) || !IsValid(Board) || !IsValid(Backpack)))
+	{
+		OutFailureReason = FText::FromString(TEXT("奖励换批失败：商店未初始化、依赖无效或正在交易。"));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s：%s"), *GetPathName(), *OutFailureReason.ToString());
+		return false;
+	}
+	if (!bFree && (!ValidateTrade(OutFailureReason) || !Economy->CanSpendGold(RefreshCost, OutFailureReason)))
 	{
 		return false;
 	}
@@ -176,12 +257,13 @@ bool UCastleShopComponent::TryRefreshOffers(FText& OutFailureReason)
 	TArray<FCastleShopOffer> Candidates;
 	if (!GenerateOffers(CandidateStream, Candidates, OutFailureReason))
 	{
+		if (bFree) { UE_LOG(LogMoving_Castle, Error, TEXT("%s 奖励换批失败：%s"), *GetPathName(), *OutFailureReason.ToString()); }
 		return false;
 	}
 	// 先暂存完整商品再扣费，使余额通知的观察者看见的是同一笔交易的最终状态。
 	TArray<FCastleShopOffer> PreviousOffers = MoveTemp(Offers);
 	Offers = MoveTemp(Candidates);
-	if (!Economy->TrySpendGold(RefreshCost, OutFailureReason))
+	if (!bFree && !Economy->TrySpendGold(RefreshCost, OutFailureReason))
 	{
 		Offers = MoveTemp(PreviousOffers);
 		return false;

@@ -87,7 +87,8 @@ void ACastleHUD::DrawHUD()
 		// 关闭商店时仍显示余额和入口提示，玩家不必打开商店才能确认收支结果。
 		DrawText(FString::Printf(TEXT("Gold: %d   |   [B] Shop   |   [1-9,0] Backpack"), Controller->GetEconomy()->GetGold()),
 			FLinearColor(1.0f, 0.82f, 0.32f), 24.0f, 24.0f, nullptr, 1.25f);
-		if (Controller->GetShop()->IsShopOpen())
+		FText EditReason;
+		if (Controller->GetShop()->IsShopOpen() || !Controller->IsDirectorEditingAllowed(EditReason))
 		{
 			return;
 		}

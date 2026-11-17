@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 #include "Castle/Actors/CastleBoard.h"
 #include "Castle/Actors/CastleBuildingBase.h"
+#include "Castle/Actors/CastleGroundTileActor.h"
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Components/CastleBackpackComponent.h"
 #include "Castle/Data/CastleBuildingDefinition.h"
@@ -57,7 +58,7 @@ namespace CastleCannonPlayerInputTests
 			}
 			if (Stage==10)
 			{
-				if (!Capture(Cannon,FirstHit,FirstProjected)) { Cleanup(); return true; }
+				if (!Capture(Cannon,FirstHit,FirstExpected,FirstProjected)) { Cleanup(); return true; }
 				Press(EKeys::P); Stage=11; return false;
 			}
 			if (Stage==11)
@@ -68,7 +69,7 @@ namespace CastleCannonPlayerInputTests
 			if (Stage==12) { AimBuilding(Neighbor,Scenario==2); Stage=13; return false; }
 			if (Stage==13)
 			{
-				if (!Capture(Neighbor,SecondHit,SecondProjected)) { Cleanup(); return true; }
+				if (!Capture(Neighbor,SecondHit,SecondExpected,SecondProjected)) { Cleanup(); return true; }
 				Press(EKeys::LeftMouseButton); Stage=14; return false;
 			}
 			if (Stage==14)
@@ -79,22 +80,21 @@ namespace CastleCannonPlayerInputTests
 			{
 				const auto& Points=Nav->GetRequestedWaypoints();
 				if (!Test->TestEqual(TEXT("Enter经真实路径编辑提交两个点"),Points.Num(),2)) { Cleanup(); return true; }
-				Test->TestTrue(TEXT("路径点1精确来自Visibility命中，未手动投影或替换"),Points[0].Equals(FirstHit.ImpactPoint,0.1));
-				Test->TestTrue(TEXT("路径点2精确来自Visibility命中，未手动投影或替换"),Points[1].Equals(SecondHit.ImpactPoint,0.1));
+				// 期望值由同一次原生射线与棋盘格坐标独立计算，不调用被测取点函数伪造预期。
+				// 只有地块命中才保留原始 ImpactPoint；楼顶建筑必须提交对应层底面锚点。
+				Test->TestTrue(Cast<ACastleGroundTileActor>(FirstHit.GetActor())
+					? TEXT("地块路径点1精确保留Visibility命中") : TEXT("建筑路径点1等于D26本层楼板点"),Points[0].Equals(FirstExpected,0.1));
+				Test->TestTrue(Cast<ACastleGroundTileActor>(SecondHit.GetActor())
+					? TEXT("地块路径点2精确保留Visibility命中") : TEXT("建筑路径点2等于D26本层楼板点"),Points[1].Equals(SecondExpected,0.1));
+				Test->AddInfo(FString::Printf(TEXT("W4_INPUT_D26 P1=%s Expected1=%s Hit1=%s P2=%s Expected2=%s Hit2=%s"),
+					*Points[0].ToString(),*FirstExpected.ToString(),*FirstHit.ImpactPoint.ToString(),
+					*Points[1].ToString(),*SecondExpected.ToString(),*SecondHit.ImpactPoint.ToString()));
 				const auto Path=Nav->AcquireSharedPath();
 				const bool bLoop=Path&&Path->bValid&&Path->bClosedLoop;
 				Test->AddInfo(FString::Printf(TEXT("W1_INPUT Family=%s Scenario=%s Project=(%d,%d) ValidLoop=%d LastFailure=%s"),
 					Families[Family],Scenarios[Scenario],FirstProjected,SecondProjected,bLoop,*Nav->LastFailure.ToString()));
-				// 屋顶命中与投影状态只作为诊断输出；D7 将取点修复交给 W4，
-				// 这里不能把当前屋顶行为固化成失败期望。楼内两点仍必须形成有效闭环。
-				if (FirstProjected&&SecondProjected)
-				{
-					Test->TestTrue(TEXT("实际楼内可投影取点跨界闭环"),bLoop);
-				}
-				else
-				{
-					Test->AddInfo(TEXT("屋顶或美术件取点投影状态仅作诊断，不作为本测试失败条件。"));
-				}
+				// 原始美术屋顶的投影只作根因诊断；真实键鼠提交点经 D26 转换后，三种场景都必须闭环。
+				Test->TestTrue(TEXT("楼顶与楼内真实输入均形成跨界有效闭环"),bLoop);
 				Nav->ClearSharedRoute(); ++Scenario;
 				if (Scenario<3) { BeginScenario(); return false; }
 				if (!RemoveBuildings()) { Cleanup(); return true; }
@@ -115,10 +115,10 @@ namespace CastleCannonPlayerInputTests
 					if (Board) { break; }
 				}
 			}
-			// MainMap 允许流送初始化；给原生加载流程时间，不将首帧未出现误判为资产缺失。
+			// TestMap1 允许流送初始化；给原生加载流程时间，不将首帧未出现误判为资产缺失。
 			// 超过明确的初始化等待时间仍不存在时失败，绝不补建棋盘或切换地图。
 			if (!Board && FPlatformTime::Seconds()<InitializationDeadline) { return false; }
-			if (!Test->TestNotNull(TEXT("当前正式地图必须包含棋盘"),Board)) { return true; }
+			if (!Test->TestNotNull(TEXT("当前TestMap1测试世界必须包含正式棋盘"),Board)) { return true; }
 			Test->AddInfo(FString::Printf(TEXT("W1_INPUT_MAP %s Type=%d"),*World->GetOutermost()->GetName(),int32(World->WorldType)));
 			if (!Test->TestEqual(TEXT("要求空棋盘，不清理用户内容"),Board->GetPlacedBuildingCount(),0)) { return true; }
 			Controller=Cast<ACastlePlayerController>(World->GetFirstPlayerController());
@@ -164,8 +164,8 @@ namespace CastleCannonPlayerInputTests
 		{
 			Nav->ClearSharedRoute(); AimBuilding(Cannon,Scenario==0); Stage=10;
 		}
-		/** 完全复用巡逻编辑器的反投影、复杂Visibility射线和忽略列表，只额外记录诊断。 */
-		bool Capture(ACastleBuildingBase* Expected,FHitResult& Hit,bool& bProjected)
+		/** 复用真实视口射线，独立记录地块原点或建筑本层锚点期望，最后由键鼠入口提交后核对。 */
+		bool Capture(ACastleBuildingBase* Expected,FHitResult& Hit,FVector& ExpectedPoint,bool& bProjected)
 		{
 			int32 Width,Height; Controller->GetViewportSize(Width,Height);
 			FVector Origin,Direction;
@@ -185,6 +185,17 @@ namespace CastleCannonPlayerInputTests
 			Test->AddInfo(FString::Printf(TEXT("W1_INPUT_HIT Family=%s Scenario=%s ExpectedBuilding=%s HitActor=%s Component=%s Point=%s Functional=%d Project=%d Projected=%s"),
 				Families[Family],Scenarios[Scenario],*Expected->GetClass()->GetName(),*GetNameSafe(Hit.GetActor()),*GetNameSafe(Hit.GetComponent()),*Hit.ImpactPoint.ToString(),
 				UBuildingGameplayRootComponent::IsInGameplayHierarchy(Hit.GetComponent()),bProjected,*Projected.Location.ToString()));
+			if (Cast<ACastleBuildingBase>(Hit.GetActor()))
+			{
+				FCastleGridCursorTarget Target;
+				if (!Test->TestTrue(TEXT("建筑射线可由正式棋盘解析命中格"),Board->TryResolveGridCursorTarget(Origin,Origin+Direction*100000,Target)&&!Target.bGroundSurface)) { return false; }
+				ExpectedPoint=Board->GetGridWorldLocation(Target.Cell)-Board->GetActorTransform().TransformVector(FVector(0,0,Board->LayerHeight*0.5));
+			}
+			else
+			{
+				if (!Test->TestNotNull(TEXT("非建筑取点必须是原有地块命中"),Cast<ACastleGroundTileActor>(Hit.GetActor()))) { return false; }
+				ExpectedPoint=Hit.ImpactPoint;
+			}
 			return true;
 		}
 		bool ClearBackpack()
@@ -248,6 +259,8 @@ namespace CastleCannonPlayerInputTests
 		FCastleGroundGenerationResult Ground;
 		FIntVector Center;
 		FHitResult FirstHit,SecondHit;
+		/** 从原始射线和 D26 公式得到的独立期望，不从导航请求结果反推。 */
+		FVector FirstExpected,SecondExpected;
 		bool FirstProjected=false,SecondProjected=false;
 		int32 Family=0,Scenario=0,Stage=0;
 		double Deadline=FPlatformTime::Seconds()+120.0;
@@ -261,16 +274,16 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleCannonPlayerInputTest,"MovingCastle.Cast
 	EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FCastleCannonPlayerInputTest::RunTest(const FString& Parameters)
 {
-	// 编辑器单独运行时显式加载指南指定的MainMap并启动PIE；已有Game/PIE世界时使用调用者加载的地图。
-	// 这不是缺少棋盘时的地图替换：FCommand仍会严格拒绝所选地图中缺失的棋盘或视口。
+	// 编辑器单独运行时显式加载TestMap1并启动PIE；已有Game/PIE世界时使用调用者加载的地图。
+	// TestMap1 提供本测试所需的正式棋盘及导航输入；FCommand仍明确拒绝缺失的棋盘或视口。
 	bool bHasGameWorld=false;
 	for (const auto& Context:GEngine->GetWorldContexts())
 	{
 		bHasGameWorld |= Context.WorldType==EWorldType::Game || Context.WorldType==EWorldType::PIE;
 	}
-	if (GIsEditor&&!bHasGameWorld&&!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/MainMap"),true))
+	if (GIsEditor&&!bHasGameWorld&&!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/Test/TestMap1"),true))
 	{
-		AddError(TEXT("无法为真实输入测试加载MainMap PIE。")); return false;
+		AddError(TEXT("无法为真实输入测试加载TestMap1 PIE。")); return false;
 	}
 	ADD_LATENT_AUTOMATION_COMMAND(CastleCannonPlayerInputTests::FCommand(this)); return true;
 }
