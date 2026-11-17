@@ -29,6 +29,9 @@ public:
 	 */
 	bool InitializeGroundCell(const FCastleGroundCell& InGroundCell, float GroundTileSize, float LayerHeight);
 
+	/** 不销毁、不改数据和导航资格，只切换三类表现及地块的 Visibility 响应。 */
+	void SetGroundPresentationHidden(bool bInHidden);
+
 	/** 返回该 Actor 对应的格子数据副本。 */
 	UFUNCTION(BlueprintPure, Category="移动城堡|棋盘格")
 	FCastleGroundCell GetGroundCell() const { return GroundCell; }
