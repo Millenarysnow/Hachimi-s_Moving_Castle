@@ -6,6 +6,7 @@
 
 #include "CastleBuildingTestUtilities.h"
 #include "CastleBackpackComponent.h"
+#include "Castle/PCG/CastleBuildingPCGRule.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
@@ -131,6 +132,11 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("创建测试棋盘"), Board)) { return false; }
 	Board->GridSize = FIntVector(3, 3, 3);
 	CastleBuildingTests::ConfigureBoard(Board);
+	// 本组只验证定向放置，独立世界明确关闭导航；沿用边界测试的平面 PCG 输入，
+	// 避免新增上层场景请求本夹具未配置的 Recast 梯子连接，正式棋盘规则资产保持原样。
+	if (!TestNotNull(TEXT("放置测试显式复制的 PCG 规则资产"), Board->PCGRuleSet.Get())) { return false; }
+	Board->PCGRuleSet = DuplicateObject<UCastlePCGRuleSetDataAsset>(Board->PCGRuleSet, Board);
+	Board->PCGRuleSet->Rules = { NewObject<UCastlePCGPlanarRule>(Board->PCGRuleSet) };
 	UCastleBuildingDefinition* Definition = Board->BuildingDefinitions[1];
 	UCastleBuildingDefinition* NormalRoomDefinition = Board->BuildingDefinitions[0];
 	FText Reason;
@@ -214,14 +220,52 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("普通房间实际依靠功能建筑面建成"), RoomOnTowerFace)) { AddError(Reason.ToString()); return false; }
 	if (!CastleBuildingTests::CompletePlacement(RoomOnTowerFace) || !Board->RemoveBuilding(RoomOnTowerFace, Reason)) { return false; }
 
-	// 上层仍要求整个底面有支撑；来源建筑消失时也必须拒绝，不能改用其他邻格。
+	// 同一个匹配面可以放置部分悬空的多格建筑；坐标入口也不再要求其余底面有支撑。
 	FCastleGridCursorTarget TopTarget = LeftTarget;
 	TopTarget.Face = ECastleGridFace::Up;
 	TopTarget.AdjacentCell = TopTarget.Cell + FIntVector(0, 0, 1);
-	TestTrue(TEXT("匹配的建筑顶面可支撑上层单格"), Board->CanPlaceBuildingAtCursor(TopTarget, RedCard, Reason));
+	TestTrue(TEXT("匹配的建筑顶面可放置上层单格"), Board->CanPlaceBuildingAtCursor(TopTarget, RedCard, Reason));
 	FCastleBuildingDescriptor WideCard;
-	Definition->CreateDescriptor(2, ECastleTileColor::Red, 3, WideCard, Reason);
-	TestFalse(TEXT("有匹配面仍不能让双格建筑部分悬空"), Board->CanPlaceBuildingAtCursor(TopTarget, WideCard, Reason));
+	if (!Definition->CreateDescriptor(2, ECastleTileColor::Red, 3, WideCard, Reason)) { return false; }
+	TestTrue(TEXT("有匹配面允许双格建筑部分悬空"), Board->CanPlaceBuildingAtCursor(TopTarget, WideCard, Reason));
+	TestTrue(TEXT("坐标入口只需锚点下方匹配，不要求完整底面支撑"), Board->CanPlaceBuilding(TopTarget.AdjacentCell, WideCard, Reason));
+	if (!Board->PrototypeBackpack->TryAddItem(WideCard, CardIndex, Reason)) { return false; }
+	ACastleBuildingBase* FloatingWide = Board->PlaceBackpackBuildingAtCursor(TopTarget, CardIndex, Reason);
+	if (!TestNotNull(TEXT("背包实际放置部分悬空的双格建筑"), FloatingWide)) { AddError(Reason.ToString()); return false; }
+	if (!CastleBuildingTests::CompletePlacement(FloatingWide)) { return false; }
+	// 从公开建筑列表检查实际三维占格，不为测试开放棋盘内部的受保护索引查询。
+	const auto HasPlacedCell = [Board](const FIntVector& Cell)
+	{
+		return Board->GetPlacedBuildings().ContainsByPredicate([&Cell](const ACastleBuildingBase* Building)
+		{
+			return Building->GetOccupiedCoordinates().Contains(Cell);
+		});
+	};
+	TestTrue(TEXT("悬空部分保留实际占格"), FloatingWide->GetOccupiedCoordinates().Contains(FIntVector(1, 1, 1)));
+	TestEqual(TEXT("双格建筑正确登记两格占用"), Board->GetOccupiedRoomCellCount(), 4);
+	TestFalse(TEXT("双格建筑第二格正下方确实为空"), HasPlacedCell(Destination));
+	TestEqual(TEXT("悬空放置成功正常扣牌"), Board->PrototypeBackpack->GetItemCount(), 0);
+
+	// 从已完成的上层建筑真实侧面解析光标，再走背包入口生成下方完全没有建筑的普通房间。
+	FCastleGridCursorTarget FloatingSide;
+	const FVector WideCenter = FloatingWide->GetVisualBounds().GetCenter();
+	if (!TestTrue(TEXT("真实射线选中上层建筑侧面"), Board->TryResolveGridCursorTarget(
+		WideCenter + FVector(0, Board->CellSize, 0), WideCenter, FloatingSide))) { return false; }
+	TestEqual(TEXT("射线选中朝 +Y 的建筑面"), FloatingSide.Face, ECastleGridFace::PositiveY);
+	TestEqual(TEXT("侧面落点仍在第二层"), FloatingSide.AdjacentCell.Z, 1);
+	TestFalse(TEXT("侧面落点正下方没有建筑"), HasPlacedCell(FloatingSide.AdjacentCell - FIntVector(0, 0, 1)));
+	TestTrue(TEXT("同色普通房间允许侧向悬空"), Board->CanPlaceBuildingAtCursor(FloatingSide, NormalRoomCard, Reason));
+	TestFalse(TEXT("悬空放置仍拒绝颜色数字均不匹配的卡牌"), Board->CanPlaceBuildingAtCursor(FloatingSide, ColorOnly, Reason));
+	if (!Board->PrototypeBackpack->TryAddItem(NormalRoomCard, CardIndex, Reason)) { return false; }
+	ACastleBuildingBase* FloatingRoom = Board->PlaceBackpackBuildingAtCursor(FloatingSide, CardIndex, Reason);
+	if (!TestNotNull(TEXT("普通房间实际侧向悬空建成"), FloatingRoom)) { AddError(Reason.ToString()); return false; }
+	if (!CastleBuildingTests::CompletePlacement(FloatingRoom)) { return false; }
+	TestTrue(TEXT("悬空房间占用光标指定落点"), FloatingRoom->GetOccupiedCoordinates().Contains(FloatingSide.AdjacentCell));
+	TestEqual(TEXT("悬空房间正确登记一格占用"), Board->GetOccupiedRoomCellCount(), 5);
+	TestFalse(TEXT("悬空落点占用后仍拒绝重复放置"), Board->CanPlaceBuildingAtCursor(FloatingSide, RedCard, Reason));
+	if (!Board->RemoveBuilding(FloatingRoom, Reason) || !Board->RemoveBuilding(FloatingWide, Reason)) { return false; }
+
+	// 撤销下方支撑规则不改变匹配来源的有效性要求，失效的旧高亮面仍须明确拒绝。
 	if (!Board->RemoveBuilding(Left, Reason)) { return false; }
 	TestFalse(TEXT("来源建筑消失后拒绝旧高亮面"), Board->CanPlaceBuildingAtCursor(LeftTarget, RedCard, Reason));
 

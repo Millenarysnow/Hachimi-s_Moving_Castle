@@ -567,26 +567,9 @@ bool ACastleBoard::CanPlaceBuildingInternal(const FIntVector& Coordinate, const 
 			OutFailureReason = FText::FromString(TEXT("建筑占用范围中有格子已被占用。"));
 			return false;
 		}
-		// 支撑仅约束棋盘内的格；跨界多格卡逐格判断，不能整卡豁免。
-		const bool bInsideXY = Cell.X >= Min.X && Cell.X <= Max.X && Cell.Y >= Min.Y && Cell.Y <= Max.Y;
-		FCastleGroundCell GroundCell;
-		if (bInsideXY && Cell.Z == GridOrigin.Z && !TryGetGroundCellAtPlane(Cell, GroundCell))
-		{
-			OutFailureReason = FText::FromString(TEXT("建筑占用范围中的地面尚未生成。"));
-			return false;
-		}
-		if (bInsideXY && Cell.Z > GridOrigin.Z)
-		{
-			const FIntVector Support = Cell - FIntVector(0, 0, 1);
-			// 四级卡自带的下层格也能支撑自身上层；其他底面仍必须有实际建筑支撑。
-			if (!Footprint.Contains(Support) && GetBuildingAt(Support) == nullptr)
-			{
-				OutFailureReason = FText::FromString(TEXT("上层建筑的整个底面必须有紧贴下方的建筑支撑。"));
-				return false;
-			}
-		}
 	}
-	// 占用和支撑检查遍历整座建筑；属性匹配只读取玩家选中的一个面。
+	// 整座建筑只逐格检查高度、水平边界与占用，不要求下方存在地面或建筑。
+	// 悬空和多格建筑部分悬空都允许；属性仍必须匹配当前选中的唯一来源面。
 	return HasPlacementMatch(Coordinate, Descriptor, CursorTarget, OutFailureReason);
 }
 
@@ -1863,7 +1846,8 @@ bool ACastleBoard::TryResolvePlacementCoordinate(const FCastleGridCursorTarget& 
 
 bool ACastleBoard::HasPlacementMatch(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason) const
 {
-	// 无视线来源的坐标接口只使用正下方的支撑面，避免它继续扫描邻居而绕过定向规则。
+	// 无视线来源的坐标接口仍只用正下方顶面提供属性匹配，不扫描其他邻居。
+	// 这是坐标入口的来源约定，不代表整座建筑需要下方支撑；侧向悬空建造使用光标入口。
 	FCastleGridCursorTarget SupportTarget;
 	if (CursorTarget == nullptr)
 	{

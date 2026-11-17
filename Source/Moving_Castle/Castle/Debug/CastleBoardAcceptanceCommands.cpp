@@ -168,7 +168,7 @@ namespace CastleBoardAcceptance
   if (!Check(!Board->CanPlaceBuildingAtCursor(Third,Card,Reason)
    && Reason.ToString().Contains(TEXT("最多伸出棋盘边界 2 格")),TEXT("第三格未按 D10 拒绝"))) { return; }
   if (!Check(!Board->CanPlaceBuilding(FIntVector(-1,2,0),Card,Reason),TEXT("外围坐标入口错误放行"))) { return; }
-  if (!Check(!Board->CanPlaceBuilding(FIntVector(3,3,1),Card,Reason),TEXT("内部悬空错误放行"))) { return; }
+  if (!Check(!Board->CanPlaceBuilding(FIntVector(3,3,1),Card,Reason),TEXT("无下方匹配来源的坐标入口错误放行"))) { return; }
   // 在第二个外围格逐层建到第八层，保留场景供视口检查。
   for (int32 Z=1; Z<8; ++Z)
   {
@@ -184,7 +184,7 @@ namespace CastleBoardAcceptance
   Ninth.bValid=true; Ninth.Cell=FIntVector(6,2,7);
   Ninth.Face=ECastleGridFace::Up; Ninth.AdjacentCell=FIntVector(6,2,8);
   if (!Check(!Board->CanPlaceBuildingAtCursor(Ninth,Card,Reason),TEXT("第九层错误放行"))) { return; }
-  UE_LOG(LogMoving_Castle, Display, TEXT("W2_MAINMAP_OVERHANG_PASS: 正式背包放置外围 1/2 格，第三格拒绝；外围叠到第八层，第九层拒绝；内部悬空和外围坐标入口拒绝。"));
+  UE_LOG(LogMoving_Castle, Display, TEXT("W2_MAINMAP_OVERHANG_PASS: 正式背包放置外围 1/2 格，第三格拒绝；外围叠到第八层，第九层拒绝；无下方匹配来源的内部坐标入口和外围首层坐标入口拒绝。"));
  }));
 }
 #endif

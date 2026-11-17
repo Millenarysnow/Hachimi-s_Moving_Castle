@@ -208,15 +208,16 @@ bool FCastleBoardOverhangTest::RunTest(const FString& Parameters)
  TestFalse(TEXT("第三格拒绝"), Board->CanPlaceBuildingAtCursor(Third, Card, Reason));
  TestTrue(TEXT("第三格给出距离原因"), Reason.ToString().Contains(TEXT("最多伸出棋盘边界 2 格")));
  TestFalse(TEXT("外围首层坐标入口没有地面不能放"), Board->CanPlaceBuilding(FIntVector(-1,2,0), Card, Reason));
- TestFalse(TEXT("棋盘内悬空仍拒绝"), Board->CanPlaceBuilding(FIntVector(3,3,1), Card, Reason));
+ TestFalse(TEXT("无下方匹配来源的坐标入口仍拒绝"), Board->CanPlaceBuilding(FIntVector(3,3,1), Card, Reason));
+ TestTrue(TEXT("坐标入口明确报告来源建筑不存在"), Reason.ToString().Contains(TEXT("指向的建筑已不存在")));
  FCastleGridCursorTarget Top;
  Top.bValid=true; Top.Cell=FIntVector(6,2,0); Top.Face=ECastleGridFace::Up; Top.AdjacentCell=FIntVector(6,2,1);
  TestTrue(TEXT("外围建筑顶面允许上叠"), Board->CanPlaceBuildingAtCursor(Top, Card, Reason));
  FCastleBuildingDescriptor Multi;
  if (!Board->BuildingDefinitions[1]->CreateDescriptor(4, Card.Color, Card.Number, Multi, Reason)) { return false; }
  Top.Cell=FIntVector(4,2,0); Top.AdjacentCell=FIntVector(4,2,1);
- TestFalse(TEXT("跨界卡内部缺支撑不能被外围豁免"), Board->CanPlaceBuildingAtCursor(Top, Multi, Reason));
- // 三级卡横跨边界：来源是内侧建筑的外侧面，外围格无需支撑，内部格仍逐格验证。
+ TestTrue(TEXT("跨界四级卡的内部格也允许下方无支撑"), Board->CanPlaceBuildingAtCursor(Top, Multi, Reason));
+ // 多格卡横跨边界仍须使用建筑面来源；是否悬空不改变地面来源的边界约束。
  FCastleBuildingDescriptor Level2;
  if (!Board->BuildingDefinitions[1]->CreateDescriptor(2, Card.Color, Card.Number, Level2, Reason)) { return false; }
  TestFalse(TEXT("首层跨界多格卡不能从地面坐标入口伸出"), Board->CanPlaceBuilding(FIntVector(4,4,0), Level2, Reason));

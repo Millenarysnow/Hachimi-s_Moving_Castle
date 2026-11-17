@@ -218,13 +218,13 @@ public:
 	/**
 	 * 检查一张建筑卡牌是否可以放到目标坐标。
 	 *
-	 * 没有射线方向的坐标入口固定从下方顶面放置：首层只匹配目标地面，
-	 * 上层只匹配正下方建筑。玩家交互必须使用带高亮面来源的光标入口。
+	 * 没有射线方向的坐标入口固定用下方顶面提供属性匹配：首层只匹配目标地面，
+	 * 上层只匹配正下方建筑，不要求其余占用格有支撑。侧向悬空建造使用带来源的光标入口。
 	 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
 	bool CanPlaceBuilding(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason) const;
 
-	/** 校验当前高亮面：只匹配该面所属地面或建筑，同时检查整座建筑的占用、边界与支撑。 */
+	/** 校验当前高亮面：只匹配该面所属地面或建筑，逐格检查占用与边界，允许下方无支撑。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
 	bool CanPlaceBuildingAtCursor(const FCastleGridCursorTarget& CursorTarget, const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason) const;
 
