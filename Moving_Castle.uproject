@@ -17,6 +17,10 @@
 	],
 	"Plugins": [
 		{
+			"Name": "AerialTerrain",
+			"Enabled": true
+		},
+		{
 			"Name": "MassGameplay",
 			"Enabled": true
 		},

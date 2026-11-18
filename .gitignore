@@ -19,3 +19,10 @@
 !AO-WORKER.md
 
 !/.agents/skills/**
+
+# 独立高空地表插件的资产、着色器和源码。插件的编译产物沿用全局忽略规则。
+!/Plugins/AerialTerrain/*.uplugin
+!/Plugins/AerialTerrain/Content/**
+!/Plugins/AerialTerrain/Scripts/**
+!/Plugins/AerialTerrain/Shaders/**
+!/Plugins/AerialTerrain/Source/**

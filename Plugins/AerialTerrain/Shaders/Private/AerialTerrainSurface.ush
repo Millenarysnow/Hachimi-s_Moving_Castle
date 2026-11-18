@@ -1,0 +1,112 @@
+#ifndef AERIAL_TERRAIN_SURFACE_INCLUDED
+#define AERIAL_TERRAIN_SURFACE_INCLUDED
+
+#include "/Plugin/AerialTerrain/Private/AerialTerrainNoise.ush"
+
+// UV0 使用固定平面上的线性世界坐标。纹理寻址负责环绕，保留 UV 导数。
+float2 AerialTerrainUV(float2 MeshUV, float4 Offset, float4 Geometry)
+{
+    return (MeshUV - 0.5) * Geometry.x + Offset.xy;
+}
+
+float AerialVisibleElevation(float2 HeightAndWater)
+{
+    return max(HeightAndWater.x, HeightAndWater.y) - 1.0;
+}
+
+float3 AerialTerrainDisplacement(Texture2D Field, SamplerState FieldSampler, float2 UV, float4 Offset, float4 Geometry)
+{
+    const float2 MapUV = AerialTerrainUV(UV, Offset, Geometry);
+    const float2 FieldValue = Field.SampleLevel(FieldSampler, MapUV, 0).rg;
+    return float3(0.0, 0.0, AerialVisibleElevation(FieldValue) * Geometry.y);
+}
+
+// 用稀疏的周期格点塑造林冠。超过可见分辨率后逐渐并入群系底色。
+float2 AerialCanopy(float2 MapUV, float Cover, float Footprint)
+{
+    const int Period = 1792;
+    const float2 P = MapUV * Period;
+    const uint Bits = AerialHash(int2(floor(P)), Period, 237u);
+    const float Plant = float(Bits & 255u) / 255.0;
+    const float2 Center = 0.30 + 0.40 * float2(float((Bits >> 8u) & 255u), float((Bits >> 16u) & 255u)) / 255.0;
+    const float2 Delta = (frac(P) - Center) * float2(1.0, 1.17);
+    const float Radius = 0.19 + float(Bits >> 24u) * (0.102 / 255.0);
+    const float EdgeAA = max(Footprint * Period * 0.7, 0.035);
+    const float Crown = 1.0 - smoothstep(Radius - EdgeAA, Radius + EdgeAA, length(Delta));
+    const float Shade = 1.0 - smoothstep(Radius - EdgeAA, Radius + EdgeAA, length(Delta - float2(0.13, -0.10)));
+    const float Visible = 1.0 - smoothstep(0.19, 0.63, Footprint * Period);
+    return float2(Crown, Shade) * step(Plant, Cover) * Visible;
+}
+
+float3 AerialTerrainColor(Texture2D Field, SamplerState FieldSampler, float2 UV, float4 Offset, float4 Geometry,
+    float4 Sun, float4 Haze, float3 SkyLuminance, float ViewDistance)
+{
+    const float2 MapUV = AerialTerrainUV(UV, Offset, Geometry);
+    const float Footprint = max(length(ddx(MapUV)), length(ddy(MapUV)));
+    // 与位移一致的高程；两侧差分使悬崖上的岩石与地形光照从同一坡度计算。
+    const float SampleStep = Geometry.w * 1.5;
+    const float3 Data = Field.SampleLevel(FieldSampler, MapUV, 0).rgb;
+    const float X0 = Field.SampleLevel(FieldSampler, MapUV - float2(SampleStep, 0), 0).r;
+    const float X1 = Field.SampleLevel(FieldSampler, MapUV + float2(SampleStep, 0), 0).r;
+    const float Y0 = Field.SampleLevel(FieldSampler, MapUV - float2(0, SampleStep), 0).r;
+    const float Y1 = Field.SampleLevel(FieldSampler, MapUV + float2(0, SampleStep), 0).r;
+    const float2 Slope = float2(X1 - X0, Y1 - Y0) * Geometry.z / (2.0 * SampleStep);
+    const float3 Normal = normalize(float3(-Slope, 1.0));
+    const float Steep = length(Slope);
+    const float Height = Data.r - 1.0;
+    const float Depth = Data.g - Data.r;
+
+    // 区域温度与湿度结合高度定群系。高处降温使积雪位置贴合实际山脊。
+    const float Temperature = 0.55 + 0.88 * AerialNoise(MapUV, 7, 419u) - 0.98 * max(Height, 0.0);
+    const float Moisture = Data.b;
+    const float Cold = 1.0 - smoothstep(0.25, 0.45, Temperature);
+    const float Wet = smoothstep(0.33, 0.64, Moisture);
+    const float Arid = smoothstep(0.55, 0.74, Temperature) * (1.0 - smoothstep(0.28, 0.49, Moisture));
+    const float Meadow = smoothstep(0.10, 0.26, Height) * (1.0 - smoothstep(0.22, 0.68, Steep));
+    const float Macro = AerialNoise(MapUV, 91, 137u);
+    const float LandVariation = 0.93 + 0.22 * Macro;
+    float3 Land = lerp(float3(0.214, 0.312, 0.074), float3(0.074, 0.252, 0.051), Wet);
+    Land = lerp(Land, float3(0.473, 0.309, 0.106), Arid * 0.94);
+    Land = lerp(Land, float3(0.183, 0.223, 0.139), Cold * 0.66);
+    Land = lerp(Land, float3(0.246, 0.426, 0.111), Meadow * Wet * 0.53);
+
+    // 林冠的选址同时受湿度、坡度和水线限制，森林聚集噪声留出连续的草甸空地。
+    const float Grove = 0.53 + 0.82 * Macro + 0.29 * AerialNoise(MapUV, 33, 261u);
+    const float Forest = smoothstep(0.27, 0.79, Wet * 0.88 + Grove * 0.54 - Arid)
+        * (1.0 - smoothstep(0.24, 0.56, Steep)) * (1.0 - smoothstep(0.19, 0.31, Height))
+        * (1.0 - smoothstep(-0.009, 0.002, Depth));
+    const float2 Canopy = AerialCanopy(MapUV, Forest, Footprint);
+    const float3 Foliage = lerp(float3(0.035, 0.168, 0.064), float3(0.034, 0.108, 0.093), Cold);
+    Land = lerp(Land, Foliage, Forest * 0.64 + Canopy.x * 0.31);
+    Land *= LandVariation * (1.0 - Canopy.y * 0.20);
+
+    const float Crag = smoothstep(0.22, 0.67, Steep) * smoothstep(0.040, 0.14, Height);
+    const float Snow = smoothstep(0.23, 0.36, Height + Cold * 0.073 + Macro * 0.019)
+        * (1.0 - smoothstep(0.56, 1.10, Steep));
+    Land = lerp(Land, float3(0.312, 0.275, 0.225) * (0.82 + 0.30 * Macro), Crag);
+    Land = lerp(Land, float3(0.66, 0.75, 0.82), Snow);
+    const float Beach = smoothstep(-0.015, -0.004, Depth) * (1.0 - smoothstep(0.16, 0.41, Steep));
+    Land = lerp(Land, float3(0.54, 0.445, 0.235), Beach * (0.53 + 0.35 * (1.0 - Wet)));
+    Land *= 0.62 + 0.53 * saturate(dot(Normal, Sun.xyz));
+
+    // 浅滩、深水和河水使用同一条水线。细微的水色纹理随地貌流动，水位本身固定。
+    const float InlandWater = smoothstep(0.001, 0.024, Data.g - 1.0);
+    const float Deep = smoothstep(0.0035, 0.060, Depth);
+    const float WaterGrain = AerialNoise(MapUV * float2(1.0, 3.0), 241, 357u);
+    const float Spec = pow(saturate(Sun.z), 4.0) * 0.055 * (0.55 + 0.45 * Macro);
+    const float3 Shallows = lerp(float3(0.070, 0.357, 0.326), float3(0.058, 0.259, 0.213), InlandWater);
+    const float3 DeepWater = lerp(float3(0.014, 0.087, 0.168), float3(0.021, 0.124, 0.147), InlandWater);
+    const float3 Water = lerp(Shallows, DeepWater, Deep) * (0.97 + 0.09 * WaterGrain) + Spec;
+    const float ShoreWidth = max(fwidth(Depth), 0.00075);
+    const float WaterMask = smoothstep(-ShoreWidth, ShoreWidth, Depth);
+    const float3 Terrain = lerp(Land, Water, WaterMask);
+
+    // 先压低远景对比，再让临近网格遮罩的像素与天空球取得同一方向的亮度。
+    // 到达几何淡出范围前必须完成颜色融合，否则雾再浓也会留下整片地表的剪影。
+    const float Mist = smoothstep(Sun.w, Haze.w * 0.79, ViewDistance);
+    const float SkyBlend = smoothstep(Haze.w * 0.55, Haze.w * 0.78, ViewDistance);
+    const float3 HazyTerrain = lerp(Terrain, Haze.rgb, 0.025 + 0.55 * Mist);
+    return lerp(HazyTerrain, SkyLuminance, SkyBlend);
+}
+
+#endif

@@ -1,0 +1,54 @@
+#ifndef AERIAL_TERRAIN_FIELD_INCLUDED
+#define AERIAL_TERRAIN_FIELD_INCLUDED
+
+#include "/Plugin/AerialTerrain/Private/AerialTerrainNoise.ush"
+
+// 这三个通道由一次 GPU 烘焙写入线性 RT。R/G 是相对高程加一，B 是湿度。
+// 数据图保留裸地高度，以便区分有地形起伏的陆地和铺在上方的静水。
+float3 AerialBuildField(float2 UV, float TerrainSeed)
+{
+    const uint Seed = uint(TerrainSeed);
+    const float2 Warp = float2(AerialFbm(UV, 5, Seed + 1u), AerialFbm(UV, 5, Seed + 8u));
+    const float2 WarpedUV = UV + Warp * 0.056;
+
+    // 大陆度控制跨越海岸线时的抬升，深海和陆地都保留数公里宽的连续区域。
+    const float Continentalness = AerialFbm(WarpedUV, 6, Seed + 47u) + 0.043;
+    const float Land = smoothstep(-0.16, 0.19, Continentalness);
+    const float Inland = smoothstep(0.01, 0.43, Continentalness);
+    const float Upland = smoothstep(-0.02, 0.35, Continentalness);
+    const float BaseHeight = lerp(-0.195, 0.096, Land) + 0.073 * Inland;
+
+    // 山脉由独立的抬升与侵蚀控制。脊线在山地内部产生连贯的长谷和分叉山峰。
+    const float Erosion = AerialFbm(WarpedUV, 12, Seed + 58u);
+    const float Uplift = smoothstep(-0.18, 0.34, AerialFbm(WarpedUV, 10, Seed + 71u));
+    const float Mountain = Upland * Uplift * (1.0 - smoothstep(-0.14, 0.33, Erosion));
+    const float RidgeLine = 1.0 - abs(AerialNoise(WarpedUV + Warp * 0.02, 28, Seed + 89u));
+    const float Ridge = saturate(RidgeLine * 1.4 - 0.43);
+    const float Hills = AerialFbm(WarpedUV, 37, Seed + 110u);
+    const float RockDetail = AerialNoise(WarpedUV, 127, Seed + 42u);
+    float Height = BaseHeight + (0.017 + 0.04 * Land) * Hills
+        + Mountain * (0.065 + 0.31 * Ridge * Ridge + 0.034 * RockDetail);
+
+    // 弯曲的浅谷沿低地延伸。谷心水位约随大陆抬升，海岸附近过渡回海平面。
+    const float RiverCourse = abs(AerialNoise(WarpedUV + Warp * 0.037, 8, Seed + 105u)
+        + 0.21 * AerialNoise(WarpedUV, 23, Seed + 137u));
+    const float RiverBed = 1.0 - smoothstep(0.006, 0.067, RiverCourse);
+    const float RiverReach = smoothstep(-0.075, -0.005, Continentalness)
+        * (1.0 - smoothstep(0.13, 0.57, Mountain));
+    const float RiverLevel = 0.051 * Land * (0.30 + Inland);
+    const float CarvedRiver = lerp(Height, RiverLevel - 0.012, RiverBed * RiverReach);
+
+    // 湖泊从少数湿润低地中形成；统一的局部水位给湖盆留下平坦的水面。
+    const float WetClimate = AerialFbm(WarpedUV, 9, Seed + 301u);
+    const float Basin = smoothstep(0.16, 0.42, AerialFbm(WarpedUV, 17, Seed + 391u))
+        * smoothstep(-0.015, 0.06, Continentalness) * (1.0 - smoothstep(0.15, 0.32, Continentalness));
+    const float LakeWeight = Basin * smoothstep(-0.10, 0.30, WetClimate);
+    Height = min(CarvedRiver, lerp(Height, 0.007, LakeWeight));
+    const float RiverWater = RiverLevel * RiverReach * (1.0 - smoothstep(0.020, 0.074, RiverCourse));
+    const float LakeWater = 0.051 * smoothstep(0.11, 0.71, LakeWeight);
+    const float WaterHeight = max(RiverWater, LakeWater);
+    const float Moisture = saturate(0.49 + 0.89 * WetClimate + RiverBed * RiverReach * 0.13 + LakeWeight * 0.14);
+    return float3(Height + 1.0, WaterHeight + 1.0, Moisture);
+}
+
+#endif

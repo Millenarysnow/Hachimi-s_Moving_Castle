@@ -1,0 +1,45 @@
+#ifndef AERIAL_TERRAIN_NOISE_INCLUDED
+#define AERIAL_TERRAIN_NOISE_INCLUDED
+
+// 整数格点的周期与数据图一致。负坐标在拼接另一侧时仍命中相同格点。
+uint AerialHash(int2 Cell, int Period, uint Seed)
+{
+    const int2 Wrapped = (Cell % Period + Period) % Period;
+    uint Key = uint(Wrapped.x) * 0x9e3779b1u ^ uint(Wrapped.y) * 0x85ebca77u ^ (Seed + 11u) * 0x27d4eb2fu;
+    Key ^= Key >> 16u;
+    Key *= 0x7feb352du;
+    Key ^= Key >> 15u;
+    Key *= 0x846ca68bu;
+    return Key ^ (Key >> 16u);
+}
+
+// 八个单位梯度，低频使用梯度噪声避免大陆轮廓出现格子亮斑。
+float AerialGradient(int2 Cell, int Period, uint Seed, float2 Delta)
+{
+    const uint Bits = AerialHash(Cell, Period, Seed);
+    const float2 SignedDelta = Delta * float2((Bits & 1u) ? -1.0 : 1.0, (Bits & 2u) ? -1.0 : 1.0);
+    const float Axial = (Bits & 4u) ? SignedDelta.x : SignedDelta.y;
+    return (Bits & 8u) ? (SignedDelta.x + SignedDelta.y) * 0.70710678 : Axial;
+}
+
+float AerialNoise(float2 UV, int Period, uint Seed)
+{
+    const float2 Coord = UV * Period;
+    const int2 Cell = int2(floor(Coord));
+    const float2 T = frac(Coord);
+    const float2 Blend = T * T * T * (T * (T * 6.0 - 15.0) + 10.0);
+    const float Bottom = lerp(AerialGradient(Cell, Period, Seed, T),
+        AerialGradient(Cell + int2(1, 0), Period, Seed, T - float2(1, 0)), Blend.x);
+    const float Top = lerp(AerialGradient(Cell + int2(0, 1), Period, Seed, T - float2(0, 1)),
+        AerialGradient(Cell + int2(1, 1), Period, Seed, T - 1.0), Blend.x);
+    return lerp(Bottom, Top, Blend.y) * 1.41421356;
+}
+
+float AerialFbm(float2 UV, int Period, uint Seed)
+{
+    return 0.61 * AerialNoise(UV, Period, Seed)
+        + 0.27 * AerialNoise(UV, Period * 2, Seed + 31u)
+        + 0.12 * AerialNoise(UV, Period * 4, Seed + 79u);
+}
+
+#endif

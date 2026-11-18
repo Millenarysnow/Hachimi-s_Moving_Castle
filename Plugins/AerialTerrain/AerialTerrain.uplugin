@@ -1,0 +1,16 @@
+{
+    "FileVersion": 3,
+    "Version": 1,
+    "VersionName": "1.0",
+    "FriendlyName": "Aerial Terrain",
+    "Description": "为固定场景渲染持续滚动的高空地表。",
+    "Category": "Rendering",
+    "CanContainContent": true,
+    "Modules": [
+        {
+            "Name": "AerialTerrain",
+            "Type": "Runtime",
+            "LoadingPhase": "PostConfigInit"
+        }
+    ]
+}
