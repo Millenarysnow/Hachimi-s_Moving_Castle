@@ -21,6 +21,10 @@
 			"Enabled": true
 		},
 		{
+			"Name": "AerialCloudscape",
+			"Enabled": true
+		},
+		{
 			"Name": "MassGameplay",
 			"Enabled": true
 		},

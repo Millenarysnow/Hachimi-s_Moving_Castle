@@ -199,8 +199,8 @@ void AAerialTerrainBackdrop::BeginPlay()
     const double MeshDiameter = MeshBounds.Max.X - MeshBounds.Min.X;
     const double HeadingRadians = FMath::DegreesToRadians(HeadingDegrees);
     const FVector2D Heading(FMath::Cos(HeadingRadians), FMath::Sin(HeadingRadians));
-    TravelPeriodsPerSecond = Heading * (TravelSpeedCmPerSecond / MapPeriodCm);
-    SamplingOffset = WrapMapUV(InitialMapUV);
+    TravelVelocityCmPerSecond = Heading * TravelSpeedCmPerSecond;
+    TraveledDistanceCm = FVector2D::ZeroVector;
     const FVector Sun = SunDirection.GetUnsafeNormal();
 
     SurfaceInstance->SetTextureParameterValue(FieldTextureParameter, TerrainField);
@@ -213,6 +213,7 @@ void AAerialTerrainBackdrop::BeginPlay()
     PushSamplingOffset();
     BackdropMesh->SetMaterial(0, SurfaceInstance);
     BackdropMesh->SetVisibility(true);
+    bTravelInitialized = true;
     SetActorTickEnabled(true);
 
     UE_LOG(LogAerialTerrain, Log, TEXT("%s: 已提交 GPU 地貌生成，种子 %d，地貌周期 %.2f km，航向 %.1f 度，航速 %.1f m/s。"),
@@ -221,14 +222,26 @@ void AAerialTerrainBackdrop::BeginPlay()
 
 void AAerialTerrainBackdrop::PushSamplingOffset() const
 {
+    // 由同一份世界航程换算材质相位；只在送入着色器前按当前地貌周期回绕。
+    const FVector2D SamplingOffset = WrapMapUV(InitialMapUV + TraveledDistanceCm / MapPeriodCm);
     SurfaceInstance->SetVectorParameterValue(TravelParameter,
         FLinearColor(static_cast<float>(SamplingOffset.X), static_cast<float>(SamplingOffset.Y), 0.0f, 0.0f));
+}
+
+bool AAerialTerrainBackdrop::TryGetTraveledDistanceCm(FVector2D& OutDistanceCm) const
+{
+    if (!bTravelInitialized)
+    {
+        return false;
+    }
+    OutDistanceCm = TraveledDistanceCm;
+    return true;
 }
 
 void AAerialTerrainBackdrop::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
-    // 双精度追踪每一帧的航程，材质只接收一个有界的二维偏移。
-    SamplingOffset = WrapMapUV(SamplingOffset + TravelPeriodsPerSecond * DeltaSeconds);
+    // 其他远景层读取厘米航程；它们的周期与地貌周期无关。
+    TraveledDistanceCm += TravelVelocityCmPerSecond * DeltaSeconds;
     PushSamplingOffset();
 }

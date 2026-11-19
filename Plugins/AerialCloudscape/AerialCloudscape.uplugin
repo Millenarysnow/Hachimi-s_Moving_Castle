@@ -1,0 +1,15 @@
+{
+    "FileVersion": 3,
+    "Version": 1,
+    "VersionName": "1.0",
+    "FriendlyName": "Aerial Cloudscape",
+    "Description": "俯视可见的三维云海，按照地表的世界航程滚动。",
+    "Category": "Rendering",
+    "CanContainContent": true,
+    "Modules": [
+        { "Name": "AerialCloudscape", "Type": "Runtime", "LoadingPhase": "PostConfigInit" }
+    ],
+    "Plugins": [
+        { "Name": "AerialTerrain", "Enabled": true }
+    ]
+}

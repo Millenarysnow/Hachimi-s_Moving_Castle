@@ -26,3 +26,10 @@
 !/Plugins/AerialTerrain/Scripts/**
 !/Plugins/AerialTerrain/Shaders/**
 !/Plugins/AerialTerrain/Source/**
+
+# 高空云海只纳入资产及可复现的制作源码，不纳入工程中间产物。
+!/Plugins/AerialCloudscape/*.uplugin
+!/Plugins/AerialCloudscape/Content/**
+!/Plugins/AerialCloudscape/Scripts/**/*.py
+!/Plugins/AerialCloudscape/Shaders/**
+!/Plugins/AerialCloudscape/Source/**

@@ -1,0 +1,60 @@
+#ifndef AERIAL_CLOUD_DENSITY_INCLUDED
+#define AERIAL_CLOUD_DENSITY_INCLUDED
+
+// 在物理世界坐标上推进采样。相位增大时，相同密度就会向航行的反方向经过镜头。
+float2 AerialCloudUV(float3 PositionCm, float3 Phase, float PeriodKm)
+{
+    return PositionCm.xy / (100000.0 * PeriodKm) + Phase.xy;
+}
+
+float AerialCloudFarWeight(float DistanceCm, float StartKm, float EndKm)
+{
+    return 1.0 - smoothstep(StartKm, EndKm, DistanceCm * 0.00001);
+}
+
+// 保守密度只跳过详细模型也严格为零的区域；不拿二维图近似云的最终轮廓。
+float4 AerialCloudSupport(Texture2D Weather, SamplerState WeatherSampler, float2 UV, float Height,
+    float DistanceCm, float StartKm, float EndKm)
+{
+    const float2 WeatherData = Weather.SampleLevel(WeatherSampler, UV, 0).rg;
+    const float FarWeight = AerialCloudFarWeight(DistanceCm, StartKm, EndKm);
+    const float HasMass = (WeatherData.r > 0.16 && Height > 0.025 && Height < 0.98 && FarWeight > 0.0) ? 1.0 : 0.0;
+    return float4(HasMass, WeatherData, FarWeight);
+}
+
+float2 AerialCloudMedium(Texture3D Shape, SamplerState ShapeSampler, float2 UV, float Height, float HeightCm,
+    float PeriodKm, float4 Support, float Extinction)
+{
+    const float Coverage = Support.y;
+    const float HeightPattern = Support.z;
+    const float FarWeight = Support.w;
+
+    // 跨过完整云周期时，各轴的采样相位回到完全相同的体积数据。Z 的物理尺度跟 XY 一致，
+    // 不让一整个噪声立方体被硬压到很薄的云层里。不同剖面来自云团本身，而非相机方向。
+    const float3 ShapeUV = 8.0 * float3(UV, HeightCm / (PeriodKm * 100000.0)) + float3(0.237, 0.583, 0.317);
+    const float2 Macro = Shape.SampleLevel(ShapeSampler, ShapeUV, 0).rg;
+    const float2 Shoulder = Shape.SampleLevel(ShapeSampler, ShapeUV * 2.0 + float3(0.31, 0.17, 0.59), 0).gb;
+    const float CloudBody = 0.66 * Macro.r + 0.12 * Macro.g + 0.22 * Shoulder.x;
+
+    const float LocalTop = 0.30 + 0.22 * Coverage + 0.21 * HeightPattern + 0.25 * CloudBody + 0.15 * Shoulder.x;
+    const float DepthUnderLobe = LocalTop - Height;
+    const float LowerSoftness = smoothstep(0.025, 0.205 + 0.08 * HeightPattern, Height);
+    const float UpperSoftness = smoothstep(0.0, 0.19, DepthUnderLobe) * (1.0 - smoothstep(0.86, 0.98, Height));
+    const float SkyOpening = smoothstep(0.16, 0.54, Coverage);
+
+    // 主密度隆起、包住团块；更细的蚀刻只在团块肩部最明显，避免在实心亮面上铺一层噪点。
+    const float BodyField = CloudBody + 0.32 * Coverage - 0.45;
+    const float Edge = 1.0 - smoothstep(0.10, 0.41, BodyField);
+    const float Detail = Shape.SampleLevel(ShapeSampler, ShapeUV * 3.0 + float3(0.23, 0.39, 0.11), 0).b;
+    const float Body = smoothstep(-0.08, 0.28, BodyField - Edge * (1.0 - Detail) * 0.16);
+    const float Density = Extinction * FarWeight * SkyOpening * LowerSoftness * UpperSoftness * Body;
+
+    // 近似局部天空开口：越深入上覆密度、越被邻近云肩包围，间接天光越少。
+    // 只影响大气的间接光，太阳的遮蔽仍由引擎用同一消光场二次步进得到。
+    const float Overburden = smoothstep(0.025, 0.35, DepthUnderLobe) * SkyOpening;
+    const float Valley = (1.0 - smoothstep(0.28, 0.70, CloudBody)) * smoothstep(0.27, 0.77, Coverage);
+    const float SkyVisibility = exp2(-2.2 * Overburden - 1.85 * Valley * (0.45 + 0.55 * Shoulder.y));
+    return float2(Density, lerp(1.0, SkyVisibility, FarWeight));
+}
+
+#endif

@@ -19,6 +19,9 @@ public:
     AAerialTerrainBackdrop();
     virtual void Tick(float DeltaSeconds) override;
 
+    /** 读取自本次航行开始以来未回绕的世界 XY 航程（厘米）。地表未初始化时不写输出。 */
+    bool TryGetTraveledDistanceCm(FVector2D& OutDistanceCm) const;
+
 protected:
     virtual void BeginPlay() override;
 
@@ -81,6 +84,8 @@ private:
     bool ValidateConfiguration() const;
     void PushSamplingOffset() const;
 
-    FVector2D SamplingOffset = FVector2D::ZeroVector;
-    FVector2D TravelPeriodsPerSecond = FVector2D::ZeroVector;
+    // 地表出场 UV 只选地貌，不属于航程；使用独立周期的背景层可以共享同一个世界位移。
+    FVector2D TraveledDistanceCm = FVector2D::ZeroVector;
+    FVector2D TravelVelocityCmPerSecond = FVector2D::ZeroVector;
+    bool bTravelInitialized = false;
 };
