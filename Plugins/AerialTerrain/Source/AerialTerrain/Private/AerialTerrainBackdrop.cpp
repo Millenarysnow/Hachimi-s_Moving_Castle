@@ -81,6 +81,14 @@ bool AAerialTerrainBackdrop::ValidateConfiguration() const
     }
 
     const FBox Bounds = Mesh->GetBoundingBox();
+    // UV0 是地貌坐标，UV1 是制作网格时写入的相邻顶点间距。不能用缺少足迹的普通平面替代。
+    if (Mesh->GetNumTexCoords(0) < 2)
+    {
+        UE_LOG(LogAerialTerrain, Error, TEXT("%s: 网格 %s 缺少用于稳定远景高程采样的 UV1。"),
+            *GetPathName(), *GetPathNameSafe(Mesh));
+        return false;
+    }
+
     // 已知静态面片位于 Z=0，地貌函数输出的可见高度幅度小于 HeightScaleCm。
     // 包围盒须覆盖位移，并给地平线淡出留下连续的圆形网格。
     if (Bounds.Max.Z < HeightScaleCm || Bounds.Min.Z > -HeightScaleCm ||
@@ -156,14 +164,21 @@ void AAerialTerrainBackdrop::BeginPlay()
     TerrainField->RenderTargetFormat = RTF_RGBA16f;
     TerrainField->AddressX = TA_Wrap;
     TerrainField->AddressY = TA_Wrap;
-    TerrainField->Filter = TF_Bilinear;
+    // 生成后的数据图按地表网格的采样足迹读取相邻 mip，并在级间线性插值。
+    // 生成和采样都保持周期寻址，不能在贴图首尾把水线或山脊截断。
+    TerrainField->bAutoGenerateMips = true;
+    TerrainField->MipsAddressU = TA_Wrap;
+    TerrainField->MipsAddressV = TA_Wrap;
+    TerrainField->MipsSamplerFilter = TF_Bilinear;
+    TerrainField->Filter = TF_Trilinear;
     TerrainField->ClearColor = FLinearColor::Black;
     TerrainField->InitAutoFormat(FieldResolution, FieldResolution);
     TerrainField->UpdateResourceImmediate(true);
-    if (!TerrainField->GameThread_GetRenderTargetResource())
+    const int32 ExpectedMipCount = FMath::FloorLog2(FieldResolution) + 1;
+    if (!TerrainField->GameThread_GetRenderTargetResource() || TerrainField->GetNumMips() != ExpectedMipCount)
     {
-        UE_LOG(LogAerialTerrain, Error, TEXT("%s: 生成材质 %s 的高空地表渲染目标创建失败。"),
-            *GetPathName(), *GetPathNameSafe(FieldMaterial));
+        UE_LOG(LogAerialTerrain, Error, TEXT("%s: 生成材质 %s 的高空地表渲染目标未建立完整的 mip 链，实际 %d 级，预期 %d 级。"),
+            *GetPathName(), *GetPathNameSafe(FieldMaterial), TerrainField->GetNumMips(), ExpectedMipCount);
         return;
     }
 
@@ -176,7 +191,7 @@ void AAerialTerrainBackdrop::BeginPlay()
         return;
     }
 
-    // 唯一的地貌生成 pass；后续各帧对同一张数据图平移采样，无需回读 GPU。
+    // 一次性写入地貌并由 DrawMaterialToRenderTarget 生成 mip；后续只平移采样，不重烘焙也不回读 GPU。
     BakeInstance->SetScalarParameterValue(SeedParameter, static_cast<float>(TerrainSeed));
     UKismetRenderingLibrary::DrawMaterialToRenderTarget(this, TerrainField, BakeInstance);
 

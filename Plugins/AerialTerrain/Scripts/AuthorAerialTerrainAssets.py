@@ -83,7 +83,12 @@ def make_field_texture_binding():
     texture.set_editor_property('render_target_format', ue.TextureRenderTargetFormat.RTF_RGBA16F)
     texture.set_editor_property('address_x', ue.TextureAddress.TA_WRAP)
     texture.set_editor_property('address_y', ue.TextureAddress.TA_WRAP)
-    texture.set_editor_property('filter', ue.TextureFilter.TF_BILINEAR)
+    # 和运行时数据图使用相同的采样设置，使材质编辑视图也能访问合法的 mip 链。
+    texture.set_editor_property('auto_generate_mips', True)
+    texture.set_editor_property('mips_address_u', ue.TextureAddress.TA_WRAP)
+    texture.set_editor_property('mips_address_v', ue.TextureAddress.TA_WRAP)
+    texture.set_editor_property('mips_sampler_filter', ue.TextureFilter.TF_BILINEAR)
+    texture.set_editor_property('filter', ue.TextureFilter.TF_TRILINEAR)
     assert ASSET.save_loaded_asset(texture, only_if_is_dirty=False), f'无法保存 {path}'
     return texture
 
@@ -121,6 +126,8 @@ def make_surface_material():
     # 材质显式混合天光亮度。避免引擎在该像素再叠加一次 Sky Atmosphere 的空气透视；地图的体积雾仍生效。
     material.set_editor_property('is_sky', True)
     uv = node(material, ue.MaterialExpressionTextureCoordinate, -840, -200)
+    # UV1 不用于美术贴图；其两个分量是以面片边长为单位的网格采样足迹。
+    spacing = node(material, ue.MaterialExpressionTextureCoordinate, -840, -290, coordinate_index=1)
     # 此资产是材质编译所需的 RT 类型声明。Actor 会先绑定真实地貌，再让网格可见。
     texture_type = make_field_texture_binding()
     field = node(material, ue.MaterialExpressionTextureObjectParameter, -840, -410,
@@ -135,28 +142,21 @@ def make_surface_material():
     distance = node(material, ue.MaterialExpressionLength, -585, 705)
     assert EDIT.connect_material_expressions(camera_relative, '', distance, ''), '无法读取地表像素的视距'
     sky = node(material, ue.MaterialExpressionSkyAtmosphereViewLuminance, -840, 925)
-    common_inputs = {'Field': field, 'UV': uv, 'Offset': offset, 'Geometry': geometry}
+    common_inputs = {'Field': field, 'UV': uv, 'GridSpacing': spacing, 'Offset': offset, 'Geometry': geometry}
     displacement = create_custom(material, (-335, -410), '滚动高度场，水线与地形共用网格', 'AerialTerrainSurface',
-                                 'return AerialTerrainDisplacement(Field, FieldSampler, UV, Offset, Geometry);',
+                                 'return AerialTerrainDisplacement(Field, FieldSampler, UV, GridSpacing, Offset, Geometry);',
                                  ue.CustomMaterialOutputType.CMOT_FLOAT3, common_inputs)
     color = create_custom(material, (-335, -85), '气候群系、林冠、浅滩与空气透视', 'AerialTerrainSurface',
-                         'return AerialTerrainColor(Field, FieldSampler, UV, Offset, Geometry, Sun, Haze, Sky, DistanceCm);',
+                         'return AerialTerrainColor(Field, FieldSampler, UV, GridSpacing, Offset, Geometry, Sun, Haze, Sky, DistanceCm);',
                          ue.CustomMaterialOutputType.CMOT_FLOAT3,
                          {**common_inputs, 'Sun': sun, 'Haze': haze, 'Sky': sky, 'DistanceCm': distance})
-    fade = create_custom(material, (-335, 390), '视距淡出，隐藏固定网格外缘', 'AerialTerrainSurface',
-                        'return 1.0 - smoothstep(Haze.w * 0.79, Haze.w, DistanceCm);',
-                        ue.CustomMaterialOutputType.CMOT_FLOAT1, {'Haze': haze, 'DistanceCm': distance})
-    dither = node(material, ue.MaterialExpressionMaterialFunctionCall, 140, 390)
-    # 从包按对象路径加载，编辑器 commandlet 的 Asset Registry 不扫描全部引擎函数。
-    dither_function = ue.load_object(None, '/Engine/Functions/Engine_MaterialFunctions02/Utility/DitherTemporalAA.DitherTemporalAA')
-    assert dither_function, '缺少引擎的时间抗锯齿淡出函数'
-    dither.set_editor_property('material_function', dither_function)
-    assert EDIT.connect_material_expressions(fade, '', dither, 'Alpha Threshold'), (
-        f'时间抗锯齿淡出接线失败：{EDIT.get_material_expression_input_names(dither)}'
-    )
+    # 颜色先在远处完全融入天空，再裁掉面片外缘。遮罩不再随逐帧抖动改变覆盖范围。
+    cutoff = create_custom(material, (-335, 390), '天空颜色融合后裁掉地表外缘', 'AerialTerrainSurface',
+                           'return AerialTerrainCoverage(Haze, DistanceCm);',
+                           ue.CustomMaterialOutputType.CMOT_FLOAT1, {'Haze': haze, 'DistanceCm': distance})
     link(material, displacement, ue.MaterialProperty.MP_WORLD_POSITION_OFFSET)
     link(material, color, ue.MaterialProperty.MP_EMISSIVE_COLOR)
-    link(material, dither, ue.MaterialProperty.MP_OPACITY_MASK)
+    link(material, cutoff, ue.MaterialProperty.MP_OPACITY_MASK)
     save_material(material)
     return material
 
@@ -164,12 +164,6 @@ def make_surface_material():
 def make_fixed_surface_mesh():
     """生成一片不可碰撞的静态平面；中心 60 m 采样，远端用渐疏的布点控制顶点量。"""
     path = f'{ROOT}/Meshes/SM_AerialTerrainGrid'
-    if ASSET.does_asset_exist(path):
-        asset = ASSET.load_asset(path)
-        assert isinstance(asset, ue.StaticMesh), f'{path} 不是 StaticMesh'
-        ue.log(f'AERIAL_ASSET 使用已生成的固定面片 {path}')
-        return asset
-
     central = 840000.0
     extent = 3640000.0
     axis_positive = [6000.0 * i for i in range(141)]
@@ -179,7 +173,13 @@ def make_fixed_surface_mesh():
     axis = [-p for p in reversed(axis_positive[1:])] + axis_positive
     stride = len(axis)
     vertices = [ue.Vector(x, y, 0) for y in axis for x in axis]
-    uv = [ue.Vector2D(x / (2 * extent) + 0.5, y / (2 * extent) + 0.5) for y in axis for x in axis]
+    diameter = 2 * extent
+    uv = [ue.Vector2D(x / diameter + 0.5, y / diameter + 0.5) for y in axis for x in axis]
+    # 每个顶点以两侧较大的间距为足迹；在渐疏区，横纵跨度均从实际网格推导。
+    # 两个外缘顶点只有一个相邻区间，直接使用该区间宽度。
+    gaps = [b - a for a, b in zip(axis, axis[1:])]
+    spacing = [gap / diameter for gap in [gaps[0], *(max(a, b) for a, b in zip(gaps, gaps[1:])), gaps[-1]]]
+    uv1 = [ue.Vector2D(x, y) for y in spacing for x in spacing]
     triangles = []
     for y in range(stride - 1):
         for x in range(stride - 1):
@@ -189,14 +189,21 @@ def make_fixed_surface_mesh():
 
     data = ue.GeometryScriptSimpleMeshBuffers()
     for name, values in [('vertices', vertices), ('normals', [ue.Vector(0, 0, 1)] * len(vertices)),
-                         ('uv0', uv), ('triangles', triangles)]:
+                         ('uv0', uv), ('uv1', uv1), ('triangles', triangles)]:
         data.set_editor_property(name, values)
     dynamic_mesh = ue.DynamicMesh()
     ue.GeometryScript_MeshEdits.append_buffers_to_mesh(dynamic_mesh, data)
-    options = ue.GeometryScriptCreateNewStaticMeshAssetOptions()
-    options.set_editor_property('enable_collision', False)
-    asset, result = ue.GeometryScript_NewAssetUtils.create_new_static_mesh_asset_from_mesh(dynamic_mesh, path, options)
-    assert asset and result == ue.GeometryScriptOutcomePins.SUCCESS, f'无法创建 {path}：{result}'
+    # 重制已存在的网格也保留包名和对象引用，主关卡不需要重绑地表 Actor。
+    if ASSET.does_asset_exist(path):
+        asset = ASSET.load_asset(path)
+        assert isinstance(asset, ue.StaticMesh), f'{path} 不是 StaticMesh'
+        _, result = ue.GeometryScript_AssetUtils.copy_mesh_to_static_mesh(
+            dynamic_mesh, asset, ue.GeometryScriptCopyMeshToAssetOptions(), ue.GeometryScriptMeshWriteLOD())
+    else:
+        options = ue.GeometryScriptCreateNewStaticMeshAssetOptions()
+        options.set_editor_property('enable_collision', False)
+        asset, result = ue.GeometryScript_NewAssetUtils.create_new_static_mesh_asset_from_mesh(dynamic_mesh, path, options)
+    assert asset and result == ue.GeometryScriptOutcomePins.SUCCESS, f'无法写入 {path}：{result}'
 
     # 固定面片的非等距顶点必须使用完整 UV 精度，否则数十公里范围内会量化错位。
     subsystem = ue.get_editor_subsystem(ue.StaticMeshEditorSubsystem)

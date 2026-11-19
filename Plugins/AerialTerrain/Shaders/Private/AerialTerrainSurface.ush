@@ -14,10 +14,24 @@ float AerialVisibleElevation(float2 HeightAndWater)
     return max(HeightAndWater.x, HeightAndWater.y) - 1.0;
 }
 
-float3 AerialTerrainDisplacement(Texture2D Field, SamplerState FieldSampler, float2 UV, float4 Offset, float4 Geometry)
+// UV1 存储两个轴上各自的相邻顶点间距，占平面边长的比例。使用较宽的一轴，避免斜向山脊在疏网格上变形。
+float AerialGridFootprint(float2 GridSpacing, float4 Geometry)
+{
+    return max(GridSpacing.x, GridSpacing.y) * Geometry.x;
+}
+
+// 足迹用地貌 UV 表示；小于一个 texel 时读取原图。三线性插值避免在 mip 交界突然切换轮廓。
+float AerialTerrainMip(float Footprint, float TexelUV)
+{
+    return log2(max(Footprint / TexelUV, 1.0));
+}
+
+float3 AerialTerrainDisplacement(Texture2D Field, SamplerState FieldSampler, float2 UV, float2 GridSpacing, float4 Offset, float4 Geometry)
 {
     const float2 MapUV = AerialTerrainUV(UV, Offset, Geometry);
-    const float2 FieldValue = Field.SampleLevel(FieldSampler, MapUV, 0).rg;
+    // 足迹只由固定网格决定，不随镜头转动或采样航程变化。近处保留细节，远端顶点不追逐比网格更细的起伏。
+    const float Mip = AerialTerrainMip(AerialGridFootprint(GridSpacing, Geometry), Geometry.w);
+    const float2 FieldValue = Field.SampleLevel(FieldSampler, MapUV, Mip).rg;
     return float3(0.0, 0.0, AerialVisibleElevation(FieldValue) * Geometry.y);
 }
 
@@ -38,18 +52,21 @@ float2 AerialCanopy(float2 MapUV, float Cover, float Footprint)
     return float2(Crown, Shade) * step(Plant, Cover) * Visible;
 }
 
-float3 AerialTerrainColor(Texture2D Field, SamplerState FieldSampler, float2 UV, float4 Offset, float4 Geometry,
+float3 AerialTerrainColor(Texture2D Field, SamplerState FieldSampler, float2 UV, float2 GridSpacing, float4 Offset, float4 Geometry,
     float4 Sun, float4 Haze, float3 SkyLuminance, float ViewDistance)
 {
     const float2 MapUV = AerialTerrainUV(UV, Offset, Geometry);
     const float Footprint = max(length(ddx(MapUV)), length(ddy(MapUV)));
-    // 与位移一致的高程；两侧差分使悬崖上的岩石与地形光照从同一坡度计算。
-    const float SampleStep = Geometry.w * 1.5;
-    const float3 Data = Field.SampleLevel(FieldSampler, MapUV, 0).rgb;
-    const float X0 = Field.SampleLevel(FieldSampler, MapUV - float2(SampleStep, 0), 0).r;
-    const float X1 = Field.SampleLevel(FieldSampler, MapUV + float2(SampleStep, 0), 0).r;
-    const float Y0 = Field.SampleLevel(FieldSampler, MapUV - float2(0, SampleStep), 0).r;
-    const float Y1 = Field.SampleLevel(FieldSampler, MapUV + float2(0, SampleStep), 0).r;
+    // 地表着色和位移使用同一份降频的高度、水位；只有投影更小的像素才进一步降低细节。
+    // 差分跨过同一采样足迹，避免远端重新在粗轮廓上绘制无法分辨的坡面高光和水岸。
+    const float SurfaceFootprint = max(AerialGridFootprint(GridSpacing, Geometry), Footprint);
+    const float Mip = AerialTerrainMip(SurfaceFootprint, Geometry.w);
+    const float SampleStep = max(Geometry.w * 1.5, SurfaceFootprint);
+    const float3 Data = Field.SampleLevel(FieldSampler, MapUV, Mip).rgb;
+    const float X0 = Field.SampleLevel(FieldSampler, MapUV - float2(SampleStep, 0), Mip).r;
+    const float X1 = Field.SampleLevel(FieldSampler, MapUV + float2(SampleStep, 0), Mip).r;
+    const float Y0 = Field.SampleLevel(FieldSampler, MapUV - float2(0, SampleStep), Mip).r;
+    const float Y1 = Field.SampleLevel(FieldSampler, MapUV + float2(0, SampleStep), Mip).r;
     const float2 Slope = float2(X1 - X0, Y1 - Y0) * Geometry.z / (2.0 * SampleStep);
     const float3 Normal = normalize(float3(-Slope, 1.0));
     const float Steep = length(Slope);
@@ -101,12 +118,18 @@ float3 AerialTerrainColor(Texture2D Field, SamplerState FieldSampler, float2 UV,
     const float WaterMask = smoothstep(-ShoreWidth, ShoreWidth, Depth);
     const float3 Terrain = lerp(Land, Water, WaterMask);
 
-    // 先压低远景对比，再让临近网格遮罩的像素与天空球取得同一方向的亮度。
-    // 到达几何淡出范围前必须完成颜色融合，否则雾再浓也会留下整片地表的剪影。
+    // 先压低远景对比，再让远端像素与天空球取得同一方向的亮度。
+    // 到达距离遮罩前必须完成颜色融合，否则雾再浓也会留下整片地表的剪影。
     const float Mist = smoothstep(Sun.w, Haze.w * 0.79, ViewDistance);
     const float SkyBlend = smoothstep(Haze.w * 0.55, Haze.w * 0.78, ViewDistance);
     const float3 HazyTerrain = lerp(Terrain, Haze.rgb, 0.025 + 0.55 * Mist);
     return lerp(HazyTerrain, SkyLuminance, SkyBlend);
+}
+
+// 裁剪只发生在已经完全是天空颜色的区域，保持同一视距下的可见性稳定。
+float AerialTerrainCoverage(float4 Haze, float ViewDistance)
+{
+    return 1.0 - step(Haze.w, ViewDistance);
 }
 
 #endif
