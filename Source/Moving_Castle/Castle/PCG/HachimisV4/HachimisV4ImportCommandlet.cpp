@@ -17,6 +17,7 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "StaticMeshAttributes.h"
+#include "StaticMeshCompiler.h"
 #include "UObject/SavePackage.h"
 
 THIRD_PARTY_INCLUDES_START
@@ -67,11 +68,12 @@ namespace HachimisV4Import
 	class FImporter
 	{
 	public:
-		explicit FImporter(const FString& InDirectory) : Directory(InDirectory) {}
+		explicit FImporter(const FString& InDirectory, const FString& InRebuildMesh) : Directory(InDirectory), RebuildMesh(InRebuildMesh) {}
 		bool Run(const FJsonObject& Manifest);
 
 	private:
 		FString Directory;
+		FString RebuildMesh;
 		TMap<FString, UStaticMesh*> Meshes;
 		TMap<FName, UMaterial*> Palette;
 		TMap<FName, UCastleV4WallKit*> WallKits;
@@ -350,8 +352,17 @@ namespace HachimisV4Import
 		const bool bAlreadySaved = FPackageName::DoesPackageExist(PackageName);
 		UStaticMesh* Mesh = CreateOrLoad<UStaticMesh>(PackageName);
 		if (!Mesh || Source.Triangles.IsEmpty()) { return Fail(PackageName, TEXT("静态网格缺少资源或三角")); }
-		if (!bAlreadySaved)
+		if (!bAlreadySaved || Mesh->bDoFastBuild || Digest == RebuildMesh)
 		{
+			// 持久化网格须走编辑器标准构建，FastBuild 的重载路径不会重新计算渲染包围盒。
+			FStaticMeshCompilingManager::Get().FinishCompilation({Mesh});
+			Mesh->bDoFastBuild = false;
+			Mesh->GetStaticMaterials().Reset();
+			Mesh->SetNumSourceModels(1);
+			FMeshBuildSettings& Settings = Mesh->GetSourceModel(0).BuildSettings;
+			Settings.bRecomputeNormals = false;
+			Settings.bRecomputeTangents = true;
+			Settings.bGenerateLightmapUVs = false;
 			FMeshDescription Description;
 			FStaticMeshAttributes Attributes(Description);
 			Attributes.Register();
@@ -392,12 +403,16 @@ namespace HachimisV4Import
 			Mesh->SetLightMapCoordinateIndex(0);
 			Mesh->CreateBodySetup();
 			Mesh->GetBodySetup()->CollisionTraceFlag = CTF_UseComplexAsSimple;
-			UStaticMesh::FBuildMeshDescriptionsParams Options;
-			Options.bFastBuild = true;
-			Options.bUseHashAsGuid = true;
-			if (!Mesh->BuildFromMeshDescriptions({&Description}, Options) || !Save(*Mesh))
+			Mesh->CreateMeshDescription(0, MoveTemp(Description));
+			UStaticMesh::FCommitMeshDescriptionParams Commit;
+			// 已存在网格显式重建时刷新源 GUID，避免命中该次替换前的 DDC 构建结果。
+			Commit.bUseHashAsGuid = !bAlreadySaved;
+			Mesh->CommitMeshDescription(0, Commit);
+			Mesh->Build(false);
+			FStaticMeshCompilingManager::Get().FinishCompilation({Mesh});
+			if (Mesh->GetBounds().ContainsNaN() || Mesh->GetBounds().BoxExtent.IsNearlyZero() || !Save(*Mesh))
 			{
-				return Fail(PackageName, TEXT("无法构建或保存作者分件"));
+				return Fail(PackageName, TEXT("无法验证包围盒或保存作者分件"));
 			}
 		}
 		Source.Part.Mesh = Mesh;
@@ -697,7 +712,9 @@ int32 UHachimisV4ImportCommandlet::Main(const FString& Params)
 		HachimisV4Import::Fail(ManifestPath, TEXT("需要可读的 -Manifest= 清点脚本结果"));
 		return 1;
 	}
-	HachimisV4Import::FImporter Importer(Manifest->GetStringField(TEXT("source")));
+	FString RebuildMesh;
+	FParse::Value(*Params, TEXT("RebuildMesh="), RebuildMesh);
+	HachimisV4Import::FImporter Importer(Manifest->GetStringField(TEXT("source")), RebuildMesh);
 	return Importer.Run(*Manifest) ? 0 : 1;
 #else
 	// FBX SDK 和 UE 原生资产生成接口仅用于编辑器目标。
