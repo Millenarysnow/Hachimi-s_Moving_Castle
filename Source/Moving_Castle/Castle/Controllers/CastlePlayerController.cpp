@@ -120,6 +120,9 @@ void ACastlePlayerController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::Eight, IE_Pressed, this, &ACastlePlayerController::SelectBackpackSlot8);
 	InputComponent->BindKey(EKeys::Nine, IE_Pressed, this, &ACastlePlayerController::SelectBackpackSlot9);
 	InputComponent->BindKey(EKeys::Zero, IE_Pressed, this, &ACastlePlayerController::SelectBackpackSlot10);
+	// 视口每次滚动会同时产生方向键和轴事件；只绑定方向键，避免一次滚动被处理两次。
+	InputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this, &ACastlePlayerController::SelectPreviousBackpackSlot);
+	InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &ACastlePlayerController::SelectNextBackpackSlot);
 	InputComponent->BindKey(EKeys::B, IE_Pressed, this, &ACastlePlayerController::ToggleShop);
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ACastlePlayerController::PlacePrototypeBuildingAtCursor);
 }
@@ -255,6 +258,52 @@ void ACastlePlayerController::SelectBackpackSlot7() { SelectBackpackSlot(6); }
 void ACastlePlayerController::SelectBackpackSlot8() { SelectBackpackSlot(7); }
 void ACastlePlayerController::SelectBackpackSlot9() { SelectBackpackSlot(8); }
 void ACastlePlayerController::SelectBackpackSlot10() { SelectBackpackSlot(9); }
+
+void ACastlePlayerController::SelectPreviousBackpackSlot()
+{
+	StepBackpackSelection(false);
+}
+
+void ACastlePlayerController::SelectNextBackpackSlot()
+{
+	StepBackpackSelection(true);
+}
+
+void ACastlePlayerController::StepBackpackSelection(bool bNext)
+{
+	// 模态界面当下拥有滚轮；即使界面没有消费该事件，也不能切换它背后的建造卡。
+	if (bModalInputActive)
+	{
+		return;
+	}
+	if (!IsValid(ActiveBoard) || !IsValid(ActiveBoard->PrototypeBackpack))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s 滚轮选牌失败：棋盘 %s 或其 PrototypeBackpack 无效。"),
+			*GetPathName(), *GetPathNameSafe(ActiveBoard.Get()));
+		return;
+	}
+
+	// 卡牌在背包内连续存放；尾部半透明键位不属于卡牌序列，无需扫描或过滤。
+	const int32 Count = ActiveBoard->PrototypeBackpack->GetItemCount();
+	if (Count == 0)
+	{
+		ShowGameplayMessage(TEXT("背包为空，没有可切换的建筑卡牌。"), false);
+		return;
+	}
+	if (SelectedBackpackIndex < 0 || SelectedBackpackIndex >= Count)
+	{
+		// 同一输入帧内可能已消耗尾部卡牌。下方 Tick 仍负责同步库存，不在这里猜测新的起点。
+		ShowGameplayMessage(TEXT("建造栏正在同步已变化的背包，请再滚动一次。"), false);
+		return;
+	}
+
+	// 首尾没有可选的相邻卡牌。越过实际持有范围的方向不提交选择，保留当前高亮且不跳到另一端。
+	const int32 TargetIndex = SelectedBackpackIndex + (bNext ? 1 : -1);
+	if (TargetIndex >= 0 && TargetIndex < Count)
+	{
+		SelectBackpackSlot(TargetIndex);
+	}
+}
 
 void ACastlePlayerController::SelectBackpackSlot(int32 SlotIndex)
 {

@@ -2135,7 +2135,7 @@ void ACastleBoard::InitializePrototypeDeck()
 	}
 
 	SelectedPrototypeSlot = 0;
-	ShowPrototypeMessage(TEXT("测试卡牌已准备：按 1-9、0 选择背包槽位，左键放置，B 打开房间商店。"), FColor::Cyan);
+	ShowPrototypeMessage(TEXT("测试卡牌已准备：滚轮或数字键 1-9、0 选择建造卡牌，左键放置，B 打开房间商店。"), FColor::Cyan);
 }
 
 ACastleBuildingBase* ACastleBoard::PlacePrototypeBuildingAtCursor(const FCastleGridCursorTarget& CursorTarget, FText& OutFailureReason)
