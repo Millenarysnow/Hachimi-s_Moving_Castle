@@ -159,7 +159,7 @@ bool ACastlePatrolRoute::TryResolveWaypointFromRay(UWorld* World, const FVector&
 		for (TActorIterator<ACastleBoard> It(World); It; ++It)
 		{
 			FCastleGridCursorTarget Target;
-			if (It->GetPlacedBuildings().Contains(Building) && It->TryResolveGridCursorTarget(RayStart, RayEnd, Target) && !Target.bGroundSurface)
+			if (It->GetPlacedBuildings().Contains(Building) && It->TryResolveGridCursorTarget(RayStart, RayEnd, Target) && Target.Surface == ECastleGridCursorSurface::Building)
 			{
 				OutPoint = It->GetGridWorldLocation(Target.Cell) - It->GetActorTransform().TransformVector(FVector(0, 0, It->LayerHeight * 0.5));
 				return true;

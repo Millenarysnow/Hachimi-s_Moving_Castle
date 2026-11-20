@@ -22,6 +22,8 @@ class UCastleBackpackComponent;
 class UCastleCombatDataAsset;
 class UCastleGroundGenerator;
 class UCastleMainTowerComponent;
+class UCastleTowerSideGridComponent;
+struct FCastleTowerSideCell;
 class USceneComponent;
 struct FCastleBuildingTriggerContext;
 
@@ -31,9 +33,8 @@ DECLARE_MULTICAST_DELEGATE_TwoParams(FCastleBoardBuildingTriggered, ACastleBuild
 /**
  * 逻辑棋盘 Actor。
  *
- * 棋盘只保存地面生成结果、建筑占用索引和放置/合成规则。地面具体如何生成
- * 由 UCastleGroundGenerator 决定，建筑具体的表现由各个建筑子类决定，两者都
- * 不会把随机算法或美术组件写进棋盘本身。
+ * 地面和主塔侧格提供各自的初始放置来源；两种模式共享这一份三维建筑占用和合成规则，
+ * 不在各个塔面分别管理建筑，也不把随机算法和美术细节放入占用管理。
  */
 UCLASS(Blueprintable)
 class MOVING_CASTLE_API ACastleBoard : public AActor
@@ -110,6 +111,28 @@ public:
 	/** 开局样例使用池中此类别的首个定义，不生成资产之外的替代建筑。 */
 	UCastleBuildingDefinition* FindBuildingDefinition(ECastleBuildingType BuildingType) const;
 
+	/** 旧地图仍采用地面模式；正式地图由关卡实例明确选择主塔侧面。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|建造面")
+	ECastlePlacementSurfaceMode PlacementSurfaceMode = ECastlePlacementSurfaceMode::GroundBoard;
+
+	/** 塔根至侧格面板中心的水平距离；塔侧地图必须按主塔模型明确配置。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|建造面", meta = (Units = "cm", EditCondition = "PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides"))
+	float TowerSideSurfaceOffset = 0.0f;
+
+	/** 校验当前模式的实际数据，不能从缺失的塔侧格回退到地面。 */
+	bool ValidatePlacementSurface(FText& OutFailureReason) const;
+
+	/** 供导演切换编辑表现；不移除塔身、建筑或格子的已生成属性。 */
+	bool SetPlacementSurfacePresentationHidden(bool bHidden, FText& OutFailureReason);
+	bool IsPlacementSurfacePresentationHidden() const;
+
+	/** 查询确切塔身坐标和朝向的属性；不在四面之间搜索匹配。 */
+	const FCastleTowerSideCell* FindTowerSideCell(const FIntVector& TowerCell, ECastleGridFace Face) const;
+
+	/** 运行时和验收均可显式提交一个已解析的来源面，正常玩家仍走背包入口。 */
+	ACastleBuildingBase* PlaceBuildingAtCursor(const FCastleGridCursorTarget& CursorTarget,
+		const FCastleBuildingDescriptor& Descriptor, bool bTryMerge, FText& OutFailureReason);
+
 	/** 地面生成策略类，可替换为固定模板或其他自定义策略。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|地面")
 	TSubclassOf<UCastleGroundGenerator> GroundGeneratorClass;
@@ -118,7 +141,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|地面")
 	int32 GroundSeed = 1337;
 
-	/** BeginPlay 时自动生成地面，关闭后可以由关卡蓝图手动调用 GenerateGround。 */
+	/** 仅地面模式可在 BeginPlay 自动生成地面；该开关不决定当前模式。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|地面")
 	bool bGenerateGroundOnBeginPlay = true;
 
@@ -288,7 +311,7 @@ public:
 	/**
 	 * 将一条世界空间射线解析为当前吸附的格子和格面。
 	 *
-	 * 控制器只提供屏幕中心射线，棋盘只接受真实命中地面或建筑网格的结果，
+	 * 控制器只提供屏幕中心射线，棋盘只接受当前模式的真实格面或建筑网格，
 	 * 没有命中可见建造面时返回无效目标，避免空中或棋盘边界产生虚假高亮。
 	 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
@@ -311,12 +334,12 @@ protected:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "占位可视化")
 	TMap<FIntVector, TObjectPtr<ACastleGroundTileActor>> GroundTiles;
 
-	/** 根据 bGenerateGroundOnBeginPlay 决定是否在运行开始时生成地面。 */
+	/** 开局根据关卡模式准备初始来源，之后才按实际格子属性准备样例卡。 */
 	virtual void BeginPlay() override;
 	/** 清理播放回调和等待请求，退出关卡时不再触发升级。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
-	/** 生成原型背包和四个数字键样例卡，卡牌属性来自本次实际生成的地面。 */
+	/** 生成原型背包的样例卡，属性来自本次实际生成的建造面。 */
 	void InitializePrototypeDeck();
 
 	/** 查找背包中与当前样例卡牌完全匹配的第一张卡牌。 */
@@ -413,7 +436,13 @@ protected:
 	/** 校验棋盘格实体尺寸、间隙、中心距和层高，拒绝无效配置而不自动修正。 */
 	bool ValidateBoardDimensions(FText& OutFailureReason) const;
 
-	/** 从高亮面的唯一来源解析落点；地面顶面落在本格，建筑面落在该面外侧格。 */
+	/** 塔侧格归属于主塔 Actor；棋盘只查询由自身生成并登记的组件。 */
+	UPROPERTY(Transient) TObjectPtr<UCastleTowerSideGridComponent> TowerSideGrid;
+
+	/** 塔侧模式的中心整列不可被房间占用，在预览和真正登记时共同校验。 */
+	bool IsMainTowerCellReserved(const FIntVector& Coordinate) const;
+
+	/** 从唯一来源解析落点：地面顶面落在本格，塔侧格和建筑面落在外侧格。 */
 	bool TryResolvePlacementCoordinate(const FCastleGridCursorTarget& CursorTarget, FIntVector& OutCoordinate, FText& OutFailureReason) const;
 
 	/** 匹配指定来源；无光标的坐标入口仅使用下方顶面，绝不搜索其余邻居。 */

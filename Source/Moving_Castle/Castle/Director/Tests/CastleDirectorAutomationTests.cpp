@@ -63,6 +63,9 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 	UCastleDirectorSubsystem* Director = World->GetSubsystem<UCastleDirectorSubsystem>();
 	UCastleDirectorConfigDataAsset* Config = NewObject<UCastleDirectorConfigDataAsset>();
 	FText Reason;
+	Board->PlacementSurfaceMode = ECastlePlacementSurfaceMode::GroundBoard;
+	Board->GridSize = FIntVector(3, 3, 8);
+	if (!TestTrue(TEXT("导演测试显式生成旧地面建造面"), Board->GenerateGround(Reason))) { AddError(Reason.ToString()); return false; }
 	TestTrue(TEXT("导演未运行时允许编辑"), Director->IsEditingAllowed(Reason));
 	TestTrue(TEXT("导演未运行时允许旧商店"), Director->IsShopAccessAllowed(Reason));
 	Director->ConfigureForAutomation(Config, Board, Controller, Tower);
@@ -79,18 +82,18 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 	Director->SetPhaseForAutomation(ECastleDirectorPhase::Reward);
 	TestFalse(TEXT("奖励禁止编辑"), Director->IsEditingAllowed(Reason));
 	Config->RewardExp = 360;
-	TestTrue(TEXT("经验奖励可一次连升多级"), Director->TryChooseReward(ECastleDirectorReward::Experience, Reason));
+	if (!TestTrue(TEXT("经验奖励可一次连升多级"), Director->TryChooseReward(ECastleDirectorReward::Experience, Reason))) { AddError(Reason.ToString()); return false; }
 	TestEqual(TEXT("主塔4级"), Director->GetLevel(), 4);
 	TestEqual(TEXT("剩余60经验"), Director->GetExperience(), 60);
 	TestEqual(TEXT("房间上限30写入商店"), Controller->GetShop()->RoomLimit, 30);
 	Director->SetPhaseForAutomation(ECastleDirectorPhase::Reward);
 	Tower->ApplyDamage(500.0f);
 	const int32 AttackCount = Tower->AttackCount;
-	TestTrue(TEXT("回血奖励成功"), Director->TryChooseReward(ECastleDirectorReward::Healing, Reason));
+	if (!TestTrue(TEXT("回血奖励成功"), Director->TryChooseReward(ECastleDirectorReward::Healing, Reason))) { AddError(Reason.ToString()); return false; }
 	TestEqual(TEXT("回复最大生命30%"), Tower->CurrentHealth, 800.0f);
 	TestEqual(TEXT("回血不增加攻击次数"), Tower->AttackCount, AttackCount);
 	Director->SetPhaseForAutomation(ECastleDirectorPhase::Reward);
-	TestTrue(TEXT("商店奖励成功"), Director->TryChooseReward(ECastleDirectorReward::Shop, Reason));
+	if (!TestTrue(TEXT("商店奖励成功"), Director->TryChooseReward(ECastleDirectorReward::Shop, Reason))) { AddError(Reason.ToString()); return false; }
 	TestTrue(TEXT("商店自动打开"), Controller->GetShop()->IsShopOpen());
 	TestTrue(TEXT("本轮商店权限可用"), Director->IsShopAccessAllowed(Reason));
 	Controller->GetShop()->CloseShop();
@@ -101,6 +104,7 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 	const int32 BeforeLimit = Controller->GetShop()->RoomLimit;
 	const float BeforeHealth = Tower->CurrentHealth;
 	const auto BeforeOffers = Controller->GetShop()->GetOffers();
+	if (!TestTrue(TEXT("成功提交商店奖励后有商品可核对"), !BeforeOffers.IsEmpty())) { return false; }
 	const auto Definitions = Board->BuildingDefinitions;
 	Board->BuildingDefinitions.Reset();
 	AddExpectedError(TEXT("奖励换批失败"), EAutomationExpectedErrorFlags::Contains, 1);
@@ -111,7 +115,9 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("失败保留经验"), Director->GetExperience(), BeforeExp);
 	TestEqual(TEXT("失败保留房间上限"), Controller->GetShop()->RoomLimit, BeforeLimit);
 	TestEqual(TEXT("失败保留生命"), Tower->CurrentHealth, BeforeHealth);
-	TestEqual(TEXT("失败保留商品"), Controller->GetShop()->GetOffers()[0].Descriptor.Number, BeforeOffers[0].Descriptor.Number);
+	const auto& AfterOffers = Controller->GetShop()->GetOffers();
+	TestTrue(TEXT("失败保留商品"), AfterOffers.Num() == BeforeOffers.Num() && AfterOffers[0].Descriptor.Number == BeforeOffers[0].Descriptor.Number);
+	TestTrue(TEXT("失败重新隐藏地面建造面"), Board->IsPlacementSurfacePresentationHidden());
 	Board->BuildingDefinitions = Definitions;
 	Config->RewardExp = MAX_int32;
 	Config->RoomLimitPerLevel = MAX_int32;

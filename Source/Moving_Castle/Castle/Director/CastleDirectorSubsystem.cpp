@@ -98,12 +98,13 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 	}
 	int32 BoardCount = 0;
 	for (TActorIterator<ACastleBoard> It(GetWorld()); It; ++It) { Board = *It; ++BoardCount; }
-	FCastleGroundCell Ground;
-	if (BoardCount != 1 || !Board->TryGetGroundCell(Board->GridOrigin, Ground))
+	if (BoardCount != 1)
 	{
-		OutReason = FText::FromString(FString::Printf(TEXT("需要唯一且已生成地面的棋盘，当前棋盘数 %d。"), BoardCount));
+		OutReason = FText::FromString(FString::Printf(TEXT("需要唯一的城堡棋盘，当前棋盘数 %d。"), BoardCount));
 		return false;
 	}
+	// MainMap 的开局依赖主塔侧格；旧地图仍可以显式使用地面格。
+	if (!Board->ValidatePlacementSurface(OutReason)) { return false; }
 	Tower = GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>()->GetRegisteredMainTower();
 	Controller = Cast<ACastlePlayerController>(GetWorld()->GetFirstPlayerController());
 	if (!IsValid(Tower) || !IsValid(Controller) || !Controller->IsLocalController())
@@ -277,13 +278,15 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 	const ECastleBattleKind Kind = Node->GetKind() == ECastleDirectorNodeKind::Elite ? ECastleBattleKind::Elite : ECastleBattleKind::Normal;
 	const int32 PreviousCount = Kind == ECastleBattleKind::Elite ? EliteBattles : NormalBattles;
 	if (PreviousCount == MAX_int32) { return Reject(TEXT("本类战斗序号溢出。")); }
+	FText Failure;
+	// 显隐校验在撤下商店和巡逻草稿之前，失败不得推进开战事务。
+	if (!Board->SetPlacementSurfacePresentationHidden(true, Failure)) { return Reject(Failure.ToString()); }
 	const bool bPreviousPermission = bShopPermission;
 	const bool bShopWasOpen = Controller->GetShop()->IsShopOpen();
 	Controller->GetShop()->CloseShop();
 	bShopPermission = false;
 	for (TActorIterator<ACastlePatrolRoute> It(GetWorld()); It; ++It) { It->CancelEditingDraft(); }
 	Controller->HideDirectorEditingPresentation();
-	Board->SetGroundPresentationHidden(true);
 	// 生成器禁用 BeginPlay 自动生成，显式调用以便同步核对完整批次数量。
 	BattleNPCSpawner = GetWorld()->SpawnActorDeferred<ACastleMassSpawner>(ACastleMassSpawner::StaticClass(), FTransform::Identity,
 		nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
@@ -297,7 +300,6 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 		BattleNPCSpawner->FinishSpawning(FTransform::Identity);
 		bNPCsReady = BattleNPCSpawner->SpawnUnits() && BattleNPCSpawner->SpawnedUnits.Num() == Config->NPCCount;
 	}
-	FText Failure;
 	if (!bNPCsReady || !Combat->StartBattle(Kind, PreviousCount + 1, Failure))
 	{
 		if (!bNPCsReady)
@@ -307,10 +309,12 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 		}
 		FText CleanupFailure;
 		const bool bRecalled = RecallBattleNPCs(CleanupFailure);
-		Board->SetGroundPresentationHidden(false);
+		FText SurfaceFailure;
+		const bool bSurfaceRestored = Board->SetPlacementSurfacePresentationHidden(false, SurfaceFailure);
 		bShopPermission = bPreviousPermission;
 		if (bShopWasOpen) { Controller->ToggleShop(); }
-		return Reject(Failure.ToString() + (bRecalled ? FString() : TEXT("；NPC 回收失败：") + CleanupFailure.ToString()));
+		return Reject(Failure.ToString() + (bRecalled ? FString() : TEXT("；NPC 回收失败：") + CleanupFailure.ToString())
+			+ (bSurfaceRestored ? FString() : TEXT("；建造面恢复失败：") + SurfaceFailure.ToString()));
 	}
 	ActiveBattleKind = Kind;
 	ActiveBattleOrdinal = PreviousCount + 1;
@@ -366,7 +370,7 @@ void UCastleDirectorSubsystem::HandleBattleCleared(const ECastleBattleKind Kind,
 	++ClearedSteps;
 	SetPhase(ECastleDirectorPhase::Reward);
 	ShowMessage(FText::FromString(TEXT("通关奖励：请选择一项")), false);
-	UE_LOG(LogMoving_Castle, Display, TEXT("导演清场：已通过 %d 关，进入三选一，地块保持隐藏。"), ClearedSteps);
+	UE_LOG(LogMoving_Castle, Display, TEXT("导演清场：已通过 %d 关，进入三选一，建造面保持隐藏。"), ClearedSteps);
 }
 
 void UCastleDirectorSubsystem::HandleBattleFailed(const ECastleBattleKind Kind, const int32 Ordinal, const FText& Reason)
@@ -415,7 +419,12 @@ bool UCastleDirectorSubsystem::TryChooseReward(const ECastleDirectorReward Rewar
 		|| !FMath::IsFinite(Tower->CurrentHealth))) { return Reject(TEXT("主塔生命配置无效，无法回血。")); }
 	TArray<TObjectPtr<ACastleDirectorNodeActor>> Candidates;
 	if (!PrepareNodes(GetNextStep(), Candidates, OutReason)) { return Reject(OutReason.ToString()); }
-	// 节点分配是最后一个可能失败的表现准备步骤；奖励自身事务成功后不再执行可失败操作。
+	// 先同步恢复建造面；奖励失败时重新隐藏，避免奖励已提交后才发现建造面有问题。
+	if (!Board->SetPlacementSurfacePresentationHidden(false, OutReason))
+	{
+		for (ACastleDirectorNodeActor* Candidate : Candidates) { Candidate->Destroy(); }
+		return Reject(OutReason.ToString());
+	}
 	bool bCommitted = false;
 	if (Reward == ECastleDirectorReward::Experience)
 	{
@@ -427,12 +436,14 @@ bool UCastleDirectorSubsystem::TryChooseReward(const ECastleDirectorReward Rewar
 	if (!bCommitted)
 	{
 		for (ACastleDirectorNodeActor* Candidate : Candidates) { Candidate->Destroy(); }
-		return Reject(OutReason.IsEmpty() ? TEXT("奖励提交失败，详见日志。") : OutReason.ToString());
+		FText SurfaceFailure;
+		const bool bSurfaceHidden = Board->SetPlacementSurfacePresentationHidden(true, SurfaceFailure);
+		const FString RewardFailure = OutReason.IsEmpty() ? TEXT("奖励提交失败，详见日志。") : OutReason.ToString();
+		return Reject(RewardFailure + (bSurfaceHidden ? FString() : TEXT("；建造面回滚失败：") + SurfaceFailure.ToString()));
 	}
 	bShopPermission = Reward == ECastleDirectorReward::Shop;
 	// 到此奖励已经完整提交，才发布编辑阶段并让候选节点进入世界交互。
 	Nodes = MoveTemp(Candidates);
-	Board->SetGroundPresentationHidden(false);
 	SetPhase(ECastleDirectorPhase::Editing);
 	for (ACastleDirectorNodeActor* Candidate : Nodes) { Candidate->ActivateNode(); }
 	ShowMessage(FText::FromString(TEXT("飞向节点进入下一关")), false);

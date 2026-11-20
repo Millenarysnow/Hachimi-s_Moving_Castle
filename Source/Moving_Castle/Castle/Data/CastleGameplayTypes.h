@@ -59,6 +59,23 @@ enum class ECastleGridFace : uint8
 	NegativeY UMETA(DisplayName = "-Y")
 };
 
+/** 关卡显式选择初始建造面；不在运行时切换或在初始化失败时改用另一模式。 */
+UENUM(BlueprintType)
+enum class ECastlePlacementSurfaceMode : uint8
+{
+	GroundBoard = 0 UMETA(DisplayName = "地面棋盘（保留）"),
+	MainTowerSides UMETA(DisplayName = "主塔侧面")
+};
+
+/** 光标必须保留唯一匹配来源；建筑面与塔侧格都不能改用地面重试。 */
+UENUM(BlueprintType)
+enum class ECastleGridCursorSurface : uint8
+{
+	Building = 0 UMETA(DisplayName = "建筑面"),
+	Ground UMETA(DisplayName = "地面顶格"),
+	MainTowerSide UMETA(DisplayName = "主塔侧格")
+};
+
 /**
  * 屏幕中心射线解析后的网格目标。
  *
@@ -83,9 +100,9 @@ struct MOVING_CASTLE_API FCastleGridCursorTarget
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")
 	FIntVector AdjacentCell = FIntVector::ZeroValue;
 
-	/** 命中的是地面顶面还是建筑面；放置时保留来源，不能在建筑消失后改用其下方地面匹配。 */
+	/** 数据来源在预览、扣牌和提交之间保持不变。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")
-	bool bGroundSurface = false;
+	ECastleGridCursorSurface Surface = ECastleGridCursorSurface::Building;
 
 	/** 指示平面在世界中的法线方向。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")

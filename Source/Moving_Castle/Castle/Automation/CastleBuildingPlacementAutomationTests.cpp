@@ -179,8 +179,8 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 		Center - FVector(0, 0, Board->LayerHeight), FloorTarget))
 		|| !TestTrue(TEXT("射线命中左侧建筑面"), ResolveSide(Left, LeftTarget))
 		|| !TestTrue(TEXT("射线命中右侧建筑面"), ResolveSide(Right, RightTarget))) { return false; }
-	TestTrue(TEXT("地面来源被保留"), FloorTarget.bGroundSurface);
-	TestFalse(TEXT("建筑来源不会误认成下方地面"), LeftTarget.bGroundSurface);
+	TestEqual(TEXT("地面来源被保留"), FloorTarget.Surface, ECastleGridCursorSurface::Ground);
+	TestEqual(TEXT("建筑来源不会误认成下方地面"), LeftTarget.Surface, ECastleGridCursorSurface::Building);
 	TestEqual(TEXT("左侧高亮面向 +X"), LeftTarget.Face, ECastleGridFace::PositiveX);
 	TestEqual(TEXT("右侧高亮面向 -X"), RightTarget.Face, ECastleGridFace::NegativeX);
 	TestEqual(TEXT("两侧指向同一个落点"), LeftTarget.AdjacentCell, RightTarget.AdjacentCell);

@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleBoard.h"
+#include "Castle/Placement/CastleTowerSideGridComponent.h"
 #include "Castle/PCG/CastleBuildingPCGSubsystem.h"
 #include "Units/BuildingInteraction/CastleBuildingTriggerSubsystem.h"
 
@@ -119,7 +120,21 @@ void ACastleBoard::BeginPlay()
 			TEXT("/Game/MovingCastle/Data/DA_CastleCombat.DA_CastleCombat"));
 	}
 
-	if (bGenerateGroundOnBeginPlay)
+	// 建造面由地图显式指定；塔侧模式从不创建地面作为备用来源。
+	if (PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides)
+	{
+		if (!bSpawnMainTowerOnBeginPlay)
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 启用了塔侧建造面但禁用了开局生成主塔。"), *GetPathName());
+			return;
+		}
+	}
+	else if (PlacementSurfaceMode != ECastlePlacementSurfaceMode::GroundBoard)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 的建造面模式无效。"), *GetPathName());
+		return;
+	}
+	else if (bGenerateGroundOnBeginPlay)
 	{
 		FText FailureReason;
 		if (!GenerateGround(FailureReason))
@@ -128,7 +143,7 @@ void ACastleBoard::BeginPlay()
 		}
 	}
 
-	if (GeneratedGroundCells.Num() > 0)
+	if (PlacementSurfaceMode == ECastlePlacementSurfaceMode::GroundBoard && !GeneratedGroundCells.IsEmpty())
 	{
 		InitializePrototypeDeck();
 	}
@@ -138,9 +153,15 @@ void ACastleBoard::BeginPlay()
 		FText FailureReason;
 		if (!SpawnMainTower(FailureReason))
 		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 BeginPlay 生成主塔失败：%s"), *FailureReason.ToString());
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 生成主塔失败（%s）：%s"), *GetPathName(),
+				*GetPathNameSafe(MainTowerClass.Get()), *FailureReason.ToString());
 			return;
 		}
+	}
+
+	if (PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides)
+	{
+		InitializePrototypeDeck();
 	}
 
 	if (bSpawnInitialEnemiesOnBeginPlay)
@@ -189,8 +210,12 @@ bool ACastleBoard::SpawnMainTower(FText& OutFailureReason)
 		return false;
 	}
 
-	// 主塔与普通建筑共用“占用范围底面中心”锚点：中心格只有一个占用单元，
-	// 因此先取该格的中心，再沿棋盘局部 Z 下降半个层高得到底面中心。
+	if (PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides && !ValidateBoardDimensions(OutFailureReason))
+	{
+		return false;
+	}
+
+	// 主塔和普通建筑共用最低格的底面锚点；塔侧放置占用塔身外侧而非塔根格。
 	// 使用棋盘变换转换偏移，保证旋转和缩放棋盘时主塔仍与其他建筑保持同一落格规则。
 	const FVector TowerBottomCenter = GetGridWorldLocation(GetBoardCenterCoordinate())
 		+ GetActorTransform().TransformVector(FVector(0.0f, 0.0f, -LayerHeight * 0.5f));
@@ -230,6 +255,23 @@ bool ACastleBoard::SpawnMainTower(FText& OutFailureReason)
 		return false;
 	}
 
+	if (PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides)
+	{
+		// 真实塔根在 FinishSpawning 后才确定。完整初始化前不发布主塔或侧格索引。
+		UCastleTowerSideGridComponent* Grid = NewObject<UCastleTowerSideGridComponent>(TowerActor, TEXT("TowerSideGrid"));
+		TowerActor->AddInstanceComponent(Grid);
+		Grid->RegisterComponent();
+		const int32 RunSeed = static_cast<int32>(GetTypeHash(FGuid::NewGuid()));
+		if (!Grid->Initialize(GetBoardCenterCoordinate(), GridSize.Z, GroundTileSize, LayerHeight,
+			TowerSideSurfaceOffset, RunSeed, OutFailureReason))
+		{
+			TowerActor->Destroy();
+			return false;
+		}
+		TowerSideGrid = Grid;
+		UE_LOG(LogMoving_Castle, Display, TEXT("主塔 %s 已生成 %d 个侧格（种子 %d）；本局不生成地面棋盘。"),
+			*GetPathNameSafe(TowerActor), Grid->GetCells().Num(), RunSeed);
+	}
 	MainTowerActor = TowerActor;
 	UE_LOG(LogMoving_Castle, Display, TEXT("主塔已在棋盘中心格 (%d, %d, %d) 生成，生命 %.1f。"),
 		GetBoardCenterCoordinate().X, GetBoardCenterCoordinate().Y, GetBoardCenterCoordinate().Z,
@@ -289,6 +331,12 @@ bool ACastleBoard::SpawnInitialEnemies(FText& OutFailureReason)
 bool ACastleBoard::GenerateGround(FText& OutFailureReason)
 {
 	OutFailureReason = FText::GetEmpty();
+	if (PlacementSurfaceMode != ECastlePlacementSurfaceMode::GroundBoard)
+	{
+		OutFailureReason = FText::FromString(TEXT("当前不是地面棋盘模式，不能生成地块。"));
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s：%s"), *GetPathName(), *OutFailureReason.ToString());
+		return false;
+	}
 	if (!ValidateBoardDimensions(OutFailureReason))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 拒绝生成地面：%s"), *GetName(), *OutFailureReason.ToString());
@@ -334,6 +382,12 @@ bool ACastleBoard::GenerateGround(FText& OutFailureReason)
 bool ACastleBoard::ApplyGroundGenerationResult(const FCastleGroundGenerationResult& Result, FText& OutFailureReason)
 {
 	OutFailureReason = FText::GetEmpty();
+	if (PlacementSurfaceMode != ECastlePlacementSurfaceMode::GroundBoard)
+	{
+		OutFailureReason = FText::FromString(TEXT("当前不是地面棋盘模式，不能接收地块。"));
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s：%s"), *GetPathName(), *OutFailureReason.ToString());
+		return false;
+	}
 	if (!ValidateBoardDimensions(OutFailureReason))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 拒绝接收地面结果：%s"), *GetName(), *OutFailureReason.ToString());
@@ -440,6 +494,10 @@ bool ACastleBoard::ExpandBoard(FText& OutFailureReason)
 		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 拒绝扩张：%s"), *GetName(), *Reason);
 		return false;
 	};
+	if (PlacementSurfaceMode != ECastlePlacementSurfaceMode::GroundBoard)
+	{
+		return Reject(TEXT("地面扩张仅用于地面棋盘模式。"));
+	}
 	if (!ValidateBoardDimensions(OutFailureReason)) { return Reject(OutFailureReason.ToString()); }
 	FIntPoint Min, Max;
 	GetBoardExtent(Min, Max);
@@ -562,6 +620,12 @@ bool ACastleBoard::CanPlaceBuildingInternal(const FIntVector& Coordinate, const 
 			OutFailureReason = FText::FromString(FString::Printf(TEXT("最多伸出棋盘边界 %d 格。"), MaxOverhangCells));
 			return false;
 		}
+		// 原本的房间占用不能描述主塔，否则主塔会被计数、合成或当成 PCG 邻居。
+		if (IsMainTowerCellReserved(Cell))
+		{
+			OutFailureReason = FText::FromString(TEXT("建筑不能占用主塔塔身。"));
+			return false;
+		}
 		if (GetBuildingAt(Cell) != nullptr)
 		{
 			OutFailureReason = FText::FromString(TEXT("建筑占用范围中有格子已被占用。"));
@@ -576,6 +640,14 @@ bool ACastleBoard::CanPlaceBuildingInternal(const FIntVector& Coordinate, const 
 ACastleBuildingBase* ACastleBoard::PlaceBuilding(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, bool bTryMerge, FText& OutFailureReason)
 {
 	return PlaceBuildingInternal(Coordinate, Descriptor, bTryMerge, nullptr, OutFailureReason);
+}
+
+ACastleBuildingBase* ACastleBoard::PlaceBuildingAtCursor(const FCastleGridCursorTarget& CursorTarget,
+	const FCastleBuildingDescriptor& Descriptor, const bool bTryMerge, FText& OutFailureReason)
+{
+	FIntVector Coordinate;
+	return TryResolvePlacementCoordinate(CursorTarget, Coordinate, OutFailureReason)
+		? PlaceBuildingInternal(Coordinate, Descriptor, bTryMerge, &CursorTarget, OutFailureReason) : nullptr;
 }
 
 ACastleBuildingBase* ACastleBoard::PlaceBuildingInternal(const FIntVector& Coordinate, const FCastleBuildingDescriptor& Descriptor, bool bTryMerge, const FCastleGridCursorTarget* CursorTarget, FText& OutFailureReason)
@@ -745,6 +817,12 @@ void ACastleBoard::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	PendingPlacements.Reset();
 	ReadyMergeRequests.Reset();
 	DestroyGroundTileActors();
+	// 塔侧格随主塔回收；单独移除棋盘时也不能留下可被射线命中的幽灵侧格。
+	if (IsValid(TowerSideGrid) && IsValid(MainTowerActor) && EndPlayReason == EEndPlayReason::Destroyed)
+	{
+		MainTowerActor->Destroy();
+	}
+	TowerSideGrid = nullptr;
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -1098,12 +1176,18 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 		return false;
 	}
 
-	// 只接受地面格和建筑网格的真实碰撞命中；空中或棋盘边界不代表可选中的建造面。
+	// 使用首个真实遮挡命中；不能穿过建筑去选它后面的塔侧格。
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(CastleGridCursor), true);
 	FHitResult HitResult;
 	if (!GetWorld()->LineTraceSingleByChannel(HitResult, RayStart, RayEnd, ECC_Visibility, QueryParams))
 	{
 		return false;
+	}
+
+	if (PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides && HitResult.GetActor() == MainTowerActor)
+	{
+		// 主塔装饰和其它模型碰撞不是侧格；侧格组件自行验证唯一身份和正面法线。
+		return IsValid(TowerSideGrid) && TowerSideGrid->TryResolveHit(HitResult, OutTarget);
 	}
 
 	FIntVector HitCell = FIntVector::ZeroValue;
@@ -1113,7 +1197,8 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 	if (const ACastleGroundTileActor* HitGroundTile = Cast<ACastleGroundTileActor>(HitResult.GetActor()))
 	{
 		const TObjectPtr<ACastleGroundTileActor>* RegisteredTile = GroundTiles.Find(HitGroundTile->GetGroundCell().Coordinate);
-		if (RegisteredTile != nullptr && RegisteredTile->Get() == HitGroundTile
+		if (PlacementSurfaceMode == ECastlePlacementSurfaceMode::GroundBoard
+			&& RegisteredTile != nullptr && RegisteredTile->Get() == HitGroundTile
 			&& HitResult.GetComponent() == HitGroundTile->GetTileMeshComponent())
 		{
 			HitCell = HitGroundTile->GetGroundCell().Coordinate;
@@ -1162,7 +1247,7 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 	}
 
 	BuildGridCursorTarget(HitCell, LocalImpactPoint, LocalNormal, OutTarget);
-	OutTarget.bGroundSurface = bHitGroundTile;
+	OutTarget.Surface = bHitGroundTile ? ECastleGridCursorSurface::Ground : ECastleGridCursorSurface::Building;
 	return OutTarget.bValid;
 }
 
@@ -1295,6 +1380,12 @@ bool ACastleBoard::RegisterBuilding(ACastleBuildingBase* Building, FText& OutFai
 			return false;
 		}
 
+		// 合成和内部注册也走同样禁区，避免绕过手牌预判写进塔身。
+		if (IsMainTowerCellReserved(Coordinate))
+		{
+			OutFailureReason = FText::FromString(TEXT("建筑占用坐标与主塔塔身重叠。"));
+			return false;
+		}
 		if (UniqueCoordinates.Contains(Coordinate))
 		{
 			OutFailureReason = FText::FromString(TEXT("建筑占用坐标存在重复值。"));
@@ -1856,15 +1947,26 @@ bool ACastleBoard::TryResolvePlacementCoordinate(const FCastleGridCursorTarget& 
 	if (!CursorTarget.bValid || FaceOffset == FIntVector::ZeroValue
 		|| CursorTarget.AdjacentCell != CursorTarget.Cell + FaceOffset)
 	{
-		OutFailureReason = FText::FromString(TEXT("放置失败：当前指向的格面无效，请重新对准棋盘。"));
+		OutFailureReason = FText::FromString(TEXT("放置失败：当前指向的格面无效，请重新对准建造面。"));
 		return false;
 	}
 
-	if (CursorTarget.bGroundSurface)
+	if (CursorTarget.Surface == ECastleGridCursorSurface::MainTowerSide)
+	{
+		if (!FindTowerSideCell(CursorTarget.Cell, CursorTarget.Face) || TowerSideGrid->IsPresentationHidden())
+		{
+			OutFailureReason = FText::FromString(TEXT("放置失败：指向的主塔侧格不可用，请重新选择格面。"));
+			return false;
+		}
+		OutCoordinate = CursorTarget.AdjacentCell;
+		return true;
+	}
+	if (CursorTarget.Surface == ECastleGridCursorSurface::Ground)
 	{
 		// 地块的顶面支撑首层建筑，落点仍是地块所在格；地块侧面不允许用于建造。
 		FCastleGroundCell GroundCell;
-		if (!IsCoordinateWithinBoard(CursorTarget.Cell) || CursorTarget.Face != ECastleGridFace::Up || !TryGetGroundCellAtPlane(CursorTarget.Cell, GroundCell)
+		if (PlacementSurfaceMode != ECastlePlacementSurfaceMode::GroundBoard
+			|| !IsCoordinateWithinBoard(CursorTarget.Cell) || CursorTarget.Face != ECastleGridFace::Up || !TryGetGroundCellAtPlane(CursorTarget.Cell, GroundCell)
 			|| GetBuildingAt(CursorTarget.Cell) != nullptr)
 		{
 			OutFailureReason = FText::FromString(TEXT("放置失败：指向的地面顶面已不可用，请重新选择。"));
@@ -1875,7 +1977,7 @@ bool ACastleBoard::TryResolvePlacementCoordinate(const FCastleGridCursorTarget& 
 	}
 
 	// 建筑的任一面都指向其外侧邻格；建筑消失后不能改用同坐标的地面作为匹配来源。
-	if (!IsValid(GetBuildingAt(CursorTarget.Cell)))
+	if (CursorTarget.Surface != ECastleGridCursorSurface::Building || !IsValid(GetBuildingAt(CursorTarget.Cell)))
 	{
 		OutFailureReason = FText::FromString(TEXT("放置失败：指向的建筑已不存在，请重新选择格面。"));
 		return false;
@@ -1892,15 +1994,16 @@ bool ACastleBoard::HasPlacementMatch(const FIntVector& Coordinate, const FCastle
 	if (CursorTarget == nullptr)
 	{
 		SupportTarget.bValid = true;
-		SupportTarget.bGroundSurface = Coordinate.Z == GridOrigin.Z;
-		SupportTarget.Cell = SupportTarget.bGroundSurface ? Coordinate : Coordinate - FIntVector(0, 0, 1);
+		const bool bUsesGround = PlacementSurfaceMode == ECastlePlacementSurfaceMode::GroundBoard && Coordinate.Z == GridOrigin.Z;
+		SupportTarget.Surface = bUsesGround ? ECastleGridCursorSurface::Ground : ECastleGridCursorSurface::Building;
+		SupportTarget.Cell = bUsesGround ? Coordinate : Coordinate - FIntVector(0, 0, 1);
 		SupportTarget.Face = ECastleGridFace::Up;
 		SupportTarget.AdjacentCell = SupportTarget.Cell + FIntVector(0, 0, 1);
 		CursorTarget = &SupportTarget;
 	}
 
-	// 任何外围占格都要求建筑面来源；地面匹配不能让跨界多格卡绕过 D9。
-	if (CursorTarget->bGroundSurface)
+	// 地面模式保留原有越界约束：不能靠地面匹配让多格卡跨越地块边界。
+	if (CursorTarget->Surface == ECastleGridCursorSurface::Ground)
 	{
 		for (const FIntVector& Cell : BuildPlacementFootprint(Coordinate, Descriptor.Level))
 		{
@@ -1919,9 +2022,15 @@ bool ACastleBoard::HasPlacementMatch(const FIntVector& Coordinate, const FCastle
 		return false;
 	}
 
-	// 所有占用格共享建筑的颜色和数字，只读取命中面所属的地块或建筑一次。
+	// 所有占用格共享建筑属性；只读取确切命中面，不能拼接不同面的颜色与数字。
 	bool bMatches = false;
-	if (CursorTarget->bGroundSurface)
+	if (CursorTarget->Surface == ECastleGridCursorSurface::MainTowerSide)
+	{
+		const FCastleTowerSideCell* Cell = FindTowerSideCell(CursorTarget->Cell, CursorTarget->Face);
+		// TryResolvePlacementCoordinate 已在本次同步调用中确认该侧格身份和可用状态。
+		bMatches = Cell->Color == Descriptor.Color || Cell->Number == Descriptor.Number;
+	}
+	else if (CursorTarget->Surface == ECastleGridCursorSurface::Ground)
 	{
 		FCastleGroundCell GroundCell;
 		if (!TryGetGroundCellAtPlane(CursorTarget->Cell, GroundCell)) { return false; }
@@ -1954,21 +2063,39 @@ void ACastleBoard::InitializePrototypeDeck()
 		return;
 	}
 
-	// 接收阶段已严格验证整份地面，普通房间与功能建筑直接共享全部格子。
-	const TArray<FCastleGroundCell>& FunctionalCells = GeneratedGroundCells;
-
-	if (FunctionalCells.Num() == 0)
+	// 样例牌只从当前模式实际生成的格子取色号；塔侧模式从第一层不同面取三组。
+	struct FStarterMatch { ECastleTileColor Color; int32 Number; };
+	FStarterMatch Matches[3];
+	if (PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides)
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘原型卡组初始化失败：生成结果中没有功能地面格。"));
-		return;
+		FText FailureReason;
+		if (!ValidatePlacementSurface(FailureReason) || TowerSideGrid->GetCells().Num() < UE_ARRAY_COUNT(Matches))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 无法按主塔 %s 的侧格准备样例牌：侧格不全。%s"),
+				*GetPathName(), *GetPathNameSafe(MainTowerActor.Get()), *FailureReason.ToString());
+			return;
+		}
+		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Matches); ++Index)
+		{
+			const FCastleTowerSideCell& Cell = TowerSideGrid->GetCells()[Index];
+			Matches[Index] = {Cell.Color, Cell.Number};
+		}
 	}
-
-	// 样例功能卡牌的颜色和数字直接取本局实际地面，保证第一次点击时不用手动猜匹配属性。
-	const FCastleGroundCell& ArcherCell = FunctionalCells[0];
-	const FCastleGroundCell& CannonCell = FunctionalCells[FMath::Min(1, FunctionalCells.Num() - 1)];
-	const FCastleGroundCell& FarmCell = FunctionalCells[FMath::Min(2, FunctionalCells.Num() - 1)];
-	// 盾塔样例明确与箭塔共用第一块功能地面的属性，便于直接比较不同塔的放置和合成。
-	const FCastleGroundCell& ShieldCell = FunctionalCells[0];
+	else
+	{
+		const TArray<FCastleGroundCell>& FunctionalCells = GeneratedGroundCells;
+		if (FunctionalCells.IsEmpty())
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 原型卡组初始化失败：生成结果中没有功能地面格。"), *GetPathName());
+			return;
+		}
+		// 旧地面模式的样例顺序和小棋盘行为保持原样。
+		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Matches); ++Index)
+		{
+			const FCastleGroundCell& Cell = FunctionalCells[FMath::Min(Index, FunctionalCells.Num() - 1)];
+			Matches[Index] = {Cell.Color, Cell.Number};
+		}
+	}
 
 	FText DefinitionReason;
 	if (!ValidateBuildingDefinitions(DefinitionReason))
@@ -1978,7 +2105,7 @@ void ACastleBoard::InitializePrototypeDeck()
 	}
 	const ECastleBuildingType Types[] = { ECastleBuildingType::NormalRoom, ECastleBuildingType::ArcherTower,
 		ECastleBuildingType::CannonTower, ECastleBuildingType::Farm, ECastleBuildingType::ShieldTower };
-	const FCastleGroundCell Cells[] = { ArcherCell, ArcherCell, CannonCell, FarmCell, ShieldCell };
+	const FStarterMatch Cells[] = { Matches[0], Matches[0], Matches[1], Matches[2], Matches[0] };
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Types); ++Index)
 	{
 		UCastleBuildingDefinition* Definition = FindBuildingDefinition(Types[Index]);
@@ -2045,7 +2172,7 @@ ACastleBuildingBase* ACastleBoard::PlaceBackpackBuildingAtCursor(const FCastleGr
 	FCastleBuildingDescriptor SelectedDescriptor;
 	if (!CursorTarget.bValid || PrototypeBackpack == nullptr || !PrototypeBackpack->TryGetItemAt(BackpackIndex, SelectedDescriptor))
 	{
-		OutFailureReason = FText::FromString(TEXT("放置失败：请先选择有效背包卡牌，并将中心指针对准棋盘格面。"));
+		OutFailureReason = FText::FromString(TEXT("放置失败：请先选择有效背包卡牌，并将中心指针对准建造面。"));
 		ShowPrototypeMessage(OutFailureReason.ToString(), FColor::Yellow);
 		return nullptr;
 	}
