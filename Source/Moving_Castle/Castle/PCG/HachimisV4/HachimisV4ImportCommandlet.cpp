@@ -6,6 +6,7 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Dom/JsonObject.h"
 #include "Engine/StaticMesh.h"
+#include "StaticMeshResources.h"
 #include "Materials/Material.h"
 #include "MeshDescription.h"
 #include "Misc/FileHelper.h"
@@ -268,6 +269,10 @@ namespace HachimisV4Import
 					Corner.Position = FVector3f(Position(Mesh->GetControlPointAt(Point)));
 					Corner.Normal = FVector3f(Normal[0], -Normal[1], Normal[2]);
 					Corner.UV = FVector2f(UV[0], 1.0 - UV[1]);
+					if (Corner.Position.ContainsNaN() || Corner.Normal.ContainsNaN() || Corner.UV.ContainsNaN())
+					{
+						return Fail(File, Name + TEXT(" 的作者三角包含非有限顶点属性"));
+					}
 				}
 			}
 		}
@@ -363,6 +368,8 @@ namespace HachimisV4Import
 			Settings.bRecomputeNormals = false;
 			Settings.bRecomputeTangents = true;
 			Settings.bGenerateLightmapUVs = false;
+			// 箭塔包角的两份装配路径共用此作者几何。给该分件保留源 UV 精度，独立重建派生数据。
+			if (Digest == TEXT("161D81F27F3D572F4CF79B0918B10A5C12D59EFA")) { Settings.bUseFullPrecisionUVs = true; }
 			FMeshDescription Description;
 			FStaticMeshAttributes Attributes(Description);
 			Attributes.Register();
@@ -410,10 +417,15 @@ namespace HachimisV4Import
 			Mesh->CommitMeshDescription(0, Commit);
 			Mesh->Build(false);
 			FStaticMeshCompilingManager::Get().FinishCompilation({Mesh});
-			if (Mesh->GetBounds().ContainsNaN() || Mesh->GetBounds().BoxExtent.IsNearlyZero() || !Save(*Mesh))
+			const FStaticMeshRenderData* Render = Mesh->GetRenderData();
+			if (!Render || Render->LODResources.IsEmpty() || Render->LODResources[0].GetNumTriangles() == 0
+				|| Render->Bounds.ContainsNaN() || Mesh->GetBounds().ContainsNaN() || Mesh->GetBounds().BoxExtent.IsNearlyZero())
 			{
-				return Fail(PackageName, TEXT("无法验证包围盒或保存作者分件"));
+				return Fail(PackageName, Render ? FString::Printf(TEXT("渲染包围盒无效，中心 %s，范围 %s，球半径 %g"),
+					*Render->Bounds.Origin.ToString(), *Render->Bounds.BoxExtent.ToString(), Render->Bounds.SphereRadius)
+					: TEXT("缺少渲染网格"));
 			}
+			if (!Save(*Mesh)) { return false; }
 		}
 		Source.Part.Mesh = Mesh;
 		Meshes.Add(Key, Mesh);
