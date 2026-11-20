@@ -499,13 +499,21 @@ bool UCastleDirectorSubsystem::EnsurePresentation(FText& OutReason)
 	HUDWidget = CreateWidget<UUserWidget>(Controller, Config->HUDWidgetClass);
 	RewardWidget = CreateWidget<UUserWidget>(Controller, Config->RewardWidgetClass);
 	GameOverWidget = CreateWidget<UUserWidget>(Controller, Config->GameOverWidgetClass);
-	if (!Cast<UCastleDirectorHUDWidget>(HUDWidget) || !Cast<UCastleRewardChoiceWidget>(RewardWidget) || !Cast<UCastleGameOverWidget>(GameOverWidget)
-		|| !Cast<UCastleDirectorHUDWidget>(HUDWidget)->HasRequiredBindings()
+	UCastleDirectorHUDWidget* DirectorHUD = Cast<UCastleDirectorHUDWidget>(HUDWidget);
+	if (!DirectorHUD || !Cast<UCastleRewardChoiceWidget>(RewardWidget) || !Cast<UCastleGameOverWidget>(GameOverWidget)
+		|| !DirectorHUD->HasRequiredBindings()
 		|| !Cast<UCastleRewardChoiceWidget>(RewardWidget)->HasRequiredBindings()
 		|| !Cast<UCastleGameOverWidget>(GameOverWidget)->HasRequiredBindings())
 	{
-		OutReason = FText::FromString(FString::Printf(TEXT("界面创建或绑定失败：HUD=%s，Reward=%s，GameOver=%s；请检查父类和必需 BindWidget 控件。"),
+		OutReason = FText::FromString(FString::Printf(TEXT("界面创建或绑定失败：HUD=%s，Reward=%s，GameOver=%s；请检查父类、必需控件和图标贴图。"),
 			*GetPathNameSafe(Config->HUDWidgetClass.Get()), *GetPathNameSafe(Config->RewardWidgetClass.Get()), *GetPathNameSafe(Config->GameOverWidgetClass.Get())));
+		return false;
+	}
+	// 先用已注册主塔初始化生命栏，再让 WBP 进入视口；生命不依赖首帧 Slate Tick。
+	if (!DirectorHUD->BindMainTowerHealth(Tower))
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("HUD %s 无法绑定主塔 %s。"),
+			*GetPathNameSafe(Config->HUDWidgetClass.Get()), *GetPathNameSafe(Tower)));
 		return false;
 	}
 	HUDWidget->AddToViewport(10);
@@ -549,10 +557,10 @@ FText UCastleDirectorSubsystem::GetRewardLabel(const ECastleDirectorReward Rewar
 FString UCastleDirectorSubsystem::GetHUDSummary() const
 {
 	if (!bRunning) { return FString(); }
-	if (!IsValid(Config) || !IsValid(Controller) || !IsValid(Tower))
+	if (!IsValid(Config) || !IsValid(Controller))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("导演 HUD 读取失败：配置 %s、控制器 %s 或主塔 %s 已失效。"),
-			*GetPathNameSafe(Config), *GetPathNameSafe(Controller), *GetPathNameSafe(Tower));
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演 HUD 读取失败：配置 %s 或控制器 %s 已失效。"),
+			*GetPathNameSafe(Config), *GetPathNameSafe(Controller));
 		return TEXT("导演 HUD 数据无效，详见错误日志。");
 	}
 	if (!IsValid(Board) || !IsValid(Board->PrototypeBackpack))
@@ -569,9 +577,10 @@ FString UCastleDirectorSubsystem::GetHUDSummary() const
 	const TCHAR* PhaseText = Phase == ECastleDirectorPhase::Editing ? TEXT("编辑中") : Phase == ECastleDirectorPhase::Battle
 		? TEXT("战斗中") : Phase == ECastleDirectorPhase::Reward ? TEXT("选择奖励") : TEXT("游戏结束");
 	const int32 DisplayStep = Phase == ECastleDirectorPhase::Reward ? ClearedSteps : GetNextStep();
-	FString Summary = FString::Printf(TEXT("%s · 第 %d 关 %s\n主塔 Lv%d · 经验 %d/%d · 房间 %d/%d\n主塔生命 %.0f/%.0f"),
+	// 生命在独立的 WBP 行中与爱心图标对齐，不再混在摘要里。
+	FString Summary = FString::Printf(TEXT("%s · 第 %d 关 %s\n主塔 Lv%d · 经验 %d/%d · 房间 %d/%d"),
 		PhaseText, DisplayStep, GetNodeKindForStep(*Config, DisplayStep) == ECastleDirectorNodeKind::Elite ? TEXT("精英") : TEXT("普通"),
-		Level, Experience, Config->ExpPerLevel, OwnedRooms, Controller->GetShop()->RoomLimit, Tower->CurrentHealth, Tower->MaxHealth);
+		Level, Experience, Config->ExpPerLevel, OwnedRooms, Controller->GetShop()->RoomLimit);
 	if (Phase == ECastleDirectorPhase::Battle)
 	{
 		int32 Enemies = 0, PendingGroups = 0;

@@ -5,9 +5,9 @@
 #include "Blueprint/UserWidget.h"
 #include "BuildBar/CastleBuildBarWidget.h"
 #include "CastlePlayerController.h"
-#include "CastleEconomyComponent.h"
 #include "CastleShopComponent.h"
 #include "CastleShopWidget.h"
+#include "Economy/CastleEconomyHUDWidget.h"
 #include "Engine/Canvas.h"
 #include "GameFramework/PlayerController.h"
 #include "Moving_Castle.h"
@@ -17,12 +17,16 @@ namespace
 {
 	/** HUD 唯一使用的建造栏资产；名字和位置供出错时明确定位。 */
 	constexpr TCHAR BuildBarAssetPath[] = TEXT("/Game/MovingCastle/UI/BuildBar/WBP_BuildBar");
+	/** 金币与快捷键提示的正式 WBP；保留硬引用，保证与 HUD 一同烘焙。 */
+	constexpr TCHAR EconomyHUDAssetPath[] = TEXT("/Game/MovingCastle/UI/Economy/WBP_EconomyHUD");
 }
 
 ACastleHUD::ACastleHUD()
 {
 	static const ConstructorHelpers::FClassFinder<UCastleBuildBarWidget> BuildBarClass(BuildBarAssetPath);
 	BuildBarWidgetClass = BuildBarClass.Class;
+	static const ConstructorHelpers::FClassFinder<UCastleEconomyHUDWidget> EconomyHUDClass(EconomyHUDAssetPath);
+	EconomyWidgetClass = EconomyHUDClass.Class;
 }
 
 void ACastleHUD::BeginPlay()
@@ -60,10 +64,38 @@ void ACastleHUD::BeginPlay()
 
 	// 底部居中和完整等比缩放由 WBP 设计器的 Canvas / ScaleBox 负责。
 	BuildBarWidget->AddToViewport(20);
+
+	if (!IsValid(EconomyWidgetClass.Get()))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("城堡 HUD 无法找到有效的金币 WBP：%s。"), EconomyHUDAssetPath);
+		return;
+	}
+	UCastleEconomyHUDWidget* NewEconomyWidget = CreateWidget<UCastleEconomyHUDWidget>(PlayerOwner, EconomyWidgetClass);
+	if (!IsValid(NewEconomyWidget))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("城堡 HUD 无法实例化金币 WBP：%s。"), EconomyHUDAssetPath);
+		return;
+	}
+	if (!NewEconomyWidget->BindToOwningEconomy())
+	{
+		// 错误已由金币 WBP 记录；不能用旧的 Canvas 文字或占位余额替代。
+		return;
+	}
+
+	// 在商店和导演模态之下展示；提示是只读标签，不截获准星放置的鼠标输入。
+	EconomyWidget = NewEconomyWidget;
+	EconomyWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
+	EconomyWidget->AddToViewport(20);
 }
 
 void ACastleHUD::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	// 移除视口上的金币 WBP，触发 NativeDestruct 清理账户事件订阅。
+	if (EconomyWidget != nullptr)
+	{
+		EconomyWidget->RemoveFromParent();
+		EconomyWidget = nullptr;
+	}
 	if (ShopWidget != nullptr)
 	{
 		ShopWidget->RemoveFromParent();
@@ -89,9 +121,7 @@ void ACastleHUD::DrawHUD()
 	const ACastlePlayerController* Controller = Cast<ACastlePlayerController>(PlayerOwner);
 	if (Controller != nullptr)
 	{
-		// 关闭商店时仍显示余额和入口提示，玩家不必打开商店才能确认收支结果。
-		DrawText(FString::Printf(TEXT("Gold: %d   |   [B] Shop   |   [Wheel / 1-9,0] Build Bar"), Controller->GetEconomy()->GetGold()),
-			FLinearColor(1.0f, 0.82f, 0.32f), 24.0f, 24.0f, nullptr, 1.25f);
+		// 金币与提示由 WBP 接管；Canvas 保留独立的中心准星和既有可见条件。
 		FText EditReason;
 		if (Controller->GetShop()->IsShopOpen() || !Controller->IsDirectorEditingAllowed(EditReason))
 		{
