@@ -8,7 +8,8 @@
 #include "Interaction/CastlePatrolWaypointMarker.h"
 #include "Visualization/CastlePatrolPathVisualizationSubsystem.h"
 #include "Camera/CameraComponent.h"
-#include "Components/InstancedStaticMeshComponent.h"
+#include "Components/SplineMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -17,7 +18,8 @@
 #include "InputKeyEventArgs.h"
 #include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
-#include "Materials/MaterialInterface.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/Paths.h"
 #include "Misc/OutputDeviceNull.h"
@@ -56,7 +58,7 @@ namespace CastlePatrolDemoTests
 			case 0:
 				if (!Navigation->GetSharedPath().bValid || Spawner->SpawnedUnits.Num() != 32) { return false; }
 				Test->TestFalse(TEXT("新游戏世界的巡逻线初始关闭"), Drawing->IsPathDrawingEnabled());
-				FindLineComponent(0);
+				FindLineActor(0);
 				InitialWaypoints = Navigation->GetRequestedWaypoints();
 				Test->AddExpectedMessagePlain(TEXT("Castle.ShowPatrolPath：只接受 0 或 1"), ELogVerbosity::Error);
 				ExecDrawing(TEXT("Castle.ShowPatrolPath 2"));
@@ -83,9 +85,16 @@ namespace CastlePatrolDemoTests
 				return false;
 			case 11:
 				if (World->GetTimeSeconds() - ReadyTime < 0.5) { return false; }
+				// 保持相机位置不变再取一帧，供对比虚线是否在滚动而不是只画成了静态虚线。
+				FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir() / TEXT("Navigation/MassPatrolAnimated.png"), true, false);
+				ReadyTime = World->GetTimeSeconds();
+				Stage = 13;
+				return false;
+			case 13:
+				if (World->GetTimeSeconds() - ReadyTime < 0.25) { return false; }
 				// 在线路和 NPC 均就绪时关闭，验证渲染被移除但编号路点和共享路线都不变。
 				if (!ToggleDrawing(false)) { return true; }
-				FindLineComponent(0);
+				FindLineActor(0);
 				CheckMarkers(4);
 				Units->GetUnitSnapshot(Spawner->SpawnedUnits[0], Snapshot);
 				PositionBeforeHidden = Snapshot.Transform.GetLocation();
@@ -128,9 +137,9 @@ namespace CastlePatrolDemoTests
 			case 6:
 				CheckMarkers(0);
 				Test->TestFalse(TEXT("Delete 立即清空共享路线"), Navigation->GetSharedPath().bValid);
-				FindLineComponent(0);
+				FindLineActor(0);
 				if (!ToggleDrawing(false) || !ToggleDrawing(true)) { return true; }
-				FindLineComponent(0);
+				FindLineActor(0);
 				// 玩家输入可能晚于本帧 Mass 阶段，等待下一轮模拟消费失效快照再检查真实速度。
 				Stage = 61;
 				return false;
@@ -159,7 +168,7 @@ namespace CastlePatrolDemoTests
 				CheckMarkers(1);
 				Test->TestFalse(TEXT("提交后退出编辑"), Route->IsEditing());
 				Test->TestEqual(TEXT("单点待命没有多余查询"), Navigation->PathQueryCount, 4);
-				FindLineComponent(0);
+				FindLineActor(0);
 				Spawner->SpawnUnits();
 				Stage = 10;
 				return false;
@@ -196,7 +205,7 @@ namespace CastlePatrolDemoTests
 				// 专用测试世界即将结束；销毁入口必须当帧清除标记和正式路线对应的线条。
 				Test->TestTrue(TEXT("巡逻入口可销毁"), Route->Destroy());
 				CheckMarkers(0);
-				FindLineComponent(0);
+				FindLineActor(0);
 				return true;
 			}
 			return true;
@@ -218,34 +227,31 @@ namespace CastlePatrolDemoTests
 			return Test->TestEqual(TEXT("命令设置当前世界的绘制状态"), Drawing->IsPathDrawingEnabled(), bEnabled);
 		}
 
-		UInstancedStaticMeshComponent* FindLineComponent(int32 ExpectedCount)
+		AActor* FindLineActor(int32 ExpectedCount)
 		{
 			int32 Count = 0;
-			UInstancedStaticMeshComponent* Line = nullptr;
+			AActor* Line = nullptr;
 			for (TActorIterator<AActor> It(World); It; ++It)
 			{
-				auto* Candidate = Cast<UInstancedStaticMeshComponent>(It->GetRootComponent());
-				if (Candidate && Candidate->GetFName() == TEXT("CastlePatrolPathSegments"))
+				const USceneComponent* Root = It->GetRootComponent();
+				if (Root && Root->GetFName() == TEXT("CastlePatrolPathSegments"))
 				{
 					++Count;
-					Line = Candidate;
+					Line = *It;
 				}
 			}
-			Test->TestEqual(TEXT("同一世界只拥有预期数量的巡逻线组件"), Count, ExpectedCount);
+			Test->TestEqual(TEXT("当前世界只拥有预期数量的巡逻线 Actor"), Count, ExpectedCount);
 			return Line;
 		}
 
 		void CheckLineGeometry()
 		{
 			const auto Path = Navigation->AcquireSharedPath();
-			auto* Line = FindLineComponent(1);
-			if (!Test->TestNotNull(TEXT("正式巡逻线有实例组件"), Line) || !Test->TestNotNull(TEXT("线条网格已加载"), Line->GetStaticMesh().Get())) { return; }
-			Test->TestTrue(TEXT("线组件已注册且不参与导航或碰撞"), Line->IsRegistered()
-				&& !Line->CanEverAffectNavigation() && Line->GetCollisionEnabled() == ECollisionEnabled::NoCollision);
-			Test->TestEqual(TEXT("线条使用工具包圆柱网格"), Line->GetStaticMesh()->GetName(), FString(TEXT("SM_Cylinder_Line")));
-			Test->TestTrue(TEXT("线条使用项目的青绿实心材质"), Line->GetMaterial(0) && Line->GetMaterial(0)->GetFName() == TEXT("MI_CastlePatrolLine"));
-			if (!Test->TestTrue(TEXT("取得有效的闭环"), Path && Path->bValid && Path->bClosedLoop && Path->PatrolPoints.Num() > 2)
-				|| !Test->TestEqual(TEXT("每条实际采样线段（包括返程）都有一个实例"), Line->GetInstanceCount(), Path->PatrolPoints.Num() - 1)) { return; }
+			AActor* LineActor = FindLineActor(1);
+			if (!Test->TestNotNull(TEXT("正式巡逻线有渲染 Actor"), LineActor)
+				|| !Test->TestTrue(TEXT("取得有效的闭环"), Path && Path->bValid && Path->bClosedLoop && Path->PatrolPoints.Num() > 2)) { return; }
+			TInlineComponentArray<USplineMeshComponent*> Segments(LineActor);
+			if (!Test->TestEqual(TEXT("每条实际采样线段（包括返程）都有一个样条网格"), Segments.Num(), Path->PatrolPoints.Num() - 1)) { return; }
 
 			// 这张演示用楼梯而非垂直 NavLink；直接验证高低层样本，不依赖梯子专用的距离区间。
 			Test->TestTrue(TEXT("演示闭环确实跨楼层"), Path->PatrolPoints.ContainsByPredicate([&Path](const FVector& Point)
@@ -253,17 +259,29 @@ namespace CastlePatrolDemoTests
 				return FMath::Abs(Point.Z - Path->PatrolPoints[0].Z) > 100.0;
 			}));
 
-			// 用原网格的轴向端点反解实例，验证中心不是被放到世界原点、错误楼层或直线抄近路。
-			const FBoxSphereBounds Bounds = Line->GetStaticMesh()->GetBounds();
-			const FVector AxisRadius(Bounds.BoxExtent.X, 0, 0);
 			const FVector Height(0, 0, 12.0);
-			for (int32 Index = 0; Index < Line->GetInstanceCount(); ++Index)
+			for (int32 Index = 0; Index < Segments.Num(); ++Index)
 			{
-				FTransform Transform;
+				auto* Segment = FindObjectFast<USplineMeshComponent>(LineActor, FName(*FString::Printf(TEXT("CastlePatrolDash_%d"), Index)));
+				if (!Test->TestNotNull(TEXT("每个采样线段都有对应的圆柱组件"), Segment)) { return; }
+				Test->TestTrue(TEXT("线条使用原包圆柱且不参与导航或碰撞"), Segment->GetStaticMesh()
+					&& Segment->GetStaticMesh()->GetFName() == TEXT("SM_Cylinder_Line") && Segment->IsRegistered()
+					&& !Segment->CanEverAffectNavigation() && Segment->GetCollisionEnabled() == ECollisionEnabled::NoCollision);
+				// 用组件变换反解世界坐标，检查连的是原采样而非曲线抄近路。
+				const FTransform& Transform = Segment->GetComponentTransform();
 				if (!Test->TestTrue(FString::Printf(TEXT("线段 %d 的两端对齐实际 NPC 路线"), Index + 1),
-					Line->GetInstanceTransform(Index, Transform, true)
-					&& Transform.TransformPosition(Bounds.Origin - AxisRadius).Equals(Path->PatrolPoints[Index] + Height, 0.01)
-					&& Transform.TransformPosition(Bounds.Origin + AxisRadius).Equals(Path->PatrolPoints[Index + 1] + Height, 0.01))) { return; }
+					Transform.TransformPosition(Segment->GetStartPosition()).Equals(Path->PatrolPoints[Index] + Height, 0.01)
+					&& Transform.TransformPosition(Segment->GetEndPosition()).Equals(Path->PatrolPoints[Index + 1] + Height, 0.01))) { return; }
+				// 检查真实样条材质使用 Overview 母材质，且短采样段之间的纹理相位按世界累计距离接续。
+				auto* Material = Cast<UMaterialInstanceDynamic>(Segment->GetMaterial(0));
+				const double Start = Path->PatrolDistances[Index];
+				const double Length = Path->PatrolDistances[Index + 1] - Start;
+				if (!Test->TestTrue(TEXT("黄虚线沿用 PathTracer_08 的材质、滚动速度和间隔，UV 由累计距离驱动"), Material
+					&& Material->GetMaterial()->GetFName() == TEXT("M_PT_DottedLine_Anim")
+					&& FMath::IsNearlyEqual(Material->K2_GetScalarParameterValue(TEXT("AnimSpeed")), -0.5f)
+					&& FMath::IsNearlyEqual(Material->K2_GetScalarParameterValue(TEXT("GapSize")), 0.1f)
+					&& FMath::IsNearlyEqual(Material->K2_GetScalarParameterValue(TEXT("ScaleUV")), static_cast<float>(Length / 50.0))
+					&& FMath::IsNearlyEqual(Material->K2_GetScalarParameterValue(TEXT("Offset")), static_cast<float>(FMath::Fmod(Start / 50.0, 1.0))))) { return; }
 			}
 		}
 
@@ -280,6 +298,13 @@ namespace CastlePatrolDemoTests
 				Numbers.Add(Index + 1);
 				Test->TestTrue(TEXT("标记归属当前巡逻入口且使用正式蓝图"), It->GetOwner() == Route
 					&& It->GetClass()->GetFName() == TEXT("BP_CastlePatrolWaypointMarker_C"));
+				// 用真实放点、撤回、清空流程验证每个编号都带恰好一个圆圈，且不依赖巡逻线开关。
+				const auto* Circle = FindObjectFast<UStaticMeshComponent>(*It, TEXT("WaypointGroundCircle"));
+				Test->TestTrue(TEXT("每个显示中的路点使用工具包的 04 圆圈，贴在该点地面且不参与导航或碰撞"), Circle
+					&& Circle->IsVisible() && Circle->IsRegistered() && Circle->GetMaterial(0)
+					&& Circle->GetMaterial(0)->GetFName() == TEXT("MI_PT_Circle_Preview_04")
+					&& Circle->GetComponentLocation().Equals(It->GetActorLocation() + FVector(0, 0, 2.0), 0.01)
+					&& !Circle->CanEverAffectNavigation() && Circle->GetCollisionEnabled() == ECollisionEnabled::NoCollision);
 				if (!Route->IsEditing() && Points.IsValidIndex(Index))
 				{
 					Test->TestTrue(TEXT("正式标记枢轴与导航请求点一致，悬浮不改站立高度"), It->GetActorLocation().Equals(Points[Index]));

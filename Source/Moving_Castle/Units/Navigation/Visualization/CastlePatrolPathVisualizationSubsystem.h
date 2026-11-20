@@ -4,8 +4,9 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "CastlePatrolPathVisualizationSubsystem.generated.h"
 
+class AActor;
 class UCastleNavigationSubsystem;
-class UInstancedStaticMeshComponent;
+struct FCastleSharedNavigationPath;
 class UMaterialInterface;
 class UStaticMesh;
 
@@ -31,12 +32,12 @@ protected:
 	virtual void Deinitialize() override;
 
 private:
-	/** 路线版本变化才重建实例；失效发布也立即清除旧线，不在 Tick 中轮询。 */
+	/** 路线版本变化才重建线段；失效发布也立即清除旧线，不在 Tick 中轮询。 */
 	UFUNCTION()
 	void HandleSharedPathChanged();
 
 	bool RefreshDrawing();
-	bool CreatePathSegments();
+	bool BuildPathSegments(const FCastleSharedNavigationPath& Path);
 	bool RejectDrawing(const FString& Reason) const;
 	void DestroyPathSegments();
 	void StopDrawing();
@@ -51,9 +52,9 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInterface> LineMaterial;
 
-	/** 每条共享路径只拥有一个临时实例组件，而不是每段或每个 NPC 各生成 Actor。 */
+	/** 一个临时 Actor 持有整条线段；不为每个 NPC 单独构建路径。 */
 	UPROPERTY(Transient)
-	TObjectPtr<UInstancedStaticMeshComponent> PathSegments;
+	TObjectPtr<AActor> PathVisualActor;
 
 	bool bDrawingEnabled = false;
 };

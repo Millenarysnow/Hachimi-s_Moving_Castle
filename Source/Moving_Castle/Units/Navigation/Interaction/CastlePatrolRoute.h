@@ -22,7 +22,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="共享巡逻")
 	bool bAllowPlayerEditing = true;
 
-	/** 只控制编号路点和编辑状态提示；正式巡逻线由当前世界的可视化子系统控制。 */
+	/** 只控制路点圆圈、悬浮编号和编辑状态提示；正式巡逻线由当前世界的可视化子系统控制。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="共享巡逻")
 	bool bShowRoute = true;
 

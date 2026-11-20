@@ -1,21 +1,27 @@
 ﻿#include "Visualization/CastlePatrolPathVisualizationSubsystem.h"
 
 #include "CastleNavigationSubsystem.h"
-#include "Components/InstancedStaticMeshComponent.h"
+#include "Components/SceneComponent.h"
+#include "Components/SplineMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "HAL/IConsoleManager.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/OutputDevice.h"
 #include "Moving_Castle.h"
 
 namespace
 {
-	// Path Tracer Toolkit 的实心样式：原包圆柱网格 + M_PT_Color 的项目材质实例，保留真实楼板遮挡。
+	// Overview / PathTracer_08 使用原包圆柱和 M_PT_DottedLine_Anim；项目材质实例保存原黄橙配色、透明间隔及动画速率。
 	constexpr const TCHAR* LineMeshAsset = TEXT("/Game/PathTracer/Meshes/SM_Cylinder_Line.SM_Cylinder_Line");
 	constexpr const TCHAR* LineMaterialAsset = TEXT("/Game/MovingCastle/FX/Navigation/MI_CastlePatrolLine.MI_CastlePatrolLine");
-	constexpr double LineRadius = 7.0; // 厘米：从俯视仍能辨认线路，又不会盖住棋盘格心和路点。
+	// 复用演示直段的截面缩放 4，以及 75 cm 直段的 ScaleUV=1.5（一个 UV 周期对应 50 cm）。
+	const FVector2D DashCrossSection(4.0, 4.0);
+	constexpr double DashPeriodCm = 50.0;
+	const FName ScaleUVParameter(TEXT("ScaleUV"));
+	const FName OffsetParameter(TEXT("Offset"));
 	const FVector LineLift(0.0, 0.0, 12.0); // 仅渲染抬高，避免斜坡与楼板交界吞掉线条，不写回路线坐标。
 
 	// 命令按当前世界处理，不用全局 CVar；多开 PIE 或切关卡不会继承上个世界的选择。
@@ -45,7 +51,7 @@ namespace
 			return;
 		}
 		const TCHAR* Message = bEnable ? TEXT("NPC 巡逻线已开启；有可走路段的有效巡逻闭环才会显示。")
-			: TEXT("NPC 巡逻线已关闭；编号路点与巡逻保持不变。");
+			: TEXT("NPC 巡逻线已关闭；地面圆圈、悬浮编号与巡逻保持不变。");
 		UE_LOG(LogMoving_Castle, Display, TEXT("Castle.ShowPatrolPath：%s"), Message);
 		Output.Log(Message);
 	}));
@@ -87,10 +93,17 @@ bool UCastlePatrolPathVisualizationSubsystem::SetPathDrawingEnabled(bool bEnable
 	LineMesh = LoadObject<UStaticMesh>(nullptr, LineMeshAsset);
 	LineMaterial = LoadObject<UMaterialInterface>(nullptr, LineMaterialAsset);
 	if (!IsValid(LineMesh) || !LineMesh->HasValidRenderData() || LineMesh->GetStaticMaterials().Num() != 1
-		|| !IsValid(LineMaterial) || !LineMaterial->GetUsageByFlag(MATUSAGE_InstancedStaticMeshes))
+		|| !IsValid(LineMaterial) || !LineMaterial->GetUsageByFlag(MATUSAGE_SplineMesh))
 	{
 		StopDrawing();
-		return RejectDrawing(TEXT("网格必须可渲染且只有一个材质槽，材质必须已启用实例网格用法。"));
+		return RejectDrawing(TEXT("网格必须可渲染且只有一个材质槽，材质必须已启用样条网格用法。"));
+	}
+	float ParameterValue = 0.0f;
+	if (!LineMaterial->GetScalarParameterValue(ScaleUVParameter, ParameterValue)
+		|| !LineMaterial->GetScalarParameterValue(OffsetParameter, ParameterValue))
+	{
+		StopDrawing();
+		return RejectDrawing(TEXT("黄虚线材质缺少 ScaleUV 或 Offset 参数。"));
 	}
 	const FBoxSphereBounds Bounds = LineMesh->GetBounds();
 	if (Bounds.Origin.ContainsNaN() || Bounds.BoxExtent.ContainsNaN() || Bounds.BoxExtent.GetMin() <= UE_DOUBLE_SMALL_NUMBER)
@@ -139,67 +152,96 @@ bool UCastlePatrolPathVisualizationSubsystem::RefreshDrawing()
 		return true;
 	}
 
-	const FBoxSphereBounds Bounds = LineMesh->GetBounds();
-	TArray<FTransform> Instances;
-	Instances.Reserve(Points.Num() - 1);
-	for (int32 Index = 1; Index < Points.Num(); ++Index)
-	{
-		// 包括已采样的格心转折、上下楼和末点回到首点；不额外求解，不在角点间平滑抄近路。
-		const FVector Delta = Points[Index] - Points[Index - 1];
-		const double Length = Delta.Size();
-		if (!FMath::IsFinite(Length) || Length <= UE_DOUBLE_SMALL_NUMBER)
-		{
-			return RejectDrawing(FString::Printf(TEXT("巡逻快照 %d 的第 %d 条采样线段无效，拒绝绘制整条路线。"),
-				Path->PathRevision, Index));
-		}
-		const FQuat Rotation = FQuat::FindBetweenNormals(FVector::ForwardVector, Delta / Length);
-		const FVector Scale(Length / (2.0 * Bounds.BoxExtent.X), LineRadius / Bounds.BoxExtent.Y, LineRadius / Bounds.BoxExtent.Z);
-		// 网格的长轴为局部 X，但枢轴不在中点。把真实包围盒中心对齐线段中点，避免每段偏移半截。
-		const FVector Center = Points[Index - 1] + Delta * 0.5 + LineLift;
-		Instances.Emplace(Rotation, Center - Rotation.RotateVector(Bounds.Origin * Scale), Scale);
-	}
-
-	if (!PathSegments && !CreatePathSegments()) { return false; }
-	if (!IsValid(PathSegments) || !PathSegments->IsRegistered())
-	{
-		return RejectDrawing(TEXT("巡逻线实例组件失效或未注册。"));
-	}
-	// 整批验证通过才提交渲染数据；绝不能留下部分路径，也不通知 NavMesh。
-	PathSegments->ClearInstances();
-	PathSegments->AddInstances(Instances, /*bShouldReturnIndices=*/false, /*bWorldSpace=*/true, /*bUpdateNavigation=*/false);
-	if (PathSegments->GetInstanceCount() != Instances.Num())
-	{
-		return RejectDrawing(TEXT("未能向实例组件提交整条巡逻线。"));
-	}
-	return true;
+	return BuildPathSegments(*Path);
 }
 
-bool UCastlePatrolPathVisualizationSubsystem::CreatePathSegments()
+bool UCastlePatrolPathVisualizationSubsystem::BuildPathSegments(const FCastleSharedNavigationPath& Path)
 {
+	struct FDashSegment
+	{
+		FVector Origin;
+		FQuat Rotation;
+		double Length;
+		float ScaleUV;
+		float Offset;
+	};
+
+	// 全部使用 NPC 实际采样的相邻点；不复刻示例的大圆角，否则楼梯和建筑转折上会抄近路。
+	const TArray<FVector>& Points = Path.PatrolPoints;
+	const TArray<double>& Distances = Path.PatrolDistances;
+	if (Distances.Num() != Points.Num() || Distances[0] != 0.0)
+	{
+		return RejectDrawing(FString::Printf(TEXT("巡逻快照 %d 的累计距离与采样列表不匹配。"), Path.PathRevision));
+	}
+	TArray<FDashSegment> Segments;
+	Segments.Reserve(Points.Num() - 1);
+	for (int32 Index = 1; Index < Points.Num(); ++Index)
+	{
+		const FVector Delta = Points[Index] - Points[Index - 1];
+		const double Length = Delta.Size();
+		if (!FMath::IsFinite(Length) || Length <= UE_DOUBLE_SMALL_NUMBER || !FMath::IsFinite(Distances[Index])
+			|| !FMath::IsNearlyEqual(Distances[Index] - Distances[Index - 1], Length, 0.01))
+		{
+			return RejectDrawing(FString::Printf(TEXT("巡逻快照 %d 的第 %d 条采样线段或累计距离无效。"), Path.PathRevision, Index));
+		}
+		// 在组件局部 X 轴上拉直网格，再整体旋转到实际三维方向。梯子段也不会遇到样条上向量与切线平行。
+		// UV 跨度随长度缩放，起始相位来自整圈累计距离；不能每 20 cm 采样点都从同一相位重播。
+		Segments.Add({Points[Index - 1] + LineLift, FQuat::FindBetweenNormals(FVector::ForwardVector, Delta / Length),
+			Length, static_cast<float>(Length / DashPeriodCm), static_cast<float>(FMath::Fmod(Distances[Index - 1] / DashPeriodCm, 1.0))});
+	}
+
+	DestroyPathSegments();
 	UWorld* World = GetWorld();
 	FActorSpawnParameters Spawn;
 	Spawn.OverrideLevel = World->PersistentLevel;
 	Spawn.ObjectFlags |= RF_Transient;
-	AActor* Owner = World->SpawnActor<AActor>(AActor::StaticClass(), FTransform::Identity, Spawn);
-	if (!IsValid(Owner)) { return RejectDrawing(TEXT("无法创建临时巡逻线 Actor。")); }
+	PathVisualActor = World->SpawnActor<AActor>(AActor::StaticClass(), FTransform::Identity, Spawn);
+	if (!IsValid(PathVisualActor)) { return RejectDrawing(TEXT("无法创建临时巡逻线 Actor。")); }
 
-	PathSegments = NewObject<UInstancedStaticMeshComponent>(Owner, TEXT("CastlePatrolPathSegments"), RF_Transient);
-	Owner->AddInstanceComponent(PathSegments);
-	if (!Owner->SetRootComponent(PathSegments) || !PathSegments->SetStaticMesh(LineMesh))
+	USceneComponent* Root = NewObject<USceneComponent>(PathVisualActor, TEXT("CastlePatrolPathSegments"), RF_Transient);
+	PathVisualActor->AddInstanceComponent(Root);
+	if (!PathVisualActor->SetRootComponent(Root)) { return RejectDrawing(TEXT("无法安装巡逻线根组件。")); }
+
+	// 同一个临时 Actor 管理整条路线。线段自身只在发布时设置参数，虚线运动完全由原材质的时间输入驱动。
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
 	{
-		return RejectDrawing(TEXT("无法安装巡逻线实例组件或圆柱网格。"));
+		const FDashSegment& Segment = Segments[Index];
+		const FName Name(*FString::Printf(TEXT("CastlePatrolDash_%d"), Index));
+		auto* Line = NewObject<USplineMeshComponent>(PathVisualActor, Name, RF_Transient);
+		PathVisualActor->AddInstanceComponent(Line);
+		Line->SetupAttachment(Root);
+		Line->SetMobility(EComponentMobility::Movable);
+		// 只画画面，不拦建造或放点，也不参与导航、物理和阴影。
+		Line->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Line->SetGenerateOverlapEvents(false);
+		Line->SetCanEverAffectNavigation(false);
+		Line->SetCastShadow(false);
+		Line->SetAffectDistanceFieldLighting(false);
+		Line->SetVisibleInRayTracing(false);
+		Line->SetReceivesDecals(false);
+		if (!Line->SetStaticMesh(LineMesh)) { return RejectDrawing(FString::Printf(TEXT("第 %d 段无法安装圆柱网格。"), Index + 1)); }
+		auto* Material = UMaterialInstanceDynamic::Create(LineMaterial, Line);
+		if (!IsValid(Material)) { return RejectDrawing(FString::Printf(TEXT("第 %d 段无法创建黄虚线材质实例。"), Index + 1)); }
+		Material->SetScalarParameterValue(ScaleUVParameter, Segment.ScaleUV);
+		Material->SetScalarParameterValue(OffsetParameter, Segment.Offset);
+		Line->SetMaterial(0, Material);
+		Line->SetRelativeLocationAndRotation(Segment.Origin, Segment.Rotation);
+		Line->SetForwardAxis(ESplineMeshAxis::X, false);
+		Line->SetStartScale(DashCrossSection, false);
+		Line->SetEndScale(DashCrossSection, false);
+		const FVector Tangent(Segment.Length, 0, 0);
+		Line->SetStartAndEnd(FVector::ZeroVector, Tangent, Tangent, Tangent, false);
 	}
-	// 只画画面，不拦建造/放点的射线，不参与导航、物理和阴影；随世界销毁，不保存到关卡。
-	PathSegments->SetMobility(EComponentMobility::Movable);
-	PathSegments->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	PathSegments->SetGenerateOverlapEvents(false);
-	PathSegments->SetCanEverAffectNavigation(false);
-	PathSegments->SetCastShadow(false);
-	PathSegments->SetAffectDistanceFieldLighting(false);
-	PathSegments->SetVisibleInRayTracing(false);
-	PathSegments->SetReceivesDecals(false);
-	PathSegments->SetMaterial(0, LineMaterial);
-	PathSegments->RegisterComponent();
+
+	// 只在整条路径构建完毕之后注册，报错由调用者销毁完整的临时 Actor，不留半套渲染组件。
+	PathVisualActor->RegisterAllComponents();
+	for (const UActorComponent* Component : PathVisualActor->GetComponents())
+	{
+		if (!Component->IsRegistered())
+		{
+			return RejectDrawing(FString::Printf(TEXT("巡逻线组件 %s 未注册。"), *Component->GetName()));
+		}
+	}
 	return true;
 }
 
@@ -213,11 +255,8 @@ bool UCastlePatrolPathVisualizationSubsystem::RejectDrawing(const FString& Reaso
 void UCastlePatrolPathVisualizationSubsystem::DestroyPathSegments()
 {
 	// 正常关闭、路线失效和世界结束都走同一清理，避免留下旧地图实例或屏幕残线。
-	if (IsValid(PathSegments))
-	{
-		if (AActor* Owner = PathSegments->GetOwner(); IsValid(Owner)) { Owner->Destroy(); }
-	}
-	PathSegments = nullptr;
+	if (IsValid(PathVisualActor)) { PathVisualActor->Destroy(); }
+	PathVisualActor = nullptr;
 }
 
 void UCastlePatrolPathVisualizationSubsystem::StopDrawing()
