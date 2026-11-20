@@ -5,6 +5,7 @@
 #include "CastleNavigationSubsystem.h"
 #include "Demo/CastleNavigationDemo.h"
 #include "Interaction/CastlePatrolRoute.h"
+#include "Interaction/CastlePatrolWaypointMarker.h"
 #include "Camera/CameraComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -46,6 +47,7 @@ namespace CastlePatrolDemoTests
 			{
 			case 0:
 				if (!Navigation->GetSharedPath().bValid || Spawner->SpawnedUnits.Num() != 32) { return false; }
+				CheckMarkers(4);
 				Test->TestEqual(TEXT("四个点一次算好完整四段"), Navigation->PathQueryCount, 4);
 				Test->TestEqual(TEXT("飞入整轮只构建一次 NavMesh"), Navigation->RefreshCount, 1);
 				Units->GetUnitSnapshot(Spawner->SpawnedUnits[0], Snapshot);
@@ -74,11 +76,13 @@ namespace CastlePatrolDemoTests
 				Stage = 3;
 				return false;
 			case 3:
+				CheckMarkers(3);
 				Test->TestEqual(TEXT("草稿撤回不执行任何寻路"), Navigation->PathQueryCount, 4);
 				Press(EKeys::P);
 				Stage = 4;
 				return false;
 			case 4:
+				CheckMarkers(4);
 				Test->TestFalse(TEXT("P 退出编辑并释放左键"), Route->IsEditing());
 				Test->TestEqual(TEXT("取消草稿保留四点完整路线"), Navigation->GetSharedPath().Waypoints.Num(), 4);
 				Press(EKeys::P);
@@ -89,6 +93,7 @@ namespace CastlePatrolDemoTests
 				Stage = 6;
 				return false;
 			case 6:
+				CheckMarkers(0);
 				Test->TestFalse(TEXT("Delete 立即清空共享路线"), Navigation->GetSharedPath().bValid);
 				// 玩家输入可能晚于本帧 Mass 阶段，等待下一轮模拟消费失效快照再检查真实速度。
 				Stage = 61;
@@ -109,11 +114,13 @@ namespace CastlePatrolDemoTests
 				Stage = 8;
 				return false;
 			case 8:
+				CheckMarkers(1);
 				Press(EKeys::Enter);
 				Stage = 9;
 				return false;
 			case 9:
 				if (!Test->TestTrue(TEXT("左键碰撞落点和 Enter 正式发布单点路线"), Navigation->GetSharedPath().bValid && Navigation->GetSharedPath().Waypoints.Num() == 1)) { return true; }
+				CheckMarkers(1);
 				Test->TestFalse(TEXT("提交后退出编辑"), Route->IsEditing());
 				Test->TestEqual(TEXT("单点待命没有多余查询"), Navigation->PathQueryCount, 4);
 				Spawner->SpawnUnits();
@@ -123,11 +130,50 @@ namespace CastlePatrolDemoTests
 				if (!Test->TestEqual(TEXT("可以沿玩家新路线重新生成"), Spawner->SpawnedUnits.Num(), 1)) { return true; }
 				Units->GetUnitSnapshot(Spawner->SpawnedUnits[0], Snapshot);
 				Test->TestTrue(TEXT("单点 NPC 可见状态为巡逻待命"), Snapshot.bFollowingSharedRoute && !Snapshot.bPatrolBlocked && Snapshot.Velocity.IsNearlyZero());
+				Route->bShowRoute = false;
+				Stage = 20;
+				return false;
+			case 20:
+				CheckMarkers(0);
+				Test->TestTrue(TEXT("隐藏标记不清空导航路线"), Navigation->GetSharedPath().bValid);
+				Route->bShowRoute = true;
+				Stage = 21;
+				return false;
+			case 21:
+				CheckMarkers(1);
+				// 专用测试世界即将结束；销毁入口时标记必须当帧一并销毁，不能留悬浮残影。
+				Test->TestTrue(TEXT("巡逻入口可销毁"), Route->Destroy());
+				CheckMarkers(0);
 				return true;
 			}
 			return true;
 		}
 	private:
+		void CheckMarkers(int32 ExpectedCount)
+		{
+			// 直接读取当前世界里的正式蓝图实例，验证制作、撤回和提交没有叠出两套标记。
+			TSet<int32> Numbers;
+			int32 Count = 0;
+			const TArray<FVector>& Points = Navigation->GetRequestedWaypoints();
+			for (TActorIterator<ACastlePatrolWaypointMarker> It(World); It; ++It)
+			{
+				++Count;
+				const int32 Index = It->GetDisplayedNumber() - 1;
+				Numbers.Add(Index + 1);
+				Test->TestTrue(TEXT("标记归属当前巡逻入口且使用正式蓝图"), It->GetOwner() == Route
+					&& It->GetClass()->GetFName() == TEXT("BP_CastlePatrolWaypointMarker_C"));
+				if (!Route->IsEditing() && Points.IsValidIndex(Index))
+				{
+					Test->TestTrue(TEXT("正式标记枢轴与导航请求点一致，悬浮不改站立高度"), It->GetActorLocation().Equals(Points[Index]));
+				}
+			}
+			Test->TestEqual(TEXT("标记数与当前显示路径点数相同"), Count, ExpectedCount);
+			for (int32 Number = 1; Number <= ExpectedCount; ++Number)
+			{
+				Test->TestTrue(TEXT("标记从 1 按巡逻顺序连续编号"), Numbers.Contains(Number));
+			}
+		}
+
 		void Press(FKey Key)
 		{
 			Controller->InputKey(FInputKeyEventArgs(nullptr, INPUTDEVICEID_NONE, Key, IE_Pressed, FPlatformTime::Cycles64()));

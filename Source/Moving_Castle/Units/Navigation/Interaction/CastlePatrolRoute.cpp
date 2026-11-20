@@ -1,6 +1,7 @@
 #include "Interaction/CastlePatrolRoute.h"
 
 #include "CastleNavigationSubsystem.h"
+#include "Interaction/CastlePatrolWaypointMarker.h"
 #include "CastlePlayerController.h"
 #include "CastleShopComponent.h"
 #include "Components/InputComponent.h"
@@ -11,13 +12,22 @@
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Moving_Castle.h"
+#include "UObject/ConstructorHelpers.h"
 #include "Castle/Actors/CastleBoard.h"
 #include "Castle/Actors/CastleBuildingBase.h"
+
+namespace
+{
+	// 硬引用正式蓝图，打包时随巡逻入口和其资产依赖一起 Cook；不依赖手工关卡配置。
+	constexpr const TCHAR* WaypointMarkerAsset = TEXT("/Game/MovingCastle/BP/BP_CastlePatrolWaypointMarker");
+}
 
 ACastlePatrolRoute::ACastlePatrolRoute()
 {
 	PrimaryActorTick.bCanEverTick = true;
 	SetRootComponent(CreateDefaultSubobject<USceneComponent>(TEXT("Root")));
+	static ConstructorHelpers::FClassFinder<ACastlePatrolWaypointMarker> Markers(WaypointMarkerAsset);
+	WaypointMarkerClass = Markers.Class;
 	// 编辑时先消费左键，避免同一次输入继续放置建筑；退出编辑后左键交还原控制器。
 	InputPriority = 10;
 }
@@ -95,7 +105,7 @@ void ACastlePatrolRoute::ToggleEditing()
 	if (!CanEdit()) { return; }
 	if (bEditing)
 	{
-		SetEditing(false);
+		CancelEditingDraft();
 		ShowMessage(TEXT("已取消路径草稿，继续使用已发布路线。"), true);
 		return;
 	}
@@ -107,6 +117,15 @@ void ACastlePatrolRoute::ToggleEditing()
 void ACastlePatrolRoute::AddPointAtViewCenter()
 {
 	if (!bEditing || !CanEdit()) { return; }
+	// 路线序号从 1 开始；满 99 点后明确拒绝添加，不循环编号也不跳过显示。
+	if (DraftWaypoints.Num() >= ACastlePatrolWaypointMarker::MaxDisplayedNumber)
+	{
+		const FString Failure = FString::Printf(TEXT("巡逻入口 %s 最多可放置 %d 个带编号的路径点。"),
+			*GetPathName(), ACastlePatrolWaypointMarker::MaxDisplayedNumber);
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *Failure);
+		ShowMessage(Failure, false);
+		return;
+	}
 	APlayerController* Controller = GetWorld()->GetFirstPlayerController();
 	int32 Width, Height;
 	Controller->GetViewportSize(Width, Height);
@@ -245,7 +264,13 @@ void ACastlePatrolRoute::Tick(float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 	// 打开商店时退出草稿模式并释放左键，保证购买/放置输入不会被巡逻编辑截获。
 	if (bEditing && !CanEdit()) { CancelEditingDraft(); }
-	if (!bShowRoute || !bOwnsRoute) { return; }
+	if (!bOwnsRoute) { return; }
+	if (!bShowRoute)
+	{
+		DestroyWaypointMarkers();
+		LastMarkerPoints.Reset();
+		return;
+	}
 	const auto* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
 	const auto Path = Navigation->AcquireSharedPath();
 	if (Path && Path->bValid && Path->bClosedLoop)
@@ -256,12 +281,7 @@ void ACastlePatrolRoute::Tick(float DeltaSeconds)
 		}
 	}
 	const TArray<FVector>& DisplayPoints = bEditing ? DraftWaypoints : Navigation->GetRequestedWaypoints();
-	for (int32 Index = 0; Index < DisplayPoints.Num(); ++Index)
-	{
-		const FVector Position = DisplayPoints[Index] + FVector(0, 0, 20);
-		DrawDebugSphere(GetWorld(), Position, 14.0f, 12, bEditing ? FColor::Orange : FColor::Cyan);
-		DrawDebugString(GetWorld(), Position + FVector(0, 0, 25), FString::FromInt(Index + 1), nullptr, FColor::White, 0.0f, false, 1.3f);
-	}
+	RefreshWaypointMarkers(DisplayPoints);
 	if (GEngine)
 	{
 		const FString State = !Navigation->LastFailure.IsEmpty() ? Navigation->LastFailure.ToString()
@@ -272,8 +292,92 @@ void ACastlePatrolRoute::Tick(float DeltaSeconds)
 	}
 }
 
+void ACastlePatrolRoute::RefreshWaypointMarkers(const TArray<FVector>& Points)
+{
+	if (LastMarkerPoints == Points) { return; }
+	LastMarkerPoints = Points;
+	const auto Reject = [this](const FString& Reason)
+	{
+		// 不留半套编号误导玩家，也不改动导航子系统的已请求路线。
+		DestroyWaypointMarkers();
+		const FString Message = FString::Printf(TEXT("巡逻入口 %s 无法显示路径点（%s）：%s"),
+			*GetPathName(), WaypointMarkerAsset, *Reason);
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *Message);
+		ShowMessage(Message, false);
+	};
+	if (Points.IsEmpty())
+	{
+		DestroyWaypointMarkers();
+		return;
+	}
+	if (Points.Num() > ACastlePatrolWaypointMarker::MaxDisplayedNumber)
+	{
+		Reject(FString::Printf(TEXT("路径有 %d 点，超过标记可显示的 99 个序号。"), Points.Num()));
+		return;
+	}
+	if (!IsValid(WaypointMarkerClass.Get()))
+	{
+		Reject(TEXT("正式标记蓝图类缺失或未加载。"));
+		return;
+	}
+
+	while (WaypointMarkers.Num() > Points.Num())
+	{
+		if (ACastlePatrolWaypointMarker* Marker = WaypointMarkers.Pop(); IsValid(Marker)) { Marker->Destroy(); }
+	}
+	for (int32 Index = 0; Index < Points.Num(); ++Index)
+	{
+		if (WaypointMarkers.IsValidIndex(Index))
+		{
+			// 已有实例的序号等于数组位置，撤回/取消/提交时只移动变更的实例。
+			ACastlePatrolWaypointMarker* Marker = WaypointMarkers[Index];
+			if (!IsValid(Marker))
+			{
+				Reject(FString::Printf(TEXT("第 %d 个标记实例已失效。"), Index + 1));
+				return;
+			}
+			if (Marker->GetActorLocation() != Points[Index] && !Marker->SetActorLocation(Points[Index]))
+			{
+				Reject(FString::Printf(TEXT("无法移动标记 %s 到路径点 %d。"), *Marker->GetPathName(), Index + 1));
+				return;
+			}
+			continue;
+		}
+		FActorSpawnParameters SpawnParameters;
+		SpawnParameters.Owner = this;
+		SpawnParameters.ObjectFlags |= RF_Transient;
+		SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		// 模型枢轴位于地面且悬浮高度已做在网格里。Actor 直接放在导航请求点，
+		// 不额外移动导航坐标，也不把模型的可见高度当成 NPC 的站立高度。
+		ACastlePatrolWaypointMarker* Marker = GetWorld()->SpawnActor<ACastlePatrolWaypointMarker>(
+			WaypointMarkerClass, Points[Index], FRotator::ZeroRotator, SpawnParameters);
+		if (!IsValid(Marker))
+		{
+			Reject(FString::Printf(TEXT("无法生成第 %d 个标记。"), Index + 1));
+			return;
+		}
+		WaypointMarkers.Add(Marker);
+		if (!Marker->SetDisplayedNumber(Index + 1))
+		{
+			Reject(FString::Printf(TEXT("无法设置第 %d 个标记的数字，请检查标记资产日志。"), Index + 1));
+			return;
+		}
+	}
+}
+
+void ACastlePatrolRoute::DestroyWaypointMarkers()
+{
+	// Actor 的 Owner 并不自动销毁子 Actor，关卡切换和 PIE 收尾显式释放自己创建的标记。
+	for (ACastlePatrolWaypointMarker* Marker : WaypointMarkers)
+	{
+		if (IsValid(Marker)) { Marker->Destroy(); }
+	}
+	WaypointMarkers.Reset();
+}
+
 void ACastlePatrolRoute::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	DestroyWaypointMarkers();
 	if (bOwnsRoute && (EndPlayReason == EEndPlayReason::Destroyed || EndPlayReason == EEndPlayReason::RemovedFromWorld))
 	{
 		GetWorld()->GetSubsystem<UCastleNavigationSubsystem>()->ClearSharedRoute();
