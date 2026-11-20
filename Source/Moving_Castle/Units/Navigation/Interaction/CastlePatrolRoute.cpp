@@ -265,7 +265,18 @@ bool ACastlePatrolRoute::TryResolveWaypointFromRay(UWorld* World, const FVector&
 			FCastleGridCursorTarget Target;
 			if (It->GetPlacedBuildings().Contains(Building) && It->TryResolveGridCursorTarget(RayStart, RayEnd, Target) && Target.Surface == ECastleGridCursorSurface::Building)
 			{
-				OutPoint = It->GetGridWorldLocation(Target.Cell) - It->GetActorTransform().TransformVector(FVector(0, 0, It->LayerHeight * 0.5));
+				// 选中屋檐等表现件也要吸附到该占格真实的站立面。旧建筑仍取逻辑格底，V4 取作者标高。
+				const ACastleBuildingBase* FloorOwner = It->GetBuildingAt(Target.Cell);
+				if (!IsValid(FloorOwner))
+				{
+					OutFailureReason = FText::FromString(FString::Printf(TEXT("建筑 %s 的巡逻命中格 %s 没有登记楼体。"),
+						*Building->GetPathName(), *Target.Cell.ToString()));
+					UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
+					return false;
+				}
+				const double StandingHeight = FloorOwner->HachimisLayout ? FloorOwner->HachimisLayout->StandingHeight : 0.0;
+				OutPoint = It->GetGridWorldLocation(Target.Cell)
+					+ It->GetActorTransform().TransformVector(FVector(0, 0, StandingHeight - It->LayerHeight * 0.5));
 				return true;
 			}
 		}
