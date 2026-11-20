@@ -120,6 +120,12 @@ protected:
 	void SelectBackpackSlot8();
 	void SelectBackpackSlot9();
 	void SelectBackpackSlot10();
+	/** 滚轮按背包当前卡牌顺序换牌，向上选前一张、向下选后一张。 */
+	void SelectPreviousBackpackSlot();
+	void SelectNextBackpackSlot();
+	void CycleBackpackSlot(bool bNext);
+
+	/** 数字键与滚轮共用的选中提交入口，负责更新原有索引和玩家提示。 */
 	void SelectBackpackSlot(int32 SlotIndex);
 
 	/** 商店状态改变后统一切换鼠标、移动、视角和准星，不依赖打开商店的触发来源。 */
