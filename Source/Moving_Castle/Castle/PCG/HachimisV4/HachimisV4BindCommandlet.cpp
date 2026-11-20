@@ -13,7 +13,7 @@
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/StaticMesh.h"
-#include "StaticMeshResources.h"
+#include "HachimisV4MeshValidation.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
@@ -258,17 +258,19 @@ namespace HachimisV4Bind
 					return Error(*Binding.Blueprint, TEXT("重新加载后的装配引用或蓝图节点数不同"));
 				}
 			}
+			// 同一次审计报告全部异常资产，并让命令失败；不会忽略某个网格后报验收成功。
+			bool bValidMeshes = true;
 			for (UStaticMesh* Mesh : Meshes)
 			{
-				const FStaticMeshRenderData* Render = Mesh ? Mesh->GetRenderData() : nullptr;
-				if (!Mesh || !Render || Render->LODResources.IsEmpty() || Render->LODResources[0].GetNumTriangles() == 0
-					|| Render->Bounds.ContainsNaN() || Mesh->GetBounds().ContainsNaN() || Mesh->GetBounds().BoxExtent.IsNearlyZero()
-					|| !Catalog->FindGeometry(Mesh))
+				FString Reason;
+				if (!Mesh || !HachimisV4MeshValidation::Verify(*Mesh, Reason) || !Catalog->FindGeometry(Mesh))
 				{
-					UE_LOG(LogHachimisV4Bind, Error, TEXT("%s 重载后缺少几何目录或有效包围盒"), *GetPathNameSafe(Mesh));
-					return false;
+					UE_LOG(LogHachimisV4Bind, Error, TEXT("%s 重载校验失败：%s"), *GetPathNameSafe(Mesh),
+						Reason.IsEmpty() ? TEXT("未加载网格或缺少动画几何目录") : *Reason);
+					bValidMeshes = false;
 				}
 			}
+			if (!bValidMeshes) { return false; }
 			UE_LOG(LogHachimisV4Bind, Display, TEXT("重新加载确认 39 个装配、34 个蓝图和 %d 个目录网格"), Meshes.Num());
 			return true;
 		}
