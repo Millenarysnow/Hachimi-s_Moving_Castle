@@ -152,7 +152,7 @@ namespace CastleV4PCG
 		return true;
 	}
 
-	bool BuildStairs(const ACastleBoard& Board, const FOccupancy& Occupancy, const FTargets& Targets, FStairs& Out, FString& Error)
+	bool BuildStairs(const ACastleBoard& Board, const FOccupancy& Occupancy, const FTargets& Targets, const FRooms& Rooms, FStairs& Out, FString& Error)
 	{
 		for (const auto& Entry : Targets)
 		{
@@ -200,6 +200,9 @@ namespace CastleV4PCG
 				const double Scale = (Board.LayerHeight + UpperWalk - LowerWalk) / Board.LayerHeight;
 				Interface.WorldFrame.SetScale3D(Interface.WorldFrame.GetScale3D() * FVector(1, 1, Scale));
 				Interface.WorldFrame.AddToTranslation(Board.GetActorTransform().TransformVector(FVector(0, 0, LowerWalk * (1.0 - Scale))));
+				// 只调整普通房互接时的套件方向；混接保持下层系列的安装锚，格位选择不变。
+				if (IsRoom(&Lower) && IsRoom(Upper) && !OrientRoomStair(Board, Lower, *Upper,
+					Rooms.FindChecked(Top.Key).Frame, Rooms.FindChecked(Top.Key + Up).Frame, Interface, Error)) { return false; }
 			}
 		}
 		return true;

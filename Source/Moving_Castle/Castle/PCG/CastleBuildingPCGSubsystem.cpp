@@ -165,7 +165,7 @@ bool UCastleBuildingPCGSubsystem::RecomputeInternal(ACastleBoard* Board, const F
 	CastleV4PCG::FRooms Rooms;
 	CastleV4PCG::FStairs Stairs;
 	if (!CastleV4PCG::BuildRooms(*Rules, Occupancy, Targets, Rooms, Error)) { return false; }
-	if (!CastleV4PCG::BuildStairs(*Board, Occupancy, Targets, Stairs, Error)) { return false; }
+	if (!CastleV4PCG::BuildStairs(*Board, Occupancy, Targets, Rooms, Stairs, Error)) { return false; }
 	for (auto* Building : Buildings)
 	{
 		// 普通房互达分量可能跨越多个格。重新求计划，稳定键保证未改变的逐房组件保持原位。

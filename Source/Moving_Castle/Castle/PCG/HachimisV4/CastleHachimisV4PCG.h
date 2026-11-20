@@ -43,7 +43,10 @@ namespace CastleV4PCG
 	bool Extract(ACastleBuildingBase& Building, const ACastleBoard& Board, TArray<FCastlePCGPartAnnotation>& Out, FString& Error);
 	bool BuildRooms(const UCastlePCGRuleSetDataAsset& Rules, const FOccupancy& Occupancy, FTargets& Targets, FRooms& Rooms, FString& Error);
 	/** 共享楼梯几何来自下层所属资产。旧盾塔只在 V4 混接时加入这份共享计划。 */
-	bool BuildStairs(const ACastleBoard& Board, const FOccupancy& Occupancy, const FTargets& Targets, FStairs& Out, FString& Error);
+	bool BuildStairs(const ACastleBoard& Board, const FOccupancy& Occupancy, const FTargets& Targets, const FRooms& Rooms, FStairs& Out, FString& Error);
+	/** 在原梯格中选择满足上下房作者家具净空的楼板梯方向，不改家具或共享接口资格。 */
+	bool OrientRoomStair(const ACastleBoard& Board, const ACastleBuildingBase& Lower, const ACastleBuildingBase& Upper,
+		const FRoomSample& LowerFrame, const FRoomSample& UpperFrame, FStairInterface& Stair, FString& Error);
 	bool CutDeck(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FIntVector& Cell, const FIntVector& SourceCell,
 		const FStairInterface& Interface, FCastlePCGApplyPlan& Plan, FString& Error);
 	void AddLink(FCastlePCGApplyPlan& Plan, const FIntVector& Lower, const FTransform& Frame, const FCastleV4Hatch& Hatch);

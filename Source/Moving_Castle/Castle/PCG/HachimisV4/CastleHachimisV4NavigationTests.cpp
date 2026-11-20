@@ -64,7 +64,7 @@ namespace CastleV4NavigationTests
 			for (ACastleBuildingBase*& Building : Extra) { if (!Remove(Building)) { Cleanup(); return true; } }
 			Extra.Reset();
 			Stage = 0;
-			if (++Scene < 4) { return false; }
+			if (++Scene < 5) { return false; }
 			if (FParse::Param(FCommandLine::Get(), TEXT("HachimisV4Capture"))) { CaptureRoomsAndPreviews(); }
 			Cleanup();
 			return true;
@@ -113,13 +113,15 @@ namespace CastleV4NavigationTests
 
 		bool PlaceScene()
 		{
-			const TCHAR* LowerName = Scene == 2 ? TEXT("ShieldTower") : TEXT("ArcherTower");
-			const TCHAR* UpperName = Scene == 1 ? TEXT("ShieldTower") : TEXT("CannonTower");
+			const bool bRotatedRooms = Scene == 4;
+			const TCHAR* LowerName = bRotatedRooms ? TEXT("NormalRoom") : Scene == 2 ? TEXT("ShieldTower") : TEXT("ArcherTower");
+			const TCHAR* UpperName = bRotatedRooms ? TEXT("NormalRoom") : Scene == 1 ? TEXT("ShieldTower") : TEXT("CannonTower");
 			const int32 Level = Scene == 0 ? 2 : 1;
 			const bool bClosed = Scene == 3;
 			FCastleBuildingDescriptor LowerCard, UpperCard;
 			if (!MakeCard(LowerName, Level, ECastleTileColor::Red, 3, LowerCard)
-				|| !MakeCard(UpperName, Level, ECastleTileColor::Blue, bClosed ? 4 : 3, UpperCard)) { return false; }
+				|| !MakeCard(UpperName, Level, bRotatedRooms ? ECastleTileColor::Red : ECastleTileColor::Blue,
+					bClosed ? 4 : 3, UpperCard)) { return false; }
 			FCastleGroundGenerationResult Ground = OriginalGround;
 			const FIntVector Side = Center + FIntVector(0, 1, 0);
 			for (FCastleGroundCell& Cell : Ground.Cells)
@@ -129,7 +131,7 @@ namespace CastleV4NavigationTests
 					Cell.Color = LowerCard.Color;
 					Cell.Number = LowerCard.Number;
 				}
-				if (bClosed && Cell.Coordinate == Side)
+				if ((bClosed || bRotatedRooms) && Cell.Coordinate == Side)
 				{
 					Cell.Color = UpperCard.Color;
 					Cell.Number = UpperCard.Number;
@@ -140,6 +142,18 @@ namespace CastleV4NavigationTests
 			Lower = Board->PlaceBuilding(Center, LowerCard, false, Error);
 			if (!Lower) { Test.AddError(Error.ToString()); return false; }
 			FinishAnimations();
+			if (bRotatedRooms)
+			{
+				// 沿棋盘 +Y 放独立房，真正触发 L3V 的 90° 格局。Extra 保持从上到下的释放顺序。
+				ACastleBuildingBase* SideLower = Board->PlaceBuilding(Side, LowerCard, false, Error);
+				if (!SideLower) { Test.AddError(Error.ToString()); return false; }
+				Extra.Add(SideLower);
+				FinishAnimations();
+				ACastleBuildingBase* SideUpper = Board->PlaceBuilding(Side + Up, UpperCard, false, Error);
+				if (!SideUpper) { Test.AddError(Error.ToString()); return false; }
+				Extra.Insert(SideUpper, 0);
+				FinishAnimations();
+			}
 			if (bClosed)
 			{
 				// 上楼从同号侧楼横向落位，下方接触层的颜色与数字均不同。
@@ -204,7 +218,15 @@ namespace CastleV4NavigationTests
 			const auto Path = Navigation->AcquireSharedPath();
 			Test.TestTrue(Label + TEXT(" 上下行路线闭环"), Path && Path->bValid && Path->bClosedLoop);
 			Navigation->ClearSharedRoute();
-			const FVector Offset = Lower->HachimisLayout ? FVector(122, 123, 0) : FVector(-127, 152, 0);
+			FVector Offset = Lower->HachimisLayout ? FVector(122, 123, 0) : FVector(-127, 152, 0);
+			if (Scene == 4)
+			{
+				// 真正提交的梯面顶端位于套件净空内。变换回所属格后检查开洞及另一格未切的板。
+				Offset = CastleV4PCG::CellFrame(*Board, Links[0].UpperCell).InverseTransformPosition(Links[0].TopWorldLocation);
+				Offset.Z = 0.0;
+				TraceFloor(Center + FIntVector(0,1,1), Offset, true);
+				Capture(TEXT("V4-L3V-rotated-hatch"), Board->GetGridWorldLocation(Center) + FVector(0,257,340), FVector(-1510,-1860,1510));
+			}
 			TraceFloor(Links[0].UpperCell, Offset, false);
 			TraceFloor(Links[0].UpperCell, FVector::ZeroVector, true);
 			if (Scene == 0)

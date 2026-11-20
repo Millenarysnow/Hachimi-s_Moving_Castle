@@ -374,6 +374,102 @@ bool FCastleV4IndependentRooms::RunTest(const FString& Parameters)
 		TestEqual(TEXT("同一格拥有自己的样例结构或保持露天"), Origin.Frame.Layout ? Origin.Frame.Layout->Form : NAME_None, FrameForm);
 		return true;
 	};
+	// 保持上下两层 Actor 集合不变，单独改变垂直通行资格。这样开、封、再开使用同一套作者家具。
+	auto VerifyReversibleHatch = [&](const FIntVector& LowerCell, const FIntVector& Other, bool bTurn)
+	{
+		using namespace CastleV4PCG;
+		const FIntVector Up(0,0,1);
+		FTargets Targets;
+		for (const auto& Pair : Placed) { Targets.Add(Pair.Value); }
+		FRooms Rooms;
+		FStairs Stairs;
+		FString Error;
+		if (!BuildRooms(*Board->PCGRuleSet, Placed, Targets, Rooms, Error)
+			|| !BuildStairs(*Board, Placed, Targets, Rooms, Stairs, Error)) { AddError(Error); return false; }
+		const FStairInterface* Stair = Stairs.Find(LowerCell);
+		const FRoomSample& Sample = Rooms.FindChecked(LowerCell).Frame;
+		if (!TestNotNull(TEXT("相同格局按字典序保留一个梯格"), Stair)
+			|| !TestNotNull(TEXT("取得独立房的作者木构"), Sample.Layout)
+			|| !TestEqual(TEXT("多格样例保持作者 L3V"), Sample.Layout->Form, FName(TEXT("L3V")))
+			|| !TestEqual(TEXT("按实际房格方向装配 L3V"), Sample.bTurn, bTurn)) { return false; }
+		const FBox Opening = Stair->Hatch.Opening;
+		FVector TopCenter = Opening.GetCenter();
+		TopCenter.Z = Opening.Max.Z;
+		const FVector TestCenter = Stair->WorldFrame.TransformPosition(TopCenter);
+		const FCollisionQueryParams Query(SCENE_QUERY_STAT(HachimisRoomHatch), true);
+		auto TraceDeck = [&](const FVector& Center) -> const AActor*
+		{
+			FHitResult Hit;
+			World->LineTraceSingleByChannel(Hit, Center + FVector(0,0,60), Center - FVector(0,0,20), ECC_Pawn, Query);
+			return Hit.GetActor();
+		};
+		// 通过作者装配坐标直接核对网格与变换，不使用被测的家具归属函数来构造预期。
+		const FTransform SampleFrame = FTransform(-Sample.Layout->CellBottom(FIntVector::ZeroValue))
+			* FTransform(FQuat(FVector::UpVector, bTurn ? HALF_PI : 0.0)) * CellFrame(*Board, Sample.Origin);
+		auto VerifyFurniture = [&](bool bOpen)
+		{
+			int32 Count = 0;
+			for (const FCastleV4Part& Part : Sample.Layout->Parts)
+			{
+				if (Part.Group != TEXT("Furniture")) { continue; }
+				++Count;
+				const FTransform Expected = Part.Local * SampleFrame;
+				int32 Matches = 0;
+				for (const auto& Pair : Placed)
+				{
+					TArray<UStaticMeshComponent*> Visuals;
+					Pair.Value->GetComponents(Visuals);
+					for (const UStaticMeshComponent* Mesh : Visuals)
+					{
+						if (Mesh->IsVisible() && Mesh->IsRegistered() && Mesh->GetStaticMesh() == Part.Mesh
+							&& Mesh->GetComponentTransform().Equals(Expected, 0.01)) { ++Matches; }
+					}
+				}
+				TestEqual(FString::Printf(TEXT("%s 在开封切换前后保持网格和作者变换"), *Part.Node.ToString()), Matches, 1);
+				if (bOpen)
+				{
+					// 只用真实套件的洞口、世界变换及整个家具包围盒检查，不用家具中心代替几何。
+					FBox Shaft = Opening;
+					Shaft.Min.Z = Stair->Hatch.BottomStand.Z;
+					Shaft.Max.Z += Board->LayerHeight;
+					const FTransform InStair = Expected.GetRelativeTransform(Stair->WorldFrame);
+					TestFalse(FString::Printf(TEXT("%s 完整范围不堵旋转后的梯井"), *Part.Node.ToString()),
+						Part.Mesh->GetBoundingBox().TransformBy(InStair.ToMatrixWithScale()).Intersect(Shaft));
+				}
+			}
+			TestEqual(TEXT("L3V 作者家具拆件一个不丢"), Count, 19);
+			TArray<FCastleActiveLadderConnection> Links;
+			PCG->GetActiveLadderConnections(Board, Links);
+			TestEqual(TEXT("本层界仅开洞时注册一个真实 Link"), Links.Num(), bOpen ? 1 : 0);
+			const AActor* ExpectedDeck = bOpen ? nullptr : Placed.FindChecked(LowerCell + Up);
+			TestEqual(TEXT("原梯井同坐标开时无 Pawn 阻挡，封时命中上房功能地板"), TraceDeck(TestCenter), ExpectedDeck);
+			const ACastleBuildingBase* UpperNeighbor = Placed.FindChecked(Other + Up);
+			const FVector NeighborDeck = CellFrame(*Board, Other + Up).TransformPosition(FVector(0,0,UpperNeighbor->HachimisLayout->StandingHeight));
+			TestEqual(TEXT("另一个上层房的地板不被切走"), TraceDeck(NeighborDeck), static_cast<const AActor*>(UpperNeighbor));
+		};
+		const FCastleBuildingDescriptor OpenCard = Card;
+		FCastleBuildingDescriptor ClosedCard;
+		if (!Definition->CreateDescriptor(1, ECastleTileColor::Blue, 4, ClosedCard, Failure)) { AddError(Failure.ToString()); return false; }
+		auto SetUpper = [&](const FCastleBuildingDescriptor& Desired)
+		{
+			for (const FIntVector& Cell : {LowerCell + Up, Other + Up})
+			{
+				if (!Placed.FindChecked(Cell)->InitializeBuilding(Desired, {Cell})) { return false; }
+			}
+			if (!PCG->Recompute(Board, FVector::ZeroVector, Error)) { AddError(Error); return false; }
+			CompleteAll();
+			return true;
+		};
+		VerifyFurniture(true);
+		if (!SetUpper(ClosedCard)) { return false; }
+		VerifyFurniture(false);
+		if (!SetUpper(OpenCard)) { return false; }
+		VerifyFurniture(true);
+		AddInfo(FString::Printf(TEXT("L3V %s：洞口世界点 %s，同一上下层 Actor 开→封→再开，19 件作者家具不变"),
+			bTurn ? TEXT("沿 +Y，旋转 90°") : TEXT("沿 +X，原始朝向"), *TestCenter.ToCompactString()));
+		return true;
+	};
+
 	const FIntVector A(0,0,0), B(1,0,0), C(0,1,0), D(1,1,0), Up(0,0,1);
 	if (!Place(A) || !Verify(TEXT("L1"), NAME_None, 0)) { return false; }
 	if (!Place(A + Up) || !Verify(TEXT("L1"), TEXT("L2V"), 1)) { return false; }
@@ -388,6 +484,7 @@ bool FCastleV4IndependentRooms::RunTest(const FString& Parameters)
 		&& Recovered.Level == 1 && Recovered.Color == Card.Color && Recovered.Number == Card.Number && Recovered.Definition == Definition);
 	if (!Place(C) || !Verify(TEXT("L2H"), NAME_None, 0)) { return false; }
 	if (!Place(C + Up) || !Place(A + Up) || !Verify(TEXT("L2H"), TEXT("L3V"), 1)) { return false; }
+	if (!VerifyReversibleHatch(A, C, true)) { return false; }
 	if (!Place(D) || !Place(B) || !Verify(TEXT("L3H"), TEXT("L3V"), 1)) { return false; }
 	if (!Place(D + Up) || !Place(B + Up) || !Verify(TEXT("L3H"), TEXT("L4"), 1)) { return false; }
 	// 天面以上，从格心发射选择射线。命中的造型部件必须属于该房，而非整座样例的共同演员。
@@ -433,6 +530,10 @@ bool FCastleV4IndependentRooms::RunTest(const FString& Parameters)
 		TestEqual(TEXT("逐层倒序放置后同一格得到同一套构件"), Pair.Value->BuildingPCG->GetAppliedKey(), LayoutBefore.FindChecked(Pair.Key));
 	}
 	if (!ClearRooms()) { return false; }
+
+	// 同一作者多格造型也沿原生 X 轴装配，开封切换不依靠棋盘坐标的固定矩形。
+	for (const FIntVector& Cell : {A, B, A + Up, B + Up}) { if (!Place(Cell)) { return false; } }
+	if (!VerifyReversibleHatch(A, B, false) || !ClearRooms()) { return false; }
 
 	// 下层横向互达时，两个不相连的上层岛也要各有入口。连起中间格后只保留一个确定性梯位。
 	const FIntVector E(2,0,0);

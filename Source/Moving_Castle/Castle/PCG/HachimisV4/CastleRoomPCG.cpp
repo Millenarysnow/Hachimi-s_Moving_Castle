@@ -178,8 +178,49 @@ namespace CastleRoomPCG
 		return true;
 	}
 
+	/** 单件归属由作者格局确定。榫卯、家具和梁不裁切，也不随楼板开洞改变所有者。 */
+	FIntVector FramePartOwner(const UCastleHachimisV4Layout& Layout, const FCastleV4Part& Part)
+	{
+		const FVector Center = Part.Local.TransformPosition(Part.Mesh->GetBoundingBox().GetCenter());
+		const int32 Layer = Center.Z >= Layout.StoryRise ? 1 : 0;
+		FIntVector Owner(0, 0, Layer);
+		double Closest = TNumericLimits<double>::Max();
+		for (int32 X = 0; X < Layout.Grid.X; ++X)
+		for (int32 Y = 0; Y < Layout.Grid.Y; ++Y)
+		{
+			const FIntVector Candidate(X, Y, Layer);
+			const double Distance = FVector::DistSquared2D(Center, Layout.CellBottom(Candidate));
+			if (Distance < Closest - 0.1) { Owner = Candidate; Closest = Distance; }
+		}
+		return Owner;
+	}
+
+	/** 取本房拥有的家具完整网格范围；只供计算梯井朝向，不改变任何家具装配。 */
+	bool CollectRoomFurniture(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FRoomSample& Sample,
+		TArray<TPair<FBox, FTransform>>& Bounds, FString& Error)
+	{
+		if (!Sample.Layout) { return Reject(Building, Error, TEXT("通梯普通房缺少对应双层木构")); }
+		const FTransform SampleWorld = InRoom(Board, Building, Sample) * Building.GetActorTransform();
+		for (const FCastleV4Part& Part : Sample.Layout->Parts)
+		{
+			if (Part.Group != TEXT("Furniture")) { continue; }
+			if (!Part.Mesh) { return Reject(Building, Error, Part.Node.ToString() + TEXT(" 的 Room 家具网格缺失")); }
+			if (FramePartOwner(*Sample.Layout, Part) == Sample.Cell)
+			{
+				const FBox MeshBounds = Part.Mesh->GetBoundingBox();
+				const FTransform PartWorld = Part.Local * SampleWorld;
+				if (!MeshBounds.IsValid || MeshBounds.Min.ContainsNaN() || MeshBounds.Max.ContainsNaN() || PartWorld.ContainsNaN())
+				{
+					return Reject(Building, Error, Part.Node.ToString() + TEXT(" 的 Room 家具边界或变换无效"));
+				}
+				Bounds.Emplace(MeshBounds, PartWorld);
+			}
+		}
+		return true;
+	}
+
 	bool AddFrame(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FOccupancy& Occupancy, const FRooms& Rooms,
-		const FRoomSample& Sample, const FIntVector& Cell, bool bIncomingHatch, FCastlePCGApplyPlan& Plan, FString& Error)
+		const FRoomSample& Sample, const FIntVector& Cell, FCastlePCGApplyPlan& Plan, FString& Error)
 	{
 		const FTransform Frame = InRoom(Board, Building, Sample);
 		const UCastleHachimisV4Layout& Layout = *Sample.Layout;
@@ -196,26 +237,11 @@ namespace CastleRoomPCG
 			{
 				if (OwnRoofKey(Part, Sample, Cell, Occupancy, Rooms) && !AddPart(Building, Part, Frame, Plan, Error)) { return false; }
 			}
-			else if (Group == TEXT("Structure") || Group == TEXT("WallJunction") || Group == TEXT("Furniture"))
+			else if ((Group == TEXT("Structure") || Group == TEXT("WallJunction") || Group == TEXT("Furniture"))
+				&& FramePartOwner(Layout, Part) == Sample.Cell)
 			{
-				// 由模型几何中心选择零件的单一所有者，中心落在格缝时取最小格。榫卯和梁不做粗暴裁切。
-				const FVector Center = Part.Local.TransformPosition(Part.Mesh->GetBoundingBox().GetCenter());
-				const int32 Layer = Center.Z >= Layout.StoryRise ? 1 : 0;
-				FIntVector Owner(0, 0, Layer);
-				double Closest = TNumericLimits<double>::Max();
-				for (int32 X = 0; X < Layout.Grid.X; ++X)
-				for (int32 Y = 0; Y < Layout.Grid.Y; ++Y)
-				{
-					const FIntVector Candidate(X, Y, Layer);
-					const double Distance = FVector::DistSquared2D(Center, Layout.CellBottom(Candidate));
-					if (Distance < Closest - 0.1) { Owner = Candidate; Closest = Distance; }
-				}
-				if (Owner == Sample.Cell)
-				{
-					// 作者支撑/家具在本层开洞处需让出梯井。楼板梯套件自带洞边压条。
-					if (bIncomingHatch && Group == TEXT("Furniture") && Center.X > 49 && Center.X < 195 && Center.Y > 52 && Center.Y < 194) { continue; }
-					if (!AddPart(Building, Part, Frame, Plan, Error)) { return false; }
-				}
+				// 梯井属于楼板＋梯套件的装配状态。家具不因任何洞口状态被隐藏或替换。
+				if (!AddPart(Building, Part, Frame, Plan, Error)) { return false; }
 			}
 		}
 		return true;
@@ -341,6 +367,43 @@ bool CastleV4PCG::BuildRooms(const UCastlePCGRuleSetDataAsset& Rules, const FOcc
 	return true;
 }
 
+bool CastleV4PCG::OrientRoomStair(const ACastleBoard& Board, const ACastleBuildingBase& Lower,
+	const ACastleBuildingBase& Upper, const FRoomSample& LowerFrame, const FRoomSample& UpperFrame,
+	FStairInterface& Stair, FString& Error)
+{
+	using namespace CastleRoomPCG;
+	TArray<TPair<FBox, FTransform>> Furniture;
+	if (!CollectRoomFurniture(Board, Lower, LowerFrame, Furniture, Error)
+		|| !CollectRoomFurniture(Board, Upper, UpperFrame, Furniture, Error)) { return false; }
+
+	// 套件格局从作者标注的井口与上下落脚点得到净空，而不是对整个房组使用一块固定 XY 矩形。
+	// 梯套件（梯脚、口沿、上层楼板）和功能洞共用一份旋转；四个正交朝向均为正式装配。
+	FBox Shaft = Stair.Hatch.Opening;
+	Shaft += Stair.Hatch.BottomStand;
+	Shaft += Stair.Hatch.TopStand;
+	Shaft += Stair.Hatch.LadderBottom;
+	Shaft.Min.Z = Stair.Hatch.BottomStand.Z;
+	Shaft.Max.Z = Stair.Hatch.TopStand.Z + Board.LayerHeight;
+	for (int32 Quarter = 0; Quarter < 4; ++Quarter)
+	{
+		// 相同样例随格局旋转：在上房的作者方向中进行稳定的顺时针装配求值。
+		const FQuat Yaw(FVector::UpVector, (Quarter + int32(UpperFrame.bTurn)) * HALF_PI);
+		FTransform Candidate = Stair.WorldFrame;
+		Candidate.SetRotation(Board.GetActorQuat() * Yaw);
+		const bool bObstructed = Furniture.ContainsByPredicate([&](const TPair<FBox, FTransform>& Part)
+		{
+			const FTransform InKit = Part.Value.GetRelativeTransform(Candidate);
+			return Part.Key.TransformBy(InKit.ToMatrixWithScale()).Intersect(Shaft);
+		});
+		if (!bObstructed)
+		{
+			Stair.WorldFrame = Candidate;
+			return true;
+		}
+	}
+	return Reject(Lower, Error, Upper.GetPathName() + TEXT(" 的作者家具使同格四个正式梯向均无净空"));
+}
+
 bool CastleV4PCG::PrepareRoom(const ACastleBoard& Board, const ACastleBuildingBase& Building, const UCastlePCGRuleSetDataAsset& Rules,
 	const FOccupancy& Occupancy, const FRooms& Rooms, const FStairs& Stairs, TConstArrayView<FCastlePCGPartAnnotation> Original,
 	FCastlePCGApplyPlan& Plan, FString& Error)
@@ -356,7 +419,7 @@ bool CastleV4PCG::PrepareRoom(const ACastleBoard& Board, const ACastleBuildingBa
 		for (const auto& Part : Original) { Plan.Hidden.Add(Part.Component); }
 		if (!bIncomingHatch && !AddDeck(Board, Building, Occupancy, Room.Deck, Cell, Plan, Error)) { return false; }
 	}
-	if (Room.Frame.Layout && !AddFrame(Board, Building, Occupancy, Rooms, Room.Frame, Cell, bIncomingHatch, Plan, Error)) { return false; }
+	if (Room.Frame.Layout && !AddFrame(Board, Building, Occupancy, Rooms, Room.Frame, Cell, Plan, Error)) { return false; }
 	for (const FIntVector& Side : Directions)
 	{
 		if (!AddWall(Board, Building, Rules, Cell, Side, Room.Frame, Occupancy.FindRef(Cell + Side), Plan, Error)) { return false; }
