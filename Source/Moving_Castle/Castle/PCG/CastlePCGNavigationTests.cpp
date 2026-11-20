@@ -3,12 +3,15 @@
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
+#include "CastleGroundTileActor.h"
 #include "BuildingMergeComponent.h"
 #include "CastleLadderLinkComponent.h"
 #include "CastleNavigationSubsystem.h"
 #include "CastleMassSpawner.h"
 #include "CastleMassTraits.h"
 #include "CastleMassUnitSubsystem.h"
+#include "Interaction/CastlePatrolRoute.h"
+#include "Interaction/CastlePatrolWaypointMarker.h"
 #include "Mass/CastleMassPatrolFragments.h"
 #include "Mass/CastleMassPatrolProcessor.h"
 #include "MassCommonFragments.h"
@@ -18,6 +21,7 @@
 #include "MassExecutor.h"
 #include "MassProcessingContext.h"
 #include "Components/Building/Effects/CastleBuildingEffectComponent.h"
+#include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Units/BuildingInteraction/Mass/CastleMassBuildingTriggerProcessor.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -96,14 +100,77 @@ namespace CastlePCGNavigationTests
 			Test->TestTrue(TEXT("上端在真实Recast多边形内部精确投影"),System->ProjectPointToNavigation(Top,P,FVector(10,10,20))&&FVector::Dist2D(Top,P.Location)<1.0);
 			Test->TestEqual(TEXT("动态Link双向"),Direction,ENavLinkDirection::BothWays);
 			Test->AddInfo(FString::Printf(TEXT("真实LV2接驳 Bottom=%s Top=%s 梯底=%s 梯顶=%s"),*Ladder->BottomStandOffset.ToString(),*Ladder->TopStandOffset.ToString(),*Ladder->LadderBottomOffset.ToString(),*Ladder->LadderTopOffset.ToString()));
+			// 使用同一条垂直列，但分别从两层房间内部点击；提交的是点击结果而不是人工指定的楼层。
+			FVector LowerPoint, UpperPoint;
+			if (!VerifyFloorClick(Board->GridOrigin, Bottom.Z, false, LowerPoint)
+				|| !VerifyFloorClick(Board->GridOrigin + FIntVector(0, 0, 1), Top.Z, true, UpperPoint))
+			{ Cleanup(); return true; }
+			ClickedFloors = {LowerPoint, UpperPoint};
+			TActorIterator<ACastlePatrolRoute> Route(World);
+			if (!Test->TestTrue(TEXT("TestMap1 包含正式巡逻编辑入口"), static_cast<bool>(Route))) { Cleanup(); return true; }
 			FText Error;
-			if(!Test->TestTrue(TEXT("提交上下两层闭环"),Nav->RequestSharedPatrolRoute({Ladder->GetComponentTransform().TransformPosition(FVector(-140,-80,0)),Ladder->GetComponentTransform().TransformPosition(FVector(140,-80,560))},Error))){Test->AddError(Error.ToString());Cleanup();return true;}
+			if (!Test->TestTrue(TEXT("通过正式巡逻入口提交两个点击楼层"), Route->SetWorldWaypoints(ClickedFloors, Error)))
+			{ Test->AddError(Error.ToString()); Cleanup(); return true; }
 			Stage=2;return false;
+		}
+		bool VerifyFloorClick(FIntVector Cell, double FloorZ, bool bUpperFloor, FVector& OutPoint)
+		{
+			FVector Expected = Board->GetGridWorldLocation(Cell);
+			Expected.Z = FloorZ;
+			const FVector Start = Expected + FVector(120, 120, 180);
+			const FVector End = Start - FVector(0, 0, 100000);
+			FHitResult VisibilityHit, PhysicalHit;
+			const FCollisionQueryParams Query(SCENE_QUERY_STAT(StackedPatrolFloors), true);
+			World->LineTraceSingleByChannel(VisibilityHit, Start, End, ECC_Visibility, Query);
+			const bool bFloorHit = World->LineTraceSingleByChannel(PhysicalHit, Start, End, ECC_Pawn, Query);
+			Test->AddInfo(FString::Printf(TEXT("叠层取点：Visibility=%s/%s %s；Pawn=%s/%s %s"),
+				*GetNameSafe(VisibilityHit.GetActor()), *GetNameSafe(VisibilityHit.GetComponent()), *VisibilityHit.ImpactPoint.ToString(),
+				*GetNameSafe(PhysicalHit.GetActor()), *GetNameSafe(PhysicalHit.GetComponent()), *PhysicalHit.ImpactPoint.ToString()));
+			if (!Test->TestTrue(TEXT("同 XY 的每层都有真实可点击功能楼板"), bFloorHit
+				&& UBuildingGameplayRootComponent::IsInGameplayHierarchy(PhysicalHit.GetComponent())
+				&& FMath::IsNearlyEqual(PhysicalHit.ImpactPoint.Z, FloorZ, 1.0))) { return false; }
+			if (bUpperFloor)
+			{
+				// 关键复现条件：美术命中归下层 Actor，不能再据此把上层楼板降一层。
+				if (!Test->TestTrue(TEXT("上层视线命中下层建筑拥有的平板美术"), VisibilityHit.GetActor() == Lower
+					&& FMath::IsNearlyEqual(VisibilityHit.ImpactPoint.Z, FloorZ, 1.0))) { return false; }
+			}
+			else if (Cast<ACastleGroundTileActor>(VisibilityHit.GetActor()))
+			{
+				// TestMap1 的第一层地块是更靠前的选中面，沿用它的顶面 Z；提交后仍应投影到下层真实楼板。
+				Expected.Z = VisibilityHit.ImpactPoint.Z;
+			}
+			FText Error;
+			if (!Test->TestTrue(TEXT("能从楼内射线解析路径点"), ACastlePatrolRoute::TryResolveWaypointFromRay(World, Start, End, OutPoint, Error)))
+			{ Test->AddError(Error.ToString()); return false; }
+			return Test->TestTrue(FString::Printf(TEXT("路径点属于实际点击层的格心（期望 %s，实际 %s）"),
+				*Expected.ToCompactString(), *OutPoint.ToCompactString()), OutPoint.Equals(Expected, 1.0));
 		}
 		bool Patrol()
 		{
 			const auto Path=Nav->AcquireSharedPath();
 			if(!Path||!Path->bValid){return false;}
+			// 正式入口在 World Tick 中生成编号蓝图，校验显示点、请求点与真实投影不仅同 XY，且各自留在点击层。
+			Test->TestTrue(TEXT("正式请求原样保存两个已吸附的点击点"), Nav->GetRequestedWaypoints() == ClickedFloors);
+			if (Test->TestEqual(TEXT("NavMesh 分别投影两个点击楼层"), Path->Waypoints.Num(), ClickedFloors.Num()))
+			{
+				for (int32 Index = 0; Index < ClickedFloors.Num(); ++Index)
+				{
+					Test->TestTrue(TEXT("投影保持点击楼层和水平格心"), FMath::Abs(Path->Waypoints[Index].Z - ClickedFloors[Index].Z) <= Nav->ProjectionExtent.Z
+						&& FVector::Dist2D(Path->Waypoints[Index], ClickedFloors[Index]) < 1.0);
+				}
+			}
+			TSet<int32> Numbers;
+			for (TActorIterator<ACastlePatrolWaypointMarker> It(World); It; ++It)
+			{
+				const int32 Index = It->GetDisplayedNumber() - 1;
+				if (Test->TestTrue(TEXT("叠层标记编号有效且不重复"), ClickedFloors.IsValidIndex(Index) && !Numbers.Contains(Index)))
+				{
+					Numbers.Add(Index);
+					Test->TestTrue(TEXT("实际编号标记在各自点击层的格心"), It->GetActorLocation().Equals(ClickedFloors[Index], 1.0));
+				}
+			}
+			Test->TestEqual(TEXT("上下两层各有一个编号标记"), Numbers.Num(), ClickedFloors.Num());
 			Test->TestEqual(TEXT("PCG梯子上下各一段攀爬区间"),Path->LadderRanges.Num(),2);
 			auto* Config=NewObject<UMassEntityConfigAsset>(World);
 			auto* Trait=NewObject<UCastleMassNPCTrait>(Config);
@@ -161,6 +228,8 @@ namespace CastlePCGNavigationTests
 		ACastleBoard* Board=nullptr;ACastleBuildingBase* Lower=nullptr;ACastleBuildingBase* Upper=nullptr;
 		UWorld* World=nullptr;UCastleNavigationSubsystem* Nav=nullptr;UCastleLadderLinkComponent* Ladder=nullptr;
 		ACastleMassSpawner* Spawner=nullptr;FMassEntityManager* Manager=nullptr;
+		/** 本次叠层场景的原始点击请求，用于和标记及投影结果逐点比对。 */
+		TArray<FVector> ClickedFloors;
 	};
 }
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePCGNavigationTest,"MovingCastle.Castle.PCG.NavigationEndToEnd",

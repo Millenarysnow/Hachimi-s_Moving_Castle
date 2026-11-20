@@ -282,6 +282,9 @@ public:
 	/** 按真实占用索引查所属棋盘；独立生成、未注册或已注销的建筑没有所属棋盘。 */
 	static ACastleBoard* FindBoardForBuilding(const ACastleBuildingBase* Building);
 
+	/** 查询指定坐标当前登记的建筑（含侧挂越界格）；未占用时返回空指针。 */
+	ACastleBuildingBase* GetBuildingAt(const FIntVector& Coordinate) const;
+
 	/** 正下方底面投影内扫描指定层数；-1 表示全部下层，结果不含自身且按建筑实例去重。 */
 	bool GetBuildingsBelow(const ACastleBuildingBase* Source, int32 LayerCount, TArray<ACastleBuildingBase*>& OutBuildings) const;
 
@@ -383,9 +386,6 @@ protected:
 
 	/** 获取六个面相邻坐标，不包含斜角坐标。 */
 	void GetFaceNeighborCoordinates(const FIntVector& Coordinate, TArray<FIntVector>& OutNeighbors) const;
-
-	/** 返回指定坐标当前占用的建筑，没有建筑时返回空指针。 */
-	ACastleBuildingBase* GetBuildingAt(const FIntVector& Coordinate) const;
 
 	/** 空源、未完成源或索引不完整是错误，不能伪装成没有邻居的成功查询。 */
 	bool ValidateEffectQuerySource(const ACastleBuildingBase* Source) const;

@@ -16,6 +16,7 @@
 #include "Castle/Components/CastleEconomyComponent.h"
 #include "Castle/Automation/CastleBuildingTestUtilities.h"
 #include "Units/Navigation/Interaction/CastlePatrolRoute.h"
+#include "Units/Navigation/Interaction/CastlePatrolWaypointMarker.h"
 #include "Units/Navigation/CastleNavigationSubsystem.h"
 #include "Units/Mass/CastleMassSpawner.h"
 #include "Engine/Engine.h"
@@ -131,6 +132,17 @@ public:
 		}
 		if (Stage == 2)
 		{
+			// 真正 MainMap 的巡逻入口应自动为已发布落点生成模型，而非依赖手工新增关卡 Actor。
+			TActorIterator<ACastlePatrolWaypointMarker> Markers(World);
+			if (Test->TestTrue(TEXT("正式 MainMap 已生成巡逻标记"), static_cast<bool>(Markers)))
+			{
+				Test->TestTrue(TEXT("标记属于正式巡逻入口，单点显示 1"),
+					Cast<ACastlePatrolRoute>(Markers->GetOwner()) && Markers->GetDisplayedNumber() == 1);
+				Test->TestTrue(TEXT("MainMap 的标记枢轴仍在 NPC 请求的楼内格心"),
+					Markers->GetActorLocation().Equals(Navigation->GetRequestedWaypoints()[0]));
+				++Markers;
+				Test->TestFalse(TEXT("MainMap 不叠放多套标记"), static_cast<bool>(Markers));
+			}
 			if (!Test->TestTrue(TEXT("真实开战成功"), Director->TryStartSelectedBattle(Director->Nodes[0], Reason))) { Test->AddError(Reason.ToString()); return true; }
 			Test->TestEqual(TEXT("同步派出恰好8个NPC"), Director->BattleNPCSpawner->SpawnedUnits.Num(), 8);
 			Test->TestTrue(TEXT("战斗隐藏塔侧格"), Board->IsPlacementSurfacePresentationHidden());

@@ -81,11 +81,11 @@ namespace CastleCannonPlayerInputTests
 				const auto& Points=Nav->GetRequestedWaypoints();
 				if (!Test->TestEqual(TEXT("Enter经真实路径编辑提交两个点"),Points.Num(),2)) { Cleanup(); return true; }
 				// 期望值由同一次原生射线与棋盘格坐标独立计算，不调用被测取点函数伪造预期。
-				// 只有地块命中才保留原始 ImpactPoint；楼顶建筑必须提交对应层底面锚点。
+				// 地块吸附到格心并保留命中面的 Z；楼顶建筑必须提交对应层底面锚点。
 				Test->TestTrue(Cast<ACastleGroundTileActor>(FirstHit.GetActor())
-					? TEXT("地块路径点1精确保留Visibility命中") : TEXT("建筑路径点1等于D26本层楼板点"),Points[0].Equals(FirstExpected,0.1));
+					? TEXT("地块路径点1对齐格心并保留顶面高度") : TEXT("建筑路径点1等于D26本层楼板点"),Points[0].Equals(FirstExpected,0.1));
 				Test->TestTrue(Cast<ACastleGroundTileActor>(SecondHit.GetActor())
-					? TEXT("地块路径点2精确保留Visibility命中") : TEXT("建筑路径点2等于D26本层楼板点"),Points[1].Equals(SecondExpected,0.1));
+					? TEXT("地块路径点2对齐格心并保留顶面高度") : TEXT("建筑路径点2等于D26本层楼板点"),Points[1].Equals(SecondExpected,0.1));
 				Test->AddInfo(FString::Printf(TEXT("W4_INPUT_D26 P1=%s Expected1=%s Hit1=%s P2=%s Expected2=%s Hit2=%s"),
 					*Points[0].ToString(),*FirstExpected.ToString(),*FirstHit.ImpactPoint.ToString(),
 					*Points[1].ToString(),*SecondExpected.ToString(),*SecondHit.ImpactPoint.ToString()));
@@ -193,8 +193,10 @@ namespace CastleCannonPlayerInputTests
 			}
 			else
 			{
-				if (!Test->TestNotNull(TEXT("非建筑取点必须是原有地块命中"),Cast<ACastleGroundTileActor>(Hit.GetActor()))) { return false; }
-				ExpectedPoint=Hit.ImpactPoint;
+				const auto* Tile = Cast<ACastleGroundTileActor>(Hit.GetActor());
+				if (!Test->TestNotNull(TEXT("非建筑取点必须是原有地块命中"), Tile)) { return false; }
+				ExpectedPoint = Board->GetGridWorldLocation(Tile->GetGroundCell().Coordinate);
+				ExpectedPoint.Z = Hit.ImpactPoint.Z;
 			}
 			return true;
 		}

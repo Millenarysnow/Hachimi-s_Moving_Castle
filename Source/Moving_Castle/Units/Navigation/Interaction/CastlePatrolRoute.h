@@ -4,6 +4,8 @@
 #include "GameFramework/Actor.h"
 #include "CastlePatrolRoute.generated.h"
 
+class ACastlePatrolWaypointMarker;
+
 /** 世界唯一的玩家巡逻路径编辑入口；只管理路径点和反馈，实际整条寻路交给导航子系统。 */
 UCLASS()
 class MOVING_CASTLE_API ACastlePatrolRoute : public AActor
@@ -20,6 +22,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="共享巡逻")
 	bool bAllowPlayerEditing = true;
 
+	/** 同时控制地面路线和悬浮标记的显隐，不会清除已发布给 NPC 的路线。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="共享巡逻")
 	bool bShowRoute = true;
 
@@ -33,7 +36,7 @@ public:
 	/** 开战只取消草稿和输入占用，不提交、不清除正式路线。 */
 	void CancelEditingDraft();
 
-	/** 与视口放点共用：建筑命中格按底面锚点取本层楼板；其他顶面保持实际命中位置。 */
+	/** 与视口放点共用：功能楼板按命中的楼层取格心；选中建筑美术时取该占格的楼内底面。 */
 	static bool TryResolveWaypointFromRay(UWorld* World, const FVector& RayStart, const FVector& RayEnd,
 		FVector& OutPoint, FText& OutFailureReason);
 
@@ -42,6 +45,19 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** 正式蓝图类随入口一起加载，既有地图不需要再布置标记 Actor。 */
+	UPROPERTY()
+	TSubclassOf<ACastlePatrolWaypointMarker> WaypointMarkerClass;
+
+	/** 只持有本入口生成的临时实例。草稿和正式点在同一显示列表中切换，不同时叠两套标记。 */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<ACastlePatrolWaypointMarker>> WaypointMarkers;
+
+	/** 只在显示点列变化时同步；同一份无效配置不会在 Tick 中重试并重复报错。 */
+	TArray<FVector> LastMarkerPoints;
+	void RefreshWaypointMarkers(const TArray<FVector>& Points);
+	void DestroyWaypointMarkers();
+
 	/** 草稿只在 Enter 时整批提交，拖动/连续放点不会逐帧或逐次计算半条路线。 */
 	TArray<FVector> DraftWaypoints;
 	bool bEditing = false;
