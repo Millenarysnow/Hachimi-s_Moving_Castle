@@ -24,6 +24,67 @@ namespace
 	const FName OffsetParameter(TEXT("Offset"));
 	const FVector LineLift(0.0, 0.0, 12.0); // 仅渲染抬高，避免斜坡与楼板交界吞掉线条，不写回路线坐标。
 
+	struct FPatrolRenderSpan
+	{
+		FVector Direction;
+		double Length;
+		FBox Bounds;
+		FVector LaneOffset = FVector::ZeroVector;
+	};
+
+	// 原材质的虚线沿 UV 前进。反向且共用同一段空间的圆柱会叠出两套相反相位，视觉上变成原地开合。
+	// 检测三维中心线间距是否小于一条线宽，并要求有共同的纵向区间；相交路口、仅端点相接和上下楼板不是折返。
+	bool OverlapsInReverse(const FPatrolRenderSpan& A, const FVector& StartA, const FVector& EndA,
+		const FPatrolRenderSpan& B, const FVector& StartB, const FVector& EndB, double LineDiameter)
+	{
+		if (FVector::DotProduct(A.Direction, B.Direction) > -0.98) { return false; }
+		const double From = FVector::DotProduct(StartB - StartA, A.Direction);
+		const double To = FVector::DotProduct(EndB - StartA, A.Direction);
+		// 此处 B 指向 A 的反向，To 是投影区间的低端；采样分段不完全对齐也能判定。
+		if (FMath::Min(A.Length, From) - FMath::Max(0.0, To) <= UE_KINDA_SMALL_NUMBER) { return false; }
+		FVector ClosestA, ClosestB;
+		FMath::SegmentDistToSegmentSafe(StartA, EndA, StartB, EndB, ClosestA, ClosestB);
+		return FVector::DistSquared(ClosestA, ClosestB) < FMath::Square(LineDiameter);
+	}
+
+	void SeparateReverseLanes(const TArray<FVector>& Points, const FBox& PathBounds, double LineDiameter,
+		TArray<FPatrolRenderSpan>& Spans)
+	{
+		// 按最长空间轴扫掠包围盒，只精查附近路段；在路线发布时计算，不随帧或 NPC 数重算。
+		const FVector Size = PathBounds.GetSize();
+		const int32 Axis = Size.X >= Size.Y && Size.X >= Size.Z ? 0 : (Size.Y >= Size.Z ? 1 : 2);
+		TArray<int32> Sweep;
+		Sweep.Reserve(Spans.Num());
+		for (int32 Index = 0; Index < Spans.Num(); ++Index) { Sweep.Add(Index); }
+		Sweep.Sort([&](int32 A, int32 B) { return Spans[A].Bounds.Min[Axis] < Spans[B].Bounds.Min[Axis]; });
+
+		const auto LaneOffset = [LineDiameter](const FVector& Direction)
+		{
+			// 两个方向各挪一条半线宽，即使原路已有不到一条线宽的错位，也能留出可见间隔。
+			// 水平/斜坡取行进右侧；竖直段按升降分到世界 Y 两侧，所有侧移都保持原高度。
+			const FVector Right(-Direction.Y, Direction.X, 0.0);
+			const FVector Side = Right.SizeSquared() > UE_DOUBLE_SMALL_NUMBER
+				? Right.GetUnsafeNormal() : FVector(0.0, FMath::Sign(Direction.Z), 0.0);
+			return Side * (1.5 * LineDiameter);
+		};
+		for (int32 Order = 0; Order < Sweep.Num(); ++Order)
+		{
+			const int32 A = Sweep[Order];
+			const FBox SearchBounds = Spans[A].Bounds.ExpandBy(LineDiameter);
+			for (int32 Next = Order + 1; Next < Sweep.Num(); ++Next)
+			{
+				const int32 B = Sweep[Next];
+				if (Spans[B].Bounds.Min[Axis] > SearchBounds.Max[Axis]) { break; }
+				if (SearchBounds.Intersect(Spans[B].Bounds) && OverlapsInReverse(Spans[A], Points[A], Points[A + 1],
+					Spans[B], Points[B], Points[B + 1], LineDiameter))
+				{
+					Spans[A].LaneOffset = LaneOffset(Spans[A].Direction);
+					Spans[B].LaneOffset = LaneOffset(Spans[B].Direction);
+				}
+			}
+		}
+	}
+
 	// 命令按当前世界处理，不用全局 CVar；多开 PIE 或切关卡不会继承上个世界的选择。
 	FAutoConsoleCommandWithWorldArgsAndOutputDevice ShowPatrolPathCommand(TEXT("Castle.ShowPatrolPath"),
 		TEXT("Castle.ShowPatrolPath <0|1>：关闭或开启当前游戏世界的 NPC 共享巡逻线。"),
@@ -166,28 +227,77 @@ bool UCastlePatrolPathVisualizationSubsystem::BuildPathSegments(const FCastleSha
 		float Offset;
 	};
 
-	// 全部使用 NPC 实际采样的相邻点；不复刻示例的大圆角，否则楼梯和建筑转折上会抄近路。
+	// 仍按 NPC 的贴地采样构建，不用示例样条重新走捷径；偏移只写入临时渲染顶点。
 	const TArray<FVector>& Points = Path.PatrolPoints;
 	const TArray<double>& Distances = Path.PatrolDistances;
-	if (Distances.Num() != Points.Num() || Distances[0] != 0.0)
+	if (Distances.Num() != Points.Num() || Distances[0] != 0.0 || !Points.Last().Equals(Points[0], 0.01))
 	{
-		return RejectDrawing(FString::Printf(TEXT("巡逻快照 %d 的累计距离与采样列表不匹配。"), Path.PathRevision));
+		return RejectDrawing(FString::Printf(TEXT("巡逻快照 %d 的累计距离不匹配或采样首尾没有闭合。"), Path.PathRevision));
 	}
-	TArray<FDashSegment> Segments;
-	Segments.Reserve(Points.Num() - 1);
-	for (int32 Index = 1; Index < Points.Num(); ++Index)
+	const int32 NumSpans = Points.Num() - 1;
+	TArray<FPatrolRenderSpan> Spans;
+	Spans.Reserve(NumSpans);
+	FBox PathBounds(ForceInit);
+	for (int32 Index = 0; Index < NumSpans; ++Index)
 	{
-		const FVector Delta = Points[Index] - Points[Index - 1];
+		const FVector Delta = Points[Index + 1] - Points[Index];
 		const double Length = Delta.Size();
-		if (!FMath::IsFinite(Length) || Length <= UE_DOUBLE_SMALL_NUMBER || !FMath::IsFinite(Distances[Index])
-			|| !FMath::IsNearlyEqual(Distances[Index] - Distances[Index - 1], Length, 0.01))
+		if (!FMath::IsFinite(Length) || Length <= UE_DOUBLE_SMALL_NUMBER || !FMath::IsFinite(Distances[Index + 1])
+			|| !FMath::IsNearlyEqual(Distances[Index + 1] - Distances[Index], Length, 0.01))
 		{
-			return RejectDrawing(FString::Printf(TEXT("巡逻快照 %d 的第 %d 条采样线段或累计距离无效。"), Path.PathRevision, Index));
+			return RejectDrawing(FString::Printf(TEXT("巡逻快照 %d 的第 %d 条采样线段或累计距离无效。"), Path.PathRevision, Index + 1));
 		}
-		// 在组件局部 X 轴上拉直网格，再整体旋转到实际三维方向。梯子段也不会遇到样条上向量与切线平行。
-		// UV 跨度随长度缩放，起始相位来自整圈累计距离；不能每 20 cm 采样点都从同一相位重播。
-		Segments.Add({Points[Index - 1] + LineLift, FQuat::FindBetweenNormals(FVector::ForwardVector, Delta / Length),
-			Length, static_cast<float>(Length / DashPeriodCm), static_cast<float>(FMath::Fmod(Distances[Index - 1] / DashPeriodCm, 1.0))});
+		const FBox Bounds = FBox(Points[Index], Points[Index]) + Points[Index + 1];
+		Spans.Add({Delta / Length, Length, Bounds});
+		PathBounds += Bounds;
+	}
+
+	const FVector Extent = LineMesh->GetBounds().BoxExtent;
+	const double LineDiameter = 2.0 * FMath::Max(Extent.Y * DashCrossSection.X, Extent.Z * DashCrossSection.Y);
+	SeparateReverseLanes(Points, PathBounds, LineDiameter, Spans);
+	// 前后段共用显示端点来连续通过采样接缝。离开重叠区时侧移平滑收回，折返点的两个反向偏移相消。
+	TArray<FVector> KnotOffsets;
+	KnotOffsets.Reserve(Points.Num());
+	for (int32 Index = 0; Index < NumSpans; ++Index)
+	{
+		KnotOffsets.Add(0.5 * (Spans[(Index + NumSpans - 1) % NumSpans].LaneOffset + Spans[Index].LaneOffset));
+	}
+	KnotOffsets.Add(FVector(KnotOffsets[0]));
+
+	TArray<FDashSegment> Segments;
+	Segments.Reserve(NumSpans);
+	const auto AppendDash = [&](const FVector& Start, const FVector& End, double DistanceA, double DistanceB)
+	{
+		const FVector Delta = End - Start;
+		const double Length = Delta.Size();
+		if (!FMath::IsFinite(Length) || Length <= UE_DOUBLE_SMALL_NUMBER)
+		{
+			return RejectDrawing(FString::Printf(TEXT("巡逻快照 %d 在累计距离 %.2f cm 处生成了无效的显示线段。"), Path.PathRevision, DistanceA));
+		}
+		// 局部 X 轴负责网格形变，世界旋转可适配斜坡和梯子。相位仍用 NPC 行程距离，侧移处也不会重新起播。
+		Segments.Add({Start + LineLift, FQuat::FindBetweenNormals(FVector::ForwardVector, Delta / Length), Length,
+			static_cast<float>((DistanceB - DistanceA) / DashPeriodCm), static_cast<float>(FMath::Fmod(DistanceA / DashPeriodCm, 1.0))});
+		return true;
+	};
+	for (int32 Index = 0; Index < NumSpans; ++Index)
+	{
+		const FVector Start = Points[Index] + KnotOffsets[Index];
+		const FVector End = Points[Index + 1] + KnotOffsets[Index + 1];
+		double EndOfFirstDash = Distances[Index + 1];
+		FVector EndPointOfFirstDash = End;
+		// 很短的折返可能整条去程只有一个采样段，两个折返点都必须接回中心；用显示中点撑开两条线。
+		const bool bSplitAtLaneMidpoint = !Spans[Index].LaneOffset.IsZero()
+			&& KnotOffsets[Index].IsNearlyZero() && KnotOffsets[Index + 1].IsNearlyZero();
+		if (bSplitAtLaneMidpoint)
+		{
+			EndOfFirstDash = (Distances[Index] + Distances[Index + 1]) * 0.5;
+			EndPointOfFirstDash = (Start + End) * 0.5 + Spans[Index].LaneOffset;
+		}
+		if (!AppendDash(Start, EndPointOfFirstDash, Distances[Index], EndOfFirstDash)
+			|| (bSplitAtLaneMidpoint && !AppendDash(EndPointOfFirstDash, End, EndOfFirstDash, Distances[Index + 1])))
+		{
+			return false;
+		}
 	}
 
 	DestroyPathSegments();
