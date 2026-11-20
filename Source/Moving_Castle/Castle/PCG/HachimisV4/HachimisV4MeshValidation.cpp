@@ -15,8 +15,10 @@ namespace HachimisV4MeshValidation
 	{
 		// StaticMesh 的 LOD 编译和距离场是不同队列，等待前者不能证明 GPU 会收到有效的 SDF。
 		FStaticMeshCompilingManager::Get().FinishCompilation({&Mesh});
-		const bool bNeedsDistanceField = IConsoleManager::Get().FindConsoleVariable(TEXT("r.GenerateMeshDistanceFields"))->GetInt() != 0
-			|| Mesh.bGenerateMeshDistanceField;
+		// 注册项跨全量审计保持稳定；每件仍读取当前配置值，不重复查找上万个控制台对象。
+		static const IConsoleVariable* const GenerateDistanceFields = IConsoleManager::Get().FindConsoleVariable(TEXT("r.GenerateMeshDistanceFields"));
+		check(GenerateDistanceFields);
+		const bool bNeedsDistanceField = GenerateDistanceFields->GetInt() != 0 || Mesh.bGenerateMeshDistanceField;
 		if (bNeedsDistanceField && GDistanceFieldAsyncQueue)
 		{
 			GDistanceFieldAsyncQueue->BlockUntilBuildComplete(&Mesh, false);
