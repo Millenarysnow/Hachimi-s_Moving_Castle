@@ -8,7 +8,6 @@
 #include "Components/InputComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
-#include "DrawDebugHelpers.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -351,13 +350,6 @@ void ACastlePatrolRoute::Tick(float DeltaSeconds)
 	}
 	const auto* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
 	const auto Path = Navigation->AcquireSharedPath();
-	if (Path && Path->bValid && Path->bClosedLoop)
-	{
-		for (int32 Index = 1; Index < Path->PatrolPoints.Num(); ++Index)
-		{
-			DrawDebugLine(GetWorld(), Path->PatrolPoints[Index - 1] + FVector(0, 0, 8), Path->PatrolPoints[Index] + FVector(0, 0, 8), FColor::Green, false, -1.0f, 0, 3.0f);
-		}
-	}
 	const TArray<FVector>& DisplayPoints = bEditing ? DraftWaypoints : Navigation->GetRequestedWaypoints();
 	RefreshWaypointMarkers(DisplayPoints);
 	if (GEngine)

@@ -4,10 +4,11 @@
 #include "GameFramework/Actor.h"
 #include "CastlePatrolWaypointMarker.generated.h"
 
+class UMaterialInterface;
 class UStaticMesh;
 class UStaticMeshComponent;
 
-/** 仅负责巡逻路点的外观；根枢轴在地面，主体和数字按模型原有高度悬浮。 */
+/** 仅负责巡逻路点的外观；地面圆圈标出落点，主体和数字沿用模型的悬浮高度。 */
 UCLASS(Abstract, Blueprintable)
 class MOVING_CASTLE_API ACastlePatrolWaypointMarker : public AActor
 {
@@ -41,6 +42,14 @@ private:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="巡逻标记", meta=(AllowPrivateAccess="true"))
 	int32 DisplayedNumber = 0;
 
+	/** 地面样式固定引用工具包的原始网格和材质；Cook 不依赖示例地图。 */
+	UPROPERTY()
+	TObjectPtr<UStaticMesh> GroundCircleMesh;
+	UPROPERTY()
+	TObjectPtr<UMaterialInterface> GroundCircleMaterial;
+
+	UPROPERTY(VisibleAnywhere, Category="巡逻标记")
+	TObjectPtr<UStaticMeshComponent> GroundCircle;
 	UPROPERTY(VisibleAnywhere, Category="巡逻标记")
 	TObjectPtr<UStaticMeshComponent> Body;
 	UPROPERTY(VisibleAnywhere, Category="巡逻标记")
