@@ -122,7 +122,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category="移动城堡|NPC导航")
 	bool RequestSharedPath(FVector Start, FVector Goal, FText& OutFailureReason);
 
-	/** 一次接收整组路径点，集中算完所有相邻最短路和 N→1 后才原子发布；单点表示原地待命。 */
+	/** 一次接收整组路径点，集中算完相邻通路及格内轨迹后才原子发布；单点表示原地待命。 */
 	UFUNCTION(BlueprintCallable, Category="移动城堡|NPC导航")
 	bool RequestSharedPatrolRoute(const TArray<FVector>& Waypoints, FText& OutFailureReason);
 

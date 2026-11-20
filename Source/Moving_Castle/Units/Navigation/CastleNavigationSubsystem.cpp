@@ -12,6 +12,7 @@
 #include "NavigationSystem.h"
 #include "NavMesh/NavMeshPath.h"
 #include "NavMesh/RecastNavMesh.h"
+#include "Surface/CastleGridSurfacePath.h"
 
 void FCastleSharedNavigationPath::SamplePatrol(double Distance, FVector& OutLocation, FVector& OutDirection) const
 {
@@ -19,7 +20,7 @@ void FCastleSharedNavigationPath::SamplePatrol(double Distance, FVector& OutLoca
 	OutLocation = PatrolPoints[0];
 	OutDirection = FVector::ZeroVector;
 	if (PatrolPoints.Num() == 1) { return; }
-	// 二分找距离右侧的采样点；保持原始折线转折，不用插值平滑把单位带入墙内。
+	// 二分找距离右侧的采样点；只沿发布时已验证的折线插值，不在运行时再次平滑。
 	int32 Low = 1;
 	int32 High = PatrolDistances.Num() - 1;
 	while (Low < High)
@@ -89,6 +90,17 @@ bool FCastleSharedNavigationPath::FindClosestPatrolDistance(FVector Location, in
 
 namespace CastlePatrolNavigation
 {
+	/** 追加一个实际要走的点；零长度线段不产生重复累计距离，供巡逻二分采样。 */
+	void AppendPoint(const FVector& Point, FCastleSharedNavigationPath& OutPath)
+	{
+		const double Span = FVector::Distance(OutPath.PatrolPoints.Last(), Point);
+		if (Span > UE_DOUBLE_SMALL_NUMBER)
+		{
+			OutPath.PatrolPoints.Add(Point);
+			OutPath.PatrolDistances.Add(OutPath.PatrolDistances.Last() + Span);
+		}
+	}
+
 	/** 梯子折线按真实三维距离采样，并只将梯底至梯顶的部分记录为攀爬区间。 */
 	bool AppendLadderPolyline(const TArray<FVector>& Points, const FVector& FacingDirection, const double Spacing,
 		FCastleSharedNavigationPath& OutPath, FText& OutFailure)
@@ -119,12 +131,7 @@ namespace CastlePatrolNavigation
 			for (int32 Step = 1; Step <= Steps; ++Step)
 			{
 				const FVector Sample = FMath::Lerp(Start, End, static_cast<double>(Step) / Steps);
-				const double Span = FVector::Distance(OutPath.PatrolPoints.Last(), Sample);
-				if (Span > UE_DOUBLE_SMALL_NUMBER)
-				{
-					OutPath.PatrolPoints.Add(Sample);
-					OutPath.PatrolDistances.Add(OutPath.PatrolDistances.Last() + Span);
-				}
+				AppendPoint(Sample, OutPath);
 			}
 			if (Segment == 2)
 			{
@@ -137,9 +144,25 @@ namespace CastlePatrolNavigation
 		return true;
 	}
 
-	bool AppendSurfaceSamples(const ARecastNavMesh& Mesh, UNavigationSystemV1& Navigation, const FNavMeshPath& Leg, double Spacing,
-		FCastleSharedNavigationPath& OutPath, FText& OutFailure)
+	bool AppendSurfaceSamples(const ARecastNavMesh& Mesh, UNavigationSystemV1& Navigation, const UObject& Owner,
+		const TOptional<CastleGridSurfacePath::FGrid>& Grid, const FNavMeshPath& Leg, double Spacing,
+		FCastleSharedNavigationPath& OutPath, FText& OutFailure, bool& bOutGridFailure)
 	{
+		TArray<FVector> Surface{OutPath.PatrolPoints.Last()};
+		const auto FlushSurface = [&]()
+		{
+			// 一次处理两个硬锚点之间的整段步行，确保同一格的进出和转角不被原生拐点拆散。
+			TArray<FVector> Shaped;
+			if (Grid.IsSet() && !CastleGridSurfacePath::Build(Grid.GetValue(), Mesh, Owner, Surface, Spacing, Shaped, OutFailure))
+			{
+				bOutGridFailure = true;
+				return false;
+			}
+			const TArray<FVector>& Points = Grid.IsSet() ? Shaped : Surface;
+			for (int32 I = 1; I < Points.Num(); ++I) { AppendPoint(Points[I], OutPath); }
+			return true;
+		};
+
 		const TArray<FNavPathPoint>& Corners = Leg.GetPathPoints();
 		int32 CorridorCursor = 0;
 		for (int32 Corner = 1; Corner < Corners.Num(); ++Corner)
@@ -186,7 +209,9 @@ namespace CastlePatrolNavigation
 				}
 				// 上下行都面向同一梯面：下行折线已逆序，仍取原下层入口指向梯底的水平向量。
 				const FVector FacingDirection = End.Z > Start.Z ? Traversal[1] - Traversal[0] : Traversal[2] - Traversal[3];
-				if (!AppendLadderPolyline(Traversal, FacingDirection, Spacing, OutPath, OutFailure)) { return false; }
+				if (!FlushSurface() || !AppendLadderPolyline(Traversal, FacingDirection, Spacing, OutPath, OutFailure)) { return false; }
+				Surface.Reset();
+				Surface.Add(OutPath.PatrolPoints.Last());
 			}
 			else
 			{
@@ -206,7 +231,7 @@ namespace CastlePatrolNavigation
 						const double HorizontalSquared = FVector::DistSquared2D(Sample, OnSurface);
 						// 限制在求解器选中的折线上；高度以最近已走表面连续选择，防止吸到重叠楼层。
 						if (HorizontalSquared > 1.0) { continue; }
-						const double Score = HorizontalSquared * 1000000.0 + FMath::Square(OnSurface.Z - OutPath.PatrolPoints.Last().Z);
+						const double Score = HorizontalSquared * 1000000.0 + FMath::Square(OnSurface.Z - Surface.Last().Z);
 						if (Score < BestScore) { BestScore = Score; BestPoint = OnSurface; BestPoly = Poly; }
 					}
 					if (BestPoly == INDEX_NONE)
@@ -215,16 +240,11 @@ namespace CastlePatrolNavigation
 						return false;
 					}
 					CorridorCursor = BestPoly;
-					const double Span = FVector::Distance(OutPath.PatrolPoints.Last(), BestPoint);
-					if (Span > UE_DOUBLE_SMALL_NUMBER)
-					{
-						OutPath.PatrolPoints.Add(BestPoint);
-						OutPath.PatrolDistances.Add(OutPath.PatrolDistances.Last() + Span);
-					}
+					if (FVector::DistSquared(Surface.Last(), BestPoint) > FMath::Square(UE_DOUBLE_SMALL_NUMBER)) { Surface.Add(BestPoint); }
 				}
 			}
 		}
-		return true;
+		return FlushSurface();
 	}
 }
 
@@ -457,14 +477,21 @@ bool UCastleNavigationSubsystem::BuildTemporaryPath(TConstArrayView<FVector> Way
 		OutReason = FText::FromString(TEXT("临时调动缺少 Recast 走廊，不能使用直线。"));
 		return false;
 	}
+	TOptional<CastleGridSurfacePath::FGrid> Grid;
+	if (!CastleGridSurfacePath::ReadGrid(*GetWorld(), Grid, OutReason))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("NPC 格心导航：%s"), *OutReason.ToString());
+		return false;
+	}
 	FCastleSharedNavigationPath Candidate;
 	Candidate.NavigationRevision = NavigationRevision;
 	for (const FVector& Waypoint : Waypoints)
 	{
 		FNavLocation Projected;
-		// 仅吸附到导航表面高度；水平偏离意味着真实落点/接驳点不可达，不能用旁边楼层或走廊替代。
+		// 棋盘落点和接驳点只贴高度；无棋盘关卡保留临时路线原有的 5 cm 横向投影校验。
 		if (Waypoint.ContainsNaN() || !Navigation->ProjectPointToNavigation(Waypoint, Projected, ProjectionExtent, Data)
-			|| FVector::DistSquared2D(Waypoint, Projected.Location) > FMath::Square(5.0))
+			|| (Grid.IsSet() ? !CastleGridSurfacePath::IsExactAnchor(*Grid, Waypoint, Projected.Location, ProjectionExtent.Z)
+				: FVector::DistSquared2D(Waypoint, Projected.Location) > FMath::Square(5.0)))
 		{
 			OutReason = FText::FromString(FString::Printf(TEXT("临时调动点 %s 不在可行走表面。"), *Waypoint.ToCompactString()));
 			return false;
@@ -486,9 +513,12 @@ bool UCastleNavigationSubsystem::BuildTemporaryPath(TConstArrayView<FVector> Way
 		const FPathFindingResult Result = Navigation->FindPathSync(Query);
 		const FNavMeshPath* Corridor = Result.IsSuccessful() && Result.Path.IsValid() && !Result.Path->IsPartial()
 			? Result.Path->CastPath<FNavMeshPath>() : nullptr;
-		if (!Corridor || !CastlePatrolNavigation::AppendSurfaceSamples(*Mesh, *Navigation, *Corridor, PatrolSampleSpacing, Candidate, OutReason))
+		bool bGridFailure = false;
+		if (!Corridor || !CastlePatrolNavigation::AppendSurfaceSamples(*Mesh, *Navigation, *this, Grid, *Corridor,
+			PatrolSampleSpacing, Candidate, OutReason, bGridFailure))
 		{
 			if (OutReason.IsEmpty()) { OutReason = FText::FromString(TEXT("没有完整可走的集结或接回路线。")); }
+			if (bGridFailure) { UE_LOG(LogMoving_Castle, Error, TEXT("NPC 格心导航：%s"), *OutReason.ToString()); }
 			return false;
 		}
 		Candidate.WaypointDistances.Add(Candidate.PatrolDistances.Last());
@@ -512,13 +542,24 @@ void UCastleNavigationSubsystem::CalculateSharedPath()
 	if (!ValidateNavigation(Navigation, Data, Failure)) { FailNavigation(Failure); return; }
 	const ARecastNavMesh* Mesh = Cast<ARecastNavMesh>(Data);
 	LastFailure = FText::GetEmpty();
+	TOptional<CastleGridSurfacePath::FGrid> Grid;
+	// 新增的格内失败以 Error 报告；保留已有原生不可达、NavLink 失败的日志边界。
+	bool bGridFailure = bRequestedClosedLoop && !CastleGridSurfacePath::ReadGrid(*GetWorld(), Grid, LastFailure);
 	// 所有路径点先统一投影；任一点无效时不开始各路段的 A*，也不发布上轮旧路线。
-	for (int32 Index = 0; Index < RequestedWaypoints.Num(); ++Index)
+	for (int32 Index = 0; Index < RequestedWaypoints.Num() && LastFailure.IsEmpty(); ++Index)
 	{
 		FNavLocation Projected;
 		if (!Navigation->ProjectPointToNavigation(RequestedWaypoints[Index], Projected, ProjectionExtent, Data))
 		{
 			LastFailure = FText::FromString(FString::Printf(TEXT("共享路线起点或终点附近没有可行走 NavMesh（路径点 %d），请检查楼板、楼梯碰撞及 Agent 尺寸。"), Index + 1));
+			break;
+		}
+		// 格心硬点不能被移动到障碍旁；没有棋盘语义的路线保留原来的路径点投影契约。
+		if (Grid.IsSet() && !CastleGridSurfacePath::IsExactAnchor(*Grid, RequestedWaypoints[Index], Projected.Location, ProjectionExtent.Z))
+		{
+			LastFailure = FText::FromString(FString::Printf(TEXT("%s 的显式巡逻路径点 %d（%s）没有原位可行走表面，不能移到附近位置或其他楼层。"),
+				*Grid->BoardName, Index + 1, *RequestedWaypoints[Index].ToCompactString()));
+			bGridFailure = true;
 			break;
 		}
 		Path.Waypoints.Add(Projected.Location);
@@ -561,7 +602,8 @@ void UCastleNavigationSubsystem::CalculateSharedPath()
 			if (bRequestedClosedLoop)
 			{
 				const FNavMeshPath* Corridor = Result.Path->CastPath<FNavMeshPath>();
-				if (LastFailure.IsEmpty() && (!Corridor || !CastlePatrolNavigation::AppendSurfaceSamples(*Mesh, *Navigation, *Corridor, PatrolSampleSpacing, Path, LastFailure)))
+				if (LastFailure.IsEmpty() && (!Corridor || !CastlePatrolNavigation::AppendSurfaceSamples(*Mesh, *Navigation, *this, Grid,
+					*Corridor, PatrolSampleSpacing, Path, LastFailure, bGridFailure)))
 				{
 					if (LastFailure.IsEmpty()) { LastFailure = FText::FromString(TEXT("共享巡逻缺少 Recast 路径走廊。")); }
 				}
@@ -585,7 +627,8 @@ void UCastleNavigationSubsystem::CalculateSharedPath()
 		Path.Points.Reset(); Path.PointFlags.Reset(); Path.PatrolPoints.Reset();
 		Path.PatrolDistances.Reset(); Path.WaypointDistances.Reset(); Path.LadderRanges.Reset(); Path.Length = 0.0;
 	}
-	if (!Path.bValid) { UE_LOG(LogMoving_Castle, Warning, TEXT("NPC 导航：%s"), *LastFailure.ToString()); }
+	if (bGridFailure) { UE_LOG(LogMoving_Castle, Error, TEXT("NPC 格心导航：%s"), *LastFailure.ToString()); }
+	else if (!Path.bValid) { UE_LOG(LogMoving_Castle, Warning, TEXT("NPC 导航：%s"), *LastFailure.ToString()); }
 	else { UE_LOG(LogMoving_Castle, Display, TEXT("NPC 共享路线发布：导航版本 %d，查询累计 %d 次，完整 %d 段，%d 个转折点，%d 个共享采样，长度 %.1f cm。"), NavigationRevision, PathQueryCount, LegCount, Path.Points.Num(), Path.PatrolPoints.Num(), Path.Length); }
 	PublishPath(MoveTemp(Path));
 }
