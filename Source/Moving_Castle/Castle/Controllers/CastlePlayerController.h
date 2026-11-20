@@ -120,10 +120,10 @@ protected:
 	void SelectBackpackSlot8();
 	void SelectBackpackSlot9();
 	void SelectBackpackSlot10();
-	/** 滚轮按背包当前卡牌顺序换牌，向上选前一张、向下选后一张。 */
+	/** 滚轮按背包当前卡牌顺序换牌，向上选前一张、向下选后一张，到首尾时不跨越。 */
 	void SelectPreviousBackpackSlot();
 	void SelectNextBackpackSlot();
-	void CycleBackpackSlot(bool bNext);
+	void StepBackpackSelection(bool bNext);
 
 	/** 数字键与滚轮共用的选中提交入口，负责更新原有索引和玩家提示。 */
 	void SelectBackpackSlot(int32 SlotIndex);

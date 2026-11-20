@@ -261,15 +261,15 @@ void ACastlePlayerController::SelectBackpackSlot10() { SelectBackpackSlot(9); }
 
 void ACastlePlayerController::SelectPreviousBackpackSlot()
 {
-	CycleBackpackSlot(false);
+	StepBackpackSelection(false);
 }
 
 void ACastlePlayerController::SelectNextBackpackSlot()
 {
-	CycleBackpackSlot(true);
+	StepBackpackSelection(true);
 }
 
-void ACastlePlayerController::CycleBackpackSlot(bool bNext)
+void ACastlePlayerController::StepBackpackSelection(bool bNext)
 {
 	// 模态界面当下拥有滚轮；即使界面没有消费该事件，也不能切换它背后的建造卡。
 	if (bModalInputActive)
@@ -297,10 +297,12 @@ void ACastlePlayerController::CycleBackpackSlot(bool bNext)
 		return;
 	}
 
-	// 只在真实牌数的两端回绕。只有一张时结果仍是当前牌；不移动库存，也不触发放置。
-	const int32 AdjacentIndex = SelectedBackpackIndex + (bNext ? 1 : -1);
-	const int32 TargetIndex = AdjacentIndex == Count ? 0 : (AdjacentIndex == INDEX_NONE ? Count - 1 : AdjacentIndex);
-	SelectBackpackSlot(TargetIndex);
+	// 首尾没有可选的相邻卡牌。越过实际持有范围的方向不提交选择，保留当前高亮且不跳到另一端。
+	const int32 TargetIndex = SelectedBackpackIndex + (bNext ? 1 : -1);
+	if (TargetIndex >= 0 && TargetIndex < Count)
+	{
+		SelectBackpackSlot(TargetIndex);
+	}
 }
 
 void ACastlePlayerController::SelectBackpackSlot(int32 SlotIndex)
