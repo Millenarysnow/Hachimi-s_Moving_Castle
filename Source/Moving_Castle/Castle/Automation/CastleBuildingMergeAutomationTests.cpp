@@ -6,6 +6,7 @@
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
 #include "CastleBuildingTestUtilities.h"
+#include "Castle/PCG/HachimisV4/CastleHachimisV4Layout.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Engine/Engine.h"
@@ -88,14 +89,15 @@ bool FCastleRealBuildingMergeTest::RunTest(const FString& Parameters)
 	UBuildingMergeComponent* Merge = Result->BuildingMerge;
 	TestTrue(TEXT("合并自动启动原生组件"), Merge->bIsPlaying && Reason.IsEmpty());
 	TestEqual(TEXT("来源快照包含全部正式模型件"), Merge->SourcePartCount, SourceCount);
-	TestEqual(TEXT("两座刀盾一级塔共提供 18 个模型零件"), SourceCount, 18);
-	// 该批源模型的屋顶/跨接结构发生变化，不能沿用旧模型“全部件复用”的固定断言。
-	TestEqual(TEXT("目录识别出 14 个跨资产同形零件"), Merge->ReusedPartCount, 14);
-	TestEqual(TEXT("新增结构的 4 个零件从场外飞入"), Merge->IncomingPartCount, 4);
-	TestEqual(TEXT("两座已落位建筑的 14 个对应件局部移动"), Merge->MovedPartCount, 14);
-	TestEqual(TEXT("二级模型增加 4 个变化零件"), Merge->AddedPartCount, 4);
-	TestEqual(TEXT("刀盾二级塔包含 18 个独立模型零件"), Merge->TargetPartCount, 18);
-	TestEqual(TEXT("一级模型的 4 个被替换零件退场"), Merge->RemovedPartCount, 4);
+	// V4 作者的屋顶、门与跨格木构使用新几何。验证实际匹配、移动、进退场及数量守恒。
+	const auto* FirstLayout = Definition->FindLevel(1)->BuildingClass->GetDefaultObject<ACastleBuildingBase>()->HachimisLayout.Get();
+	if (!TestNotNull(TEXT("一级使用持久化 V4 装配"), FirstLayout) || !TestNotNull(TEXT("二级使用持久化 V4 装配"), Result->HachimisLayout.Get())) { return false; }
+	TestEqual(TEXT("两座一级塔提供全部独立作者节点"), SourceCount, 2 * FirstLayout->Parts.Num());
+	TestEqual(TEXT("二级目标保留全部作者节点"), Merge->TargetPartCount, Result->HachimisLayout->Parts.Num());
+	TestTrue(TEXT("目录匹配跨等级同形零件，其中有原位和移动件"), Merge->ReusedPartCount > Merge->MovedPartCount && Merge->MovedPartCount > 0);
+	TestTrue(TEXT("新出现的零件从场外飞入"), Merge->AddedPartCount > 0 && Merge->IncomingPartCount >= Merge->AddedPartCount);
+	TestEqual(TEXT("原零件复用和退场合计覆盖全部来源"), Merge->ReusedPartCount + Merge->RemovedPartCount, SourceCount);
+	TestEqual(TEXT("复用与新增合计覆盖所有目标"), Merge->ReusedPartCount + Merge->AddedPartCount, Merge->TargetPartCount);
 	TestFalse(TEXT("旧建筑已经被规则销毁"), IsValid(First));
 	TestEqual(TEXT("逻辑只保留一个二级建筑"), Board->GetPlacedBuildingCount(), 1);
 	TestEqual(TEXT("仍占两格"), Board->GetOccupiedRoomCellCount(), 2);

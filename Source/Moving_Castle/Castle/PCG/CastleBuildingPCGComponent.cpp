@@ -1,5 +1,6 @@
 #include "CastleBuildingPCGComponent.h"
 #include "CastlePCGSemantics.h"
+#include "HachimisV4/CastleHachimisV4PCG.h"
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
@@ -40,7 +41,7 @@ bool UCastleBuildingPCGComponent::CacheOriginalParts(const ACastleBoard* Board, 
 
 bool UCastleBuildingPCGComponent::Prepare(const ACastleBoard* Board, const UCastlePCGRuleSetDataAsset* Rules,
 	const FCastlePCGTarget& Target, const TArray<FCastlePCGMeshTemplate>& LV1, const TArray<FCastlePCGMeshTemplate>& LV2,
-	FCastlePCGApplyPlan& Plan, FString& Error) const
+	const CastleV4PCG::FStairs& Stairs, FCastlePCGApplyPlan& Plan, FString& Error) const
 {
 	ACastleBuildingBase* Building = CastChecked<ACastleBuildingBase>(GetOwner());
 	Plan = FCastlePCGApplyPlan();
@@ -68,10 +69,26 @@ bool UCastleBuildingPCGComponent::Prepare(const ACastleBoard* Board, const UCast
 			}
 		}
 		const FTransform Frame = CastlePCGComponents::CellFrame(Board, Ceiling.Key);
+		if (const CastleV4PCG::FStairInterface* Mixed = Stairs.Find(Ceiling.Key))
+		{
+			// 旧盾塔在下时继续装旧模板，V4 上层按其同一个缺角切换原底盘功能板。
+			// 上层已生成切口四边功能面，旧下层不能再铺一整块封死梯井。
+			for (const FCastlePCGMeshTemplate& Template : LV2)
+			{
+				FCastlePCGMeshTemplate Part = CastlePCGComponents::PlaceTemplate(Template, Mixed->WorldFrame, Building);
+				Part.bSelectable = true;
+				Plan.Visuals.Add(MoveTemp(Part));
+			}
+			CastleV4PCG::AddLink(Plan, Ceiling.Key, Mixed->WorldFrame.GetRelativeTransform(Building->GetActorTransform()), Mixed->Hatch);
+			continue;
+		}
 		if (Ceiling.Value == 2)
 		{
 			for (const auto& Template : LV2) { Plan.Visuals.Add(CastlePCGComponents::PlaceTemplate(Template, Frame, Building)); }
-			Plan.LadderFrames.Add({Ceiling.Key, Frame.GetRelativeTransform(Building->GetActorTransform())});
+			// 旧系列使用已经验收的 LV2 动作点，V4 使用独立测得的作者点。
+			Plan.LadderFrames.Add({Ceiling.Key, Frame.GetRelativeTransform(Building->GetActorTransform()),
+				FVector(-58.317, 40.0, 0.0), FVector(40.0, 40.0, Board->LayerHeight),
+				FVector(-58.317, 150.0, 0.0), FVector(-58.317, 150.0, Board->LayerHeight)});
 		}
 		else if (!bHasSlab)
 		{
@@ -84,6 +101,14 @@ bool UCastleBuildingPCGComponent::Prepare(const ACastleBoard* Board, const UCast
 		FVector Top = BoardInverse.TransformPosition(Frame.GetLocation());
 		Top.Z += Board->LayerHeight - Rules->FloorThickness * 0.5;
 		AddBox(Top, FVector(205.0, 205.0, Rules->FloorThickness * 0.5));
+	}
+	for (const FIntVector& Cell : Building->GetOccupiedCoordinates())
+	{
+		// V4 在下时，沿用盾塔自己的板面高度和原碰撞身份，只切换重合格的板。
+		if (const CastleV4PCG::FStairInterface* Mixed = Stairs.Find(Cell - FIntVector(0, 0, 1)))
+		{
+			if (!CastleV4PCG::CutDeck(*Board, *Building, Cell, FIntVector::ZeroValue, *Mixed, Plan, Error)) { return false; }
+		}
 	}
 	for (const auto& Part : OriginalParts)
 	{
@@ -168,6 +193,7 @@ bool UCastleBuildingPCGComponent::Prepare(const ACastleBoard* Board, const UCast
 			return false;
 		}
 	}
+	CastleV4PCG::FinalizeKey(Target, Plan);
 	return true;
 }
 
@@ -183,24 +209,80 @@ bool UCastleBuildingPCGComponent::Apply(const ACastleBoard* Board, const FCastle
 {
 	ACastleBuildingBase* Building = CastChecked<ACastleBuildingBase>(GetOwner());
 	// 必须先结束旧动画，再写新目标；ResetMerge 会恢复旧目标显隐，不可在写目标之后调用。
-	Building->BuildingMerge->ResetMerge();
-	DestroyDynamicComponents();
-	for (const auto& Part : OriginalParts) { Part.Component->SetVisibility(Part.bOriginalVisible && !Plan.Hidden.Contains(Part.Component), false); }
-	for (const auto& Visual : Plan.Visuals)
+	check(!BeforeApply.IsSet());
+	FBeforeApply& Previous = BeforeApply.Emplace();
+	Previous.bVisualChange = NeedsVisualChange(Plan);
+	Previous.VisualKey = AppliedVisualKey;
+	if (Previous.bVisualChange)
 	{
-		auto* Mesh = NewObject<UStaticMeshComponent>(Building, NAME_None, RF_Transient);
-		Mesh->SetupAttachment(Building->GetRootComponent());
-		Mesh->SetMobility(EComponentMobility::Movable);
-		Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		Mesh->SetCanEverAffectNavigation(false);
-		Mesh->SetGenerateOverlapEvents(false);
-		Mesh->ComponentTags.Add(TEXT("CastlePCGDynamic"));
-		Mesh->SetStaticMesh(Visual.Mesh);
-		for (int32 M = 0; M < Visual.Materials.Num(); ++M) { Mesh->SetMaterial(M, Visual.Materials[M]); }
-		Mesh->SetRelativeTransform(Visual.Relative);
-		Building->AddInstanceComponent(Mesh);
-		Mesh->RegisterComponent();
-		DynamicComponents.Add(Mesh);
+		check(Snapshot);
+		Building->BuildingMerge->ResetMerge();
+		Previous.Visuals = MoveTemp(DynamicVisuals);
+	}
+	Previous.Components = MoveTemp(DynamicComponents);
+	Previous.Ladders = MoveTemp(ActiveLadders);
+	Previous.Suppressed = MoveTemp(SuppressedCollision);
+	Previous.Key = AppliedKey;
+	auto Remember = [&](UPrimitiveComponent* Primitive)
+	{
+		Previous.ChangedPrimitives.FindOrAdd(Primitive, {Primitive->IsVisible(), Primitive->GetCollisionEnabled()});
+	};
+	const auto DisablePrevious = [&](const TArray<TObjectPtr<USceneComponent>>& Components)
+	{
+		for (USceneComponent* Component : Components)
+		{
+			if (UPrimitiveComponent* Primitive = Cast<UPrimitiveComponent>(Component))
+			{
+				Remember(Primitive);
+				Primitive->SetVisibility(false, false);
+				Primitive->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			}
+		}
+	};
+	DisablePrevious(Previous.Components);
+	DisablePrevious(Previous.Visuals);
+	for (const auto& Pair : Previous.Suppressed)
+	{
+		if (UPrimitiveComponent* Primitive = Pair.Key.Get())
+		{
+			Remember(Primitive);
+			Primitive->SetCollisionEnabled(Pair.Value);
+		}
+	}
+	auto Suppress = [&](UPrimitiveComponent* Primitive)
+	{
+		Remember(Primitive);
+		SuppressedCollision.Add(Primitive, Primitive->GetCollisionEnabled());
+		Primitive->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	};
+	for (const auto& Part : OriginalParts)
+	{
+		const bool bHidden = Plan.Hidden.Contains(Part.Component);
+		Remember(Part.Component);
+		if (Previous.bVisualChange) { Part.Component->SetVisibility(Part.bOriginalVisible && !bHidden, false); }
+		if (bHidden && Building->HachimisLayout) { Suppress(Part.Component); }
+	}
+	for (UPrimitiveComponent* Floor : Plan.DisabledFloors) { Suppress(Floor); }
+	if (Previous.bVisualChange)
+	{
+		for (const auto& Visual : Plan.Visuals)
+		{
+			auto* Mesh = NewObject<UStaticMeshComponent>(Building, NAME_None, RF_Transient);
+			Mesh->SetupAttachment(Building->GetRootComponent());
+			Mesh->SetMobility(EComponentMobility::Movable);
+			Mesh->SetCollisionEnabled(Visual.bSelectable ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
+			Mesh->SetCollisionResponseToAllChannels(ECR_Ignore);
+			Mesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+			Mesh->SetCanEverAffectNavigation(false);
+			Mesh->SetGenerateOverlapEvents(false);
+			Mesh->ComponentTags.Add(TEXT("CastlePCGDynamic"));
+			Mesh->SetStaticMesh(Visual.Mesh);
+			for (int32 M = 0; M < Visual.Materials.Num(); ++M) { Mesh->SetMaterial(M, Visual.Materials[M]); }
+			Mesh->SetRelativeTransform(Visual.Relative);
+			Building->AddInstanceComponent(Mesh);
+			Mesh->RegisterComponent();
+			DynamicVisuals.Add(Mesh);
+		}
 	}
 	for (const auto& Box : Plan.FunctionalBoxes)
 	{
@@ -225,35 +307,71 @@ bool UCastleBuildingPCGComponent::Apply(const ACastleBoard* Board, const FCastle
 		auto* Link = NewObject<UCastleLadderLinkComponent>(Building, NAME_None, RF_Transient);
 		Link->SetupAttachment(Building->GameplayRoot);
 		Link->SetMobility(EComponentMobility::Movable);
-		Link->SetRelativeTransform(Frame.Value);
-		// 真实 Mesh2 在 X[-66.63,-50],Y[100,205]；由负Y侧接近梯面，上层接入板内。
-		Link->BottomStandOffset = FVector(-58.317, 40.0, 0.0);
-		Link->LadderBottomOffset = FVector(-58.317, 150.0, 0.0);
-		Link->LadderTopOffset = FVector(-58.317, 150.0, Board->LayerHeight);
-		Link->TopStandOffset = FVector(40.0, 40.0, Board->LayerHeight);
+		Link->SetRelativeTransform(Frame.Relative);
+		Link->BottomStandOffset = Frame.BottomStand;
+		Link->LadderBottomOffset = Frame.LadderBottom;
+		Link->LadderTopOffset = Frame.LadderTop;
+		Link->TopStandOffset = Frame.TopStand;
 		Building->AddInstanceComponent(Link);
 		Link->RegisterComponent();
 		DynamicComponents.Add(Link);
 		if (!Link->GetId().IsValid())
-		{ Error = FString::Printf(TEXT("%s 的动态梯子未获得有效导航ID。"), *Building->GetPathName()); Snapshot->Destroy(); return false; }
+		{ Error = FString::Printf(TEXT("%s 的动态梯子未获得有效导航ID。"), *Building->GetPathName()); if (Snapshot) { Snapshot->Destroy(); } return false; }
 		FCastleActiveLadderConnection& Connection = ActiveLadders.AddDefaulted_GetRef();
 		Connection.Building = Building;
-		Connection.LowerCell = Frame.Key;
-		Connection.UpperCell = Frame.Key + FIntVector(0, 0, 1);
+		Connection.LowerCell = Frame.LowerCell;
+		Connection.UpperCell = Frame.LowerCell + FIntVector(0, 0, 1);
 		Connection.BottomWorldLocation = Link->GetComponentTransform().TransformPosition(Link->LadderBottomOffset);
 		Connection.TopWorldLocation = Link->GetComponentTransform().TransformPosition(Link->LadderTopOffset);
-		Connection.WorldFacing = (Link->GetComponentTransform().TransformVectorNoScale(FVector::RightVector)).Rotation();
+		Connection.WorldFacing = (Link->GetComponentTransform().TransformVectorNoScale((Frame.LadderBottom - Frame.BottomStand).GetSafeNormal2D())).Rotation();
 	}
-	Building->BuildingMerge->PartCatalog = Building->GetBuildingDefinition()->PartCatalog;
-	Building->BuildingMerge->IncomingSourceActor = nullptr;
-	Building->BuildingMerge->bUseSharedChangeOrigin = true;
-	Building->BuildingMerge->ChangeOrigin = Origin;
-	Building->BuildingMerge->ArrivalDirection = Board->GetActorForwardVector();
-	const bool bStarted = Building->BuildingMerge->StartChange({Snapshot});
-	Snapshot->Destroy();
-	if (!bStarted) { Error = Building->BuildingMerge->LastError; return false; }
+	if (Previous.bVisualChange)
+	{
+		Building->BuildingMerge->PartCatalog = Building->GetBuildingDefinition()->PartCatalog;
+		Building->BuildingMerge->IncomingSourceActor = nullptr;
+		Building->BuildingMerge->bUseSharedChangeOrigin = true;
+		Building->BuildingMerge->ChangeOrigin = Origin;
+		Building->BuildingMerge->ArrivalDirection = Board->GetActorForwardVector();
+		const bool bStarted = Building->BuildingMerge->StartChange({Snapshot});
+		Snapshot->Destroy();
+		if (!bStarted) { Error = Building->BuildingMerge->LastError; return false; }
+	}
 	AppliedKey = Plan.Key;
+	AppliedVisualKey = Plan.VisualKey;
 	return true;
+}
+
+void UCastleBuildingPCGComponent::FinishApply(bool bCommit)
+{
+	check(BeforeApply.IsSet());
+	FBeforeApply& Previous = BeforeApply.GetValue();
+	if (bCommit)
+	{
+		// 新目标成功接管后才销毁退场组件，释放上一份 NavLink。
+		for (USceneComponent* Component : Previous.Components) { Component->DestroyComponent(); }
+		for (USceneComponent* Component : Previous.Visuals) { Component->DestroyComponent(); }
+	}
+	else
+	{
+		if (Previous.bVisualChange)
+		{
+			CastChecked<ACastleBuildingBase>(GetOwner())->BuildingMerge->ResetMerge();
+			for (USceneComponent* Component : DynamicVisuals) { Component->DestroyComponent(); }
+			DynamicVisuals = MoveTemp(Previous.Visuals);
+		}
+		DestroyDynamicComponents();
+		for (const auto& Pair : Previous.ChangedPrimitives)
+		{
+			Pair.Key->SetVisibility(Pair.Value.Key, false);
+			Pair.Key->SetCollisionEnabled(Pair.Value.Value);
+		}
+		DynamicComponents = MoveTemp(Previous.Components);
+		ActiveLadders = MoveTemp(Previous.Ladders);
+		SuppressedCollision = MoveTemp(Previous.Suppressed);
+		AppliedKey = MoveTemp(Previous.Key);
+		AppliedVisualKey = MoveTemp(Previous.VisualKey);
+	}
+	BeforeApply.Reset();
 }
 
 void UCastleBuildingPCGComponent::GetLadders(TArray<FCastleActiveLadderConnection>& Out) const
@@ -264,5 +382,7 @@ void UCastleBuildingPCGComponent::GetLadders(TArray<FCastleActiveLadderConnectio
 void UCastleBuildingPCGComponent::EndPlay(const EEndPlayReason::Type Reason)
 {
 	DestroyDynamicComponents();
+	for (USceneComponent* Component : DynamicVisuals) { Component->DestroyComponent(); }
+	DynamicVisuals.Reset();
 	Super::EndPlay(Reason);
 }

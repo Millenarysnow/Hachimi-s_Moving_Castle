@@ -101,5 +101,9 @@ public:
 	UPROPERTY(EditAnywhere, Category="建筑PCG|V4")
 	TMap<FName, TObjectPtr<class UCastleHachimisV4Layout>> RoomExamples;
 
+	/** 露天底盘仅在与异色房或功能塔实际接壤时使用一级墙套件。 */
+	UPROPERTY(EditAnywhere, Category="建筑PCG|V4")
+	TObjectPtr<class UCastleV4WallKit> RoomL1Bay;
+
 	bool ValidateConfiguration(FString& Error) const;
 };

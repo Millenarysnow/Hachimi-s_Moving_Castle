@@ -3,6 +3,7 @@
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
+#include "HachimisV4/CastleHachimisV4Layout.h"
 #include "CastleGroundTileActor.h"
 #include "BuildingMergeComponent.h"
 #include "CastleLadderLinkComponent.h"
@@ -85,7 +86,7 @@ namespace CastlePCGNavigationTests
 				if(!Test->TestNotNull(TEXT("可走通上层正式房间放置"),Upper)){Test->AddError(Error.ToString());Cleanup();return true;}
 				return false;
 			}
-			if(!Upper->bHasCompletedPlacement||Lower->BuildingMerge->bIsPlaying){return false;}
+			if(!Upper->bHasCompletedPlacement||Lower->BuildingMerge->bIsPlaying||Upper->BuildingMerge->bIsPlaying){return false;}
 			TArray<FCastleActiveLadderConnection> Connections;
 			World->GetSubsystem<UCastleBuildingPCGSubsystem>()->GetActiveLadderConnections(Board,Connections);
 			if(!Test->TestEqual(TEXT("正式叠放动态激活唯一梯子"),Connections.Num(),1)){Cleanup();return true;}
@@ -100,6 +101,12 @@ namespace CastlePCGNavigationTests
 			Test->TestTrue(TEXT("上端在真实Recast多边形内部精确投影"),System->ProjectPointToNavigation(Top,P,FVector(10,10,20))&&FVector::Dist2D(Top,P.Location)<1.0);
 			Test->TestEqual(TEXT("动态Link双向"),Direction,ENavLinkDirection::BothWays);
 			Test->AddInfo(FString::Printf(TEXT("真实LV2接驳 Bottom=%s Top=%s 梯底=%s 梯顶=%s"),*Ladder->BottomStandOffset.ToString(),*Ladder->TopStandOffset.ToString(),*Ladder->LadderBottomOffset.ToString(),*Ladder->LadderTopOffset.ToString()));
+			// 从真实梯件的轮廓选正中位置，射线只跨上层板面，不可能误命中下一层。
+			const FBox& Opening = Lower->HachimisLayout->Ladder->Hatch.Opening;
+			const FVector Shaft = Lower->GetActorTransform().TransformPosition(Opening.GetCenter());
+			FHitResult HatchHit;
+			Test->TestFalse(TEXT("真实梯井内没有阻挡 Pawn 的上层楼板"), World->LineTraceSingleByChannel(HatchHit,
+				FVector(Shaft.X, Shaft.Y, Top.Z + 10), FVector(Shaft.X, Shaft.Y, Top.Z - 12), ECC_Pawn));
 			// 使用同一条垂直列，但分别从两层房间内部点击；提交的是点击结果而不是人工指定的楼层。
 			FVector LowerPoint, UpperPoint;
 			if (!VerifyFloorClick(Board->GridOrigin, Bottom.Z, false, LowerPoint)
@@ -117,7 +124,8 @@ namespace CastlePCGNavigationTests
 		{
 			FVector Expected = Board->GetGridWorldLocation(Cell);
 			Expected.Z = FloorZ;
-			const FVector Start = Expected + FVector(120, 120, 180);
+			// V4 梯井位于正 X、正 Y。公共走板上用原射线的镜像位置复现下层美术、上层功能面的归属。
+			const FVector Start = Expected + FVector(-120, -120, 180);
 			const FVector End = Start - FVector(0, 0, 100000);
 			FHitResult VisibilityHit, PhysicalHit;
 			const FCollisionQueryParams Query(SCENE_QUERY_STAT(StackedPatrolFloors), true);
@@ -132,8 +140,8 @@ namespace CastlePCGNavigationTests
 			if (bUpperFloor)
 			{
 				// 关键复现条件：美术命中归下层 Actor，不能再据此把上层楼板降一层。
-				if (!Test->TestTrue(TEXT("上层视线命中下层建筑拥有的平板美术"), VisibilityHit.GetActor() == Lower
-					&& FMath::IsNearlyEqual(VisibilityHit.ImpactPoint.Z, FloorZ, 1.0))) { return false; }
+				if (!Test->TestTrue(TEXT("上层视线命中下层拥有的梯口铺板，同时 Pawn 命中上层原格"), VisibilityHit.GetActor() == Lower
+					&& PhysicalHit.GetActor() == Upper && FMath::IsNearlyEqual(VisibilityHit.ImpactPoint.Z, FloorZ, 1.0))) { return false; }
 			}
 			else if (Cast<ACastleGroundTileActor>(VisibilityHit.GetActor()))
 			{

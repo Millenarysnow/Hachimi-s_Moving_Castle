@@ -5,6 +5,7 @@
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Components/CastleBackpackComponent.h"
 #include "Castle/Data/CastleBuildingDefinition.h"
+#include "HachimisV4/CastleHachimisV4Layout.h"
 #include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/Animation/BuildingMergeComponent.h"
@@ -81,7 +82,7 @@ namespace CastleCannonPlayerInputTests
 				const auto& Points=Nav->GetRequestedWaypoints();
 				if (!Test->TestEqual(TEXT("Enter经真实路径编辑提交两个点"),Points.Num(),2)) { Cleanup(); return true; }
 				// 期望值由同一次原生射线与棋盘格坐标独立计算，不调用被测取点函数伪造预期。
-				// 地块吸附到格心并保留命中面的 Z；楼顶建筑必须提交对应层底面锚点。
+				// 地块保留顶面高度，建筑取命中格的作者站立面。期望使用持久化的数据计算。
 				Test->TestTrue(Cast<ACastleGroundTileActor>(FirstHit.GetActor())
 					? TEXT("地块路径点1对齐格心并保留顶面高度") : TEXT("建筑路径点1等于D26本层楼板点"),Points[0].Equals(FirstExpected,0.1));
 				Test->TestTrue(Cast<ACastleGroundTileActor>(SecondHit.GetActor())
@@ -189,7 +190,11 @@ namespace CastleCannonPlayerInputTests
 			{
 				FCastleGridCursorTarget Target;
 				if (!Test->TestTrue(TEXT("建筑射线可由正式棋盘解析命中格"),Board->TryResolveGridCursorTarget(Origin,Origin+Direction*100000,Target) && Target.Surface == ECastleGridCursorSurface::Building)) { return false; }
-				ExpectedPoint=Board->GetGridWorldLocation(Target.Cell)-Board->GetActorTransform().TransformVector(FVector(0,0,Board->LayerHeight*0.5));
+				const ACastleBuildingBase* FloorOwner = Board->GetBuildingAt(Target.Cell);
+				if (!Test->TestNotNull(TEXT("射线命中格有实际建筑"), FloorOwner)) { return false; }
+				const double StandingHeight = FloorOwner->HachimisLayout ? FloorOwner->HachimisLayout->StandingHeight : 0.0;
+				ExpectedPoint = Board->GetGridWorldLocation(Target.Cell)
+					+ Board->GetActorTransform().TransformVector(FVector(0, 0, StandingHeight - Board->LayerHeight * 0.5));
 			}
 			else
 			{

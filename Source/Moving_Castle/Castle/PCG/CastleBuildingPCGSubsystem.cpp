@@ -4,6 +4,7 @@
 #include "CastleBuildingPCGRule.h"
 #include "CastlePCGSemantics.h"
 #include "CastleDeterministicPCGNoise.h"
+#include "HachimisV4/CastleHachimisV4PCG.h"
 #include "BuildingMergeComponent.h"
 #include "CastleNavigationSubsystem.h"
 #include "Components/StaticMeshComponent.h"
@@ -96,11 +97,11 @@ bool UCastleBuildingPCGSubsystem::RecomputeInternal(ACastleBoard* Board, const F
 	{
 		// 不完整飞入不参与语义场，这是明确的业务谓词，不能读取动画中的半装配模型。
 		if (!Building->bHasCompletedPlacement) { continue; }
-		if (Building->GetBuildingLevel() == 5)
+		if (Building->GetBuildingLevel() == 5 && !Building->HachimisLayout)
 		{
 			// LV5仍以单格参与其他建筑的占用邻接，但它复用LV4八格模型，禁止猜测部件覆盖关系。
 			UE_LOG(LogMoving_Castle, Warning,
-				TEXT("建筑 %s（%s）为五级正式占格与专属模型尚未接通，跳过本期 PCG 语义提取与部件替换。"),
+				TEXT("建筑 %s（%s）使用旧五级模型及单格占用，沿用旧系列 PCG 语义跳过规则。"),
 				*Building->GetPathName(), *Building->GetClass()->GetPathName());
 			for (const auto& Cell : Building->GetOccupiedCoordinates()) { Occupancy.Add(Cell, Building); }
 			continue;
@@ -132,10 +133,10 @@ bool UCastleBuildingPCGSubsystem::RecomputeInternal(ACastleBoard* Board, const F
 	{
 		for (const auto& Pair : *Previous) { if (!CurrentOccupancy.Contains(Pair.Key)) { MarkCellAndNeighbors(Pair.Key); } }
 	}
+	// 先求值整份格面语义，为普通房水平互达和上下两侧共用的梯口提供稳定输入。
+	CastleV4PCG::FTargets Targets;
 	for (auto* Building : Buildings)
 	{
-		if (bAffectedOnly && !Affected.Contains(Building)) { continue; }
-		if (!Building->BuildingPCG->CacheOriginalParts(Board, Error)) { return false; }
 		FCastlePCGRuleContext Context;
 		Context.Building = Building;
 		Context.Seed = Board->GroundSeed;
@@ -154,16 +155,31 @@ bool UCastleBuildingPCGSubsystem::RecomputeInternal(ACastleBoard* Board, const F
 				Adj.FirstCell = Cell;
 				Adj.SecondCell = Cell + Direction;
 				Adj.Offset = Direction;
-				Adj.bCanTraverse = Building->GetBuildingColor() == (*Neighbor)->GetBuildingColor()
-					|| Building->GetBuildingNumber() == (*Neighbor)->GetBuildingNumber();
+				Adj.bCanTraverse = CastleV4PCG::CanTraverse(*Building, **Neighbor);
 				Context.Adjacencies.Add(Adj);
 			}
 		}
-		FCastlePCGTarget Target;
+		FCastlePCGTarget& Target = Targets.Add(Building);
 		for (UCastleBuildingPCGRule* Rule : Rules->Rules) { if (!Rule->Evaluate(Context, Target, Error)) { return false; } }
-		if (Building->BuildingPCG->GetAppliedKey() == Target.StableKey()) { continue; }
+	}
+	CastleV4PCG::FRooms Rooms;
+	CastleV4PCG::FStairs Stairs;
+	if (!CastleV4PCG::BuildRooms(*Rules, Occupancy, Targets, Rooms, Error)) { return false; }
+	if (!CastleV4PCG::BuildStairs(*Board, Occupancy, Targets, Stairs, Error)) { return false; }
+	for (auto* Building : Buildings)
+	{
+		// 普通房互达分量可能跨越多个格。重新求计划，稳定键保证未改变的逐房组件保持原位。
+		if (bAffectedOnly && !Affected.Contains(Building) && !CastleV4PCG::IsRoom(Building)) { continue; }
+		if (!Building->BuildingPCG->CacheOriginalParts(Board, Error)) { return false; }
+		const FCastlePCGTarget& Target = Targets.FindChecked(Building);
 		FCastlePCGApplyPlan Plan;
-		if (!Building->BuildingPCG->Prepare(Board, Rules, Target, LV1, LV2, Plan, Error)) { return false; }
+		if (Building->HachimisLayout)
+		{
+			if (!CastleV4PCG::Prepare(*Board, *Building, *Rules, Occupancy, Rooms, Stairs, Target,
+				Building->BuildingPCG->GetOriginalParts(), Plan, Error)) { return false; }
+		}
+		else if (!Building->BuildingPCG->Prepare(Board, Rules, Target, LV1, LV2, Stairs, Plan, Error)) { return false; }
+		if (Building->BuildingPCG->GetAppliedKey() == Plan.Key) { continue; }
 		Changes.Add({Building->BuildingPCG, MoveTemp(Plan)});
 	}
 	if (Changes.IsEmpty()) { PreviousOccupancy.Add(Board, MoveTemp(CurrentOccupancy)); return true; }
@@ -172,8 +188,16 @@ bool UCastleBuildingPCGSubsystem::RecomputeInternal(ACastleBoard* Board, const F
 	for (auto& Change : Changes)
 	{
 		auto* Building = CastChecked<ACastleBuildingBase>(Change.Key->GetOwner());
-		AActor* Snapshot = Building->BuildingMerge->CreateVisualSnapshot(Error);
-		if (!Snapshot) { for (auto* Captured : Snapshots) { Captured->Destroy(); } return false; }
+		AActor* Snapshot = nullptr;
+		if (Change.Key->NeedsVisualChange(Change.Value))
+		{
+			Snapshot = Building->BuildingMerge->CreateVisualSnapshot(Error);
+			if (!Snapshot)
+			{
+				for (AActor* Captured : Snapshots) { if (Captured) { Captured->Destroy(); } }
+				return false;
+			}
+		}
 		Snapshots.Add(Snapshot);
 	}
 	const FScopedCastleNavigationChange NavigationChange(GetWorld(), Board);
@@ -181,10 +205,13 @@ bool UCastleBuildingPCGSubsystem::RecomputeInternal(ACastleBoard* Board, const F
 	{
 		if (!Changes[Index].Key->Apply(Board, Changes[Index].Value, Snapshots[Index], Origin, Error))
 		{
-			for (int32 Remaining = Index + 1; Remaining < Snapshots.Num(); ++Remaining) { Snapshots[Remaining]->Destroy(); }
+			// 应用还可能因新导航登记或动画配置错误拒绝。逆序撤回已试装的组件，随后把错误交给调用方。
+			for (int32 Applied = Index; Applied >= 0; --Applied) { Changes[Applied].Key->FinishApply(false); }
+			for (int32 Remaining = Index + 1; Remaining < Snapshots.Num(); ++Remaining) { if (Snapshots[Remaining]) { Snapshots[Remaining]->Destroy(); } }
 			return false;
 		}
 	}
+	for (auto& Change : Changes) { Change.Key->FinishApply(true); }
 	OnPCGLayoutUpdated.Broadcast(Board);
 	PreviousOccupancy.Add(Board, MoveTemp(CurrentOccupancy));
 	return true;

@@ -16,6 +16,7 @@
 #include "UObject/ConstructorHelpers.h"
 #include "Castle/Actors/CastleBoard.h"
 #include "Castle/Actors/CastleBuildingBase.h"
+#include "Castle/PCG/HachimisV4/CastleHachimisV4Layout.h"
 
 namespace
 {
@@ -23,7 +24,7 @@ namespace
 	constexpr const TCHAR* WaypointMarkerAsset = TEXT("/Game/MovingCastle/BP/BP_CastlePatrolWaypointMarker");
 	// 两个通道独立查询同一顶面，允许世界空间 1 mm 的碰撞精度差；不能用导航投影范围穿透前景。
 	constexpr double CoincidentHitTolerance = 0.1;
-	// 蓝图功能地板和 PCG 顶板的顶面都与逻辑层底面齐平；只留 1 cm 的几何误差，不把家具顶面当楼板。
+	// 功能面与所在格的作者站立面齐平；1 cm 容差不允许把家具或斜坡顶面当作楼板。
 	constexpr double FloorPlaneTolerance = 1.0;
 
 	FVector2D GetHorizontalGridCell(const ACastleBoard& Board, const FVector& LocalHit)
@@ -58,8 +59,7 @@ namespace
 		const double Layer = FMath::RoundToDouble(HeightFromFirstFloor / Board->LayerHeight);
 		if (Hit.bStartPenetrating || !Building.IsComponentRelevantForNavigation(Hit.GetComponent())
 			|| FVector::DotProduct(Hit.ImpactNormal, Board->GetActorUpVector()) < 0.99
-			|| Layer < 0 || Layer >= Board->GridSize.Z
-			|| !FMath::IsNearlyEqual(HeightFromFirstFloor, Layer * Board->LayerHeight, FloorPlaneTolerance))
+			|| Layer < 0 || Layer >= Board->GridSize.Z)
 		{
 			// 功能分支也能存放护栏和障碍；首个功能碰撞不是本层楼板时拒绝放点，不继续查下方。
 			return Reject(TEXT("不是棋盘该层的功能楼板顶面"));
@@ -74,9 +74,13 @@ namespace
 			return Reject(TEXT("不在棋盘允许占用的平面范围内"));
 		}
 		const FIntVector Cell(static_cast<int32>(XY.X), static_cast<int32>(XY.Y), Board->GridOrigin.Z + static_cast<int32>(Layer));
-		if (!IsValid(Board->GetBuildingAt(Cell)))
+		const ACastleBuildingBase* FloorOwner = Board->GetBuildingAt(Cell);
+		if (!IsValid(FloorOwner)) { return Reject(TEXT("命中楼层的对应格没有登记建筑")); }
+		// 下层可拥有楼板美术或碰撞。功能高度以命中层实际登记的楼体为准，盾塔仍使用旧标高。
+		const double StandingHeight = FloorOwner->HachimisLayout ? FloorOwner->HachimisLayout->StandingHeight : 0.0;
+		if (!FMath::IsNearlyEqual(HeightFromFirstFloor, Layer * Board->LayerHeight + StandingHeight, FloorPlaneTolerance))
 		{
-			return Reject(TEXT("命中楼层的对应格没有登记建筑"));
+			return Reject(TEXT("不是棋盘该层的作者站立面"));
 		}
 
 		// 只在刚命中的楼板平面内吸附，保留真实高度。格心是否可通行仍由提交时的 NavMesh 验证。

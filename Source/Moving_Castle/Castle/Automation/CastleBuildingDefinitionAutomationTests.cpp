@@ -6,6 +6,8 @@
 
 #include "CastleBackpackComponent.h"
 #include "CastleBuildingTestUtilities.h"
+#include "Castle/PCG/HachimisV4/CastleHachimisV4Layout.h"
+#include "NavigationSystem.h"
 #include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Components/ChildActorComponent.h"
 #include "Components/SceneComponent.h"
@@ -149,14 +151,17 @@ bool FCastleDirectBuildingBlueprintTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("二级蓝图继承对应 C++ 等级类"), BlueprintClass->IsChildOf(ACastleArcherTowerLevel2::StaticClass()));
 
 	const UWorld::InitializationValues Settings = UWorld::InitializationValues().AllowAudioPlayback(false)
-		.CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(false);
+		.CreatePhysicsScene(true).CreateNavigation(true).CreateAISystem(false).ShouldSimulatePhysics(false);
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Settings);
 	if (!TestNotNull(TEXT("创建蓝图回归测试世界"), World)) { return false; }
 	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
 	Context.SetCurrentWorld(World);
 	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
 
-	// 原生 SpawnActor 的结果作为模型作者的配置基线，不把 0.1 等具体美术数值硬编码进测试。
+	// 四级作者模型有原生内梯。夹具与真实地图一样提供动态 Recast 数据。
+	UNavigationSystemV1* Navigation = FNavigationSystem::GetCurrent<UNavigationSystemV1>(World);
+	if (!TestTrue(TEXT("正式蓝图夹具创建导航数据"), Navigation && Navigation->GetDefaultNavDataInstance(FNavigationSystem::Create))) { return false; }
+	// 原生 SpawnActor 的结果作为存档配置基线，独立检查作者变换。
 	ACastleBuildingBase* Reference = World->SpawnActor<ACastleBuildingBase>(BlueprintClass);
 	if (!TestNotNull(TEXT("直接生成蓝图基线 Actor"), Reference)) { return false; }
 	TArray<USceneComponent*> ReferenceComponents;
@@ -262,9 +267,10 @@ bool FCastleDirectBuildingBlueprintTest::RunTest(const FString& Parameters)
 	{
 		// 以新版资源的精确目录识别美术零件，组件可编辑名称和隐藏功能网格不应影响计数。
 		return Component->GetStaticMesh() != nullptr && Component->GetStaticMesh()->GetPathName().StartsWith(
-			TEXT("/Game/MovingCastle/Model/Buildings/DaoDun/ArcherTower/LV4/"));
+			TEXT("/Game/MovingCastle/Model/Buildings/HachimisV4/Archer/Parts/"));
 	}).Num();
-	TestEqual(TEXT("四级蓝图保留刀盾系列的 71 个模型零件"), Level4PartCount, 71);
+	if (!TestNotNull(TEXT("四级有 V4 作者装配"), Level4Building->HachimisLayout.Get())) { return false; }
+	TestEqual(TEXT("四级清单的作者节点全部保留"), Level4PartCount, Level4Building->HachimisLayout->Parts.Num());
 	Board->RemoveBuilding(Level4Building, Reason);
 	Definition->CreateDescriptor(5, ECastleTileColor::Red, 3, Card, Reason);
 	ACastleBuildingBase* Level5Building = Board->PlaceBuilding(FIntVector::ZeroValue, Card, false, Reason);

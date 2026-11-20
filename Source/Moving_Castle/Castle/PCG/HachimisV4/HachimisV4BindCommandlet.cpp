@@ -13,6 +13,7 @@
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/StaticMesh.h"
+#include "StaticMeshResources.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
@@ -196,7 +197,7 @@ namespace HachimisV4Bind
 		return true;
 	}
 
-	bool Run(bool bInspect)
+	bool Run(bool bInspect, bool bRulesOnly)
 	{
 		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
 		Registry.ScanPathsSynchronous({ContentRoot}, true);
@@ -233,33 +234,55 @@ namespace HachimisV4Bind
 				ContentRoot, LayoutCount, Bindings.Num(), Examples.Num());
 			return false;
 		}
-		if (bInspect)
-		{
-			for (const FBinding& Binding : Bindings)
-			{
-				const ACastleBuildingBase* CDO = Binding.Blueprint->GeneratedClass->GetDefaultObject<ACastleBuildingBase>();
-				if (CDO->HachimisLayout != Binding.Layout || Binding.OldParts.Num() != Binding.Layout->Parts.Num())
-				{
-					return Error(*Binding.Blueprint, TEXT("重新加载后的装配引用或蓝图节点数不同"));
-				}
-			}
-			UE_LOG(LogHachimisV4Bind, Display, TEXT("重新加载确认 39 个装配和 34 个蓝图"));
-			return true;
-		}
+
 		UBuildingPartCatalog* Catalog = LoadObject<UBuildingPartCatalog>(nullptr,
 			TEXT("/Game/MovingCastle/Data/Animation/DA_BuildingPartCatalog.DA_BuildingPartCatalog"));
 		UCastlePCGRuleSetDataAsset* Rules = LoadObject<UCastlePCGRuleSetDataAsset>(nullptr,
 			TEXT("/Game/MovingCastle/Data/DA_CastlePCGRuleSet.DA_CastlePCGRuleSet"));
 		FString Failure;
-		if (!Rules || !Catalog || !Catalog->AppendExactGeometry(Meshes, Failure))
+		UCastleV4WallKit* RoomL1Bay = LoadObject<UCastleV4WallKit>(nullptr,
+			TEXT("/Game/MovingCastle/Model/Buildings/HachimisV4/Room/Walls/DA_Wall_Room_L1_Bay.DA_Wall_Room_L1_Bay"));
+		if (!Rules || !Catalog || !RoomL1Bay || RoomL1Bay->WallKey != TEXT("Room_L1_Bay"))
 		{
-			UE_LOG(LogHachimisV4Bind, Error, TEXT("DA_CastlePCGRuleSet 或 DA_BuildingPartCatalog 无法更新 %s"), *Failure);
+			UE_LOG(LogHachimisV4Bind, Error, TEXT("DA_CastlePCGRuleSet、DA_BuildingPartCatalog 或 Room_L1_Bay 缺失或无效"));
 			return false;
 		}
-		for (const FBinding& Binding : Bindings) { if (!Bind(Binding)) { return false; } }
+		if (bInspect)
+		{
+			for (const FBinding& Binding : Bindings)
+			{
+				const ACastleBuildingBase* CDO = Binding.Blueprint->GeneratedClass->GetDefaultObject<ACastleBuildingBase>();
+				if (CDO->HachimisLayout != Binding.Layout || Binding.OldParts.Num() != Binding.Layout->Parts.Num()
+					|| Rules->RoomL1Bay != RoomL1Bay || Rules->RoomExamples.Num() != 6)
+				{
+					return Error(*Binding.Blueprint, TEXT("重新加载后的装配引用或蓝图节点数不同"));
+				}
+			}
+			for (UStaticMesh* Mesh : Meshes)
+			{
+				const FStaticMeshRenderData* Render = Mesh ? Mesh->GetRenderData() : nullptr;
+				if (!Mesh || !Render || Render->LODResources.IsEmpty() || Render->LODResources[0].GetNumTriangles() == 0
+					|| Render->Bounds.ContainsNaN() || Mesh->GetBounds().ContainsNaN() || Mesh->GetBounds().BoxExtent.IsNearlyZero()
+					|| !Catalog->FindGeometry(Mesh))
+				{
+					UE_LOG(LogHachimisV4Bind, Error, TEXT("%s 重载后缺少几何目录或有效包围盒"), *GetPathNameSafe(Mesh));
+					return false;
+				}
+			}
+			UE_LOG(LogHachimisV4Bind, Display, TEXT("重新加载确认 39 个装配、34 个蓝图和 %d 个目录网格"), Meshes.Num());
+			return true;
+		}
+		if (!bRulesOnly)
+		{
+			if (!Catalog->AppendExactGeometry(Meshes, Failure)) { return Error(*Catalog, Failure); }
+			for (const FBinding& Binding : Bindings) { if (!Bind(Binding)) { return false; } }
+		}
 		Rules->Modify();
+		Rules->RoomL1Bay = RoomL1Bay;
 		Rules->RoomExamples = MoveTemp(Examples);
-		if (!Save(*Catalog) || !Save(*Rules)) { return false; }
+		if (!Save(*Rules)) { return false; }
+		if (bRulesOnly) { return true; }
+		if (!Save(*Catalog)) { return false; }
 		for (const FBinding& Binding : Bindings) { if (!Save(*Binding.Blueprint)) { return false; } }
 		return true;
 	}
@@ -269,7 +292,7 @@ namespace HachimisV4Bind
 int32 UHachimisV4BindCommandlet::Main(const FString& Params)
 {
 #if WITH_EDITOR
-	return HachimisV4Bind::Run(FParse::Param(*Params, TEXT("Verify"))) ? 0 : 1;
+	return HachimisV4Bind::Run(FParse::Param(*Params, TEXT("Verify")), FParse::Param(*Params, TEXT("RulesOnly"))) ? 0 : 1;
 #else
 	return 1;
 #endif

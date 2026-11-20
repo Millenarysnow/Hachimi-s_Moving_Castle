@@ -15,6 +15,7 @@
 #include "MassEntitySubsystem.h"
 #include "MassExecutionContext.h"
 #include "Misc/AutomationTest.h"
+#include "NavigationSystem.h"
 #include "Units/Mass/Projectiles/CastleMassHomingProjectileFragments.h"
 
 namespace CastleSupportTests
@@ -34,15 +35,26 @@ namespace CastleSupportTests
 		FFixture()
 		{
 			const auto Settings = UWorld::InitializationValues().AllowAudioPlayback(false).CreatePhysicsScene(true)
-				.CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(false);
+				.CreateNavigation(true).CreateAISystem(false).ShouldSimulatePhysics(false);
 			World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Settings);
 			GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+			// V4 多层支援塔保有可登记的内梯，夹具提供它需要的导航数据。
+			UNavigationSystemV1* Navigation = FNavigationSystem::GetCurrent<UNavigationSystemV1>(World);
+			check(Navigation && Navigation->GetDefaultNavDataInstance(FNavigationSystem::Create));
 			Board = World->SpawnActor<ACastleBoard>();
 			Support = World->GetSubsystem<UCastleSupportTowerSubsystem>();
 			Units = World->GetSubsystem<UCastleMassUnitSubsystem>();
 		}
 		~FFixture()
 		{
+			// 先走正式移除边界，保证内梯在导航系统释放之前注销。
+			const auto Buildings = Board->GetPlacedBuildings();
+			for (ACastleBuildingBase* Building : Buildings)
+			{
+				FText Reason;
+				const bool bRemoved = Board->RemoveBuilding(Building, Reason);
+				ensureMsgf(bRemoved, TEXT("支援塔夹具关闭失败：%s"), *Reason.ToString());
+			}
 			World->DestroyWorld(false);
 			GEngine->DestroyWorldContext(World);
 		}

@@ -5,6 +5,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "BuildingMergeComponent.h"
+#include "HachimisV4/CastleHachimisV4PCG.h"
 
 bool CastlePCGSemantics::CellLess(const FIntVector& A, const FIntVector& B)
 {
@@ -34,6 +35,7 @@ bool CastlePCGSemantics::Extract(ACastleBuildingBase* Building, const ACastleBoa
 	{
 		OutError = TEXT("语义提取要求有效建筑、棋盘及占格。"); return false;
 	}
+	if (Building->HachimisLayout) { return CastleV4PCG::Extract(*Building, *Board, OutParts, OutError); }
 	const TArray<FIntVector> Cells = Building->GetOccupiedCoordinates();
 	FIntVector Minimum = Cells[0];
 	for (const FIntVector& Cell : Cells) { Minimum = Minimum.ComponentMin(Cell); }

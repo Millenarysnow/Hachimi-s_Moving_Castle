@@ -7,6 +7,7 @@
 #include "Castle/PCG/CastleBuildingPCGComponent.h"
 #include "BuildingMergeComponent.h"
 #include "AssemblyFlightComponent.h"
+#include "Castle/PCG/HachimisV4/CastleHachimisV4Layout.h"
 #include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Components/Building/Effects/CastleBuildingEffectComponent.h"
 #include "Components/PrimitiveComponent.h"
@@ -235,6 +236,22 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 			TEXT("建筑类 %s 缺少可见美术模型：请在 VisualRoot 下配置 StaticMeshComponent；GameplayRoot 下的功能网格不算美术模型。"),
 			*GetClass()->GetPathName()));
 		return false;
+	}
+
+	if (HachimisLayout)
+	{
+		// V4 的瓦、板、榫等独立节点密度更高，仍在各等级原飞入窗口内依次发射。
+		// 窗口按原造型节点数和既有每件间隔计算，飞行时长及完成回调仍由原组件负责。
+		static constexpr int32 LegacyVisualCounts[] = {9, 18, 29, 71, 71};
+		if (BuildingLevel < 1 || BuildingLevel > UE_ARRAY_COUNT(LegacyVisualCounts) || HachimisLayout->Parts.Num() <= 1)
+		{
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("V4 造型 %s 不能计算原等级的飞入窗口。"), *HachimisLayout->GetPathName()));
+			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
+			return false;
+		}
+		const ACastleBuildingBase* Template = GetClass()->GetDefaultObject<ACastleBuildingBase>();
+		AssemblyFlight->LaunchInterval = Template->AssemblyFlight->LaunchInterval * (LegacyVisualCounts[BuildingLevel - 1] - 1)
+			/ (HachimisLayout->Parts.Num() - 1);
 	}
 
 	// 已启用的美术碰撞只提供 Visibility 查询；作者明确关闭碰撞的纯表现组件保持无碰撞。

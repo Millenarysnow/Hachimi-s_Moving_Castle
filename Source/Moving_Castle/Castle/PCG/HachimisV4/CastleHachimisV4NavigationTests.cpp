@@ -1,0 +1,354 @@
+#if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
+
+#include "CastleHachimisV4PCG.h"
+#include "CastleBoard.h"
+#include "CastleBuildingBase.h"
+#include "CastleBuildingDefinition.h"
+#include "Castle/PCG/CastleBuildingPCGSubsystem.h"
+#include "CastleLadderLinkComponent.h"
+#include "CastleNavigationSubsystem.h"
+#include "CastleBuildingPreviewSubsystem.h"
+#include "AssemblyFlightComponent.h"
+#include "BuildingMergeComponent.h"
+#include "Components/SceneCaptureComponent2D.h"
+#include "Components/LightComponent.h"
+#include "Engine/DirectionalLight.h"
+#include "Engine/Engine.h"
+#include "Engine/SceneCapture2D.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "EngineUtils.h"
+#include "Kismet/KismetRenderingLibrary.h"
+#include "Misc/AutomationTest.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Paths.h"
+#include "Misc/Parse.h"
+
+namespace CastleV4NavigationTests
+{
+	const FIntVector Up(0, 0, 1);
+
+	/** 真实地图覆盖 V4 多格叠放、盾塔位于两侧、不同属性的合法悬挑和拆除后的重新铺板。 */
+	class FStackCases final : public IAutomationLatentCommand
+	{
+	public:
+		explicit FStackCases(FAutomationTestBase& InTest) : Test(InTest) {}
+
+		bool Update() override
+		{
+			if (FPlatformTime::Seconds() >= Deadline)
+			{
+				Test.AddError(FString::Printf(TEXT("TestMap1 叠层测试超时，场景 %d 阶段 %d"), Scene, Stage));
+				Cleanup();
+				return true;
+			}
+			if (!Board && !Initialize()) { return true; }
+			if (!Navigation->IsNavigationReady()) { return false; }
+			if (Stage == 0)
+			{
+				if (PlaceScene()) { Stage = 1; return false; }
+				Cleanup();
+				return true;
+			}
+			if (Stage == 1)
+			{
+				VerifyStack();
+				if (!Remove(Upper)) { Cleanup(); return true; }
+				FinishAnimations();
+				Stage = 2;
+				return false;
+			}
+			TArray<FCastleActiveLadderConnection> Links;
+			PCG->GetActiveLadderConnections(Board, Links);
+			Test.TestFalse(TEXT("移除上楼后卸载对应接口梯"), Links.ContainsByPredicate([&](const auto& Link) { return Link.Building == Lower; }));
+			if (!Remove(Lower) || !Remove(Support)) { Cleanup(); return true; }
+			for (ACastleBuildingBase*& Building : Extra) { if (!Remove(Building)) { Cleanup(); return true; } }
+			Extra.Reset();
+			Stage = 0;
+			if (++Scene < 4) { return false; }
+			if (FParse::Param(FCommandLine::Get(), TEXT("HachimisV4Capture"))) { CaptureRoomsAndPreviews(); }
+			Cleanup();
+			return true;
+		}
+
+	private:
+		bool Initialize()
+		{
+			for (const FWorldContext& Context : GEngine->GetWorldContexts())
+			{
+				if (Context.WorldType != EWorldType::Game && Context.WorldType != EWorldType::PIE) { continue; }
+				for (TActorIterator<ACastleBoard> It(Context.World()); It; ++It) { Board = *It; break; }
+				if (Board) { break; }
+			}
+			if (!Test.TestNotNull(TEXT("叠层回归的 TestMap1 棋盘"), Board)
+				|| !Test.TestEqual(TEXT("测试从空棋盘开始"), Board->GetPlacedBuildingCount(), 0)) { return false; }
+			World = Board->GetWorld();
+			Navigation = World->GetSubsystem<UCastleNavigationSubsystem>();
+			PCG = World->GetSubsystem<UCastleBuildingPCGSubsystem>();
+			if (!Test.TestNotNull(TEXT("棋盘导航"), Navigation) || !Test.TestNotNull(TEXT("棋盘 PCG"), PCG)) { return false; }
+			for (int32 X = 0; X < Board->GridSize.X; ++X)
+			for (int32 Y = 0; Y < Board->GridSize.Y; ++Y)
+			{
+				FCastleGroundCell Data;
+				if (!Board->TryGetGroundCell(Board->GridOrigin + FIntVector(X, Y, 0), Data))
+				{
+					Test.AddError(TEXT("叠层回归无法读取完整测试地面"));
+					return false;
+				}
+				OriginalGround.Cells.Add(Data);
+			}
+			Center = Board->GridOrigin + FIntVector(1, 1, 0);
+			return true;
+		}
+
+		bool MakeCard(const TCHAR* Family, int32 Level, ECastleTileColor Color, int32 Number, FCastleBuildingDescriptor& Out)
+		{
+			const FString Path = FString::Printf(TEXT("/Game/MovingCastle/Data/Buildings/DA_%s.DA_%s"), Family, Family);
+			const UCastleBuildingDefinition* Definition = LoadObject<UCastleBuildingDefinition>(nullptr, *Path);
+			if (!Test.TestNotNull(Path, Definition)) { return false; }
+			FText Error;
+			if (Definition->CreateDescriptor(Level, Color, Number, Out, Error)) { return true; }
+			Test.AddError(Error.ToString());
+			return false;
+		}
+
+		bool PlaceScene()
+		{
+			const TCHAR* LowerName = Scene == 2 ? TEXT("ShieldTower") : TEXT("ArcherTower");
+			const TCHAR* UpperName = Scene == 1 ? TEXT("ShieldTower") : TEXT("CannonTower");
+			const int32 Level = Scene == 0 ? 2 : 1;
+			const bool bClosed = Scene == 3;
+			FCastleBuildingDescriptor LowerCard, UpperCard;
+			if (!MakeCard(LowerName, Level, ECastleTileColor::Red, 3, LowerCard)
+				|| !MakeCard(UpperName, Level, ECastleTileColor::Blue, bClosed ? 4 : 3, UpperCard)) { return false; }
+			FCastleGroundGenerationResult Ground = OriginalGround;
+			const FIntVector Side = Center + FIntVector(0, 1, 0);
+			for (FCastleGroundCell& Cell : Ground.Cells)
+			{
+				if (Cell.Coordinate == Center || Cell.Coordinate == Center + FIntVector(1, 0, 0))
+				{
+					Cell.Color = LowerCard.Color;
+					Cell.Number = LowerCard.Number;
+				}
+				if (bClosed && Cell.Coordinate == Side)
+				{
+					Cell.Color = UpperCard.Color;
+					Cell.Number = UpperCard.Number;
+				}
+			}
+			FText Error;
+			if (!Board->ApplyGroundGenerationResult(Ground, Error)) { Test.AddError(Error.ToString()); return false; }
+			Lower = Board->PlaceBuilding(Center, LowerCard, false, Error);
+			if (!Lower) { Test.AddError(Error.ToString()); return false; }
+			FinishAnimations();
+			if (bClosed)
+			{
+				// 上楼从同号侧楼横向落位，下方接触层的颜色与数字均不同。
+				ACastleBuildingBase* Base = Board->PlaceBuilding(Side, UpperCard, false, Error);
+				if (!Base) { Test.AddError(Error.ToString()); return false; }
+				Extra.Add(Base);
+				FinishAnimations();
+				Support = Board->PlaceBuilding(Side + Up, UpperCard, false, Error);
+				if (!Support) { Test.AddError(Error.ToString()); return false; }
+				FinishAnimations();
+				FCastleGridCursorTarget Cursor;
+				Cursor.bValid = true;
+				Cursor.Surface = ECastleGridCursorSurface::Building;
+				Cursor.Cell = Side + Up;
+				Cursor.AdjacentCell = Center + Up;
+				Cursor.Face = ECastleGridFace::NegativeY;
+				Upper = Board->PlaceBuildingAtCursor(Cursor, UpperCard, false, Error);
+			}
+			else { Upper = Board->PlaceBuilding(Center + Up, UpperCard, false, Error); }
+			if (!Upper) { Test.AddError(Error.ToString()); return false; }
+			FinishAnimations();
+			return true;
+		}
+
+		void FinishAnimations()
+		{
+			// 跑正式完成回调，减少夹具等待。导航构建仍由实际游戏世界推进。
+			for (ACastleBuildingBase* Building : Board->GetPlacedBuildings())
+			{
+				if (Building->AssemblyFlight->bIsPlaying) { Building->AssemblyFlight->TickComponent(60.0f, LEVELTICK_All, nullptr); }
+			}
+			for (ACastleBuildingBase* Building : Board->GetPlacedBuildings())
+			{
+				if (Building->BuildingMerge->bIsPlaying) { Building->BuildingMerge->TickComponent(60.0f, LEVELTICK_All, nullptr); }
+			}
+		}
+
+		void VerifyStack()
+		{
+			const bool bClosed = Scene == 3;
+			const FString Label = FString::Printf(TEXT("场景 %d %s / %s"), Scene, *Lower->GetClass()->GetName(), *Upper->GetClass()->GetName());
+			TArray<FCastleActiveLadderConnection> Links;
+			PCG->GetActiveLadderConnections(Board, Links);
+			if (bClosed)
+			{
+				Test.TestFalse(Label + TEXT(" 上下不匹配时无重合格梯"), Links.ContainsByPredicate([&](const auto& Link) { return Link.LowerCell == Center; }));
+				TraceFloor(Center + Up, FVector(120, 120, 0), true);
+				return;
+			}
+			if (!Test.TestEqual(Label + TEXT(" 唯一跨栋梯"), Links.Num(), 1)) { return; }
+			Test.TestTrue(Label + TEXT(" 梯由实际下层 Actor 所有"), Links[0].Building == Lower);
+			const auto* Link = Lower->FindComponentByClass<UCastleLadderLinkComponent>();
+			if (!Test.TestNotNull(Label + TEXT(" 有效梯组件"), Link)) { return; }
+			FVector Bottom, Top;
+			ENavLinkDirection::Type Direction;
+			Link->GetLinkData(Bottom, Top, Direction);
+			Bottom = Lower->GetActorTransform().TransformPosition(Bottom);
+			Top = Lower->GetActorTransform().TransformPosition(Top);
+			Test.TestEqual(Label + TEXT(" 双向 Link"), Direction, ENavLinkDirection::BothWays);
+			FText Error;
+			Test.TestTrue(Label + TEXT(" Recast 接收两个真实梯口"), Navigation->RequestSharedPatrolRoute({Bottom, Top}, Error));
+			const auto Path = Navigation->AcquireSharedPath();
+			Test.TestTrue(Label + TEXT(" 上下行路线闭环"), Path && Path->bValid && Path->bClosedLoop);
+			Navigation->ClearSharedRoute();
+			const FVector Offset = Lower->HachimisLayout ? FVector(122, 123, 0) : FVector(-127, 152, 0);
+			TraceFloor(Links[0].UpperCell, Offset, false);
+			TraceFloor(Links[0].UpperCell, FVector::ZeroVector, true);
+			if (Scene == 0)
+			{
+				const FIntVector Other = Links[0].UpperCell == Center + Up ? Center + Up + FIntVector(1,0,0) : Center + Up;
+				TraceFloor(Other, Offset, true);
+				Capture(TEXT("V4-tower-stack"), Board->GetGridWorldLocation(Center) + FVector(230, 0, 250), FVector(-1550,-2250,1400));
+			}
+			Test.AddInfo(Label + TEXT(" 梯口与闭环断言完成"));
+		}
+
+		void TraceFloor(const FIntVector& Cell, const FVector& Offset, bool bSolid)
+		{
+			FVector CenterOnFloor = CastleV4PCG::CellFrame(*Board, Cell).TransformPosition(Offset);
+			ACastleBuildingBase* Floor = Board->GetBuildingAt(Cell);
+			if (!Test.TestNotNull(TEXT("板面所在格的建筑"), Floor)) { return; }
+			if (Floor->HachimisLayout) { CenterOnFloor.Z += Floor->HachimisLayout->StandingHeight; }
+			FHitResult Hit;
+			const bool bHit = World->LineTraceSingleByChannel(Hit, CenterOnFloor + FVector(0,0,12), CenterOnFloor - FVector(0,0,12), ECC_Pawn);
+			Test.TestEqual(FString::Printf(TEXT("格 %s 局部 %s 的上层 Pawn 板面"), *Cell.ToString(), *Offset.ToCompactString()), bHit, bSolid);
+			if (bSolid && bHit) { Test.TestEqual(TEXT("功能楼板归属命中格的 Actor"), Hit.GetActor(), static_cast<AActor*>(Floor)); }
+		}
+
+		void Capture(const TCHAR* Name, const FVector& Focus, const FVector& Offset)
+		{
+			if (!FParse::Param(FCommandLine::Get(), TEXT("HachimisV4Capture"))) { return; }
+			const FVector Eye = Focus + Offset * 1.2;
+			const FRotator ViewRotation = (Focus - Eye).Rotation();
+			auto* Actor = World->SpawnActor<ASceneCapture2D>(Eye, ViewRotation);
+			if (!Test.TestNotNull(TEXT("创建 UE 场景捕获"), Actor)) { return; }
+			// 截图补光只存在于本次场景捕获，便于在屋檐遮挡下核对铺板和木构细节。
+			auto* Fill = World->SpawnActor<ADirectionalLight>(Eye, ViewRotation);
+			if (!Test.TestNotNull(TEXT("创建测试截图补光"), Fill)) { Actor->Destroy(); return; }
+			ULightComponent* Light = Fill->GetLightComponent();
+			Light->SetMobility(EComponentMobility::Movable);
+			Light->SetIntensity(3.0f);
+			Light->SetCastShadows(false);
+			USceneCaptureComponent2D* Camera = Actor->GetCaptureComponent2D();
+			Camera->bCaptureEveryFrame = false;
+			Camera->bCaptureOnMovement = false;
+			Camera->CaptureSource = SCS_FinalColorLDR;
+			Camera->FOVAngle = 45.0f;
+			Camera->TextureTarget = NewObject<UTextureRenderTarget2D>(Actor);
+			Camera->TextureTarget->RenderTargetFormat = RTF_RGBA8;
+			Camera->TextureTarget->InitAutoFormat(1280, 900);
+			Camera->CaptureScene();
+			const FString Folder = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("HachimisV4"));
+			const FString File = FString(Name) + TEXT(".png");
+			UKismetRenderingLibrary::ExportRenderTarget(World, Camera->TextureTarget, Folder, File);
+			Test.TestTrue(TEXT("UE 场景捕获文件已写入"), FPaths::FileExists(Folder / File));
+			Test.AddInfo(Folder / File);
+			Actor->Destroy();
+			Fill->Destroy();
+		}
+
+		void CaptureRoomsAndPreviews()
+		{
+			// 从实际蓝图卡片入口准备代表每族和三个单格五级的预览。房间截图来自七座已完成 PCG 的原 Actor。
+			const TCHAR* Families[] = {TEXT("NormalRoom"), TEXT("ArcherTower"), TEXT("CannonTower"), TEXT("Farm"), TEXT("BalloonTower"), TEXT("BeeHive")};
+			auto* Preview = World->GetSubsystem<UCastleBuildingPreviewSubsystem>();
+			if (!Test.TestNotNull(TEXT("真实建筑卡片预览系统"), Preview)) { return; }
+			for (int32 Index = 0; Index < UE_ARRAY_COUNT(Families); ++Index)
+			{
+				const TArray<int32> Levels = Index >= 1 && Index <= 3 ? TArray<int32>{1, 5} : TArray<int32>{1};
+				for (int32 Level : Levels)
+				{
+					FCastleBuildingDescriptor Card;
+					if (!MakeCard(Families[Index], Level, ECastleTileColor::Red, 3, Card)) { return; }
+					FText Error;
+					if (!Test.TestNotNull(FString(Families[Index]) + FString::Printf(TEXT(" Lv%d 卡片预览纹理"), Level), Preview->GetPreview(Card, Error)))
+					{
+						Test.AddError(Error.ToString());
+						return;
+					}
+				}
+			}
+			FCastleBuildingDescriptor Room;
+			if (!MakeCard(TEXT("NormalRoom"), 1, ECastleTileColor::Red, 3, Room)) { return; }
+			FCastleGroundGenerationResult Ground = OriginalGround;
+			for (FCastleGroundCell& Cell : Ground.Cells)
+			{
+				const FIntVector Delta = Cell.Coordinate - Center;
+				if (Delta.X >= 0 && Delta.X <= 1 && Delta.Y >= 0 && Delta.Y <= 1) { Cell.Color = Room.Color; Cell.Number = Room.Number; }
+			}
+			FText Error;
+			if (!Board->ApplyGroundGenerationResult(Ground, Error)) { Test.AddError(Error.ToString()); return; }
+			for (int32 Z = 0; Z < 2; ++Z)
+			for (int32 X = 0; X < 2; ++X)
+			for (int32 Y = 0; Y < 2; ++Y)
+			{
+				if (X == 0 && Y == 0 && Z == 1) { continue; }
+				ACastleBuildingBase* Building = Board->PlaceBuilding(Center + FIntVector(X,Y,Z), Room, false, Error);
+				if (!Building) { Test.AddError(Error.ToString()); return; }
+				Extra.Add(Building);
+				FinishAnimations();
+			}
+			Capture(TEXT("V4-seven-independent-rooms"), Board->GetGridWorldLocation(Center) + FVector(257,257,330), FVector(-1400,-1850,1550));
+		}
+
+		bool Remove(ACastleBuildingBase*& Building)
+		{
+			if (!IsValid(Building)) { return true; }
+			FText Error;
+			if (!Board->RemoveBuilding(Building, Error)) { Test.AddError(Error.ToString()); return false; }
+			Building = nullptr;
+			return true;
+		}
+
+		void Cleanup()
+		{
+			if (!Board || !World) { return; }
+			Navigation->ClearSharedRoute();
+			Remove(Upper);
+			Remove(Support);
+			Remove(Lower);
+			for (int32 Index = Extra.Num() - 1; Index >= 0; --Index) { Remove(Extra[Index]); }
+			FinishAnimations();
+			FText Error;
+			if (!Board->ApplyGroundGenerationResult(OriginalGround, Error)) { Test.AddError(Error.ToString()); }
+		}
+
+		FAutomationTestBase& Test;
+		double Deadline = FPlatformTime::Seconds() + 150.0;
+		int32 Scene = 0;
+		int32 Stage = 0;
+		UWorld* World = nullptr;
+		ACastleBoard* Board = nullptr;
+		UCastleNavigationSubsystem* Navigation = nullptr;
+		UCastleBuildingPCGSubsystem* PCG = nullptr;
+		FCastleGroundGenerationResult OriginalGround;
+		FIntVector Center = FIntVector::ZeroValue;
+		ACastleBuildingBase* Lower = nullptr;
+		ACastleBuildingBase* Upper = nullptr;
+		ACastleBuildingBase* Support = nullptr;
+		TArray<ACastleBuildingBase*> Extra;
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleHachimisV4StackInterfaces, "MovingCastle.Castle.PCG.HachimisV4.StackInterfaces",
+	EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleHachimisV4StackInterfaces::RunTest(const FString& Parameters)
+{
+	ADD_LATENT_AUTOMATION_COMMAND(CastleV4NavigationTests::FStackCases(*this));
+	return true;
+}
+#endif
