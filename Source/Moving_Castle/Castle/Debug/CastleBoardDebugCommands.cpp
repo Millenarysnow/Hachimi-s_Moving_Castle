@@ -57,6 +57,13 @@ namespace CastleBoardDebug
   }
   if (ACastleBoard* Board = FindUnique(World))
   {
+   if (Board->PlacementSurfaceMode != ECastlePlacementSurfaceMode::GroundBoard)
+   {
+    const FString Reason = TEXT("CastleSetGroundHidden 仅适用于地面棋盘模式。");
+    UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s：%s"), *Board->GetPathName(), *Reason);
+    Screen(Reason, false);
+    return;
+   }
    const bool bHidden = Args[0]==TEXT("1");
    Board->SetGroundPresentationHidden(bHidden);
    const bool bSuccess = Board->IsGroundPresentationHidden()==bHidden;

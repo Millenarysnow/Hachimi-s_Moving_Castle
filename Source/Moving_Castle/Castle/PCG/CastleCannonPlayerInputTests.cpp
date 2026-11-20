@@ -37,7 +37,7 @@ namespace CastleCannonPlayerInputTests
 			{
 				const auto Target=Controller->GetCurrentGridCursorTarget();
 				const FIntVector Expected=Stage==1?Center:Center+FIntVector(1,0,0);
-				if (!Test->TestTrue(TEXT("视口光标射线命中预期地面格"),Target.bValid&&Target.bGroundSurface&&Target.Cell==Expected)) { Cleanup(); return true; }
+				if (!Test->TestTrue(TEXT("视口光标射线命中预期地面格"),Target.bValid && Target.Surface == ECastleGridCursorSurface::Ground && Target.Cell == Expected)) { Cleanup(); return true; }
 				Press(EKeys::One); ++Stage; return false;
 			}
 			if (Stage==2 || Stage==5)
@@ -188,7 +188,7 @@ namespace CastleCannonPlayerInputTests
 			if (Cast<ACastleBuildingBase>(Hit.GetActor()))
 			{
 				FCastleGridCursorTarget Target;
-				if (!Test->TestTrue(TEXT("建筑射线可由正式棋盘解析命中格"),Board->TryResolveGridCursorTarget(Origin,Origin+Direction*100000,Target)&&!Target.bGroundSurface)) { return false; }
+				if (!Test->TestTrue(TEXT("建筑射线可由正式棋盘解析命中格"),Board->TryResolveGridCursorTarget(Origin,Origin+Direction*100000,Target) && Target.Surface == ECastleGridCursorSurface::Building)) { return false; }
 				ExpectedPoint=Board->GetGridWorldLocation(Target.Cell)-Board->GetActorTransform().TransformVector(FVector(0,0,Board->LayerHeight*0.5));
 			}
 			else

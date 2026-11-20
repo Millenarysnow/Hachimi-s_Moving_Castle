@@ -170,7 +170,7 @@ bool FCastleShopConstructionTest::RunTest(const FString& Parameters)
 	}
 	FCastleGridCursorTarget Target;
 	Target.bValid = true;
-	Target.bGroundSurface = true;
+	Target.Surface = ECastleGridCursorSurface::Ground;
 	Target.Face = ECastleGridFace::Up;
 	Target.AdjacentCell = Target.Cell + FIntVector(0, 0, 1);
 	Shop->CloseShop();

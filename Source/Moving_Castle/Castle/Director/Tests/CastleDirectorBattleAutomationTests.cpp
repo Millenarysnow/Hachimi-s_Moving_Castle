@@ -8,6 +8,7 @@
 #include "Castle/Combat/CastleCombatSubsystem.h"
 #include "Castle/Combat/CastleCombatConfigDataAsset.h"
 #include "Castle/Actors/CastleBoard.h"
+#include "Castle/Placement/CastleTowerSideGridComponent.h"
 #include "Castle/Actors/CastleBuildingBase.h"
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Components/CastleShopComponent.h"
@@ -62,23 +63,27 @@ public:
 			Director->Tick(0);
 			Test->TestEqual(TEXT("无路线拒绝后仍编辑"), Director->GetPhase(), ECastleDirectorPhase::Editing);
 			Test->TestTrue(TEXT("无路线提示可见且节点保留"), Director->GetStatusMessage().ToString().Contains(TEXT("无法开战")) && IsValid(First));
-			// 玩家实际可放的一级炮塔作为导航输入；通过真实放置和完整飞入使导航接收变化。
-			FCastleGroundCell Ground;
-			if (!Test->TestTrue(TEXT("查询测试落点地面"), Board->TryGetGroundCell(FIntVector(0, 0, 0), Ground))) { return true; }
-			FCastleBuildingDescriptor Card;
-			Card.Definition = Board->FindBuildingDefinition(ECastleBuildingType::CannonTower);
-			Card.Level = 1; Card.Color = Ground.Color; Card.Number = Ground.Number;
-			Building = Board->PlaceBuilding(Ground.Coordinate, Card, false, Reason);
-			if (!Test->TestNotNull(TEXT("放置正式一级炮塔"), Building.Get())) { Test->AddError(Reason.ToString()); return true; }
-			CastleBuildingTests::CompletePlacement(Building.Get());
-			// 另外放置一级箭塔和两层四级农田，分别验证其他楼顶及上层楼板。
-			for (const FIntVector Cell : {FIntVector(1, 0, 0), FIntVector(3, 3, 0)})
+			// 三个独立塔面提供真实碰撞与匹配来源；根据本局格子的属性制测试牌，不改格子数据。
+			const FIntVector Base = Board->GetBoardCenterCoordinate();
+			const FVector Center = Board->GetGridWorldLocation(Base);
+			const FIntVector Directions[] = { FIntVector(0, -1, 0), FIntVector(-1, 0, 0), FIntVector(1, 0, 0) };
+			const ECastleBuildingType Types[] = { ECastleBuildingType::CannonTower, ECastleBuildingType::ArcherTower, ECastleBuildingType::Farm };
+			for (int32 Index = 0; Index < UE_ARRAY_COUNT(Directions); ++Index)
 			{
-				if (!Test->TestTrue(TEXT("取得额外测试地面"), Board->TryGetGroundCell(Cell, Ground))) { return true; }
-				Card.Definition = Board->FindBuildingDefinition(Cell.X == 1 ? ECastleBuildingType::ArcherTower : ECastleBuildingType::Farm);
-				Card.Level = Cell.X == 1 ? 1 : 4; Card.Color = Ground.Color; Card.Number = Ground.Number;
-				auto* Placed = Board->PlaceBuilding(Cell, Card, false, Reason);
-				if (!Test->TestNotNull(TEXT("放置其他建筑和多层建筑"), Placed)) { Test->AddError(Reason.ToString()); return true; }
+				FCastleGridCursorTarget Target;
+				const FVector RayStart = Center + FVector(Directions[Index]) * Board->CellSize * 2.0;
+				if (!Test->TestTrue(TEXT("解析正式主塔侧格"), Board->TryResolveGridCursorTarget(RayStart, Center, Target)
+					&& Target.Surface == ECastleGridCursorSurface::MainTowerSide && Target.AdjacentCell == Base + Directions[Index])) { return true; }
+				const FCastleTowerSideCell* Cell = Board->FindTowerSideCell(Target.Cell, Target.Face);
+				if (!Test->TestNotNull(TEXT("查询本局塔面属性"), Cell)) { return true; }
+				FCastleBuildingDescriptor Card;
+				Card.Definition = Board->FindBuildingDefinition(Types[Index]);
+				Card.Level = Index == 2 ? 4 : 1;
+				Card.Color = Cell->Color;
+				Card.Number = Cell->Number;
+				ACastleBuildingBase* Placed = Board->PlaceBuildingAtCursor(Target, Card, false, Reason);
+				if (!Test->TestNotNull(TEXT("在塔侧放置正式导航建筑"), Placed)) { Test->AddError(Reason.ToString()); return true; }
+				if (Index == 0) { Building = Placed; }
 				CastleBuildingTests::CompletePlacement(Placed);
 			}
 			Stage = 1;
@@ -87,7 +92,9 @@ public:
 		if (Stage == 1)
 		{
 			if (!Navigation->IsNavigationReady()) { return false; }
-			for (const FIntVector Cell : {FIntVector(0, 0, 0), FIntVector(1, 0, 0), FIntVector(3, 3, 1)})
+			// 炮塔、箭塔和农田第二层应继续使用原来三维网格的标准底面锚点。
+			const FIntVector Base = Board->GetBoardCenterCoordinate();
+			for (const FIntVector Cell : {Base + FIntVector(0, -1, 0), Base + FIntVector(-1, 0, 0), Base + FIntVector(1, 0, 1)})
 			{
 				const FVector GridCenter = Board->GetGridWorldLocation(Cell);
 				FVector FloorPoint;
@@ -101,20 +108,20 @@ public:
 				Test->TestTrue(TEXT("投影没有落到错误楼层"), FMath::Abs(FloorPath->Waypoints[0].Z - FloorPoint.Z) <= Navigation->ProjectionExtent.Z);
 			}
 			FVector Point;
-			const FVector Center = Board->GetGridWorldLocation(FIntVector(0, 0, 0));
+			const FVector Center = Board->GetGridWorldLocation(Base + FIntVector(0, -1, 0));
 			if (!Test->TestTrue(TEXT("楼顶射线解析到楼内地板"), ACastlePatrolRoute::TryResolveWaypointFromRay(
 				World, Center + FVector(0, 0, 2000), Center - FVector(0, 0, 1000), Point, Reason))) { Test->AddError(Reason.ToString()); return true; }
 			if (!Test->TestTrue(TEXT("提交正式单点闭环待命路线"), Navigation->RequestSharedPatrolRoute({Point}, Reason))) { Test->AddError(Reason.ToString()); return true; }
 			const auto Path = Navigation->AcquireSharedPath();
 			if (!Test->TestTrue(TEXT("生成前实际闭环已就绪"), Path && Path->bValid && Path->bClosedLoop)) { Test->AddError(Navigation->LastFailure.ToString()); return true; }
-			// NPC 已生成后令战斗配置非法，证明最后一步失败仍能收回整批 NPC 并恢复地块。
+			// NPC 已生成后令战斗配置非法，证明最后一步失败仍能收回整批 NPC 并恢复塔侧格。
 			const float Radius = Director->Config->CombatConfig->SpawnInnerRadius;
 			Director->Config->CombatConfig->SpawnInnerRadius = -1;
 			Test->AddExpectedError(TEXT("StartBattle："), EAutomationExpectedErrorFlags::Contains, 1);
 			Test->AddExpectedError(TEXT("导演开战失败"), EAutomationExpectedErrorFlags::Contains, 1);
 			Test->TestFalse(TEXT("战斗系统拒绝导致整次开战失败"), Director->TryStartSelectedBattle(Director->Nodes[0], Reason));
 			Test->TestTrue(TEXT("失败不销毁节点"), Director->Nodes.Num() >= 2 && IsValid(Director->Nodes[0]));
-			Test->TestFalse(TEXT("失败恢复地块"), Board->IsGroundPresentationHidden());
+			Test->TestFalse(TEXT("失败恢复塔侧格"), Board->IsPlacementSurfacePresentationHidden());
 			Test->TestFalse(TEXT("失败销毁NPC生成器"), IsValid(Director->BattleNPCSpawner));
 			Test->TestEqual(TEXT("失败不推进普通场次"), Director->NormalBattles, 0);
 			Test->TestEqual(TEXT("失败保持编辑阶段"), Director->GetPhase(), ECastleDirectorPhase::Editing);
@@ -126,7 +133,7 @@ public:
 		{
 			if (!Test->TestTrue(TEXT("真实开战成功"), Director->TryStartSelectedBattle(Director->Nodes[0], Reason))) { Test->AddError(Reason.ToString()); return true; }
 			Test->TestEqual(TEXT("同步派出恰好8个NPC"), Director->BattleNPCSpawner->SpawnedUnits.Num(), 8);
-			Test->TestTrue(TEXT("战斗隐藏地块"), Board->IsGroundPresentationHidden());
+			Test->TestTrue(TEXT("战斗隐藏塔侧格"), Board->IsPlacementSurfacePresentationHidden());
 			Test->TestEqual(TEXT("成功才清除节点"), Director->Nodes.Num(), 0);
 			Test->TestEqual(TEXT("普通计数提交为1"), Director->NormalBattles, 1);
 			Test->TestTrue(TEXT("HUD显示真实剩余敌人"), Director->GetHUDSummary().Contains(TEXT("剩余敌人")));
@@ -144,12 +151,12 @@ public:
 			if (!Test->TestEqual(TEXT("清场自动进入奖励"), Director->GetPhase(), ECastleDirectorPhase::Reward)) { return true; }
 			Test->TestEqual(TEXT("只通过一关"), Director->ClearedSteps, 1);
 			Test->TestFalse(TEXT("清场后NPC生成器已回收"), IsValid(Director->BattleNPCSpawner));
-			Test->TestTrue(TEXT("奖励期间地块保持隐藏"), Board->IsGroundPresentationHidden());
+			Test->TestTrue(TEXT("奖励期间塔侧格保持隐藏"), Board->IsPlacementSurfacePresentationHidden());
 			Test->AddExpectedError(TEXT("导演拒绝非法或重复清场通知"), EAutomationExpectedErrorFlags::Contains, 1);
 			Director->Combat->OnBattleCleared.Broadcast(ECastleBattleKind::Normal, 1);
 			Test->TestEqual(TEXT("重复通知不重复记关"), Director->ClearedSteps, 1);
 			if (!Test->TestTrue(TEXT("选择经验恢复编辑"), Director->TryChooseReward(ECastleDirectorReward::Experience, Reason))) { return true; }
-			Test->TestFalse(TEXT("选择奖励后显示地块"), Board->IsGroundPresentationHidden());
+			Test->TestFalse(TEXT("选择奖励后显示塔侧格"), Board->IsPlacementSurfacePresentationHidden());
 			Test->TestEqual(TEXT("实际经验60"), Director->Experience, 60);
 			Test->TestTrue(TEXT("下一关节点已生成"), Director->Nodes.Num() >= 2);
 			Test->TestFalse(TEXT("奖励关闭恢复移动"), Director->Controller->IsMoveInputIgnored());
