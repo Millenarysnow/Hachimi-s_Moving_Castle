@@ -97,5 +97,9 @@ public:
 	UPROPERTY(EditAnywhere, Instanced, Category="建筑PCG")
 	TArray<TObjectPtr<UCastleBuildingPCGRule>> Rules;
 
+	/** 普通房仍是独立一级 Actor。这六个源样例只参与局部部件求值。 */
+	UPROPERTY(EditAnywhere, Category="建筑PCG|V4")
+	TMap<FName, TObjectPtr<class UCastleHachimisV4Layout>> RoomExamples;
+
 	bool ValidateConfiguration(FString& Error) const;
 };

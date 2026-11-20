@@ -154,6 +154,10 @@ public:
 	/** 返回当前等级合成所需的单个建筑占用格子数。 */
 	static int32 GetExpectedFootprintCellCount(int32 InLevel);
 
+	/** 原蓝图的 V4 作者装配。盾塔和纯逻辑夹具使用各自既有的模型配置。 */
+	UPROPERTY(VisibleDefaultsOnly, Category = "建筑模型|V4")
+	TObjectPtr<class UCastleHachimisV4Layout> HachimisLayout;
+
 protected:
 	/** 建筑可被关卡流送或直接销毁，必须撤销本实例的触发登记。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

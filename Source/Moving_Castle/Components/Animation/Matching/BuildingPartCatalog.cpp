@@ -103,6 +103,64 @@ const FBuildingPartGeometry* UBuildingPartCatalog::FindGeometry(const UStaticMes
 }
 
 #if WITH_EDITOR
+/** 从保存的 LOD0 源三角计算可稳定复核的几何身份，不读取烹饪后的渲染缓冲区。 */
+static bool ReadExactGeometry(const UStaticMesh* Mesh, BuildingPartGeometry::FShape& Shape,
+	FBuildingPartGeometry& Geometry, FString& OutError)
+{
+	const FMeshDescription* Description = Mesh->GetMeshDescription(0);
+	if (!Description || Description->Vertices().Num() == 0 || Description->Triangles().Num() == 0)
+	{
+		OutError = FString::Printf(TEXT("%s 没有可读的 LOD0 源三角形。"), *Mesh->GetPathName());
+		return false;
+	}
+	const FStaticMeshConstAttributes Attributes(*Description);
+	const TVertexAttributesConstRef<FVector3f> Positions = Attributes.GetVertexPositions();
+	FBox Bounds(ForceInit);
+	for (const FVertexID Vertex : Description->Vertices().GetElementIDs())
+	{
+		Bounds += FVector(Positions[Vertex]);
+	}
+	const FVector Size = Bounds.GetSize();
+	const double Unit = Size.GetMax();
+	if (!Bounds.IsValid || !FMath::IsFinite(Unit) || Unit <= UE_SMALL_NUMBER)
+	{
+		OutError = FString::Printf(TEXT("%s 的源几何范围无效。"), *Mesh->GetPathName());
+		return false;
+	}
+
+	// 去掉整体平移和统一单位差异；四千分之一的量化吸收导出浮点误差。
+	// 保留各轴比例、三角形连接与朝向，因此不同形状不能仅凭相同包围盒被配为同一零件。
+	const FVector Center = Bounds.GetCenter();
+	Shape.Aspect = Size / Unit;
+	TArray<FString> Triangles;
+	Triangles.Reserve(Description->Triangles().Num());
+	for (const FTriangleID Triangle : Description->Triangles().GetElementIDs())
+	{
+		BuildingPartGeometry::FTriangle GeometryTriangle;
+		int32 CornerIndex = 0;
+		TArray<FString, TInlineAllocator<3>> Corners;
+		for (const FVertexID Vertex : Description->GetTriangleVertices(Triangle))
+		{
+			const FVector P = (FVector(Positions[Vertex]) - Center) * (4096.0 / Unit);
+			GeometryTriangle.Points[CornerIndex++] = P / 4096.0;
+			Corners.Add(FString::Printf(TEXT("%d,%d,%d"), FMath::RoundToInt(P.X), FMath::RoundToInt(P.Y), FMath::RoundToInt(P.Z)));
+		}
+		Corners.Sort();
+		Triangles.Add(Corners[0] + TEXT("/") + Corners[1] + TEXT("/") + Corners[2]);
+		Shape.Triangles.Add(GeometryTriangle);
+		Shape.SurfaceArea += FVector::CrossProduct(GeometryTriangle.Points[1] - GeometryTriangle.Points[0],
+			GeometryTriangle.Points[2] - GeometryTriangle.Points[0]).Size() * 0.5;
+	}
+	Triangles.Sort();
+	const FString Canonical = FString::Join(Triangles, TEXT(";"));
+	FTCHARToUTF8 Bytes(*Canonical);
+	uint8 Digest[FSHA1::DigestSize];
+	FSHA1::HashBuffer(Bytes.Get(), Bytes.Length(), Digest);
+	Geometry.GeometryId = BytesToHex(Digest, FSHA1::DigestSize);
+	Geometry.LocalSize = Size;
+	return true;
+}
+
 bool UBuildingPartCatalog::RebuildFromMeshes(const TArray<UStaticMesh*>& Meshes, FString& OutError)
 {
 	OutError.Reset();
@@ -131,58 +189,9 @@ bool UBuildingPartCatalog::RebuildFromMeshes(const TArray<UStaticMesh*>& Meshes,
 			OutError = TEXT("零件目录包含无效网格。");
 			return false;
 		}
-		const FMeshDescription* Description = Mesh->GetMeshDescription(0);
-		if (!Description || Description->Vertices().Num() == 0 || Description->Triangles().Num() == 0)
-		{
-			OutError = FString::Printf(TEXT("%s 没有可读的 LOD0 源三角形。"), *Mesh->GetPathName());
-			return false;
-		}
-		const FStaticMeshConstAttributes Attributes(*Description);
-		const TVertexAttributesConstRef<FVector3f> Positions = Attributes.GetVertexPositions();
-		FBox Bounds(ForceInit);
-		for (const FVertexID Vertex : Description->Vertices().GetElementIDs())
-		{
-			Bounds += FVector(Positions[Vertex]);
-		}
-		const FVector Size = Bounds.GetSize();
-		const double Unit = Size.GetMax();
-		if (!Bounds.IsValid || !FMath::IsFinite(Unit) || Unit <= UE_SMALL_NUMBER)
-		{
-			OutError = FString::Printf(TEXT("%s 的源几何范围无效。"), *Mesh->GetPathName());
-			return false;
-		}
-
-		// 去掉整体平移和统一单位差异；四千分之一的量化吸收导出浮点误差。
-		// 保留各轴比例、三角形连接与朝向，因此不同形状不能仅凭相同包围盒被配为同一零件。
-		const FVector Center = Bounds.GetCenter();
 		BuildingPartGeometry::FShape Shape;
-		Shape.Aspect = Size / Unit;
-		TArray<FString> Triangles;
-		Triangles.Reserve(Description->Triangles().Num());
-		for (const FTriangleID Triangle : Description->Triangles().GetElementIDs())
-		{
-			BuildingPartGeometry::FTriangle GeometryTriangle;
-			int32 CornerIndex = 0;
-			TArray<FString, TInlineAllocator<3>> Corners;
-			for (const FVertexID Vertex : Description->GetTriangleVertices(Triangle))
-			{
-				const FVector P = (FVector(Positions[Vertex]) - Center) * (4096.0 / Unit);
-				GeometryTriangle.Points[CornerIndex++] = P / 4096.0;
-				Corners.Add(FString::Printf(TEXT("%d,%d,%d"), FMath::RoundToInt(P.X), FMath::RoundToInt(P.Y), FMath::RoundToInt(P.Z)));
-			}
-			Corners.Sort();
-			Triangles.Add(Corners[0] + TEXT("/") + Corners[1] + TEXT("/") + Corners[2]);
-			Shape.Triangles.Add(GeometryTriangle);
-			Shape.SurfaceArea += FVector::CrossProduct(GeometryTriangle.Points[1] - GeometryTriangle.Points[0],
-				GeometryTriangle.Points[2] - GeometryTriangle.Points[0]).Size() * 0.5;
-		}
-		Triangles.Sort();
-		const FString Canonical = FString::Join(Triangles, TEXT(";"));
-		FTCHARToUTF8 Bytes(*Canonical);
-		uint8 Digest[FSHA1::DigestSize];
-		FSHA1::HashBuffer(Bytes.Get(), Bytes.Length(), Digest);
 		FBuildingPartGeometry Geometry;
-		Geometry.GeometryId = BytesToHex(Digest, FSHA1::DigestSize);
+		if (!ReadExactGeometry(Mesh, Shape, Geometry, OutError)) { return false; }
 		// 量化边界两侧的同一点可能有不同哈希；再逐三角形校验等价，不能靠降低精度硬凑对应。
 		const BuildingPartGeometry::FShape* Equivalent = KnownShapes.FindByPredicate([&Shape](const BuildingPartGeometry::FShape& Existing)
 		{
@@ -194,7 +203,26 @@ bool UBuildingPartCatalog::RebuildFromMeshes(const TArray<UStaticMesh*>& Meshes,
 			Shape.Identity = Geometry.GeometryId;
 			KnownShapes.Add(MoveTemp(Shape));
 		}
-		Geometry.LocalSize = Size;
+		NewEntries.Add(Mesh, MoveTemp(Geometry));
+	}
+	Modify();
+	Entries = MoveTemp(NewEntries);
+	MarkPackageDirty();
+	return true;
+}
+bool UBuildingPartCatalog::AppendExactGeometry(const TArray<UStaticMesh*>& Meshes, FString& OutError)
+{
+	TMap<TSoftObjectPtr<UStaticMesh>, FBuildingPartGeometry> NewEntries = Entries;
+	for (UStaticMesh* Mesh : Meshes)
+	{
+		if (!IsValid(Mesh))
+		{
+			OutError = TEXT("V4 零件目录含无效网格。");
+			return false;
+		}
+		BuildingPartGeometry::FShape Shape;
+		FBuildingPartGeometry Geometry;
+		if (!ReadExactGeometry(Mesh, Shape, Geometry, OutError)) { return false; }
 		NewEntries.Add(Mesh, MoveTemp(Geometry));
 	}
 	Modify();

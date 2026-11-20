@@ -43,5 +43,9 @@ public:
 	/** 原生编辑器工具读取源三角形，完整生成成功后才替换目录；不修改输入网格资产。 */
 	UFUNCTION(BlueprintCallable, Category="零件目录|编辑器")
 	bool RebuildFromMeshes(const TArray<UStaticMesh*>& Meshes, FString& OutError);
+
+	/** 追加已按作者局部几何去重的 V4 网格。原目录中的跨单位等价项保持不变。 */
+	bool AppendExactGeometry(const TArray<UStaticMesh*>& Meshes, FString& OutError);
+
 #endif
 };
