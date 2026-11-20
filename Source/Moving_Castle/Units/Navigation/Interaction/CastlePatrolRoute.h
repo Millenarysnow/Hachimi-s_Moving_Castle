@@ -33,7 +33,7 @@ public:
 	/** 开战只取消草稿和输入占用，不提交、不清除正式路线。 */
 	void CancelEditingDraft();
 
-	/** 与视口放点共用：建筑命中格按底面锚点取本层楼板；其他顶面保持实际命中位置。 */
+	/** 与视口放点共用：建筑命中格取本层底面锚点；棋盘内的其他顶面取格心 XY 并保留命中高度。 */
 	static bool TryResolveWaypointFromRay(UWorld* World, const FVector& RayStart, const FVector& RayEnd,
 		FVector& OutPoint, FText& OutFailureReason);
 

@@ -101,7 +101,7 @@ void ACastlePatrolRoute::ToggleEditing()
 	}
 	DraftWaypoints = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>()->GetRequestedWaypoints();
 	SetEditing(true);
-	ShowMessage(TEXT("巡逻编辑：瞄准建筑楼顶或地面后左键添加路径点；建筑取本层楼内地板；Backspace 撤回，Enter 提交完整闭环，Delete 清空，P 取消。"), true);
+	ShowMessage(TEXT("巡逻编辑：瞄准建筑楼顶或地面后左键添加路径点；建筑取本层楼内地板，棋盘内地面取格心；Backspace 撤回，Enter 提交完整闭环，Delete 清空，P 取消。"), true);
 }
 
 void ACastlePatrolRoute::AddPointAtViewCenter()
@@ -169,13 +169,46 @@ bool ACastlePatrolRoute::TryResolveWaypointFromRay(UWorld* World, const FVector&
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
 		return false;
 	}
-	// 地块和其他场景碰撞仍使用原有顶面规则，不把没有建筑的命中改造成虚拟楼板。
+	// 仍然需要实际顶面命中；逻辑网格不能为没有碰撞的空间凭空生成一个楼板。
 	if (Hit.ImpactNormal.Z < 0.5)
 	{
 		OutFailureReason = FText::FromString(TEXT("请瞄准可行走楼板或地面顶面后放置路径点。"));
 		return false;
 	}
-	OutPoint = Hit.ImpactPoint;
+	// 主塔侧挂模式没有地块 Actor，但棋盘仍拥有逻辑格；用实际命中的 XY 查格，
+	// 不调用限定建造面的取格接口，也不把格心下方的障碍物当成另一个可点击面。
+	const ACastleBoard* MatchedBoard = nullptr;
+	FVector GridCenter = FVector::ZeroVector;
+	for (TActorIterator<ACastleBoard> It(World); It; ++It)
+	{
+		const FTransform& Transform = It->GetActorTransform();
+		if (!FMath::IsFinite(It->CellSize) || It->CellSize <= 0.0f || It->GridSize.X <= 0 || It->GridSize.Y <= 0
+			|| !Transform.IsValid() || Transform.GetScale3D().GetAbsMin() <= UE_SMALL_NUMBER)
+		{
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("棋盘 %s 的格距、尺寸或变换无效，无法解析巡逻格心。"), *It->GetPathName()));
+			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
+			return false;
+		}
+		const FVector LocalHit = Transform.InverseTransformPosition(Hit.ImpactPoint);
+		// 以格中心为整数坐标，每格覆盖 [中心 - 半格, 中心 + 半格)，与巡逻平段切格相同。
+		// 先用 double 验证范围，避免对离棋盘很远的命中做越界整数转换。
+		const double X = FMath::FloorToDouble(LocalHit.X / It->CellSize + 0.5) + It->GridOrigin.X;
+		const double Y = FMath::FloorToDouble(LocalHit.Y / It->CellSize + 0.5) + It->GridOrigin.Y;
+		FIntPoint Min, Max;
+		It->GetBoardExtent(Min, Max);
+		if (X < Min.X || X > Max.X || Y < Min.Y || Y > Max.Y) { continue; }
+		if (MatchedBoard)
+		{
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("同一命中属于棋盘 %s 和 %s，无法唯一确定巡逻格心。"),
+				*MatchedBoard->GetPathName(), *It->GetPathName()));
+			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
+			return false;
+		}
+		MatchedBoard = *It;
+		GridCenter = It->GetGridWorldLocation(FIntVector(static_cast<int32>(X), static_cast<int32>(Y), It->GridOrigin.Z));
+	}
+	// 只改变棋盘内落点的水平位置，沿用原命中层的高度。棋盘外顶面没有格子，仍是原有的自由坐标。
+	OutPoint = MatchedBoard ? FVector(GridCenter.X, GridCenter.Y, Hit.ImpactPoint.Z) : Hit.ImpactPoint;
 	return true;
 }
 
