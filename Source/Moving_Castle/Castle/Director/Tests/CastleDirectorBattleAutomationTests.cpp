@@ -10,6 +10,7 @@
 #include "Castle/Actors/CastleBoard.h"
 #include "Castle/Placement/CastleTowerSideGridComponent.h"
 #include "Castle/Actors/CastleBuildingBase.h"
+#include "Castle/PCG/HachimisV4/CastleHachimisV4Layout.h"
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Components/CastleShopComponent.h"
 #include "Castle/Components/CastleMainTowerComponent.h"
@@ -93,7 +94,7 @@ public:
 		if (Stage == 1)
 		{
 			if (!Navigation->IsNavigationReady()) { return false; }
-			// 炮塔、箭塔和农田第二层应继续使用原来三维网格的标准底面锚点。
+			// 固定选择炮塔、箭塔与农田第二层的三个占格；V4 站立面高于楼层底面锚点。
 			const FIntVector Base = Board->GetBoardCenterCoordinate();
 			for (const FIntVector Cell : {Base + FIntVector(0, -1, 0), Base + FIntVector(-1, 0, 0), Base + FIntVector(1, 0, 1)})
 			{
@@ -101,8 +102,13 @@ public:
 				FVector FloorPoint;
 				if (!Test->TestTrue(TEXT("炮塔/其他建筑/上层楼顶能解析"), ACastlePatrolRoute::TryResolveWaypointFromRay(
 					World, GridCenter + FVector(0, 0, 2000), GridCenter - FVector(0, 0, 1000), FloorPoint, Reason))) { Test->AddError(Reason.ToString()); return true; }
-				const FVector Expected = GridCenter - Board->GetActorTransform().TransformVector(FVector(0, 0, Board->LayerHeight * 0.5));
-				Test->TestTrue(TEXT("楼顶点严格取本层底面锚点"), FloorPoint.Equals(Expected, 0.1));
+				const ACastleBuildingBase* FloorOwner = Board->GetBuildingAt(Cell);
+				if (!Test->TestNotNull(TEXT("预期格存在实际建筑"), FloorOwner)
+					|| !Test->TestNotNull(TEXT("该三类建筑必须持有正式 V4 标高"), FloorOwner->HachimisLayout.Get())) { return true; }
+				// 由 fixture 指定的格与资产标高独立计算期望，不从被测射线或 Recast 投影反推。
+				const FVector Expected = GridCenter + Board->GetActorTransform().TransformVector(
+					FVector(0, 0, FloorOwner->HachimisLayout->StandingHeight - Board->LayerHeight * 0.5));
+				Test->TestTrue(TEXT("楼顶点精确吸附到指定格的作者站立面"), FloorPoint.Equals(Expected, 0.1));
 				if (!Test->TestTrue(TEXT("对应楼内地板可投影为有效路线"), Navigation->RequestSharedPatrolRoute({FloorPoint}, Reason))) { Test->AddError(Reason.ToString()); return true; }
 				const auto FloorPath = Navigation->AcquireSharedPath();
 				if (!Test->TestTrue(TEXT("本层NavMesh投影通过"), FloorPath && FloorPath->bValid && FloorPath->bClosedLoop)) { Test->AddError(Navigation->LastFailure.ToString()); return true; }
