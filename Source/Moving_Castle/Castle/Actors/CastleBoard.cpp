@@ -2135,7 +2135,8 @@ void ACastleBoard::InitializePrototypeDeck()
 	}
 
 	SelectedPrototypeSlot = 0;
-	ShowPrototypeMessage(TEXT("测试卡牌已准备：滚轮或数字键 1-9、0 选择建造卡牌，左键放置，B 打开房间商店。"), FColor::Cyan);
+	// 开局卡牌操作说明仅写入日志，避免覆盖建造栏。
+	UE_LOG(LogMoving_Castle, Log, TEXT("原型操作：测试卡牌已准备：滚轮或数字键 1-9、0 选择建造卡牌，左键放置，B 打开房间商店。"));
 }
 
 ACastleBuildingBase* ACastleBoard::PlacePrototypeBuildingAtCursor(const FCastleGridCursorTarget& CursorTarget, FText& OutFailureReason)

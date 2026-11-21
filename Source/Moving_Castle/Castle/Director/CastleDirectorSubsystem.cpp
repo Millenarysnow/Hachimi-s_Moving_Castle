@@ -133,7 +133,8 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 	Tower->OnHealthChanged.AddUniqueDynamic(this, &UCastleDirectorSubsystem::HandleTowerHealthChanged);
 	SetPhase(ECastleDirectorPhase::Editing);
 	for (ACastleDirectorNodeActor* Node : Nodes) { Node->ActivateNode(); }
-	ShowMessage(FText::FromString(TEXT("飞向节点进入下一关")), false);
+	// 下一关指引由 WBP HUD 读取，避免同一句话叠加到屏幕调试层。
+	StatusMessage = FText::FromString(TEXT("飞向节点进入下一关"));
 	UE_LOG(LogMoving_Castle, Display, TEXT("导演启动：编辑阶段，第 1 关，主塔 Lv1，房间上限 %d。"), Config->BaseRoomLimit);
 	if (Tower->CurrentHealth <= 0.0f) { EnterGameOver(FText::GetEmpty()); }
 	return true;
@@ -446,7 +447,8 @@ bool UCastleDirectorSubsystem::TryChooseReward(const ECastleDirectorReward Rewar
 	Nodes = MoveTemp(Candidates);
 	SetPhase(ECastleDirectorPhase::Editing);
 	for (ACastleDirectorNodeActor* Candidate : Nodes) { Candidate->ActivateNode(); }
-	ShowMessage(FText::FromString(TEXT("飞向节点进入下一关")), false);
+	// 下一关指引由 WBP HUD 读取，避免同一句话叠加到屏幕调试层。
+	StatusMessage = FText::FromString(TEXT("飞向节点进入下一关"));
 	UE_LOG(LogMoving_Castle, Display, TEXT("奖励 %d 已提交：Lv%d，经验 %d/%d，房间上限 %d，主塔 %.2f/%.2f。"),
 		static_cast<int32>(Reward), Level, Experience, Config->ExpPerLevel, Controller->GetShop()->RoomLimit, Tower->CurrentHealth, Tower->MaxHealth);
 	return true;
