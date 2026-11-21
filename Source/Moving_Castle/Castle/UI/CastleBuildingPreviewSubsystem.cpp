@@ -27,26 +27,6 @@ namespace
 	constexpr float PreviewRotationSpeed = 14.0f;
 	constexpr float CaptureInterval = 1.0f / 20.0f;
 	constexpr double VisibilityGraceSeconds = 0.25;
-
-	/** 预览生成完整等级蓝图，并用与棋盘相同的默认占用形状初始化它。 */
-	TArray<FIntVector> BuildPreviewFootprint(int32 Level)
-	{
-		TArray<FIntVector> Coordinates;
-		const int32 Width = Level >= 2 && Level <= 4 ? 2 : 1;
-		const int32 Depth = Level >= 3 && Level <= 4 ? 2 : 1;
-		const int32 Height = Level == 4 ? 2 : 1;
-		for (int32 X = 0; X < Width; ++X)
-		{
-			for (int32 Y = 0; Y < Depth; ++Y)
-			{
-				for (int32 Z = 0; Z < Height; ++Z)
-				{
-					Coordinates.Add(FIntVector(X, Y, Z));
-				}
-			}
-		}
-		return Coordinates;
-	}
 }
 
 UCastleBuildingPreviewSubsystem::UCastleBuildingPreviewSubsystem()
@@ -103,7 +83,7 @@ UTextureRenderTarget2D* UCastleBuildingPreviewSubsystem::GetPreview(const FCastl
 		OutFailureReason = FText::FromString(TEXT("建筑预览找不到当前棋盘，无法读取网格尺寸。"));
 		return nullptr;
 	}
-	if (!Model->InitializeBuilding(Descriptor, BuildPreviewFootprint(Descriptor.Level)))
+	if (!Model->InitializeBuilding(Descriptor, ACastleBoard::BuildPlacementFootprint(FIntVector::ZeroValue, Descriptor.Level)))
 	{
 		Model->Destroy();
 		OutFailureReason = FText::FromString(TEXT("建筑卡片预览初始化等级 Actor 失败。"));

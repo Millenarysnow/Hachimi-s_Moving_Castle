@@ -5,7 +5,8 @@
 #include "CastleBuildingDefinition.h"
 
 #include "Blueprint/WidgetTree.h"
-#include "CastleBuildingCardWidget.h"
+#include "Cards/CastleCardPortraitSubsystem.h"
+#include "Cards/CastleShopCardWidget.h"
 #include "CastleEconomyComponent.h"
 #include "CastlePlayerController.h"
 #include "CastleShopComponent.h"
@@ -146,6 +147,13 @@ void UCastleShopWidget::NativeOnInitialized()
 	RefreshButton->OnClicked.AddDynamic(this, &UCastleShopWidget::HandleRefresh);
 	UHorizontalBoxSlot* RefreshSlot = Controls->AddChildToHorizontalBox(RefreshButton);
 	RefreshSlot->SetPadding(FMargin(12.0f, 4.0f));
+
+	// 对照按钮只切换当前这组商品的箔光，保持色号、购买位置和报价不变。
+	UButton* FoilButton = WidgetTree->ConstructWidget<UCastleShopButton>(UCastleShopButton::StaticClass(), TEXT("FoilPreview"));
+	FoilLabel = MakeShopText(WidgetTree, TEXT("FoilLabel"), TEXT("箔光预览：关"), 18);
+	FoilButton->AddChild(FoilLabel);
+	FoilButton->OnClicked.AddDynamic(this, &UCastleShopWidget::HandleToggleFoil);
+	Controls->AddChildToHorizontalBox(FoilButton)->SetPadding(FMargin(12.0f, 4.0f));
 	UButton* CloseButton = WidgetTree->ConstructWidget<UCastleShopButton>();
 	CloseButton->AddChild(MakeShopText(WidgetTree, TEXT("CloseLabel"), TEXT("关闭商店 [B]"), 18));
 	CloseButton->OnClicked.AddDynamic(this, &UCastleShopWidget::HandleClose);
@@ -165,6 +173,7 @@ void UCastleShopWidget::NativeConstruct()
 	}
 	Shop = Controller->GetShop();
 	Economy = Controller->GetEconomy();
+	Portraits = GetWorld()->GetSubsystem<UCastleCardPortraitSubsystem>();
 	Shop->OnShopChanged.AddUniqueDynamic(this, &UCastleShopWidget::RefreshShop);
 	Economy->OnGoldChanged.AddUniqueDynamic(this, &UCastleShopWidget::HandleGoldChanged);
 	RefreshShop();
@@ -179,6 +188,12 @@ void UCastleShopWidget::NativeDestruct()
 	if (Economy != nullptr)
 	{
 		Economy->OnGoldChanged.RemoveDynamic(this, &UCastleShopWidget::HandleGoldChanged);
+	}
+
+	EndOfferHovers();
+	if (Portraits != nullptr)
+	{
+		Portraits->SetShopVisible(this, false);
 	}
 	Super::NativeDestruct();
 }
@@ -195,8 +210,14 @@ void UCastleShopWidget::RefreshShop()
 		return;
 	}
 	const bool bWasVisible = GetVisibility() == ESlateVisibility::Visible;
-	SetVisibility(Shop->IsShopOpen() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-	if (!Shop->IsShopOpen())
+	const bool bIsOpen = Shop->IsShopOpen();
+	SetVisibility(bIsOpen ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	if (Portraits != nullptr)
+	{
+		Portraits->SetShopVisible(this, bIsOpen);
+	}
+	EndOfferHovers();
+	if (!bIsOpen)
 	{
 		return;
 	}
@@ -209,21 +230,22 @@ void UCastleShopWidget::RefreshShop()
 		Economy->GetGold(), Shop->GetOwnedRoomCount(), Shop->RoomLimit)));
 	RefreshLabel->SetText(FText::FromString(FString::Printf(TEXT("刷新商品  ·  %d 金币"), Shop->RefreshCost)));
 	OfferRow->ClearChildren();
+	OfferCards.Reset();
 	const TArray<FCastleShopOffer> Offers = Shop->GetOffers();
 	for (int32 Index = 0; Index < Offers.Num(); ++Index)
 	{
 		UVerticalBox* Entry = WidgetTree->ConstructWidget<UVerticalBox>();
-		UCastleBuildingCardWidget* Card = CreateWidget<UCastleBuildingCardWidget>(GetOwningPlayer());
+		UCastleShopCardWidget* Card = CreateWidget<UCastleShopCardWidget>(GetOwningPlayer());
 		UCastleShopActionWidget* Action = CreateWidget<UCastleShopActionWidget>(GetOwningPlayer());
 		if (Card == nullptr || Action == nullptr)
 		{
 			UE_LOG(LogMoving_Castle, Error, TEXT("商店卡片创建失败，商品槽位 %d。"), Index);
 			return;
 		}
-		// 直接使用已有卡片与线框渲染，只在外侧增加购买标价按钮。
-		Card->SetBuildingDescriptor(Offers[Index].Descriptor);
-		Card->SetVisibility(ESlateVisibility::HitTestInvisible);
-		Card->SetRenderOpacity(Offers[Index].bSold ? 0.35f : 1.0f);
+		// 失败由卡片自身显示并报告。这一槽仍保留原商品与报价，不静默移除或拿别的卡代替。
+		Card->Configure(Offers[Index].Descriptor, Shop->GetBoundBoard(), Offers[Index].bSold);
+		Card->SetFoilPreview(bFoilPreview);
+		OfferCards.Add(Card);
 		AddShopRow(Entry, Card, 7.0f);
 		Action->Configure(false, Index, FText::FromString(Offers[Index].bSold ? TEXT("已售罄")
 			: FString::Printf(TEXT("购买  ·  %d 金币"), Offers[Index].Price)), !Offers[Index].bSold);
@@ -267,6 +289,25 @@ void UCastleShopWidget::RefreshShop()
 			Action->OnTradeRequested.AddDynamic(this, &UCastleShopWidget::HandleTrade);
 			SellRow->AddChildToHorizontalBox(Action)->SetPadding(FMargin(4.0f, 0.0f));
 		}
+	}
+}
+
+void UCastleShopWidget::EndOfferHovers()
+{
+	for (UCastleShopCardWidget* Card : OfferCards)
+	{
+		Card->EndHover();
+	}
+}
+
+void UCastleShopWidget::HandleToggleFoil()
+{
+	bFoilPreview = !bFoilPreview;
+	FoilLabel->SetText(bFoilPreview ? NSLOCTEXT("CastleShop", "FoilOn", "箔光预览：开")
+		: NSLOCTEXT("CastleShop", "FoilOff", "箔光预览：关"));
+	for (UCastleShopCardWidget* Card : OfferCards)
+	{
+		Card->SetFoilPreview(bFoilPreview);
 	}
 }
 
