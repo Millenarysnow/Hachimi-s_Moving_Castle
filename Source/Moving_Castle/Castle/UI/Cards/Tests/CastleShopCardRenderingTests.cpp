@@ -141,8 +141,8 @@ namespace
 				if (FScreenshotRequest::IsScreenshotRequested()) { return false; }
 				if (!Test.TestNotNull(TEXT("有实际可点击的箔光对照按钮"), FoilToggle.Get())) { return true; }
 				FoilToggle->OnClicked.Broadcast();
-				Start = CardScreenPoint(*Card.Get(), FVector2D(0.26, 0.45));
-				Outside = CardScreenPoint(*Card.Get(), FVector2D(1.10, 0.45));
+				Start = CardScreenPoint(*Card.Get(), FVector2D(0.50, 0.45));
+				Outside = CardScreenPoint(*Card.Get(), FVector2D(1.34, 0.45));
 				const FWidgetPath Hit = HitAt(Start);
 				if (!Test.TestTrue(TEXT("真实鼠标命中稳定卡位"), Hit.ContainsWidget(Card->GetCachedWidget().Get())))
 				{
@@ -156,10 +156,10 @@ namespace
 			{
 				Test.TestTrue(TEXT("仅悬停不会倾斜整牌，也不移动箔光"), IsCardNeutral());
 				Test.TestFalse(TEXT("仅悬停不会调度动态摄影"), Studio->IsTickable());
-				if (!ReadCardSpans(FlatFarSpan, FlatNearSpan)) { return true; }
-				Test.TestTrue(FString::Printf(TEXT("平放时卡面两侧等高（左 %d、右 %d）"), FlatFarSpan, FlatNearSpan),
-					FlatFarSpan > 0 && FlatNearSpan > 0
-					&& FMath::Abs(FlatFarSpan - FlatNearSpan) <= 3);
+				int32 FlatLeft = 0, FlatRight = 0;
+				if (!ReadCardSpans(true, FlatLeft, FlatRight)) { return true; }
+				Test.TestTrue(FString::Printf(TEXT("平放时卡面两侧等高（左 %d、右 %d）"), FlatLeft, FlatRight),
+					FlatLeft > 0 && FlatRight > 0 && FMath::Abs(FlatLeft - FlatRight) <= 3);
 				FSlateApplication& Slate = FSlateApplication::Get();
 				if (!Test.TestTrue(TEXT("按下牌面获得鼠标捕获"), PressCard(Start))) { Shop.CloseShop(); return true; }
 				Test.TestTrue(TEXT("只按下不拖动，仍使用正面"), IsCardNeutral());
@@ -173,7 +173,7 @@ namespace
 			}
 			if (Phase == 4)
 			{
-				UTextureRenderTarget2D* Dynamic = Studio->GetDynamicTexture(Card.Get(), &FirstCaptureNumber);
+				UTextureRenderTarget2D* Dynamic = Studio->GetDynamicTexture(Card.Get());
 				UTexture* BoundTexture = nullptr;
 				if (Dynamic == nullptr || !Face->GetTextureParameterValue(FMaterialParameterInfo(TEXT("Portrait")), BoundTexture)
 					|| Dynamic != BoundTexture) { return false; }
@@ -188,14 +188,7 @@ namespace
 					if (FMath::Abs(DynamicPixels[Index].A.GetFloat() - StillPixels[Index].A.GetFloat()) > 0.45f) { ++ChangedCoverage; }
 				}
 				Test.TestTrue(TEXT("拖动倾角确实转动了建筑相机"), ChangedCoverage > DynamicPixels.Num() / 250);
-				FLinearColor State, AxisX;
-				Test.TestTrue(TEXT("整牌与箔光都响应同一方向的拖动"), Face->GetVectorParameterValue(
-					FMaterialParameterInfo(TEXT("CardState")), State) && State.B == 1.0f && State.R > 0.8f
-					&& Projection->GetVectorParameterValue(FMaterialParameterInfo(TEXT("ProjectionX")), AxisX) && AxisX.B < -0.2f);
-				int32 FarSpan = 0, NearSpan = 0;
-				if (!ReadCardSpans(FarSpan, NearSpan)) { return true; }
-				Test.TestTrue(FString::Printf(TEXT("整牌的屏幕像素近边高、远边低（远 %d、近 %d）"), FarSpan, NearSpan),
-					FarSpan > 0 && NearSpan - FarSpan > FlatNearSpan / 25);
+				if (!CheckDragDirection(TEXT("右拖"), true, true)) { Shop.CloseShop(); return true; }
 				const TArray<FCastleShopOffer> After = Shop.GetOffers();
 				Test.TestEqual(TEXT("箔光不扣金币"), Controller->GetEconomy()->GetGold(), InitialGold);
 				Test.TestEqual(TEXT("箔光不改变商品槽数"), After.Num(), Offers.Num());
@@ -217,9 +210,38 @@ namespace
 			if (Phase == 5)
 			{
 				if (FScreenshotRequest::IsScreenshotRequested()) { return false; }
+				// 不松手，从同一个抓牌起点检查剩余三向；每换一次方向等到下一帧再读渲染像素。
+				struct FDragProbe
+				{
+					const TCHAR* Name;
+					FVector2D UV;
+					bool bHorizontal;
+					bool bDragPositive;
+				};
+				static const FDragProbe Probes[] = {
+					{TEXT("左拖"), FVector2D(0.06, 0.45), true, false},
+					{TEXT("上拖"), FVector2D(0.50, 0.05), false, false},
+					{TEXT("下拖"), FVector2D(0.50, 0.85), false, true},
+				};
+				FVector2D Previous = Outside;
+				if (DragProbeCount > 0)
+				{
+					const FDragProbe& Last = Probes[DragProbeCount - 1];
+					if (!CheckDragDirection(Last.Name, Last.bHorizontal, Last.bDragPositive)) { Shop.CloseShop(); return true; }
+					Previous = CardScreenPoint(*Card.Get(), Last.UV);
+				}
+				FSlateApplication& Slate = FSlateApplication::Get();
+				if (DragProbeCount < UE_ARRAY_COUNT(Probes))
+				{
+					const FVector2D Next = CardScreenPoint(*Card.Get(), Probes[DragProbeCount].UV);
+					Slate.RoutePointerMoveEvent(HitAt(Next), MakePointer(Next, Previous, true), false);
+					++DragProbeCount;
+					return false;
+				}
 				// 在同一个动态纹理里拍下一角度，覆盖“纹理指针不变但内容已变”的更新路径。
-				SecondPoint = CardScreenPoint(*Card.Get(), FVector2D(0.61, 0.78));
-				FSlateApplication::Get().RoutePointerMoveEvent(HitAt(SecondPoint), MakePointer(SecondPoint, Outside, true), false);
+				Studio->GetDynamicTexture(Card.Get(), &CaptureBeforeDiagonal);
+				DiagonalPoint = CardScreenPoint(*Card.Get(), FVector2D(0.61, 0.78));
+				Slate.RoutePointerMoveEvent(HitAt(DiagonalPoint), MakePointer(DiagonalPoint, Previous, true), false);
 				++Phase;
 				return false;
 			}
@@ -227,8 +249,8 @@ namespace
 			{
 				uint64 CaptureNumber = 0;
 				Studio->GetDynamicTexture(Card.Get(), &CaptureNumber);
-				if (CaptureNumber <= FirstCaptureNumber) { return false; }
-				FSlateApplication::Get().RoutePointerUpEvent(HitAt(SecondPoint), MakePointer(SecondPoint, SecondPoint, false, EKeys::LeftMouseButton));
+				if (CaptureNumber <= CaptureBeforeDiagonal) { return false; }
+				FSlateApplication::Get().RoutePointerUpEvent(HitAt(DiagonalPoint), MakePointer(DiagonalPoint, DiagonalPoint, false, EKeys::LeftMouseButton));
 				Test.TestTrue(TEXT("松手立即归还鼠标，保留当前角度开始平滑回正"), !Card->HasMouseCapture() && !IsCardNeutral());
 				++Phase;
 				return false;
@@ -297,7 +319,28 @@ namespace
 				&& Projection->GetVectorParameterValue(FMaterialParameterInfo(TEXT("ProjectionY")), Y) && Y.B == 0.0f && X.A == Y.A;
 		}
 
-		bool ReadCardSpans(int32& OutLeft, int32& OutRight) const
+		/** 拖向一侧时，卡窗使用反向倾角，且最终像素中对侧比被拖一侧更长。 */
+		bool CheckDragDirection(const TCHAR* Direction, bool bHorizontal, bool bDragPositive) const
+		{
+			// 屏幕右/下为正，投影轴的 B 为深度分量；正向拖动应增大右/下边的深度。
+			const float DragSign = bDragPositive ? 1.0f : -1.0f;
+			FLinearColor State, Axis;
+			const FMaterialParameterInfo AxisParam(bHorizontal ? TEXT("ProjectionX") : TEXT("ProjectionY"));
+			const bool bTiltMatches = Test.TestTrue(FString::Printf(TEXT("%s时卡窗、箔光与整牌共享正确方向的倾角"), Direction),
+				Face->GetVectorParameterValue(FMaterialParameterInfo(TEXT("CardState")), State) && State.B == 1.0f
+				&& (bHorizontal ? State.R : State.G) * DragSign < -0.6f
+				&& FMath::IsNearlyZero(bHorizontal ? State.G : State.R, 0.001f)
+				&& Projection->GetVectorParameterValue(AxisParam, Axis) && Axis.B * DragSign > 0.15f);
+			int32 NegativeSide = 0, PositiveSide = 0;
+			if (!ReadCardSpans(bHorizontal, NegativeSide, PositiveSide)) { return false; }
+			const int32 FarSpan = bDragPositive ? PositiveSide : NegativeSide;
+			const int32 NearSpan = bDragPositive ? NegativeSide : PositiveSide;
+			const bool bSpansMatch = Test.TestTrue(FString::Printf(TEXT("%s时被拖一侧的屏幕轮廓更短（远 %d、近 %d 像素）"), Direction, FarSpan, NearSpan),
+				FarSpan > 0 && NearSpan - FarSpan > NearSpan / 25);
+			return bTiltMatches && bSpansMatch;
+		}
+
+		bool ReadCardSpans(bool bHorizontal, int32& OutNegativeSide, int32& OutPositiveSide) const
 		{
 			// 读取最终经过 Retainer、材质和 UMG 绘制的牌位，而不是把材质参数本身当成视觉结果。
 			TArray<FColor> Pixels;
@@ -305,23 +348,26 @@ namespace
 			if (!Test.TestTrue(TEXT("能读回最终的 UMG 牌面像素"), FSlateApplication::Get().TakeScreenshot(
 				Card->GetCachedWidget().ToSharedRef(), Pixels, Size) && Size.X > 32 && Size.Y > 32)) { return false; }
 			const FColor Background = Pixels[0]; // 圆角之外是等色商店底板。
-			const auto Span = [&](int32 X)
+			// 横拖比较左右两列的高度，纵拖比较上下两行的宽度；避开圆角最外沿。
+			const int32 SliceCount = bHorizontal ? Size.X : Size.Y;
+			const int32 SpanLength = bHorizontal ? Size.Y : Size.X;
+			const auto Span = [&](int32 Slice)
 			{
-				int32 Top = Size.Y, Bottom = -1;
-				for (int32 Y = 0; Y < Size.Y; ++Y)
+				int32 First = SpanLength, Last = -1;
+				for (int32 Index = 0; Index < SpanLength; ++Index)
 				{
-					const FColor Pixel = Pixels[Y * Size.X + X];
+					const FColor Pixel = Pixels[bHorizontal ? Index * Size.X + Slice : Slice * Size.X + Index];
 					if (FMath::Max3(FMath::Abs(Pixel.R - Background.R), FMath::Abs(Pixel.G - Background.G),
 						FMath::Abs(Pixel.B - Background.B)) > 36)
 					{
-						Top = FMath::Min(Top, Y);
-						Bottom = Y;
+						First = FMath::Min(First, Index);
+						Last = FMath::Max(Last, Index);
 					}
 				}
-				return Bottom >= Top ? Bottom - Top + 1 : 0;
+				return Last >= First ? Last - First + 1 : 0;
 			};
-			OutLeft = Span(Size.X / 5);
-			OutRight = Span(Size.X - 1 - Size.X / 5);
+			OutNegativeSide = Span(SliceCount / 5);
+			OutPositiveSide = Span(SliceCount - 1 - SliceCount / 5);
 			return true;
 		}
 
@@ -358,10 +404,9 @@ namespace
 		TArray<FFloat16Color> StillPixels;
 		FVector2D Start;
 		FVector2D Outside;
-		FVector2D SecondPoint;
-		uint64 FirstCaptureNumber = 0;
-		int32 FlatFarSpan = 0;
-		int32 FlatNearSpan = 0;
+		FVector2D DiagonalPoint;
+		uint64 CaptureBeforeDiagonal = 0;
+		int32 DragProbeCount = 0;
 		int32 InitialGold = 0;
 		int32 Phase = 0;
 		double Deadline = 0.0;

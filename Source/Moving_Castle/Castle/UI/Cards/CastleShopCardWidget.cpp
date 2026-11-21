@@ -280,7 +280,7 @@ void UCastleShopCardWidget::RequestFaceRender()
 
 void UCastleShopCardWidget::ApplyProjection()
 {
-	// 坐标为屏幕向右、向下、远离相机。右/下拖时相应边靠近，先绕牌的横轴再绕屏幕纵轴。
+	// 坐标为屏幕向右、向下、远离相机。正倾角对应右/下边靠近，先绕牌的横轴再绕屏幕纵轴。
 	double SY, CY, SP, CP;
 	FMath::SinCos(&SY, &CY, FMath::DegreesToRadians(Tilt.X * CardYawLimitDegrees));
 	FMath::SinCos(&SP, &CP, FMath::DegreesToRadians(Tilt.Y * CardPitchLimitDegrees));
@@ -354,8 +354,9 @@ void UCastleShopCardWidget::SetInspectionOffset(const FVector2D& NewOffset)
 		return;
 	}
 	InspectionOffset = NewOffset;
-	// 小幅拖动时灵敏，拖出卡位后角度逐渐趋于上限；没有突变，也不会因光标正好越过边缘而回正。
-	Tilt = FVector2D(NewOffset.X / FMath::Sqrt(1.0 + FMath::Square(NewOffset.X)),
+	// 拖向的一侧应退远，对侧抬近。在这里统一反转共享倾角，不改变重新抓牌与回正使用的位移。
+	// 小幅拖动时灵敏，拖出卡位后角度仍平滑趋于上限。
+	Tilt = -FVector2D(NewOffset.X / FMath::Sqrt(1.0 + FMath::Square(NewOffset.X)),
 		NewOffset.Y / FMath::Sqrt(1.0 + FMath::Square(NewOffset.Y)));
 	ApplyProjection();
 	ApplyFaceState();
