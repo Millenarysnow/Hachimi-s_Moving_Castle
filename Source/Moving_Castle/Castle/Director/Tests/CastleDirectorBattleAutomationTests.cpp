@@ -24,8 +24,13 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
+#include "Castle/UI/BuildBar/CastleBuildBarWidget.h"
+#include "Castle/UI/Common/CastleHUDControls.h"
 #include "Castle/UI/Director/CastleDirectorWidgets.h"
+#include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Components/WidgetComponent.h"
+#include "Components/WidgetSwitcher.h"
+#include "Kismet/GameplayStatics.h"
 #include "MassEntitySubsystem.h"
 
 
@@ -155,6 +160,46 @@ public:
 			Test->TestEqual(TEXT("成功才清除节点"), Director->Nodes.Num(), 0);
 			Test->TestEqual(TEXT("普通计数提交为1"), Director->NormalBattles, 1);
 			Test->TestTrue(TEXT("HUD显示真实剩余敌人"), Director->GetHUDSummary().Contains(TEXT("剩余敌人")));
+			// 验证进入战斗界面后 HUD 切换到战斗模式、显示骷髅进度条(初值 0)、隐藏建造栏，以及暂停/倍速切换与恢复。
+			TArray<UUserWidget*> DirectorHUDs;
+			UWidgetBlueprintLibrary::GetAllWidgetsOfClass(World, DirectorHUDs, UCastleDirectorHUDWidget::StaticClass(), true);
+			if (Test->TestEqual(TEXT("战斗时视口存在唯一主界面 HUD"), DirectorHUDs.Num(), 1))
+			{
+				UCastleDirectorHUDWidget* BattleHUD = Cast<UCastleDirectorHUDWidget>(DirectorHUDs[0]);
+				const UCastleIconBarWidget* SkullBar = Cast<UCastleIconBarWidget>(BattleHUD->GetWidgetFromName(TEXT("BattleProgressBar")));
+				const UCastleHUDIconButtonWidget* PauseBtn = Cast<UCastleHUDIconButtonWidget>(BattleHUD->GetWidgetFromName(TEXT("BattlePauseButton")));
+				const UCastleHUDIconButtonWidget* SpeedBtn = Cast<UCastleHUDIconButtonWidget>(BattleHUD->GetWidgetFromName(TEXT("BattleSpeedButton")));
+				Test->TestEqual(TEXT("开战后 HUD 切到战斗模式"), BattleHUD->GetCurrentScreenMode(), ECastleHUDScreenMode::Battle);
+				Test->TestEqual(TEXT("开战后顶部主塔血条持续显示 20 颗心"), BattleHUD->GetFilledHeartCount(), 20);
+				Test->TestEqual(TEXT("开战瞬间骷髅已击杀进度为 0"), BattleHUD->GetFilledSkullCount(), 0);
+				if (Test->TestNotNull(TEXT("战斗骷髅进度条存在"), SkullBar))
+				{
+					Test->TestEqual(TEXT("战斗模式显示底部骷髅进度条"), SkullBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+				}
+				if (Test->TestNotNull(TEXT("战斗倍速按钮存在"), SpeedBtn))
+				{
+					Test->TestEqual(TEXT("初始为一倍速图标(0)"), SpeedBtn->GetActiveIconIndex(), 0);
+					Test->TestTrue(TEXT("切换至 2x 倍速"), Director->ToggleBattleSpeed());
+					Test->TestEqual(TEXT("全局时间缩放变为 2.0"), UGameplayStatics::GetGlobalTimeDilation(World), 2.0f);
+					Test->TestEqual(TEXT("图标切至二倍速(2)"), SpeedBtn->GetActiveIconIndex(), 2);
+				}
+				if (Test->TestNotNull(TEXT("战斗暂停按钮存在"), PauseBtn))
+				{
+					Test->TestEqual(TEXT("初始为暂停图标(0)"), PauseBtn->GetActiveIconIndex(), 0);
+					Test->TestTrue(TEXT("战斗暂停成功"), Director->ToggleBattlePause());
+					Test->TestTrue(TEXT("世界已进入战斗暂停"), World->IsPaused());
+					Test->TestEqual(TEXT("暂停后图标切至继续(2)"), PauseBtn->GetActiveIconIndex(), 2);
+					Test->TestTrue(TEXT("战斗恢复继续成功"), Director->ToggleBattlePause());
+					Test->TestFalse(TEXT("世界已恢复运行"), World->IsPaused());
+					Test->TestEqual(TEXT("继续后图标切回暂停(0)"), PauseBtn->GetActiveIconIndex(), 0);
+				}
+			}
+			TArray<UUserWidget*> BuildBars;
+			UWidgetBlueprintLibrary::GetAllWidgetsOfClass(World, BuildBars, UCastleBuildBarWidget::StaticClass(), true);
+			if (BuildBars.Num() == 1)
+			{
+				Test->TestEqual(TEXT("战斗界面隐藏建造栏"), BuildBars[0]->GetVisibility(), ESlateVisibility::Collapsed);
+			}
 			Stage = 3;
 			return false;
 		}
@@ -167,6 +212,8 @@ public:
 				return false;
 			}
 			if (!Test->TestEqual(TEXT("清场自动进入奖励"), Director->GetPhase(), ECastleDirectorPhase::Reward)) { return true; }
+			Test->TestEqual(TEXT("清场后自动恢复 1x 倍速"), UGameplayStatics::GetGlobalTimeDilation(World), 1.0f);
+			Test->TestFalse(TEXT("清场后倍速标志归零"), Director->IsBattleDoubleSpeed());
 			Test->TestEqual(TEXT("只通过一关"), Director->ClearedSteps, 1);
 			Test->TestFalse(TEXT("清场后NPC生成器已回收"), IsValid(Director->BattleNPCSpawner));
 			Test->TestTrue(TEXT("奖励期间塔侧格保持隐藏"), Board->IsPlacementSurfacePresentationHidden());
