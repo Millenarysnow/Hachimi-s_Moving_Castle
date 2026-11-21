@@ -21,7 +21,8 @@ namespace
 	// 商店卡窗约 140 像素宽；较高分辨率的线性纹理可让缩小后的建筑边缘保有覆盖率。
 	constexpr int32 PortraitResolution = 512;
 	constexpr float PortraitFov = 31.0f;
-	constexpr double CaptureInterval = 1.0 / 30.0;
+	// 卡面摄影独立限频为 30 Hz，使用专用名称避免在 Unity Build 中与建造预览冲突。
+	constexpr double CardPortraitCaptureInterval = 1.0 / 30.0;
 	constexpr double GeometryWaitSeconds = 30.0;
 
 	/** Alpha 的 1 是「全透明」。不能用 Transparent 的 A=0 清屏，初始背景会变成实心。 */
@@ -292,7 +293,7 @@ void UCastleCardPortraitSubsystem::Tick(float DeltaTime)
 	{
 		return;
 	}
-	NextCaptureAt = Now + CaptureInterval;
+	NextCaptureAt = Now + CardPortraitCaptureInterval;
 	FText Reason;
 	bool bCanCapture = StagePortrait(Portrait, Reason);
 	if (bCanCapture)
