@@ -38,6 +38,8 @@ public:
 	bool IsCombatInitialized() const { return CombatConfig != nullptr; }
 	/** 空闲或计数失败返回 false，调用者不得将失败的零输出当作清场。 */
 	bool GetBattleProgress(int32& OutEnemyEntities, int32& OutPendingGroups) const;
+	/** 读取本场战斗的已击杀进度（已击杀数与本场总预算数）；空闲或计数失败时返回 false。 */
+	bool GetBattleDefeatedProgress(int32& OutDefeatedCount, int32& OutTotalCount) const;
 
 	FCastleBattleCleared OnBattleCleared;
 	FCastleBattleFailed OnBattleFailed;
@@ -58,6 +60,8 @@ private:
 	void FailBattle(const FText& Reason);
 	void CancelForWorldEnd();
 	int32 CountPendingGroups() const;
+	/** 估算所有尚未出场组的总实体数；每组按簇范围均值估算，实际出场后按真实数量修正总预算。 */
+	int32 EstimatePendingGroupEntities() const;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UCastleCombatConfigDataAsset> CombatConfig;
@@ -71,6 +75,8 @@ private:
 	bool bWorldEnding = false;
 	ECastleBattleKind ActiveKind = ECastleBattleKind::Normal;
 	int32 ActiveOrdinal = 0;
+	/** 本场战斗用于计算骷髅击杀进度的总敌人数预算；随延迟组真实出场数与分裂增量同步修正。 */
+	int32 BattleTotalEnemyBudget = 0;
 	double BattleStartGameTime = 0;
 	float BattleInnerRadius = 0;
 	float BattleOuterRadius = 0;

@@ -25,6 +25,12 @@ namespace CastleCombat
 	}
 
 	const TCHAR* KindName(const ECastleBattleKind Kind) { return Kind == ECastleBattleKind::Normal ? TEXT("普通") : TEXT("精英"); }
+	/** 单个出场组在尚未生成前的实体数估算，统一采用上下限均值并与真实生成后差值抵消。 */
+	int32 EstimateGroupEntities(const FCastleCombatScheduledGroup& Scheduled)
+	{
+		const int32 MeanCluster = (Scheduled.Enemy.MinClusterCount + Scheduled.Enemy.MaxClusterCount) / 2;
+		return Scheduled.Group.Count * FMath::Max(1, MeanCluster);
+	}
 	void Screen(const FString& Message, const bool bSuccess)
 	{
 		if (GEngine) { GEngine->AddOnScreenDebugMessage(INDEX_NONE, 8.0f, bSuccess ? FColor::Green : FColor::Red, Message); }
@@ -129,6 +135,7 @@ bool UCastleCombatSubsystem::StartBattle(const ECastleBattleKind Kind, const int
 	ActiveKind = Kind;
 	ActiveOrdinal = KindOrdinal;
 	BattleStartGameTime = GetWorld()->GetTimeSeconds();
+	BattleTotalEnemyBudget = 0;
 	bBattleActive = true;
 	for (int32 Index = 0; Index < Plan.Num(); ++Index)
 	{
@@ -136,10 +143,22 @@ bool UCastleCombatSubsystem::StartBattle(const ECastleBattleKind Kind, const int
 		{
 			RollbackNewSpawners(FirstNewSpawner);
 			Plan.Reset();
+			BattleTotalEnemyBudget = 0;
 			bBattleActive = false;
 			return Reject(Failure.ToString());
 		}
 	}
+	int32 InitialAliveEnemies = 0;
+	if (!GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>()->CountEnemyEntities(InitialAliveEnemies))
+	{
+		RollbackNewSpawners(FirstNewSpawner);
+		Plan.Reset();
+		BattleTotalEnemyBudget = 0;
+		bBattleActive = false;
+		return Reject(TEXT("开战后统计初始敌人数失败。"));
+	}
+	// 开战瞬间总预算 = 当前存活敌人数 + 尚未出场组的估算敌人数，确保开战时已击杀进度严格为 0。
+	BattleTotalEnemyBudget = InitialAliveEnemies + EstimatePendingGroupEntities();
 	const FString Message = FString::Printf(TEXT("开战：第 %d 场%s战斗，%d 个出场组。"), ActiveOrdinal, CastleCombat::KindName(ActiveKind), Plan.Num());
 	UE_LOG(LogMoving_Castle, Display, TEXT("%s"), *Message);
 	CastleCombat::Screen(Message, true);
@@ -175,6 +194,12 @@ bool UCastleCombatSubsystem::SpawnGroup(const int32 GroupIndex, FText& OutFailur
 		return false;
 	}
 	Plan[GroupIndex].bSpawned = true;
+	// 延迟组出场时用真实实体数替换原先估算值，保持已击杀进度平滑不回跳。
+	if (BattleTotalEnemyBudget > 0)
+	{
+		const int32 Delta = Spawner->SpawnedUnits.Num() - CastleCombat::EstimateGroupEntities(Plan[GroupIndex]);
+		BattleTotalEnemyBudget = FMath::Max(1, BattleTotalEnemyBudget + Delta);
+	}
 	UE_LOG(LogMoving_Castle, Display, TEXT("第 %d 场%s战斗：第 %d 组 %s × %d 出场，实体 %d 只。"),
 		ActiveOrdinal, CastleCombat::KindName(ActiveKind), GroupIndex + 1, *Scheduled.Group.EnemyId.ToString(), Scheduled.Group.Count, Spawner->SpawnedUnits.Num());
 	return true;
@@ -202,6 +227,19 @@ int32 UCastleCombatSubsystem::CountPendingGroups() const
 	return Pending;
 }
 
+int32 UCastleCombatSubsystem::EstimatePendingGroupEntities() const
+{
+	int32 PendingEntities = 0;
+	for (const auto& Scheduled : Plan)
+	{
+		if (!Scheduled.bSpawned)
+		{
+			PendingEntities += CastleCombat::EstimateGroupEntities(Scheduled);
+		}
+	}
+	return PendingEntities;
+}
+
 bool UCastleCombatSubsystem::GetBattleProgress(int32& OutEnemyEntities, int32& OutPendingGroups) const
 {
 	OutEnemyEntities = 0;
@@ -209,6 +247,26 @@ bool UCastleCombatSubsystem::GetBattleProgress(int32& OutEnemyEntities, int32& O
 	if (!bBattleActive) { return false; }
 	if (!GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>()->CountEnemyEntities(OutEnemyEntities)) { return false; }
 	OutPendingGroups = CountPendingGroups();
+	return true;
+}
+
+bool UCastleCombatSubsystem::GetBattleDefeatedProgress(int32& OutDefeatedCount, int32& OutTotalCount) const
+{
+	OutDefeatedCount = 0;
+	OutTotalCount = 0;
+	if (!bBattleActive) { return false; }
+	int32 AliveEnemies = 0;
+	if (!GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>()->CountEnemyEntities(AliveEnemies)) { return false; }
+	const int32 RemainingEnemies = AliveEnemies + EstimatePendingGroupEntities();
+	const int32 TotalBudget = FMath::Max(BattleTotalEnemyBudget, RemainingEnemies);
+	if (TotalBudget <= 0)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("战斗配置 %s：活跃战斗的总敌人数预算无效（Total=%d）。"),
+			*GetPathNameSafe(CombatConfig), TotalBudget);
+		return false;
+	}
+	OutTotalCount = TotalBudget;
+	OutDefeatedCount = FMath::Max(0, TotalBudget - RemainingEnemies);
 	return true;
 }
 
@@ -241,7 +299,15 @@ void UCastleCombatSubsystem::Tick(float DeltaTime)
 		UE_LOG(LogMoving_Castle, Error, TEXT("战斗配置 %s：本帧敌人计数失败，不判定清场。"), *GetPathNameSafe(CombatConfig));
 		return;
 	}
-	if (Count != 0) { return; }
+	if (Count != 0)
+	{
+		// 分裂子体或调试刷兵导致剩余数上升时同步抬高总预算，防止已击杀数倒扣成负数。
+		if (bBattleActive)
+		{
+			BattleTotalEnemyBudget = FMath::Max(BattleTotalEnemyBudget, Count + EstimatePendingGroupEntities());
+		}
+		return;
+	}
 	if (!DestroyClearedSpawners()) { return; }
 	if (bBattleActive && CountPendingGroups() == 0)
 	{
@@ -249,6 +315,7 @@ void UCastleCombatSubsystem::Tick(float DeltaTime)
 		const auto Kind = ActiveKind;
 		const int32 Ordinal = ActiveOrdinal;
 		bBattleActive = false;
+		BattleTotalEnemyBudget = 0;
 		Plan.Reset();
 		const FString Message = FString::Printf(TEXT("清场：第 %d 场%s战斗。"), Ordinal, CastleCombat::KindName(Kind));
 		UE_LOG(LogMoving_Castle, Display, TEXT("%s"), *Message);
@@ -284,6 +351,7 @@ void UCastleCombatSubsystem::FailBattle(const FText& Reason)
 	const auto Kind = ActiveKind;
 	const int32 Ordinal = ActiveOrdinal;
 	bBattleActive = false;
+	BattleTotalEnemyBudget = 0;
 	Plan.Reset();
 	UE_LOG(LogMoving_Castle, Error, TEXT("战斗失败：配置 %s，第 %d 场%s战斗：%s"),
 		*GetPathNameSafe(CombatConfig), Ordinal, CastleCombat::KindName(Kind), *Reason.ToString());
@@ -296,6 +364,7 @@ void UCastleCombatSubsystem::CancelForWorldEnd()
 {
 	bWorldEnding = true;
 	bBattleActive = false;
+	BattleTotalEnemyBudget = 0;
 	Plan.Reset();
 	ManagedSpawners.Reset();
 	CombatConfig = nullptr;

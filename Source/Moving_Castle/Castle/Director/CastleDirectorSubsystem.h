@@ -52,10 +52,20 @@ public:
 	bool TryChooseReward(ECastleDirectorReward Reward, FText& OutReason);
 	void RestartCurrentMap();
 
+	/** 战斗期暂停/继续与 1x/2x 倍速的唯一业务入口；退出战斗时自动恢复运行与 1x 速度。 */
+	bool ToggleBattlePause();
+	bool SetBattlePaused(bool bInPaused);
+	bool IsBattlePaused() const { return bBattlePaused; }
+	bool ToggleBattleSpeed();
+	bool SetBattleDoubleSpeed(bool bInDoubleSpeed);
+	bool IsBattleDoubleSpeed() const { return bBattleDoubleSpeed; }
+
 	/** 无副作用的节点规则；自动化和实际生成共同使用。 */
 	static int32 GetNodeCountForStep(const UCastleDirectorConfigDataAsset& InConfig, int32 Step);
 	static ECastleDirectorNodeKind GetNodeKindForStep(const UCastleDirectorConfigDataAsset& InConfig, int32 Step);
 	FCastleDirectorPhaseChanged OnDirectorPhaseChanged;
+	/** 战斗暂停或倍速状态变化通知，HUD 据此即时切换图标。 */
+	FSimpleMulticastDelegate OnBattleControlStateChanged;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	/** 测试专用接线：仅自动化可隔离验证奖励和输入，不暴露给游戏入口。 */
@@ -85,6 +95,8 @@ private:
 	void HandleBattleCleared(ECastleBattleKind Kind, int32 Ordinal);
 	void HandleBattleFailed(ECastleBattleKind Kind, int32 Ordinal, const FText& Reason);
 	void UnbindCombatEvents();
+	/** 退出战斗、结束或重载关卡前重置战斗倍速与暂停标志；bClearWorldPause 控制是否同时解除引擎暂停。 */
+	void ResetBattleControls(bool bClearWorldPause);
 
 	UFUNCTION()
 	void HandleTowerHealthChanged(float PreviousHealth, float CurrentHealth, float Damage);
@@ -119,6 +131,8 @@ private:
 	bool bStartAttempted = false;
 	bool bShopPermission = false;
 	bool bApplyingReward = false;
+	bool bBattlePaused = false;
+	bool bBattleDoubleSpeed = false;
 	bool bAutomation = false;
 	uint64 LastNodeSelectionFrame = MAX_uint64;
 };

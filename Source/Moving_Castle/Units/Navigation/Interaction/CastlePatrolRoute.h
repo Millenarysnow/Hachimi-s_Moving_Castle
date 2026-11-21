@@ -6,6 +6,9 @@
 
 class ACastlePatrolWaypointMarker;
 
+/** 路径编辑模式开关变化通知；HUD 与建造栏据此在建造页和路径编辑页之间即时切换。 */
+DECLARE_MULTICAST_DELEGATE_OneParam(FCastlePatrolEditingChanged, bool);
+
 /** 世界唯一的玩家巡逻路径编辑入口；只管理路径点和反馈，实际整条寻路交给导航子系统。 */
 UCLASS()
 class MOVING_CASTLE_API ACastlePatrolRoute : public AActor
@@ -32,6 +35,15 @@ public:
 
 	virtual void Tick(float DeltaSeconds) override;
 	bool IsEditing() const { return bEditing; }
+
+	/** 供路径编辑 UI 按钮与 Backspace 快捷键共用同一撤回入口，不重复维护草稿逻辑。 */
+	void UndoDraftPoint();
+
+	/** 供路径编辑 UI 删除按钮与 Delete 快捷键共用同一清空入口。 */
+	void ClearPatrolRoute();
+
+	/** 路径编辑进入或退出时广播，界面只订阅唯一编辑状态。 */
+	FCastlePatrolEditingChanged OnEditingStateChanged;
 
 	/** 开战只取消草稿和输入占用，不提交、不清除正式路线。 */
 	void CancelEditingDraft();
