@@ -63,25 +63,30 @@ namespace HachimisV4Import
 		TArray<FPartSource> Parts;
 		TMap<FString, FTransform> Mounts;
 		TMap<FString, FVector> ClimbMarkers;
+		// 独立屋面用自己的根导出，必须用作者给出的厘米锚点恢复主体安装位置。
+		FVector RoofAnchor = FVector::ZeroVector;
 	};
 
 	/** 单个导入事务记住新建资源和原始语义，跨 FBX 重复几何只生成一次。 */
 	class FImporter
 	{
 	public:
-		explicit FImporter(const FString& InDirectory, const FString& InRebuildMesh) : Directory(InDirectory), RebuildMesh(InRebuildMesh) {}
+		explicit FImporter(const FString& InDirectory, const FString& InRebuildMesh, bool bInShieldDelivery)
+			: Directory(InDirectory), RebuildMesh(InRebuildMesh), bShieldDelivery(bInShieldDelivery) {}
 		bool Run(const FJsonObject& Manifest);
 
 	private:
 		FString Directory;
 		FString RebuildMesh;
+		bool bShieldDelivery;
 		TMap<FString, UStaticMesh*> Meshes;
 		TMap<FName, UMaterial*> Palette;
 		TMap<FName, UCastleV4WallKit*> WallKits;
 		TMap<FName, UCastleV4LadderKit*> LadderKits;
 		TArray<UObject*> AssemblyAssets;
 
-		bool ReadScene(const FJsonObject& Row, FSceneSource& Out);
+		bool ReadScene(const FJsonObject& Row, FSceneSource& Out, bool bRoofModule = false);
+		bool VerifyRoofModules(const FJsonObject& Row, const FSceneSource& Building);
 		bool ReadNode(FbxNode& Node, FbxNode& Root, FSceneSource& Out, const FString& File);
 		bool ImportWall(const FJsonObject& Row);
 		bool ImportLadder(const FJsonObject& Row);
@@ -184,23 +189,70 @@ namespace HachimisV4Import
 			return nullptr;
 		}
 		const FbxDouble3 Color = Diffuse.Get<FbxDouble3>();
-		if (Color[0] < 0 || Color[0] > 1 || Color[1] < 0 || Color[1] > 1 || Color[2] < 0 || Color[2] > 1)
+		if (!(Color[0] >= 0 && Color[0] <= 1 && Color[1] >= 0 && Color[1] <= 1 && Color[2] >= 0 && Color[2] <= 1))
 		{
 			Fail(File, FString::Printf(TEXT("材质 %s 的 FBX DiffuseColor 越界"), *Name));
 			return nullptr;
 		}
 		const FColor SRGB = FLinearColor(Color[0], Color[1], Color[2]).ToFColorSRGB();
+		float Roughness = 0.0f, Metallic = 0.0f, Specular = 0.0f;
+		FColor Emissive = FColor::Black;
+		if (bShieldDelivery)
+		{
+			// 盾塔是 Blender Phong FBX 交付：反解导出时的光泽度和高光换算，保留酒红釉、铜面及粉色自发光。
+			const FbxProperty Shine = Source.FindProperty(FbxSurfacePhong::sShininess);
+			const FbxProperty Reflect = Source.FindProperty(FbxSurfacePhong::sReflectionFactor);
+			const FbxProperty Highlight = Source.FindProperty(FbxSurfacePhong::sSpecularFactor);
+			const FbxProperty Glow = Source.FindProperty(FbxSurfaceMaterial::sEmissive);
+			const FbxProperty Intensity = Source.FindProperty(FbxSurfaceMaterial::sEmissiveFactor);
+			if (!Shine.IsValid() || !Reflect.IsValid() || !Highlight.IsValid() || !Glow.IsValid() || !Intensity.IsValid())
+			{
+				Fail(File, Name + TEXT(" 缺少作者表面材质参数"));
+				return nullptr;
+			}
+			const double Shininess = Shine.Get<FbxDouble>();
+			const double Metalness = Reflect.Get<FbxDouble>();
+			const double Strength = Intensity.Get<FbxDouble>();
+			const double SpecularAmount = Highlight.Get<FbxDouble>() * 2.0;
+			const FbxDouble3 Tint = Glow.Get<FbxDouble3>();
+			const FLinearColor Light(Tint[0] * Strength, Tint[1] * Strength, Tint[2] * Strength);
+			if (!(Shininess >= 0 && Shininess <= 100 && Metalness >= 0 && Metalness <= 1
+				&& SpecularAmount >= 0 && SpecularAmount <= 1 && Strength >= 0
+				&& !FVector(Light.R, Light.G, Light.B).ContainsNaN() && Light.GetMin() >= 0 && Light.GetMax() <= 1))
+			{
+				Fail(File, Name + TEXT(" 表面材质参数超出盾塔交付的有效范围"));
+				return nullptr;
+			}
+			Roughness = 1.0 - FMath::Sqrt(Shininess) / 10.0;
+			Metallic = Metalness;
+			Specular = SpecularAmount;
+			Emissive = Light.ToFColorSRGB();
+		}
 		if (UMaterial* const* Found = Palette.Find(*Name))
 		{
-			if ((*Found)->GetEditorOnlyData()->BaseColor.Constant == SRGB) { return *Found; }
-			Fail(File, FString::Printf(TEXT("材质 %s 出现两个不同的基础色"), *Name));
+			const UMaterialEditorOnlyData* Data = (*Found)->GetEditorOnlyData();
+			if (Data->BaseColor.Constant == SRGB && (!bShieldDelivery || (Data->Roughness.Constant == Roughness
+				&& Data->Metallic.Constant == Metallic && Data->Specular.Constant == Specular
+				&& Data->EmissiveColor.Constant == Emissive))) { return *Found; }
+			Fail(File, FString::Printf(TEXT("同名材质 %s 含不同的作者材质参数"), *Name));
 			return nullptr;
 		}
-		UMaterial* Material = CreateOrLoad<UMaterial>(FString(AssetRoot) / TEXT("Materials") / Name);
+		// 铜色等同名材质仅供盾塔使用，不能改写上一批建筑的共享材质。
+		const FString Folder = bShieldDelivery ? FString(AssetRoot) / TEXT("Shield/Materials") : FString(AssetRoot) / TEXT("Materials");
+		UMaterial* Material = CreateOrLoad<UMaterial>(Folder / Name);
 		if (!Material) { Fail(File, Name + TEXT(" 材质包不可读")); return nullptr; }
 		// UE 以 sRGB 字节存储常量，着色时转换回线性空间。FBX 未携带 Blender 的程序纹理。
-		Material->GetEditorOnlyData()->BaseColor.UseConstant = true;
-		Material->GetEditorOnlyData()->BaseColor.Constant = SRGB;
+		UMaterialEditorOnlyData* Data = Material->GetEditorOnlyData();
+		Data->BaseColor.UseConstant = true;
+		Data->BaseColor.Constant = SRGB;
+		if (bShieldDelivery)
+		{
+			Data->Roughness.UseConstant = Data->Metallic.UseConstant = Data->Specular.UseConstant = Data->EmissiveColor.UseConstant = true;
+			Data->Roughness.Constant = Roughness;
+			Data->Metallic.Constant = Metallic;
+			Data->Specular.Constant = Specular;
+			Data->EmissiveColor.Constant = Emissive;
+		}
 		Material->PostEditChange();
 		if (!Save(*Material)) { return nullptr; }
 		Palette.Add(*Name, Material);
@@ -296,7 +348,7 @@ namespace HachimisV4Import
 		return true;
 	}
 
-	bool FImporter::ReadScene(const FJsonObject& Row, FSceneSource& Out)
+	bool FImporter::ReadScene(const FJsonObject& Row, FSceneSource& Out, bool bRoofModule)
 	{
 		const FString File = Directory / Row.GetStringField(TEXT("file"));
 		FbxManager* Manager = FbxManager::Create();
@@ -320,6 +372,17 @@ namespace HachimisV4Import
 		{
 			return Fail(File, TEXT("FBX 未找到清单指定的唯一作者根"));
 		}
+		if (bRoofModule)
+		{
+			const FbxProperty Anchor = Root->FindProperty("assembly_anchor_cm");
+			if (!Anchor.IsValid() || Anchor.GetPropertyDataType().GetType() != eFbxDouble3)
+			{
+				return Fail(File, TEXT("独立屋面根缺少三维作者安装锚点 assembly_anchor_cm"));
+			}
+			const FbxDouble3 Value = Anchor.Get<FbxDouble3>();
+			Out.RoofAnchor = FVector(Value[0], -Value[1], Value[2]);
+			if (Out.RoofAnchor.ContainsNaN()) { return Fail(File, TEXT("独立屋面锚点包含非法坐标")); }
+		}
 		if (!ReadNode(*Root, *Root, Out, File)) { return false; }
 		if (Out.Parts.Num() != Row.GetIntegerField(TEXT("mesh_parts"))
 			|| Out.Mounts.Num() + Out.ClimbMarkers.Num() + 1 != Row.GetIntegerField(TEXT("empty_nodes")))
@@ -329,7 +392,8 @@ namespace HachimisV4Import
 		return true;
 	}
 
-	bool FImporter::StorePart(FPartSource& Source, const FString& Folder)
+	/** 几何身份不含节点名或安装变换，包含三角顺序、法线、UV 与材质槽。 */
+	FString GeometryDigest(const FPartSource& Source)
 	{
 		FSHA1 Hash;
 		for (const FTriangle& Triangle : Source.Triangles)
@@ -350,7 +414,12 @@ namespace HachimisV4Import
 		Hash.Final();
 		uint8 HashBytes[FSHA1::DigestSize];
 		Hash.GetHash(HashBytes);
-		const FString Digest = BytesToHex(HashBytes, FSHA1::DigestSize);
+		return BytesToHex(HashBytes, FSHA1::DigestSize);
+	}
+
+	bool FImporter::StorePart(FPartSource& Source, const FString& Folder)
+	{
+		const FString Digest = GeometryDigest(Source);
 		const FString Key = Folder / Digest;
 		if (UStaticMesh* const* Existing = Meshes.Find(Key)) { Source.Part.Mesh = *Existing; return true; }
 		const FString PackageName = Folder / (TEXT("SM_") + Digest);
@@ -562,6 +631,81 @@ namespace HachimisV4Import
 		return true;
 	}
 
+	/** 两次 FBX 导出使用同一局部网格；UV 的浮点尾数不同，比较时容许误差而不改写原数据。 */
+	bool SameRoofGeometry(const FPartSource& A, const FPartSource& B)
+	{
+		if (A.Triangles.Num() != B.Triangles.Num() || A.Materials != B.Materials) { return false; }
+		for (int32 Index = 0; Index < A.Triangles.Num(); ++Index)
+		{
+			const FTriangle& Left = A.Triangles[Index];
+			const FTriangle& Right = B.Triangles[Index];
+			if (Left.Material != Right.Material) { return false; }
+			for (int32 Vertex = 0; Vertex < 3; ++Vertex)
+			{
+				const FCorner& P = Left.Corners[Vertex];
+				const FCorner& Q = Right.Corners[Vertex];
+				if (!P.Position.Equals(Q.Position, 0.0001f) || !P.Normal.Equals(Q.Normal, 0.0001f) || !P.UV.Equals(Q.UV, 0.00001f))
+				{
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	/** 确认每份独立屋面是主体中相同的一组可切换部件。等价后共用原件网格和覆盖格，不重复生成一份屋顶。 */
+	bool FImporter::VerifyRoofModules(const FJsonObject& Row, const FSceneSource& Building)
+	{
+		const FString File = Row.GetStringField(TEXT("file"));
+		const TArray<TSharedPtr<FJsonValue>>* Modules = nullptr;
+		if (!Row.TryGetArrayField(TEXT("roof_modules"), Modules) || Modules->IsEmpty())
+		{
+			return Fail(File, TEXT("盾塔交付缺少独立屋面模块清单"));
+		}
+		TMap<FName, const FPartSource*> RoofParts;
+		for (const FPartSource& Part : Building.Parts)
+		{
+			if (Part.Part.Group == TEXT("Roof"))
+			{
+				if (RoofParts.Contains(Part.Part.Node)) { return Fail(File, Part.Part.Node.ToString() + TEXT(" 屋面节点重复")); }
+				RoofParts.Add(Part.Part.Node, &Part);
+			}
+		}
+		for (const auto& Item : *Modules)
+		{
+			const FJsonObject& ModuleRow = *Item->AsObject();
+			const FString ModuleFile = ModuleRow.GetStringField(TEXT("file"));
+			const FString Root = ModuleRow.GetStringField(TEXT("root"));
+			FSceneSource Module;
+			if (!ReadScene(ModuleRow, Module, true)) { return false; }
+			const FTransform* Mount = Building.Mounts.Find(Root);
+			if (!Mount || !Mount->Equals(FTransform(Module.RoofAnchor), SeamTolerance))
+			{
+				return Fail(ModuleFile, TEXT("独立模块锚点与主体内同名屋面安装变换不同"));
+			}
+			for (const FPartSource& Part : Module.Parts)
+			{
+				const FPartSource* Embedded = RoofParts.FindRef(Part.Part.Node);
+				if (!Embedded || Part.Part.Group != TEXT("Roof") || Embedded->Parent != Root)
+				{
+					return Fail(ModuleFile, Part.Part.Node.ToString() + TEXT(" 在主体对应屋面组中不存在或已匹配"));
+				}
+				if (!(Part.Part.Local * *Mount).Equals(Embedded->Part.Local, SeamTolerance))
+				{
+					return Fail(ModuleFile, Part.Part.Node.ToString() + TEXT(" 拼回主体后的安装变换不同"));
+				}
+				if (!SameRoofGeometry(Part, *Embedded))
+				{
+					return Fail(ModuleFile, Part.Part.Node.ToString() + TEXT(" 与主体的三角或材质槽不同"));
+				}
+				RoofParts.Remove(Part.Part.Node);
+			}
+		}
+		if (!RoofParts.IsEmpty()) { return Fail(File, TEXT("独立屋面清单未覆盖主体的所有屋面零件")); }
+		UE_LOG(LogHachimisV4, Display, TEXT("%s：%d 份独立屋面和接缝已逐件对齐，装配共用主体网格。"), *File, Modules->Num());
+		return true;
+	}
+
 	bool FImporter::ImportBuilding(const FJsonObject& Row)
 	{
 		const FString File = Row.GetStringField(TEXT("file"));
@@ -569,7 +713,7 @@ namespace HachimisV4Import
 		const FString Form = Row.GetStringField(TEXT("form"));
 		const FString Folder = FString(AssetRoot) / Family;
 		FSceneSource Scene;
-		if (!ReadScene(Row, Scene)) { return false; }
+		if (!ReadScene(Row, Scene) || (bShieldDelivery && !VerifyRoofModules(Row, Scene))) { return false; }
 		UCastleHachimisV4Layout* Layout = CreateOrLoad<UCastleHachimisV4Layout>(Folder / (TEXT("DA_") + Family + TEXT("_") + Form));
 		if (!Layout) { return Fail(File, TEXT("装配资源无法读取")); }
 		const auto& Grid = Row.GetArrayField(TEXT("grid"));
@@ -688,6 +832,25 @@ namespace HachimisV4Import
 
 	bool FImporter::Run(const FJsonObject& Manifest)
 	{
+		// 显式隔离两个交付批次，杜绝误用开关后写到其他建筑或共享材质目录。
+		for (const TCHAR* Category : {TEXT("walls"), TEXT("ladders"), TEXT("buildings")})
+		{
+			const auto& Rows = Manifest.GetArrayField(Category);
+			const bool bWalls = FCString::Strcmp(Category, TEXT("walls")) == 0;
+			const bool bLadders = FCString::Strcmp(Category, TEXT("ladders")) == 0;
+			if (bShieldDelivery && Rows.Num() != (bLadders ? 1 : 7))
+			{
+				return Fail(Directory, FString(Category) + TEXT(" 清单数量不符合盾塔独立交付"));
+			}
+			for (const auto& Item : Rows)
+			{
+				const FJsonObject& Row = *Item->AsObject();
+				if (bShieldDelivery != (Row.GetStringField(bWalls ? TEXT("family") : TEXT("kind")) == TEXT("Shield")))
+				{
+					return Fail(Directory, FString(Category) + TEXT(" 包含不属于当前导入范围的造型；盾塔必须使用 -Shield"));
+				}
+			}
+		}
 		for (const auto& Item : Manifest.GetArrayField(TEXT("unselected")))
 		{
 			const FJsonObject& Entry = *Item->AsObject();
@@ -720,7 +883,7 @@ int32 UHachimisV4ImportCommandlet::Main(const FString& Params)
 	}
 	FString RebuildMesh;
 	FParse::Value(*Params, TEXT("RebuildMesh="), RebuildMesh);
-	HachimisV4Import::FImporter Importer(Manifest->GetStringField(TEXT("source")), RebuildMesh);
+	HachimisV4Import::FImporter Importer(Manifest->GetStringField(TEXT("source")), RebuildMesh, FParse::Param(*Params, TEXT("Shield")));
 	return Importer.Run(*Manifest) ? 0 : 1;
 #else
 	// FBX SDK 和 UE 原生资产生成接口仅用于编辑器目标。
