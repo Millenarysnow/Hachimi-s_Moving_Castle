@@ -1,16 +1,24 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
+#include "Castle/UI/Director/CastleDirectorWidgets.h"
+#include "Castle/UI/Economy/CastleEconomyHUDWidget.h"
 #include "CastlePlayerController.h"
 #include "CastleBoard.h"
 #include "CastleBackpackComponent.h"
 #include "CastleGroundTileActor.h"
+#include "CastleEconomyComponent.h"
+#include "CastleMainTowerComponent.h"
 #include "CastleBuildingTestUtilities.h"
 #include "Castle/Placement/CastleTowerSideGridComponent.h"
+#include "Components/Button.h"
+#include "Components/TextBlock.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
+#include "Components/WidgetSwitcher.h"
 #include "CastleShopComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -22,6 +30,30 @@
 
 namespace
 {
+ /** 只有视口内真实挂载的实例才算通过，不从资产临时构造替代控件。 */
+ template <typename TWidget>
+ TWidget* FindMainMapWidget(FAutomationTestBase& Test, UWorld* World)
+ {
+	TArray<UUserWidget*> Widgets;
+	UWidgetBlueprintLibrary::GetAllWidgetsOfClass(World, Widgets, TWidget::StaticClass(), true);
+	return Test.TestEqual(FString::Printf(TEXT("视口中唯一挂载 %s"), *TWidget::StaticClass()->GetName()), Widgets.Num(), 1)
+		? Cast<TWidget>(Widgets[0]) : nullptr;
+ }
+
+ /** 在已初始化真实按钮上检查 C++ 事件接线；不点击，以免此检查执行交易或重载关卡。 */
+ void CheckActionIconStates(FAutomationTestBase& Test, UUserWidget* Owner, const FName ButtonName, const FName SwitcherName)
+ {
+	if (!Owner) { return; }
+	UButton* Button = Cast<UButton>(Owner->GetWidgetFromName(ButtonName));
+	UWidgetSwitcher* Icons = Cast<UWidgetSwitcher>(Owner->GetWidgetFromName(SwitcherName));
+	if (!Test.TestNotNull(ButtonName.ToString(), Button) || !Test.TestNotNull(SwitcherName.ToString(), Icons)) { return; }
+	Test.TestEqual(TEXT("初始显示普通切图"), Icons->GetActiveWidgetIndex(), 0);
+	Button->OnPressed.Broadcast();
+	Test.TestEqual(TEXT("按下后显示按压切图"), Icons->GetActiveWidgetIndex(), 1);
+	Button->OnReleased.Broadcast();
+	Test.TestEqual(TEXT("释放后回到普通切图"), Icons->GetActiveWidgetIndex(), 0);
+ }
+
  /** 在编辑器完成地图加载并启动PIE后检查正式开局，不保存地图。 */
  class FCheckDirectorMainMap final : public IAutomationLatentCommand
  {
@@ -51,13 +83,44 @@ namespace
 	Controller->ToggleShop();
 	Test->TestFalse(TEXT("真实B键入口拒绝开店"), Controller->GetShop()->IsShopOpen());
 	Test->TestTrue(TEXT("真实HUD房间计数是10/15"), Director->GetHUDSummary().Contains(TEXT("房间 10/15")));
+	if (UCastleEconomyHUDWidget* Balance = FindMainMapWidget<UCastleEconomyHUDWidget>(*Test, World))
+	{
+		// 真实账户事件应该在同一帧更新 WBP，HUD 不应参与中心指针的命中测试。
+		Test->TestEqual(TEXT("金币 HUD 不拦截游戏输入"), Balance->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		UTextBlock* GoldText = Cast<UTextBlock>(Balance->GetWidgetFromName(TEXT("GoldText")));
+		if (Test->TestNotNull(TEXT("金币 WBP 的数值控件"), GoldText))
+		{
+			const FString OldText = GoldText->GetText().ToString();
+			UCastleEconomyComponent* Economy = Controller->GetEconomy();
+			Test->TestTrue(TEXT("测试入账成功"), Economy->TryAddGold(25, Reason));
+			const FString NewText = GoldText->GetText().ToString();
+			Test->TestNotEqual(TEXT("入账事件立即更新 WBP"), NewText, OldText);
+			Test->TestTrue(TEXT("WBP 展示真实余额"), NewText.EndsWith(FText::AsNumber(Economy->GetGold()).ToString()));
+		}
+	}
 	FOutputDeviceNull Output;
+	if (UCastleDirectorHUDWidget* Status = FindMainMapWidget<UCastleDirectorHUDWidget>(*Test, World))
+	{
+		const UTextBlock* HealthText = Cast<UTextBlock>(Status->GetWidgetFromName(TEXT("TowerHealthText")));
+		const UCastleMainTowerComponent* MainTower = World->GetSubsystem<UCastleMainTowerSubsystem>()->GetRegisteredMainTower();
+		if (Test->TestNotNull(TEXT("导演 WBP 的生命控件"), HealthText)
+			&& Test->TestNotNull(TEXT("已有注册主塔"), MainTower))
+		{
+			const FString OldText = HealthText->GetText().ToString();
+			Test->TestTrue(TEXT("非致死伤害走原生命入口"), IConsoleManager::Get().ProcessUserConsoleInput(TEXT("CastleDamageMainTower 25"), Output, World));
+			Test->TestNotEqual(TEXT("受击后生命行立即更新"), HealthText->GetText().ToString(), OldText);
+			Test->TestEqual(TEXT("爱心行与主塔实时数据一致"), HealthText->GetText().ToString(),
+				FString::Printf(TEXT("主塔生命 %.0f/%.0f"), MainTower->CurrentHealth, MainTower->MaxHealth));
+		}
+	}
+	CheckActionIconStates(*Test, FindMainMapWidget<UCastleRewardChoiceWidget>(*Test, World), TEXT("ShopButton"), TEXT("ShopIconStates"));
 	Test->TestTrue(TEXT("真实伤害命令可执行"), IConsoleManager::Get().ProcessUserConsoleInput(TEXT("CastleDamageMainTower 99999"), Output, World));
 	Test->TestEqual(TEXT("主塔死亡触发正式游戏结束"), Director->GetPhase(), ECastleDirectorPhase::GameOver);
 	Test->TestTrue(TEXT("世界已暂停"), World->IsPaused());
 	Test->TestTrue(TEXT("游戏结束鼠标可见"), Controller->bShowMouseCursor);
 	Test->TestTrue(TEXT("游戏结束已锁定移动"), Controller->IsMoveInputIgnored());
 	Test->TestTrue(TEXT("游戏结束已锁定视角"), Controller->IsLookInputIgnored());
+	CheckActionIconStates(*Test, FindMainMapWidget<UCastleGameOverWidget>(*Test, World), TEXT("RestartButton"), TEXT("RestartIconStates"));
 	Test->AddInfo(TEXT("MainMap启动、节点、HUD、商店门控、正式主塔死亡与暂停路径已验证；字体中文显示另行验收。"));
 	return true;
   }

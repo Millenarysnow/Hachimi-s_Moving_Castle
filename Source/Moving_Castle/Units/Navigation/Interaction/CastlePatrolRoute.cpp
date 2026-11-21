@@ -364,17 +364,9 @@ void ACastlePatrolRoute::Tick(float DeltaSeconds)
 		return;
 	}
 	const auto* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
-	const auto Path = Navigation->AcquireSharedPath();
+	// 路线预览只更新场景中的路径点编号，避免逐帧输出调试文字覆盖 HUD。
 	const TArray<FVector>& DisplayPoints = bEditing ? DraftWaypoints : Navigation->GetRequestedWaypoints();
 	RefreshWaypointMarkers(DisplayPoints);
-	if (GEngine)
-	{
-		const FString State = !Navigation->LastFailure.IsEmpty() ? Navigation->LastFailure.ToString()
-			: (Path && Path->bValid && Path->bClosedLoop ? TEXT("Ready") : TEXT("Waiting for route / NavMesh"));
-		GEngine->AddOnScreenDebugMessage(reinterpret_cast<uint64>(this), 0.1f, Navigation->LastFailure.IsEmpty() ? FColor::Cyan : FColor::Red,
-			FString::Printf(TEXT("Shared NPC patrol | %s | Waypoints %d | Path queries %d | Refresh %d\n[P] Edit / cancel | LMB: point at view center | Backspace: undo | Enter: apply all | Delete: clear"),
-				bEditing ? TEXT("EDITING DRAFT") : *State, DisplayPoints.Num(), Navigation->PathQueryCount, Navigation->RefreshCount));
-	}
 }
 
 void ACastlePatrolRoute::RefreshWaypointMarkers(const TArray<FVector>& Points)
