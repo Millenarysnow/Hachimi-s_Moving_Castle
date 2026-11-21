@@ -197,12 +197,57 @@ namespace HachimisV4Bind
 		return true;
 	}
 
-	bool Run(bool bInspect, bool bRulesOnly)
+	/** 重载后逐个检查源节点索引、网格和变换，确保每块拆件仍可独立被 PCG 与合并动画找到。 */
+	bool VerifyTemplates(const FBinding& Binding)
 	{
+		const UBlueprint& BP = *Binding.Blueprint;
+		TSet<int32> Indices;
+		for (USCS_Node* Node : Binding.OldParts)
+		{
+			int32 Index = INDEX_NONE;
+			const FString Name = Node->GetVariableName().ToString();
+			if (!Name.StartsWith(TEXT("V4Part_")) || !LexTryParseString(Index, *Name.Mid(7))
+				|| !Binding.Layout->Parts.IsValidIndex(Index) || Indices.Contains(Index))
+			{
+				return Error(BP, Name + TEXT(" 的装配索引非法或重复"));
+			}
+			Indices.Add(Index);
+			const FCastleV4Part& Part = Binding.Layout->Parts[Index];
+			const UStaticMeshComponent* Mesh = CastChecked<UStaticMeshComponent>(Node->ComponentTemplate);
+			if (Mesh->GetStaticMesh() != Part.Mesh || !Mesh->GetRelativeTransform().Equals(Part.Local, 0.01)
+				|| !Mesh->ComponentHasTag(*FString::Printf(TEXT("CastleV4Part=%d"), Index)))
+			{
+				return Error(BP, Name + TEXT(" 的网格、变换或语义标签与装配不同"));
+			}
+		}
+		return Indices.Num() == Binding.Layout->Parts.Num() || Error(BP, TEXT("装配索引不完整"));
+	}
+
+	bool Run(bool bInspect, bool bRulesOnly, bool bShield)
+	{
+		if (bShield && bRulesOnly)
+		{
+			UE_LOG(LogHachimisV4Bind, Error, TEXT("盾塔以本族装配资产配置，不支持 -Shield -RulesOnly"));
+			return false;
+		}
+		// 两次美术交付有各自的资产范围；重跑原批次不会重新编译或保存盾塔蓝图。
+		const TArray<FString> Families = bShield ? TArray<FString>{TEXT("Shield")}
+			: TArray<FString>{TEXT("Room"), TEXT("Archer"), TEXT("Cannon"), TEXT("Farm"), TEXT("Balloon"), TEXT("Hive")};
 		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
-		Registry.ScanPathsSynchronous({ContentRoot}, true);
+		TArray<FString> Folders;
+		for (const FString& Family : Families) { Folders.Add(FString(ContentRoot) / Family); }
+		Registry.ScanPathsSynchronous(Folders, true);
 		TArray<FAssetData> Found;
-		Registry.GetAssetsByPath(ContentRoot, Found, true);
+		for (const FString& Folder : Folders)
+		{
+			TArray<FAssetData> ScopedAssets;
+			if (!Registry.GetAssetsByPath(*Folder, ScopedAssets, true))
+			{
+				UE_LOG(LogHachimisV4Bind, Error, TEXT("不能读取装配批次目录 %s"), *Folder);
+				return false;
+			}
+			Found.Append(MoveTemp(ScopedAssets));
+		}
 		TArray<FBinding> Bindings;
 		TSet<FString> Paths;
 		TMap<FName, TObjectPtr<UCastleHachimisV4Layout>> Examples;
@@ -216,7 +261,11 @@ namespace HachimisV4Bind
 			}
 			if (Data.AssetClassPath != UCastleHachimisV4Layout::StaticClass()->GetClassPathName()) { continue; }
 			UCastleHachimisV4Layout* Layout = Cast<UCastleHachimisV4Layout>(Data.GetAsset());
-			if (!Layout || Layout->Parts.IsEmpty()) { return false; }
+			if (!Layout || Layout->Parts.IsEmpty() || !Families.Contains(Layout->Family.ToString()))
+			{
+				UE_LOG(LogHachimisV4Bind, Error, TEXT("%s 无有效装配或属于其他批次"), *Data.GetSoftObjectPath().ToString());
+				return false;
+			}
 			++LayoutCount;
 			if (Layout->Family == TEXT("Room"))
 			{
@@ -226,37 +275,57 @@ namespace HachimisV4Bind
 			if (Layout->Family == TEXT("Room") && Layout->Form != TEXT("L1")) { continue; }
 			if (Paths.Contains(Layout->BlueprintPath)) { return Error(*Layout, TEXT("多个装配同时绑定同一蓝图")); }
 			Paths.Add(Layout->BlueprintPath);
-			if (!Inspect(*Layout, Bindings.AddDefaulted_GetRef())) { return false; }
+			FBinding& Binding = Bindings.AddDefaulted_GetRef();
+			if (!Inspect(*Layout, Binding)) { return false; }
+			if (bShield && Binding.Blueprint->GeneratedClass->GetDefaultObject<ACastleBuildingBase>()->GetBuildingType() != ECastleBuildingType::ShieldTower)
+			{
+				return Error(*Layout, Layout->BlueprintPath + TEXT(" 不是原盾塔玩法类"));
+			}
 		}
-		if (LayoutCount != 39 || Bindings.Num() != 34 || Examples.Num() != 6)
+		const int32 ExpectedLayouts = bShield ? 7 : 39;
+		const int32 ExpectedBlueprints = bShield ? 7 : 34;
+		const int32 ExpectedExamples = bShield ? 0 : 6;
+		if (LayoutCount != ExpectedLayouts || Bindings.Num() != ExpectedBlueprints || Examples.Num() != ExpectedExamples)
 		{
-			UE_LOG(LogHachimisV4Bind, Error, TEXT("%s 装配、蓝图和 Room 资产数为 %d/%d/%d，应为 39/34/6。"),
-				ContentRoot, LayoutCount, Bindings.Num(), Examples.Num());
+			UE_LOG(LogHachimisV4Bind, Error, TEXT("%s 装配、蓝图和 Room 资产数为 %d/%d/%d，应为 %d/%d/%d。"),
+				*FString::Join(Folders, TEXT(", ")), LayoutCount, Bindings.Num(), Examples.Num(), ExpectedLayouts, ExpectedBlueprints, ExpectedExamples);
 			return false;
 		}
 
 		UBuildingPartCatalog* Catalog = LoadObject<UBuildingPartCatalog>(nullptr,
 			TEXT("/Game/MovingCastle/Data/Animation/DA_BuildingPartCatalog.DA_BuildingPartCatalog"));
-		UCastlePCGRuleSetDataAsset* Rules = LoadObject<UCastlePCGRuleSetDataAsset>(nullptr,
-			TEXT("/Game/MovingCastle/Data/DA_CastlePCGRuleSet.DA_CastlePCGRuleSet"));
-		FString Failure;
-		UCastleV4WallKit* RoomL1Bay = LoadObject<UCastleV4WallKit>(nullptr,
-			TEXT("/Game/MovingCastle/Model/Buildings/HachimisV4/Room/Walls/DA_Wall_Room_L1_Bay.DA_Wall_Room_L1_Bay"));
-		if (!Rules || !Catalog || !RoomL1Bay || RoomL1Bay->WallKey != TEXT("Room_L1_Bay"))
+		if (!Catalog)
 		{
-			UE_LOG(LogHachimisV4Bind, Error, TEXT("DA_CastlePCGRuleSet、DA_BuildingPartCatalog 或 Room_L1_Bay 缺失或无效"));
+			UE_LOG(LogHachimisV4Bind, Error, TEXT("DA_BuildingPartCatalog 缺失或无效"));
 			return false;
+		}
+		UCastlePCGRuleSetDataAsset* Rules = nullptr;
+		UCastleV4WallKit* RoomL1Bay = nullptr;
+		if (!bShield)
+		{
+			Rules = LoadObject<UCastlePCGRuleSetDataAsset>(nullptr, TEXT("/Game/MovingCastle/Data/DA_CastlePCGRuleSet.DA_CastlePCGRuleSet"));
+			RoomL1Bay = LoadObject<UCastleV4WallKit>(nullptr,
+				TEXT("/Game/MovingCastle/Model/Buildings/HachimisV4/Room/Walls/DA_Wall_Room_L1_Bay.DA_Wall_Room_L1_Bay"));
+			if (!Rules || !RoomL1Bay || RoomL1Bay->WallKey != TEXT("Room_L1_Bay"))
+			{
+				UE_LOG(LogHachimisV4Bind, Error, TEXT("DA_CastlePCGRuleSet 或 Room_L1_Bay 缺失或无效"));
+				return false;
+			}
 		}
 		if (bInspect)
 		{
 			for (const FBinding& Binding : Bindings)
 			{
 				const ACastleBuildingBase* CDO = Binding.Blueprint->GeneratedClass->GetDefaultObject<ACastleBuildingBase>();
-				if (CDO->HachimisLayout != Binding.Layout || Binding.OldParts.Num() != Binding.Layout->Parts.Num()
-					|| Rules->RoomL1Bay != RoomL1Bay || Rules->RoomExamples.Num() != 6)
+				if (CDO->HachimisLayout != Binding.Layout)
 				{
-					return Error(*Binding.Blueprint, TEXT("重新加载后的装配引用或蓝图节点数不同"));
+					return Error(*Binding.Blueprint, TEXT("重新加载后的装配引用不同"));
 				}
+				if (!VerifyTemplates(Binding)) { return false; }
+			}
+			if (!bShield && (Rules->RoomL1Bay != RoomL1Bay || Rules->RoomExamples.Num() != ExpectedExamples))
+			{
+				return Error(*Rules, TEXT("重新加载后的普通房规则集不同"));
 			}
 			// 同一次审计报告全部异常资产，并让命令失败；不会忽略某个网格后报验收成功。
 			bool bValidMeshes = true;
@@ -271,18 +340,22 @@ namespace HachimisV4Bind
 				}
 			}
 			if (!bValidMeshes) { return false; }
-			UE_LOG(LogHachimisV4Bind, Display, TEXT("重新加载确认 39 个装配、34 个蓝图和 %d 个目录网格"), Meshes.Num());
+			UE_LOG(LogHachimisV4Bind, Display, TEXT("重新加载确认 %d 个装配、%d 个蓝图和 %d 个目录网格"), LayoutCount, Bindings.Num(), Meshes.Num());
 			return true;
 		}
 		if (!bRulesOnly)
 		{
+			FString Failure;
 			if (!Catalog->AppendExactGeometry(Meshes, Failure)) { return Error(*Catalog, Failure); }
 			for (const FBinding& Binding : Bindings) { if (!Bind(Binding)) { return false; } }
 		}
-		Rules->Modify();
-		Rules->RoomL1Bay = RoomL1Bay;
-		Rules->RoomExamples = MoveTemp(Examples);
-		if (!Save(*Rules)) { return false; }
+		if (!bShield)
+		{
+			Rules->Modify();
+			Rules->RoomL1Bay = RoomL1Bay;
+			Rules->RoomExamples = MoveTemp(Examples);
+			if (!Save(*Rules)) { return false; }
+		}
 		if (bRulesOnly) { return true; }
 		if (!Save(*Catalog)) { return false; }
 		for (const FBinding& Binding : Bindings) { if (!Save(*Binding.Blueprint)) { return false; } }
@@ -294,7 +367,8 @@ namespace HachimisV4Bind
 int32 UHachimisV4BindCommandlet::Main(const FString& Params)
 {
 #if WITH_EDITOR
-	return HachimisV4Bind::Run(FParse::Param(*Params, TEXT("Verify")), FParse::Param(*Params, TEXT("RulesOnly"))) ? 0 : 1;
+	return HachimisV4Bind::Run(FParse::Param(*Params, TEXT("Verify")), FParse::Param(*Params, TEXT("RulesOnly")),
+		FParse::Param(*Params, TEXT("Shield"))) ? 0 : 1;
 #else
 	return 1;
 #endif

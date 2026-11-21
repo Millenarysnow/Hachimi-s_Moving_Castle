@@ -63,7 +63,6 @@ bool FCastlePCGSemanticsTest::RunTest(const FString& Parameters)
 		if (!TestNotNull(Path, Definition)) { return false; }
 		for (const auto& Level : Definition->Levels)
 		{
-			if (Level.Level > 4 && Definition->BuildingType == ECastleBuildingType::ShieldTower) { continue; }
 			for (const bool bVertical : {false,true})
 			{
 				if (bVertical && !Level.VerticalBuildingClass) { continue; }
@@ -81,6 +80,21 @@ bool FCastlePCGSemanticsTest::RunTest(const FString& Parameters)
 					auto* Building = World->SpawnActor<ACastleBuildingBase>(bVertical ? Level.VerticalBuildingClass : Level.BuildingClass);
 					if (!TestNotNull(TEXT("正式蓝图实例"), Building)) { return false; }
 					if (!TestTrue(TEXT("初始化正式占格"), Building->InitializeBuilding(Card, Cells))) { return false; }
+					if (Definition->BuildingType == ECastleBuildingType::ShieldTower)
+					{
+						// 七个现有 BP（含五级）都必须读取本族正式装配，不能只通过旧几何提取的断言。
+						const UCastleHachimisV4Layout* Layout = Building->HachimisLayout;
+						if (!TestNotNull(Building->GetClass()->GetPathName() + TEXT(" 的盾塔 V4 装配"), Layout)) { return false; }
+						TestEqual(TEXT("盾塔使用本族装配"), Layout->Family, FName(TEXT("Shield")));
+						TestEqual(TEXT("盾塔每层每个外侧格面都绑定作者墙位"), Layout->Walls.Num(), 2 * (Shape.X + Shape.Y) * Shape.Z);
+						for (const FCastleV4WallSlot& Wall : Layout->Walls)
+						{
+							const TCHAR* Kind = (Wall.Facing.X == 0 ? Shape.X : Shape.Y) == 1 ? TEXT("Bay") : TEXT("Edge");
+							const FName Expected(*FString::Printf(TEXT("Shield_L%d_%s"), Level.Level, Kind));
+							if (!TestNotNull(Wall.Node.ToString(), Wall.Kit.Get())) { return false; }
+							TestEqual(Wall.Node.ToString() + TEXT(" 使用本级与本跨度的墙套件"), Wall.Kit->WallKey, Expected);
+						}
+					}
 					Building->SetActorRotation(FRotator(0,bRotated ? 90 : 0,0));
 					Building->SetActorLocation(FVector(bRotated ? (Shape.Y-1)*Board->CellSize*0.5 : (Shape.X-1)*Board->CellSize*0.5,
 						bRotated ? (Shape.X-1)*Board->CellSize*0.5 : (Shape.Y-1)*Board->CellSize*0.5, Board->WorldBaseHeight - 280.0));
@@ -112,7 +126,7 @@ bool FCastlePCGSemanticsTest::RunTest(const FString& Parameters)
 					}
 					else
 					{
-						const bool bFlat = FString(Family)==TEXT("NormalRoom") || FString(Family)==TEXT("ShieldTower");
+						const bool bFlat = FString(Family)==TEXT("NormalRoom");
 						const int32 TopCount = Shape.X*Shape.Y;
 						TestEqual(TEXT("屋顶数量对应每个顶层格"),Roof,FString(Family)==TEXT("NormalRoom") ? 0 : TopCount);
 						TestEqual(TEXT("平板数量含内部层和封闭顶层"),Slab,Shape.X*Shape.Y*(Shape.Z-1)+(bFlat ? TopCount:0));

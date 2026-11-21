@@ -42,7 +42,7 @@ namespace CastleV4PCG
 	bool MapCells(const ACastleBuildingBase& Building, const ACastleBoard& Board, TMap<FIntVector, FIntVector>& Out, FString& Error);
 	bool Extract(ACastleBuildingBase& Building, const ACastleBoard& Board, TArray<FCastlePCGPartAnnotation>& Out, FString& Error);
 	bool BuildRooms(const UCastlePCGRuleSetDataAsset& Rules, const FOccupancy& Occupancy, FTargets& Targets, FRooms& Rooms, FString& Error);
-	/** 共享楼梯几何来自下层所属资产。旧盾塔只在 V4 混接时加入这份共享计划。 */
+	/** 共享楼梯几何来自下层所属资产；旧造型只在与 V4 混接时加入此计划。 */
 	bool BuildStairs(const ACastleBoard& Board, const FOccupancy& Occupancy, const FTargets& Targets, const FRooms& Rooms, FStairs& Out, FString& Error);
 	/** 在原梯格中选择满足上下房作者家具净空的楼板梯方向，不改家具或共享接口资格。 */
 	bool OrientRoomStair(const ACastleBoard& Board, const ACastleBuildingBase& Lower, const ACastleBuildingBase& Upper,

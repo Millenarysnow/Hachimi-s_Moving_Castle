@@ -6,6 +6,7 @@
 #include "CastleBuildingDefinition.h"
 #include "Castle/PCG/CastleBuildingPCGSubsystem.h"
 #include "CastleLadderLinkComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "CastleNavigationSubsystem.h"
 #include "CastleBuildingPreviewSubsystem.h"
 #include "AssemblyFlightComponent.h"
@@ -60,11 +61,12 @@ namespace CastleV4NavigationTests
 			TArray<FCastleActiveLadderConnection> Links;
 			PCG->GetActiveLadderConnections(Board, Links);
 			Test.TestFalse(TEXT("移除上楼后卸载对应接口梯"), Links.ContainsByPredicate([&](const auto& Link) { return Link.Building == Lower; }));
+			if (Scene == 5) { VerifyShieldRoof(false); }
 			if (!Remove(Lower) || !Remove(Support)) { Cleanup(); return true; }
 			for (ACastleBuildingBase*& Building : Extra) { if (!Remove(Building)) { Cleanup(); return true; } }
 			Extra.Reset();
 			Stage = 0;
-			if (++Scene < 5) { return false; }
+			if (++Scene < 6) { return false; }
 			if (FParse::Param(FCommandLine::Get(), TEXT("HachimisV4Capture"))) { CaptureRoomsAndPreviews(); }
 			Cleanup();
 			return true;
@@ -114,12 +116,15 @@ namespace CastleV4NavigationTests
 		bool PlaceScene()
 		{
 			const bool bRotatedRooms = Scene == 4;
-			const TCHAR* LowerName = bRotatedRooms ? TEXT("NormalRoom") : Scene == 2 ? TEXT("ShieldTower") : TEXT("ArcherTower");
+			const bool bShieldBelow = Scene == 2 || Scene == 5;
+			const TCHAR* LowerName = bRotatedRooms ? TEXT("NormalRoom") : bShieldBelow ? TEXT("ShieldTower") : TEXT("ArcherTower");
 			const TCHAR* UpperName = bRotatedRooms ? TEXT("NormalRoom") : Scene == 1 ? TEXT("ShieldTower") : TEXT("CannonTower");
 			const int32 Level = Scene == 0 ? 2 : 1;
 			const bool bClosed = Scene == 3;
 			FCastleBuildingDescriptor LowerCard, UpperCard;
-			if (!MakeCard(LowerName, Level, ECastleTileColor::Red, 3, LowerCard)
+			// 五级保持单格，正式玩法仍不自动合成五级；夹具直接放置，验证其不会再被旧 PCG 排除。
+			const int32 LowerLevel = Scene == 2 ? 5 : Scene == 5 ? 2 : Level;
+			if (!MakeCard(LowerName, LowerLevel, ECastleTileColor::Red, 3, LowerCard)
 				|| !MakeCard(UpperName, Level, bRotatedRooms ? ECastleTileColor::Red : ECastleTileColor::Blue,
 					bClosed ? 4 : 3, UpperCard)) { return false; }
 			FCastleGroundGenerationResult Ground = OriginalGround;
@@ -142,6 +147,10 @@ namespace CastleV4NavigationTests
 			Lower = Board->PlaceBuilding(Center, LowerCard, false, Error);
 			if (!Lower) { Test.AddError(Error.ToString()); return false; }
 			FinishAnimations();
+			if (Scene == 2)
+			{
+				Capture(TEXT("Shield-L5-closed"), Board->GetGridWorldLocation(Center) + FVector(0, 0, 0), FVector(980, 1250, 870));
+			}
 			if (bRotatedRooms)
 			{
 				// 沿棋盘 +Y 放独立房，真正触发 L3V 的 90° 格局。Extra 保持从上到下的释放顺序。
@@ -218,17 +227,36 @@ namespace CastleV4NavigationTests
 			const auto Path = Navigation->AcquireSharedPath();
 			Test.TestTrue(Label + TEXT(" 上下行路线闭环"), Path && Path->bValid && Path->bClosedLoop);
 			Navigation->ClearSharedRoute();
-			FVector Offset = Lower->HachimisLayout ? FVector(122, 123, 0) : FVector(-127, 152, 0);
+			// 真正提交的梯面顶端位于各族梯井净空内；以实际 Link 核对经过旋转、跨系装配后的开洞。
+			FVector Offset = CastleV4PCG::CellFrame(*Board, Links[0].UpperCell).InverseTransformPosition(Links[0].TopWorldLocation);
+			Offset.Z = 0.0;
+			if (Scene == 2)
+			{
+				const UCastleHachimisV4Layout* Layout = Lower->HachimisLayout;
+				if (!Test.TestNotNull(TEXT("五级盾塔使用 V4 造型"), Layout)) { return; }
+				const UCastleV4LadderKit* Kit = Layout->Ladder;
+				if (!Test.TestNotNull(TEXT("五级盾塔的作者楼板梯"), Kit)) { return; }
+				Test.TestEqual(TEXT("盾塔在下时使用盾塔梯套件，而不是旧通用梯"), Kit->Family, FName(TEXT("Shield")));
+				const FCastleV4Part* Shoe = Kit->Parts.FindByPredicate([](const FCastleV4Part& Part)
+				{
+					return Part.Node.ToString().StartsWith(TEXT("Ladder_Shoe"));
+				});
+				if (!Test.TestTrue(TEXT("楼板梯中有作者梯脚网格"), Shoe && Shoe->Mesh)) { return; }
+				TInlineComponentArray<UStaticMeshComponent*> Meshes(Lower);
+				Test.TestTrue(TEXT("跨栋梯实际生成了盾塔梯脚网格"), Meshes.ContainsByPredicate([Shoe](const UStaticMeshComponent* Mesh)
+				{
+					return Mesh->IsVisible() && Mesh->GetStaticMesh() == Shoe->Mesh;
+				}));
+				Capture(TEXT("Shield-L5-stacked"), Board->GetGridWorldLocation(Center) + FVector(0, 0, 265), FVector(1250, -1600, 1080));
+			}
 			if (Scene == 4)
 			{
-				// 真正提交的梯面顶端位于套件净空内。变换回所属格后检查开洞及另一格未切的板。
-				Offset = CastleV4PCG::CellFrame(*Board, Links[0].UpperCell).InverseTransformPosition(Links[0].TopWorldLocation);
-				Offset.Z = 0.0;
 				TraceFloor(Center + FIntVector(0,1,1), Offset, true);
 				Capture(TEXT("V4-L3V-rotated-hatch"), Board->GetGridWorldLocation(Center) + FVector(0,257,340), FVector(-1510,-1860,1510));
 			}
 			TraceFloor(Links[0].UpperCell, Offset, false);
 			TraceFloor(Links[0].UpperCell, FVector::ZeroVector, true);
+			if (Scene == 5) { VerifyShieldRoof(true); }
 			if (Scene == 0)
 			{
 				const FIntVector Other = Links[0].UpperCell == Center + Up ? Center + Up + FIntVector(1,0,0) : Center + Up;
@@ -236,6 +264,34 @@ namespace CastleV4NavigationTests
 				Capture(TEXT("V4-tower-stack"), Board->GetGridWorldLocation(Center) + FVector(230, 0, 250), FVector(-1550,-2250,1400));
 			}
 			Test.AddInfo(Label + TEXT(" 梯口与闭环断言完成"));
+		}
+
+		/** 单格上塔只移走实际覆盖的盾塔屋面和接缝，移走上塔后所有作者件原地恢复。 */
+		void VerifyShieldRoof(bool bCovered)
+		{
+			const UCastleHachimisV4Layout* Layout = Lower->HachimisLayout;
+			if (!Test.TestNotNull(TEXT("水平二级盾塔的逐格屋面装配"), Layout)) { return; }
+			TArray<FCastlePCGPartAnnotation> Parts;
+			TMap<FIntVector, FIntVector> Cells;
+			FString Error;
+			if (!CastleV4PCG::Extract(*Lower, *Board, Parts, Error) || !CastleV4PCG::MapCells(*Lower, *Board, Cells, Error))
+			{
+				Test.AddError(Error);
+				return;
+			}
+			int32 CoveredBays = 0, ExposedBays = 0, Keys = 0;
+			for (int32 Index = 0; Index < Layout->Parts.Num(); ++Index)
+			{
+				const FCastleV4Part& Part = Layout->Parts[Index];
+				if (Part.Group != TEXT("Roof") && Part.Group != TEXT("RoofKeys")) { continue; }
+				const bool bOverlap = Part.Cells.ContainsByPredicate([&](const FIntVector& Cell) { return Cells.FindChecked(Cell) == Center; });
+				Keys += Part.Group == TEXT("RoofKeys") && bOverlap;
+				CoveredBays += Part.Group == TEXT("Roof") && bOverlap;
+				ExposedBays += Part.Group == TEXT("Roof") && !bOverlap;
+				Test.TestEqual(Part.Node.ToString() + TEXT(" 可见性与实际叠放格面相符"),
+					Parts[Index].Component->IsVisible(), !(bCovered && bOverlap));
+			}
+			Test.TestTrue(TEXT("盾塔被覆盖和未覆盖屋面及跨格接缝均参与核对"), Keys > 0 && CoveredBays > 0 && ExposedBays > 0);
 		}
 
 		void TraceFloor(const FIntVector& Cell, const FVector& Offset, bool bSolid)
@@ -284,13 +340,13 @@ namespace CastleV4NavigationTests
 
 		void CaptureRoomsAndPreviews()
 		{
-			// 从实际蓝图卡片入口准备代表每族和三个单格五级的预览。房间截图来自七座已完成 PCG 的原 Actor。
-			const TCHAR* Families[] = {TEXT("NormalRoom"), TEXT("ArcherTower"), TEXT("CannonTower"), TEXT("Farm"), TEXT("BalloonTower"), TEXT("BeeHive")};
+			// 从正式卡片入口核对每族和四个单格五级的预览。房间截图来自七座已完成 PCG 的原 Actor。
+			const TCHAR* Families[] = {TEXT("NormalRoom"), TEXT("ArcherTower"), TEXT("CannonTower"), TEXT("Farm"), TEXT("ShieldTower"), TEXT("BalloonTower"), TEXT("BeeHive")};
 			auto* Preview = World->GetSubsystem<UCastleBuildingPreviewSubsystem>();
 			if (!Test.TestNotNull(TEXT("真实建筑卡片预览系统"), Preview)) { return; }
 			for (int32 Index = 0; Index < UE_ARRAY_COUNT(Families); ++Index)
 			{
-				const TArray<int32> Levels = Index >= 1 && Index <= 3 ? TArray<int32>{1, 5} : TArray<int32>{1};
+				const TArray<int32> Levels = Index >= 1 && Index <= 4 ? TArray<int32>{1, 5} : TArray<int32>{1};
 				for (int32 Level : Levels)
 				{
 					FCastleBuildingDescriptor Card;

@@ -319,7 +319,7 @@ namespace CastleV4PCG
 		for (UStaticMeshComponent* Floor : Floors)
 		{
 			if (!UBuildingGameplayRootComponent::IsInGameplayHierarchy(Floor)) { continue; }
-			// 盾塔沿用旧 GameplayFloor：多格地板的原点与 V4 格心相差 3.75 cm。
+			// 混接的旧造型仍使用旧 GameplayFloor，多格板原点与 V4 格心相差 3.75 cm。
 			// 从实际板面覆盖确定归属，既支持旋转建筑，也不会误关上层内部的楼板。
 			bool bLegacyCell = false;
 			if (!Building.HachimisLayout && Floor->CanEverAffectNavigation() && Floor->GetStaticMesh()
