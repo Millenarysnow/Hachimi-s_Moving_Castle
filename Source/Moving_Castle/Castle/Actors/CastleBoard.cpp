@@ -1307,7 +1307,7 @@ void ACastleBoard::BuildGridCursorTarget(const FIntVector& Cell, const FVector& 
 	OutTarget.bValid = true;
 }
 
-TArray<FIntVector> ACastleBoard::BuildPlacementFootprint(const FIntVector& Coordinate, int32 Level) const
+TArray<FIntVector> ACastleBoard::BuildPlacementFootprint(const FIntVector& Coordinate, int32 Level)
 {
 	// 卡牌直接放置仍采用标准朝向：二级沿 X 两格，三级 XY 平面四格，四级两层八格。
 	// 自动合成使用两座建筑的实际联合占用，不能在升级时调用这里而丢掉垂直形状。

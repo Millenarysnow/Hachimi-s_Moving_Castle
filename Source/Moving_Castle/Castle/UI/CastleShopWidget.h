@@ -8,7 +8,9 @@
 #include "CastleShopWidget.generated.h"
 
 class UButton;
+class UCastleCardPortraitSubsystem;
 class UCastleEconomyComponent;
+class UCastleShopCardWidget;
 class UCastleShopComponent;
 class UHorizontalBox;
 class UTextBlock;
@@ -61,7 +63,7 @@ protected:
 };
 
 /**
- * 商店的纯 C++ 测试界面：复用现有建筑卡片和线框预览，增加价格、余额和操作。
+ * 商店的纯 C++ 界面：展示建筑卡牌、价格和余额，并将交易请求转交给逻辑层。
  * 界面订阅逻辑事件，不自行随机、不自行计算价格，也不持有独立金币副本。
  */
 UCLASS()
@@ -70,7 +72,7 @@ class MOVING_CASTLE_API UCastleShopWidget : public UUserWidget
 	GENERATED_BODY()
 
 protected:
-	/** 创建可随视口缩放的居中面板，不依赖新的 Widget Blueprint 或美术资产。 */
+	/** 创建可随视口缩放的居中面板，不由 Widget Blueprint 承担逻辑。 */
 	virtual void NativeOnInitialized() override;
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
@@ -93,6 +95,10 @@ protected:
 
 	UFUNCTION()
 	void HandleClose();
+
+	/** 箔光对照只改变现有卡片的显示，不触碰商店或摄影缓存。 */
+	UFUNCTION()
+	void HandleToggleFoil();
 
 	/** 结果保留在面板内，并写日志，金币不足或满包都有直接可见反馈。 */
 	void ShowResult(bool bSuccess, const FString& SuccessMessage, const FText& FailureReason);
@@ -123,5 +129,26 @@ protected:
 	UPROPERTY(Transient)
 	TObjectPtr<UButton> RefreshButton;
 
+
+	/** 摄影服务按商店可见性开始/暂停，不从场上 HUD 推断是否需要拍摄。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCastleCardPortraitSubsystem> Portraits;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UCastleShopCardWidget>> OfferCards;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> FoilLabel;
+
+	bool bFoilPreview = false;
 	bool bWidgetTreeBuilt = false;
+
+private:
+	friend class UCastleShopCardWidget;
+
+	/** 新卡被抓住时旧卡立即归位；共享动态纹理不能同时交给仍在回正的旧卡。 */
+	void ActivateCardInspection(UCastleShopCardWidget& Card);
+	void ReleaseCardInspection(const UCastleShopCardWidget& Card);
+	void CancelOfferInspection();
+	TWeakObjectPtr<UCastleShopCardWidget> InspectedCard;
 };

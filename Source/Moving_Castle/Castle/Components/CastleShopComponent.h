@@ -107,6 +107,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|商店")
 	bool IsInitialized() const { return bInitialized; }
 
+	/** 摄影只读取本商店绑定的棋盘尺寸，不在世界中猜测应拍哪个棋盘。 */
+	const ACastleBoard* GetBoundBoard() const { return Board.Get(); }
+
 	UFUNCTION(BlueprintPure, Category = "移动城堡|商店")
 	TArray<FCastleShopOffer> GetOffers() const { return Offers; }
 
