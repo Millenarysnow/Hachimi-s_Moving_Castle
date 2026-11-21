@@ -157,12 +157,29 @@ void ACastlePatrolRoute::CancelEditingDraft()
 
 void ACastlePatrolRoute::SetEditing(bool bNewEditing)
 {
+	const bool bChanged = (bEditing != bNewEditing);
 	bEditing = bNewEditing;
-	if (!InputComponent) { return; }
-	for (FInputKeyBinding& Binding : InputComponent->KeyBindings)
+	if (InputComponent)
 	{
-		if (Binding.Chord.Key != EKeys::P) { Binding.bConsumeInput = bEditing; }
+		for (FInputKeyBinding& Binding : InputComponent->KeyBindings)
+		{
+			if (Binding.Chord.Key != EKeys::P) { Binding.bConsumeInput = bEditing; }
+		}
 	}
+	if (bChanged)
+	{
+		OnEditingStateChanged.Broadcast(bEditing);
+	}
+}
+
+void ACastlePatrolRoute::UndoDraftPoint()
+{
+	UndoPoint();
+}
+
+void ACastlePatrolRoute::ClearPatrolRoute()
+{
+	ClearRoute();
 }
 
 void ACastlePatrolRoute::ToggleEditing()

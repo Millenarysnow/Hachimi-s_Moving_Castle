@@ -128,6 +128,11 @@ protected:
 	/** 数字键与滚轮共用的选中提交入口，负责更新原有索引和玩家提示。 */
 	void SelectBackpackSlot(int32 SlotIndex);
 
+	/** 战斗期快捷键入口（T 暂停/继续、F 切换 1x/2x 倍速、R 重试本局），均转交导演唯一状态入口。 */
+	void ToggleBattlePauseShortcut();
+	void ToggleBattleSpeedShortcut();
+	void RetryBattleShortcut();
+
 	/** 商店状态改变后统一切换鼠标、移动、视角和准星，不依赖打开商店的触发来源。 */
 	UFUNCTION()
 	void HandleShopChanged();

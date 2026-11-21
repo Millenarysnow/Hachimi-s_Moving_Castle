@@ -3,6 +3,8 @@
 #include "CastleBuildBarWidget.h"
 
 #include "Blueprint/WidgetTree.h"
+#include "Castle/Combat/CastleCombatSubsystem.h"
+#include "Castle/Director/CastleDirectorSubsystem.h"
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
 #include "CastleBuildBarSlotWidget.h"
@@ -12,6 +14,7 @@
 #include "Components/TextBlock.h"
 #include "Kismet/GameplayStatics.h"
 #include "Moving_Castle.h"
+#include "Units/Navigation/Interaction/CastlePatrolRoute.h"
 
 namespace
 {
@@ -41,17 +44,97 @@ void UCastleBuildBarWidget::NativeConstruct()
 	Backpack = Board->PrototypeBackpack;
 	DisplayedCapacity = INDEX_NONE;
 	bReady = ValidatePresentation() && SyncBackpack();
-	SetVisibility(bReady ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	EnsureModeBindings();
+	RefreshScreenVisibility();
 }
 
 void UCastleBuildBarWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
-	if (bReady && !SyncBackpack())
+	if (!bReady)
+	{
+		return;
+	}
+	EnsureModeBindings();
+	RefreshScreenVisibility();
+	if (!SyncBackpack())
 	{
 		bReady = false;
 		SetVisibility(ESlateVisibility::Collapsed);
 	}
+}
+
+void UCastleBuildBarWidget::NativeDestruct()
+{
+	if (UCastleDirectorSubsystem* Director = BoundDirector.Get())
+	{
+		Director->OnDirectorPhaseChanged.Remove(DirectorPhaseHandle);
+		BoundDirector.Reset();
+	}
+	if (ACastlePatrolRoute* Route = BoundPatrolRoute.Get())
+	{
+		Route->OnEditingStateChanged.Remove(PatrolEditingHandle);
+		BoundPatrolRoute.Reset();
+	}
+	Super::NativeDestruct();
+}
+
+void UCastleBuildBarWidget::EnsureModeBindings()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+	if (!BoundDirector.IsValid())
+	{
+		if (UCastleDirectorSubsystem* Director = World->GetSubsystem<UCastleDirectorSubsystem>())
+		{
+			BoundDirector = Director;
+			DirectorPhaseHandle = Director->OnDirectorPhaseChanged.AddUObject(this, &UCastleBuildBarWidget::HandleDirectorPhaseChanged);
+		}
+	}
+	if (!BoundPatrolRoute.IsValid())
+	{
+		if (ACastlePatrolRoute* Route = Cast<ACastlePatrolRoute>(UGameplayStatics::GetActorOfClass(World, ACastlePatrolRoute::StaticClass())))
+		{
+			BoundPatrolRoute = Route;
+			PatrolEditingHandle = Route->OnEditingStateChanged.AddUObject(this, &UCastleBuildBarWidget::HandlePatrolEditingChanged);
+		}
+	}
+}
+
+bool UCastleBuildBarWidget::ShouldDisplayInCurrentScreen() const
+{
+	// 路径编辑界面底部居中留空，战斗界面底部居中显示骷髅条；建造栏只在建造页面展示。
+	if (BoundPatrolRoute.IsValid() && BoundPatrolRoute->IsEditing())
+	{
+		return false;
+	}
+	const UCastleDirectorSubsystem* Director = BoundDirector.IsValid()
+		? BoundDirector.Get()
+		: (GetWorld() ? GetWorld()->GetSubsystem<UCastleDirectorSubsystem>() : nullptr);
+	if (IsValid(Director) && Director->IsRunning())
+	{
+		return Director->GetPhase() == ECastleDirectorPhase::Editing;
+	}
+	const UCastleCombatSubsystem* Combat = GetWorld() ? GetWorld()->GetSubsystem<UCastleCombatSubsystem>() : nullptr;
+	return !(IsValid(Combat) && Combat->IsBattleActive());
+}
+
+void UCastleBuildBarWidget::RefreshScreenVisibility()
+{
+	SetVisibility((bReady && ShouldDisplayInCurrentScreen()) ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+}
+
+void UCastleBuildBarWidget::HandleDirectorPhaseChanged(const ECastleDirectorPhase NewPhase)
+{
+	RefreshScreenVisibility();
+}
+
+void UCastleBuildBarWidget::HandlePatrolEditingChanged(const bool bIsEditing)
+{
+	RefreshScreenVisibility();
 }
 
 TStaticArray<UCastleBuildBarSlotWidget*, 10> UCastleBuildBarWidget::GetSlots() const

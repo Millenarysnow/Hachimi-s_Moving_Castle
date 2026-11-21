@@ -125,6 +125,10 @@ void ACastlePlayerController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &ACastlePlayerController::SelectNextBackpackSlot);
 	InputComponent->BindKey(EKeys::B, IE_Pressed, this, &ACastlePlayerController::ToggleShop);
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ACastlePlayerController::PlacePrototypeBuildingAtCursor);
+	// 战斗控制快捷键允许在暂停期间继续响应，确保按 T 暂停后可再次按 T 恢复或按 F/R 操作。
+	InputComponent->BindKey(EKeys::T, IE_Pressed, this, &ACastlePlayerController::ToggleBattlePauseShortcut).bExecuteWhenPaused = true;
+	InputComponent->BindKey(EKeys::F, IE_Pressed, this, &ACastlePlayerController::ToggleBattleSpeedShortcut).bExecuteWhenPaused = true;
+	InputComponent->BindKey(EKeys::R, IE_Pressed, this, &ACastlePlayerController::RetryBattleShortcut).bExecuteWhenPaused = true;
 }
 
 void ACastlePlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -390,6 +394,51 @@ void ACastlePlayerController::ToggleShop()
 	if ((!Shop->IsInitialized() && !Shop->InitializeShop(Economy, ActiveBoard, Reason)) || !Shop->TryOpenShop(Reason))
 	{
 		ShowGameplayMessage(Reason.ToString(), false);
+	}
+}
+
+void ACastlePlayerController::ToggleBattlePauseShortcut()
+{
+	if (Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive)
+	{
+		return;
+	}
+	if (UCastleDirectorSubsystem* Director = GetWorld() ? GetWorld()->GetSubsystem<UCastleDirectorSubsystem>() : nullptr)
+	{
+		if (Director->IsRunning() && Director->GetPhase() == ECastleDirectorPhase::Battle)
+		{
+			Director->ToggleBattlePause();
+		}
+	}
+}
+
+void ACastlePlayerController::ToggleBattleSpeedShortcut()
+{
+	if (Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive)
+	{
+		return;
+	}
+	if (UCastleDirectorSubsystem* Director = GetWorld() ? GetWorld()->GetSubsystem<UCastleDirectorSubsystem>() : nullptr)
+	{
+		if (Director->IsRunning() && Director->GetPhase() == ECastleDirectorPhase::Battle)
+		{
+			Director->ToggleBattleSpeed();
+		}
+	}
+}
+
+void ACastlePlayerController::RetryBattleShortcut()
+{
+	if (Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive)
+	{
+		return;
+	}
+	if (UCastleDirectorSubsystem* Director = GetWorld() ? GetWorld()->GetSubsystem<UCastleDirectorSubsystem>() : nullptr)
+	{
+		if (Director->IsRunning() && Director->GetPhase() == ECastleDirectorPhase::Battle)
+		{
+			Director->RestartCurrentMap();
+		}
 	}
 }
 

@@ -368,6 +368,8 @@ void UCastleDirectorSubsystem::HandleBattleCleared(const ECastleBattleKind Kind,
 	}
 	FText Failure;
 	if (!RecallBattleNPCs(Failure)) { EnterGameOver(FText::FromString(TEXT("战斗系统出错：") + Failure.ToString())); return; }
+	// 战斗结束时立即恢复 1x 倍速与未暂停状态，避免奖励和编辑阶段沿用战斗倍速。
+	ResetBattleControls(true);
 	++ClearedSteps;
 	SetPhase(ECastleDirectorPhase::Reward);
 	ShowMessage(FText::FromString(TEXT("通关奖励：请选择一项")), false);
@@ -470,6 +472,8 @@ void UCastleDirectorSubsystem::HandleTowerHealthChanged(float PreviousHealth, fl
 void UCastleDirectorSubsystem::EnterGameOver(const FText& Failure)
 {
 	if (Phase == ECastleDirectorPhase::GameOver) { return; }
+	// 恢复 1x 全局时间缩放并清掉战斗暂停标志；游戏结束界面自身随后负责保持世界暂停。
+	ResetBattleControls(false);
 	GameOverFailure = Failure;
 	PendingNode.Reset();
 	Controller->GetShop()->CloseShop();
@@ -485,8 +489,77 @@ void UCastleDirectorSubsystem::EnterGameOver(const FText& Failure)
 
 void UCastleDirectorSubsystem::RestartCurrentMap()
 {
-	if (!bRunning || Phase != ECastleDirectorPhase::GameOver) { return; }
+	// 游戏结束和战斗界面右下角重试按钮共用同一重开入口。
+	if (!bRunning || (Phase != ECastleDirectorPhase::GameOver && Phase != ECastleDirectorPhase::Battle)) { return; }
+	ResetBattleControls(true);
 	UGameplayStatics::OpenLevel(GetWorld(), FName(*UGameplayStatics::GetCurrentLevelName(GetWorld(), true)));
+}
+
+bool UCastleDirectorSubsystem::ToggleBattlePause()
+{
+	return SetBattlePaused(!bBattlePaused);
+}
+
+bool UCastleDirectorSubsystem::SetBattlePaused(const bool bInPaused)
+{
+	if (!bRunning || Phase != ECastleDirectorPhase::Battle || !IsValid(Controller))
+	{
+		return false;
+	}
+	if (bBattlePaused == bInPaused)
+	{
+		return true;
+	}
+	if (!bAutomation && !Controller->SetPause(bInPaused))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演战斗暂停切换失败：SetPause(%s) 返回 false。"), bInPaused ? TEXT("true") : TEXT("false"));
+		return false;
+	}
+	bBattlePaused = bInPaused;
+	OnBattleControlStateChanged.Broadcast();
+	UE_LOG(LogMoving_Castle, Display, TEXT("导演战斗暂停状态切换为：%s。"), bBattlePaused ? TEXT("暂停") : TEXT("继续"));
+	return true;
+}
+
+bool UCastleDirectorSubsystem::ToggleBattleSpeed()
+{
+	return SetBattleDoubleSpeed(!bBattleDoubleSpeed);
+}
+
+bool UCastleDirectorSubsystem::SetBattleDoubleSpeed(const bool bInDoubleSpeed)
+{
+	if (!bRunning || Phase != ECastleDirectorPhase::Battle || !GetWorld())
+	{
+		return false;
+	}
+	if (bBattleDoubleSpeed == bInDoubleSpeed)
+	{
+		return true;
+	}
+	bBattleDoubleSpeed = bInDoubleSpeed;
+	UGameplayStatics::SetGlobalTimeDilation(GetWorld(), bBattleDoubleSpeed ? 2.0f : 1.0f);
+	OnBattleControlStateChanged.Broadcast();
+	UE_LOG(LogMoving_Castle, Display, TEXT("导演战斗倍速切换为：%s。"), bBattleDoubleSpeed ? TEXT("2x") : TEXT("1x"));
+	return true;
+}
+
+void UCastleDirectorSubsystem::ResetBattleControls(const bool bClearWorldPause)
+{
+	const bool bChanged = bBattlePaused || bBattleDoubleSpeed;
+	if (bClearWorldPause && bBattlePaused && !bAutomation && IsValid(Controller))
+	{
+		Controller->SetPause(false);
+	}
+	if (bBattleDoubleSpeed && GetWorld())
+	{
+		UGameplayStatics::SetGlobalTimeDilation(GetWorld(), 1.0f);
+	}
+	bBattlePaused = false;
+	bBattleDoubleSpeed = false;
+	if (bChanged)
+	{
+		OnBattleControlStateChanged.Broadcast();
+	}
 }
 
 void UCastleDirectorSubsystem::ShowMessage(const FText& Message, const bool bError)
@@ -529,7 +602,9 @@ bool UCastleDirectorSubsystem::EnsurePresentation(FText& OutReason)
 void UCastleDirectorSubsystem::UpdatePresentation()
 {
 	if (bAutomation) { return; }
-	if (HUDWidget) { HUDWidget->SetVisibility(ESlateVisibility::HitTestInvisible); }
+	const bool bModalPhase = Phase == ECastleDirectorPhase::Reward || Phase == ECastleDirectorPhase::GameOver;
+	// 正常游玩阶段根容器采用 SelfHitTestInvisible，空白区域不阻挡准星，鼠标可见时仍可点击 HUD 按钮；模态阶段禁止穿透到底层按钮。
+	if (HUDWidget) { HUDWidget->SetVisibility(bModalPhase ? ESlateVisibility::HitTestInvisible : ESlateVisibility::SelfHitTestInvisible); }
 	if (RewardWidget) { RewardWidget->SetVisibility(Phase == ECastleDirectorPhase::Reward ? ESlateVisibility::Visible : ESlateVisibility::Collapsed); }
 	if (GameOverWidget) { GameOverWidget->SetVisibility(Phase == ECastleDirectorPhase::GameOver ? ESlateVisibility::Visible : ESlateVisibility::Collapsed); }
 	Controller->SetDirectorModalState(Phase == ECastleDirectorPhase::Reward, Phase == ECastleDirectorPhase::GameOver,
@@ -608,6 +683,7 @@ void UCastleDirectorSubsystem::UnbindCombatEvents()
 void UCastleDirectorSubsystem::OnWorldEndPlay(UWorld& InWorld)
 {
 	// 世界结束时 Mass 自己释放实体；不要在子系统析构顺序不确定时再次派发 Despawn。
+	ResetBattleControls(false);
 	UnbindCombatEvents();
 	PendingNode.Reset();
 	BattleNPCSpawner = nullptr;
@@ -618,6 +694,7 @@ void UCastleDirectorSubsystem::OnWorldEndPlay(UWorld& InWorld)
 void UCastleDirectorSubsystem::Deinitialize()
 {
 	// 先移除外部生命事件，再销毁当前世界的节点和界面，避免关卡重载后遗留回调。
+	ResetBattleControls(false);
 	if (Tower) { Tower->OnHealthChanged.RemoveDynamic(this, &UCastleDirectorSubsystem::HandleTowerHealthChanged); }
 	UnbindCombatEvents();
 	DestroyNodes();

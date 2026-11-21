@@ -8,10 +8,13 @@
 #include "CoreMinimal.h"
 #include "CastleBuildBarWidget.generated.h"
 
+class ACastlePatrolRoute;
 class ACastlePlayerController;
 class UCastleBackpackComponent;
 class UCastleBuildBarSlotWidget;
+class UCastleDirectorSubsystem;
 class UTextBlock;
+enum class ECastleDirectorPhase : uint8;
 
 /** 建造栏的原生数据绑定。WBP 管理排版，本类读取现有背包和快捷键选中项，不写入玩法状态。 */
 UCLASS(Abstract)
@@ -25,6 +28,9 @@ protected:
 
 	/** 仅在牌组、容量或选择变化时更新显示，不重建槽位树。 */
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+
+	/** 离开视口时解除对导演与路径编辑入口的显隐事件订阅。 */
+	virtual void NativeDestruct() override;
 
 private:
 	/** 绑定固定的 10 个键位（第 10 格为数字键 0），交由 WBP 编译检查名称及类型。 */
@@ -56,6 +62,10 @@ private:
 	/** 库存和选中仍分别归棋盘和控制器所有，UI 只持有本次显示期间的引用。 */
 	TWeakObjectPtr<UCastleBackpackComponent> Backpack;
 	TWeakObjectPtr<ACastlePlayerController> Controller;
+	TWeakObjectPtr<UCastleDirectorSubsystem> BoundDirector;
+	TWeakObjectPtr<ACastlePatrolRoute> BoundPatrolRoute;
+	FDelegateHandle DirectorPhaseHandle;
+	FDelegateHandle PatrolEditingHandle;
 
 	/** 对比所有会影响渲染的字段，避免切换选择时刷新模型。 */
 	UPROPERTY(Transient)
@@ -74,4 +84,11 @@ private:
 
 	/** 按键位顺序返回设计器中的槽位绑定，共用同一份顺序验证和同步。 */
 	TStaticArray<UCastleBuildBarSlotWidget*, 10> GetSlots() const;
+
+	/** 绑定导演和路径编辑状态，确保建造栏只在建造页面显示（路径编辑页与战斗页隐藏）。 */
+	void EnsureModeBindings();
+	bool ShouldDisplayInCurrentScreen() const;
+	void RefreshScreenVisibility();
+	void HandleDirectorPhaseChanged(ECastleDirectorPhase NewPhase);
+	void HandlePatrolEditingChanged(bool bIsEditing);
 };

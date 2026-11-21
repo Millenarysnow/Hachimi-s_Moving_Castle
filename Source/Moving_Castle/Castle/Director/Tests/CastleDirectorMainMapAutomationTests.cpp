@@ -4,6 +4,8 @@
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
+#include "Castle/UI/BuildBar/CastleBuildBarWidget.h"
+#include "Castle/UI/Common/CastleHUDControls.h"
 #include "Castle/UI/Director/CastleDirectorWidgets.h"
 #include "Castle/UI/Economy/CastleEconomyHUDWidget.h"
 #include "CastlePlayerController.h"
@@ -24,8 +26,11 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
+#include "InputKeyEventArgs.h"
+#include "Kismet/GameplayStatics.h"
 #include "Misc/OutputDeviceNull.h"
 #include "Tests/AutomationCommon.h"
+#include "Units/Navigation/Interaction/CastlePatrolRoute.h"
 
 
 namespace
@@ -67,52 +72,138 @@ namespace
 		if (Context.WorldType == EWorldType::PIE && Context.World()) { World = Context.World(); break; }
 	}
 	if (!Test->TestNotNull(TEXT("独立游戏世界存在"), World)) { return true; }
-	Test->TestTrue(TEXT("当前确实加载MainMap"), UWorld::RemovePIEPrefix(World->GetOutermost()->GetName()).EndsWith(TEXT("/MainMap")));
 	UCastleDirectorSubsystem* Director = World->GetSubsystem<UCastleDirectorSubsystem>();
-	if (!Test->TestTrue(TEXT("真实MainMap导演已自动启动"), Director && Director->IsRunning())) { return true; }
-	Test->TestEqual(TEXT("真实开局为编辑阶段"), Director->GetPhase(), ECastleDirectorPhase::Editing);
-	Test->TestEqual(TEXT("开局等级为1"), Director->GetLevel(), 1);
-	Test->TestEqual(TEXT("开局经验为0"), Director->GetExperience(), 0);
-	int32 NodeCount = 0;
-	for (TActorIterator<ACastleDirectorNodeActor> It(World); It; ++It) { ++NodeCount; }
-	Test->TestTrue(TEXT("真实世界中生成2至3个节点"), NodeCount >= 2 && NodeCount <= 3);
-	FText Reason;
-	Test->TestFalse(TEXT("开局没有商店权限"), Director->IsShopAccessAllowed(Reason));
 	ACastlePlayerController* Controller = Cast<ACastlePlayerController>(World->GetFirstPlayerController());
 	if (!Test->TestNotNull(TEXT("本地控制器类型正确"), Controller)) { return true; }
-	Controller->ToggleShop();
-	Test->TestFalse(TEXT("真实B键入口拒绝开店"), Controller->GetShop()->IsShopOpen());
-	Test->TestTrue(TEXT("真实HUD房间计数是10/15"), Director->GetHUDSummary().Contains(TEXT("房间 10/15")));
-	if (UCastleEconomyHUDWidget* Balance = FindMainMapWidget<UCastleEconomyHUDWidget>(*Test, World))
+
+	if (Stage == 0)
 	{
-		// 真实账户事件应该在同一帧更新 WBP，HUD 不应参与中心指针的命中测试。
-		Test->TestEqual(TEXT("金币 HUD 不拦截游戏输入"), Balance->GetVisibility(), ESlateVisibility::HitTestInvisible);
-		UTextBlock* GoldText = Cast<UTextBlock>(Balance->GetWidgetFromName(TEXT("GoldText")));
-		if (Test->TestNotNull(TEXT("金币 WBP 的数值控件"), GoldText))
+		Test->TestTrue(TEXT("当前确实加载MainMap"), UWorld::RemovePIEPrefix(World->GetOutermost()->GetName()).EndsWith(TEXT("/MainMap")));
+		if (!Test->TestTrue(TEXT("真实MainMap导演已自动启动"), Director && Director->IsRunning())) { return true; }
+		Test->TestEqual(TEXT("真实开局为编辑阶段"), Director->GetPhase(), ECastleDirectorPhase::Editing);
+		Test->TestEqual(TEXT("开局等级为1"), Director->GetLevel(), 1);
+		Test->TestEqual(TEXT("开局经验为0"), Director->GetExperience(), 0);
+		int32 NodeCount = 0;
+		for (TActorIterator<ACastleDirectorNodeActor> It(World); It; ++It) { ++NodeCount; }
+		Test->TestTrue(TEXT("真实世界中生成2至3个节点"), NodeCount >= 2 && NodeCount <= 3);
+		FText Reason;
+		Test->TestFalse(TEXT("开局没有商店权限"), Director->IsShopAccessAllowed(Reason));
+		Controller->ToggleShop();
+		Test->TestFalse(TEXT("真实B键入口拒绝开店"), Controller->GetShop()->IsShopOpen());
+		Test->TestTrue(TEXT("真实HUD房间计数是10/15"), Director->GetHUDSummary().Contains(TEXT("房间 10/15")));
+		if (UCastleEconomyHUDWidget* Balance = FindMainMapWidget<UCastleEconomyHUDWidget>(*Test, World))
 		{
-			const FString OldText = GoldText->GetText().ToString();
-			UCastleEconomyComponent* Economy = Controller->GetEconomy();
-			Test->TestTrue(TEXT("测试入账成功"), Economy->TryAddGold(25, Reason));
-			const FString NewText = GoldText->GetText().ToString();
-			Test->TestNotEqual(TEXT("入账事件立即更新 WBP"), NewText, OldText);
-			Test->TestTrue(TEXT("WBP 展示真实余额"), NewText.EndsWith(FText::AsNumber(Economy->GetGold()).ToString()));
+			// 真实账户事件应该在同一帧更新 WBP，HUD 不应参与中心指针的命中测试。
+			Test->TestEqual(TEXT("金币 HUD 不拦截游戏输入"), Balance->GetVisibility(), ESlateVisibility::HitTestInvisible);
+			UTextBlock* GoldText = Cast<UTextBlock>(Balance->GetWidgetFromName(TEXT("GoldText")));
+			if (Test->TestNotNull(TEXT("金币 WBP 的数值控件"), GoldText))
+			{
+				const FString OldText = GoldText->GetText().ToString();
+				UCastleEconomyComponent* Economy = Controller->GetEconomy();
+				Test->TestTrue(TEXT("测试入账成功"), Economy->TryAddGold(25, Reason));
+				const FString NewText = GoldText->GetText().ToString();
+				Test->TestNotEqual(TEXT("入账事件立即更新 WBP"), NewText, OldText);
+				Test->TestTrue(TEXT("WBP 展示真实余额"), NewText.EndsWith(FText::AsNumber(Economy->GetGold()).ToString()));
+			}
+		}
+		FOutputDeviceNull Output;
+		if (UCastleDirectorHUDWidget* Status = FindMainMapWidget<UCastleDirectorHUDWidget>(*Test, World))
+		{
+			// 核对 20 格心形血条与 20 格骷髅进度条的离散比例算法边界。
+			int32 FilledCount = 0;
+			Test->TestTrue(TEXT("满血为 20 颗心"), UCastleDirectorHUDWidget::ComputeFilledHearts(1000.0f, 1000.0f, FilledCount) && FilledCount == 20);
+			Test->TestTrue(TEXT("半血为 10 颗心"), UCastleDirectorHUDWidget::ComputeFilledHearts(500.0f, 1000.0f, FilledCount) && FilledCount == 10);
+			Test->TestTrue(TEXT("残血存活至少 1 颗心"), UCastleDirectorHUDWidget::ComputeFilledHearts(1.0f, 1000.0f, FilledCount) && FilledCount == 1);
+			Test->TestTrue(TEXT("归零为 0 颗心"), UCastleDirectorHUDWidget::ComputeFilledHearts(0.0f, 1000.0f, FilledCount) && FilledCount == 0);
+			Test->TestTrue(TEXT("开战 0 击杀为 0 颗骷髅"), UCastleDirectorHUDWidget::ComputeFilledSkulls(0, 40, FilledCount) && FilledCount == 0);
+			Test->TestTrue(TEXT("击杀 1 敌至少点亮 1 颗骷髅"), UCastleDirectorHUDWidget::ComputeFilledSkulls(1, 40, FilledCount) && FilledCount == 1);
+			Test->TestTrue(TEXT("半程点亮 10 颗骷髅"), UCastleDirectorHUDWidget::ComputeFilledSkulls(20, 40, FilledCount) && FilledCount == 10);
+			Test->TestTrue(TEXT("清场点亮 20 颗骷髅"), UCastleDirectorHUDWidget::ComputeFilledSkulls(40, 40, FilledCount) && FilledCount == 20);
+
+			const UCastleMainTowerComponent* MainTower = World->GetSubsystem<UCastleMainTowerSubsystem>()->GetRegisteredMainTower();
+			UCastleBuildBarWidget* BuildBar = FindMainMapWidget<UCastleBuildBarWidget>(*Test, World);
+			const UWidgetSwitcher* RightSwitcher = Cast<UWidgetSwitcher>(Status->GetWidgetFromName(TEXT("RightActionSwitcher")));
+			const UCastleIconBarWidget* BattleBar = Cast<UCastleIconBarWidget>(Status->GetWidgetFromName(TEXT("BattleProgressBar")));
+			const UCastleHUDIconButtonWidget* BuildRedo = Cast<UCastleHUDIconButtonWidget>(Status->GetWidgetFromName(TEXT("BuildRedoButton")));
+			const UCastleHUDIconButtonWidget* PathRedo = Cast<UCastleHUDIconButtonWidget>(Status->GetWidgetFromName(TEXT("PathRedoButton")));
+			const UCastleHUDIconButtonWidget* GuideBtn = Cast<UCastleHUDIconButtonWidget>(Status->GetWidgetFromName(TEXT("GuideButton")));
+
+			if (Test->TestNotNull(TEXT("已有注册主塔"), MainTower)
+				&& Test->TestNotNull(TEXT("右下三态切换器存在"), RightSwitcher)
+				&& Test->TestNotNull(TEXT("战斗骷髅进度条存在"), BattleBar)
+				&& Test->TestNotNull(TEXT("建造重做按钮存在"), BuildRedo)
+				&& Test->TestNotNull(TEXT("路径重做按钮存在"), PathRedo)
+				&& Test->TestNotNull(TEXT("左下攻略按钮存在"), GuideBtn))
+			{
+				Test->TestEqual(TEXT("开局满血显示 20 颗亮心"), Status->GetFilledHeartCount(), 20);
+				Test->TestEqual(TEXT("开局为建造页面模式"), Status->GetCurrentScreenMode(), ECastleHUDScreenMode::Build);
+				Test->TestEqual(TEXT("开局右下动作栏在建造页(0)"), RightSwitcher->GetActiveWidgetIndex(), 0);
+				Test->TestEqual(TEXT("建造页隐藏战斗骷髅进度条"), BattleBar->GetVisibility(), ESlateVisibility::Collapsed);
+				Test->TestEqual(TEXT("建造重做无步骤时显示灰态(2)"), BuildRedo->GetActiveIconIndex(), 2);
+				Test->TestEqual(TEXT("路径重做无步骤时显示灰态(2)"), PathRedo->GetActiveIconIndex(), 2);
+				CheckActionIconStates(*Test, const_cast<UCastleHUDIconButtonWidget*>(GuideBtn), TEXT("ActionButton"), TEXT("IconStates"));
+				if (BuildBar)
+				{
+					Test->TestEqual(TEXT("建造页显示建造栏"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+				}
+
+				Test->TestTrue(TEXT("非致死伤害走原生命入口"), IConsoleManager::Get().ProcessUserConsoleInput(TEXT("CastleDamageMainTower 25"), Output, World));
+				Test->TestEqual(TEXT("受击 25 点后顶部血条立即降至 19 颗心"), Status->GetFilledHeartCount(), 19);
+			}
+		}
+
+		// 通过真实输入栈投递 P 键，等待下一帧 PlayerInput 分发后再检查路径编辑界面切换。
+		Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::P, IE_Pressed, 1.0f));
+		Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::P, IE_Released, 0.0f));
+		Stage = 1;
+		return false;
+	}
+
+	if (Stage == 1)
+	{
+		ACastlePatrolRoute* Route = Cast<ACastlePatrolRoute>(UGameplayStatics::GetActorOfClass(World, ACastlePatrolRoute::StaticClass()));
+		UCastleDirectorHUDWidget* Status = FindMainMapWidget<UCastleDirectorHUDWidget>(*Test, World);
+		UCastleBuildBarWidget* BuildBar = FindMainMapWidget<UCastleBuildBarWidget>(*Test, World);
+		if (Test->TestNotNull(TEXT("场景存在巡逻路径编辑入口"), Route) && Status)
+		{
+			const UWidgetSwitcher* RightSwitcher = Cast<UWidgetSwitcher>(Status->GetWidgetFromName(TEXT("RightActionSwitcher")));
+			Test->TestTrue(TEXT("按 P 进入路径编辑状态"), Route->IsEditing());
+			Test->TestEqual(TEXT("HUD 切换到路径编辑界面"), Status->GetCurrentScreenMode(), ECastleHUDScreenMode::PathEdit);
+			if (RightSwitcher)
+			{
+				Test->TestEqual(TEXT("右下动作栏切到路径编辑页(1)"), RightSwitcher->GetActiveWidgetIndex(), 1);
+			}
+			Test->TestEqual(TEXT("路径编辑界面保持顶部 19 颗心"), Status->GetFilledHeartCount(), 19);
+			if (BuildBar)
+			{
+				Test->TestEqual(TEXT("路径编辑界面隐藏建造栏"), BuildBar->GetVisibility(), ESlateVisibility::Collapsed);
+			}
+		}
+		Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::P, IE_Pressed, 1.0f));
+		Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::P, IE_Released, 0.0f));
+		Stage = 2;
+		return false;
+	}
+
+	ACastlePatrolRoute* Route = Cast<ACastlePatrolRoute>(UGameplayStatics::GetActorOfClass(World, ACastlePatrolRoute::StaticClass()));
+	UCastleDirectorHUDWidget* Status = FindMainMapWidget<UCastleDirectorHUDWidget>(*Test, World);
+	UCastleBuildBarWidget* BuildBar = FindMainMapWidget<UCastleBuildBarWidget>(*Test, World);
+	if (Route && Status)
+	{
+		const UWidgetSwitcher* RightSwitcher = Cast<UWidgetSwitcher>(Status->GetWidgetFromName(TEXT("RightActionSwitcher")));
+		Test->TestFalse(TEXT("再次按 P 退出路径编辑"), Route->IsEditing());
+		Test->TestEqual(TEXT("HUD 回到建造页面"), Status->GetCurrentScreenMode(), ECastleHUDScreenMode::Build);
+		if (RightSwitcher)
+		{
+			Test->TestEqual(TEXT("右下动作栏回到建造页(0)"), RightSwitcher->GetActiveWidgetIndex(), 0);
+		}
+		if (BuildBar)
+		{
+			Test->TestEqual(TEXT("回到建造页恢复建造栏显示"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
 		}
 	}
+
 	FOutputDeviceNull Output;
-	if (UCastleDirectorHUDWidget* Status = FindMainMapWidget<UCastleDirectorHUDWidget>(*Test, World))
-	{
-		const UTextBlock* HealthText = Cast<UTextBlock>(Status->GetWidgetFromName(TEXT("TowerHealthText")));
-		const UCastleMainTowerComponent* MainTower = World->GetSubsystem<UCastleMainTowerSubsystem>()->GetRegisteredMainTower();
-		if (Test->TestNotNull(TEXT("导演 WBP 的生命控件"), HealthText)
-			&& Test->TestNotNull(TEXT("已有注册主塔"), MainTower))
-		{
-			const FString OldText = HealthText->GetText().ToString();
-			Test->TestTrue(TEXT("非致死伤害走原生命入口"), IConsoleManager::Get().ProcessUserConsoleInput(TEXT("CastleDamageMainTower 25"), Output, World));
-			Test->TestNotEqual(TEXT("受击后生命行立即更新"), HealthText->GetText().ToString(), OldText);
-			Test->TestEqual(TEXT("爱心行与主塔实时数据一致"), HealthText->GetText().ToString(),
-				FString::Printf(TEXT("主塔生命 %.0f/%.0f"), MainTower->CurrentHealth, MainTower->MaxHealth));
-		}
-	}
 	CheckActionIconStates(*Test, FindMainMapWidget<UCastleRewardChoiceWidget>(*Test, World), TEXT("ShopButton"), TEXT("ShopIconStates"));
 	Test->TestTrue(TEXT("真实伤害命令可执行"), IConsoleManager::Get().ProcessUserConsoleInput(TEXT("CastleDamageMainTower 99999"), Output, World));
 	Test->TestEqual(TEXT("主塔死亡触发正式游戏结束"), Director->GetPhase(), ECastleDirectorPhase::GameOver);
@@ -121,11 +212,12 @@ namespace
 	Test->TestTrue(TEXT("游戏结束已锁定移动"), Controller->IsMoveInputIgnored());
 	Test->TestTrue(TEXT("游戏结束已锁定视角"), Controller->IsLookInputIgnored());
 	CheckActionIconStates(*Test, FindMainMapWidget<UCastleGameOverWidget>(*Test, World), TEXT("RestartButton"), TEXT("RestartIconStates"));
-	Test->AddInfo(TEXT("MainMap启动、节点、HUD、商店门控、正式主塔死亡与暂停路径已验证；字体中文显示另行验收。"));
+	Test->AddInfo(TEXT("MainMap启动、节点、三态HUD、商店门控、正式主塔死亡与暂停路径已验证。"));
 	return true;
   }
  private:
   FAutomationTestBase* Test;
+  int32 Stage = 0;
  };
  /** 在实际塔模型和正式地图上验证四侧每一格；不是通过构造光标结构绕过射线。 */
  class FCheckMainTowerSidePlacement final : public IAutomationLatentCommand
