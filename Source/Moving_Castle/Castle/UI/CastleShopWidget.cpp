@@ -190,7 +190,7 @@ void UCastleShopWidget::NativeDestruct()
 		Economy->OnGoldChanged.RemoveDynamic(this, &UCastleShopWidget::HandleGoldChanged);
 	}
 
-	EndOfferHovers();
+	CancelOfferInspection();
 	if (Portraits != nullptr)
 	{
 		Portraits->SetShopVisible(this, false);
@@ -211,12 +211,13 @@ void UCastleShopWidget::RefreshShop()
 	}
 	const bool bWasVisible = GetVisibility() == ESlateVisibility::Visible;
 	const bool bIsOpen = Shop->IsShopOpen();
+	// 先归还旧卡的鼠标捕获，再隐藏或换掉树，避免悬空的捕获路由吞掉新界面的事件。
+	CancelOfferInspection();
 	SetVisibility(bIsOpen ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	if (Portraits != nullptr)
 	{
 		Portraits->SetShopVisible(this, bIsOpen);
 	}
-	EndOfferHovers();
 	if (!bIsOpen)
 	{
 		return;
@@ -243,7 +244,7 @@ void UCastleShopWidget::RefreshShop()
 			return;
 		}
 		// 失败由卡片自身显示并报告。这一槽仍保留原商品与报价，不静默移除或拿别的卡代替。
-		Card->Configure(Offers[Index].Descriptor, Shop->GetBoundBoard(), Offers[Index].bSold);
+		Card->Configure(*this, Offers[Index].Descriptor, Shop->GetBoundBoard(), Offers[Index].bSold);
 		Card->SetFoilPreview(bFoilPreview);
 		OfferCards.Add(Card);
 		AddShopRow(Entry, Card, 7.0f);
@@ -292,12 +293,30 @@ void UCastleShopWidget::RefreshShop()
 	}
 }
 
-void UCastleShopWidget::EndOfferHovers()
+void UCastleShopWidget::ActivateCardInspection(UCastleShopCardWidget& Card)
 {
-	for (UCastleShopCardWidget* Card : OfferCards)
+	if (InspectedCard.Get() != &Card)
 	{
-		Card->EndHover();
+		CancelOfferInspection();
+		InspectedCard = &Card;
 	}
+}
+
+void UCastleShopWidget::ReleaseCardInspection(const UCastleShopCardWidget& Card)
+{
+	if (InspectedCard.Get() == &Card)
+	{
+		InspectedCard.Reset();
+	}
+}
+
+void UCastleShopWidget::CancelOfferInspection()
+{
+	if (UCastleShopCardWidget* Card = InspectedCard.Get())
+	{
+		Card->CancelInspection();
+	}
+	InspectedCard.Reset();
 }
 
 void UCastleShopWidget::HandleToggleFoil()

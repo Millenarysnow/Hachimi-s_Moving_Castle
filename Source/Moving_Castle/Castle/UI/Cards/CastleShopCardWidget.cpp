@@ -5,13 +5,18 @@
 #include "Blueprint/WidgetTree.h"
 #include "CastleBuildingDefinition.h"
 #include "CastleCardPortraitSubsystem.h"
+#include "CastleShopWidget.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/Image.h"
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
 #include "Engine/TextureRenderTarget2D.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Framework/Application/SlateUser.h"
+#include "Input/Events.h"
 #include "Input/Reply.h"
+#include "InputCoreTypes.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Moving_Castle.h"
@@ -21,10 +26,21 @@ namespace
 {
 	constexpr float CardWidth = 162.0f;
 	constexpr float CardHeight = 226.0f;
+	// 牌的宽度是投影单位。相机离开牌面数个牌宽，让近边/远边的差别明显却不过度张开。
+	constexpr double CardProjectionDistance = 2.9;
+	constexpr double CardYawLimitDegrees = 22.0;
+	constexpr double CardPitchLimitDegrees = 18.0;
+	constexpr float CardInspectionReturnSeconds = 0.20f;
 	constexpr TCHAR FaceAssetPath[] = TEXT("/Game/MovingCastle/UI/Cards/M_CastleCardFace.M_CastleCardFace");
+	constexpr TCHAR CardPerspectiveAssetPath[] = TEXT("/Game/MovingCastle/UI/Cards/M_CastleCardPerspective.M_CastleCardPerspective");
 	const FName PortraitParameter(TEXT("Portrait"));
 	const FName TintParameter(TEXT("CardTint"));
 	const FName StateParameter(TEXT("CardState"));
+	const FName CardComposedParameter(TEXT("ComposedCard"));
+	const FName CardProjectionXParameter(TEXT("ProjectionX"));
+	const FName CardProjectionYParameter(TEXT("ProjectionY"));
+	const FName CardAspectParameter(TEXT("CardAspect"));
+	const FName CardOpacityParameter(TEXT("CardOpacity"));
 
 	/** 使用设计好的五种玩法色；灰不是一种商品颜色，必须向调用处报告配置错误。 */
 	bool GetGameplayTint(ECastleTileColor Color, FLinearColor& OutColor)
@@ -63,12 +79,22 @@ namespace
 	}
 }
 
+UCastleCardFaceRetainer::UCastleCardFaceRetainer(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
+{
+	// 静止状态只用已有合成结果；着色参数和捕获帧变更由卡片主动请求重画。
+	InitRenderOnInvalidation(false);
+	InitRenderOnPhase(false);
+}
+
 UCastleShopCardWidget::UCastleShopCardWidget(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
 	// 硬引用确保打包收录卡面资产；资源路径错了明确拒绝，不替换成线框或引擎默认白图。
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(FaceAssetPath);
 	FaceMaterial = Material.Object;
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> ProjectionMaterial(CardPerspectiveAssetPath);
+	PerspectiveMaterial = ProjectionMaterial.Object;
 }
 
 void UCastleShopCardWidget::NativeOnInitialized()
@@ -83,12 +109,16 @@ void UCastleShopCardWidget::NativeOnInitialized()
 	Size->SetWidthOverride(CardWidth);
 	Size->SetHeightOverride(CardHeight);
 	WidgetTree->RootWidget = Size;
+	// 只有外层 Widget 命中鼠标。字、框和卡窗一起进入合成纹理，购买按钮不在这棵树里。
+	FaceRetainer = WidgetTree->ConstructWidget<UCastleCardFaceRetainer>(UCastleCardFaceRetainer::StaticClass(),
+		TEXT("CardProjection"));
+	FaceRetainer->SetVisibility(ESlateVisibility::HitTestInvisible);
+	FaceRetainer->SetTextureParameter(CardComposedParameter);
+	Size->AddChild(FaceRetainer);
 	UCanvasPanel* Card = WidgetTree->ConstructWidget<UCanvasPanel>();
-	Size->AddChild(Card);
-	// 仅卡片本体参与鼠标命中；装饰、文字和状态均不吞输入，外部购买按钮不动。
-	Card->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+	FaceRetainer->AddChild(Card);
 	FaceImage = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass(), TEXT("CardFace"));
-	FaceImage->SetVisibility(ESlateVisibility::HitTestInvisible);
+	FaceImage->SetVisibility(ESlateVisibility::Collapsed);
 	UCanvasPanelSlot* FaceSlot = Card->AddChildToCanvas(FaceImage);
 	FaceSlot->SetAnchors(FAnchors(0.0f, 0.0f, 1.0f, 1.0f));
 	FaceSlot->SetOffsets(FMargin(0.0f));
@@ -107,7 +137,8 @@ void UCastleShopCardWidget::NativeOnInitialized()
 	PortraitStatus->SetVisibility(ESlateVisibility::Collapsed);
 }
 
-bool UCastleShopCardWidget::Configure(const FCastleBuildingDescriptor& Descriptor, const ACastleBoard* Board, bool bSold)
+bool UCastleShopCardWidget::Configure(UCastleShopWidget& InShop, const FCastleBuildingDescriptor& Descriptor,
+	const ACastleBoard* Board, bool bSold)
 {
 	FText Reason;
 	if (!Descriptor.Validate(Reason))
@@ -118,6 +149,12 @@ bool UCastleShopCardWidget::Configure(const FCastleBuildingDescriptor& Descripto
 	{
 		return ReportSetupError(Descriptor, FText::FromString(FString::Printf(TEXT("卡面没有绑定有效的 UI 材质 %s。"), FaceAssetPath)));
 	}
+	if (FaceRetainer == nullptr || !IsValid(PerspectiveMaterial) || PerspectiveMaterial->GetMaterial()->MaterialDomain != MD_UI
+		|| PerspectiveMaterial->GetBlendMode() != BLEND_AlphaComposite)
+	{
+		return ReportSetupError(Descriptor, FText::FromString(FString::Printf(TEXT("整牌合成没有绑定有效的预乘 UI 材质 %s。"),
+			CardPerspectiveAssetPath)));
+	}
 	FLinearColor Tint;
 	UTexture* TextureType = nullptr;
 	FLinearColor Value;
@@ -127,6 +164,16 @@ bool UCastleShopCardWidget::Configure(const FCastleBuildingDescriptor& Descripto
 		|| !FaceMaterial->GetTextureParameterValue(FMaterialParameterInfo(PortraitParameter), TextureType) || !IsValid(TextureType))
 	{
 		return ReportSetupError(Descriptor, FText::FromString(FString::Printf(TEXT("建筑色号或卡面材质 %s 的参数接口无效。"), FaceAssetPath)));
+	}
+	float Scalar = 0.0f;
+	if (!PerspectiveMaterial->GetVectorParameterValue(FMaterialParameterInfo(CardProjectionXParameter), Value)
+		|| !PerspectiveMaterial->GetVectorParameterValue(FMaterialParameterInfo(CardProjectionYParameter), Value)
+		|| !PerspectiveMaterial->GetScalarParameterValue(FMaterialParameterInfo(CardAspectParameter), Scalar)
+		|| !PerspectiveMaterial->GetScalarParameterValue(FMaterialParameterInfo(CardOpacityParameter), Scalar)
+		|| !PerspectiveMaterial->GetTextureParameterValue(FMaterialParameterInfo(CardComposedParameter), TextureType) || !IsValid(TextureType))
+	{
+		return ReportSetupError(Descriptor, FText::FromString(FString::Printf(TEXT("整牌透视材质 %s 的参数接口无效。"),
+			CardPerspectiveAssetPath)));
 	}
 	Portraits = GetWorld() ? GetWorld()->GetSubsystem<UCastleCardPortraitSubsystem>() : nullptr;
 	if (Portraits == nullptr)
@@ -144,6 +191,18 @@ bool UCastleShopCardWidget::Configure(const FCastleBuildingDescriptor& Descripto
 	{
 		return ReportSetupError(Descriptor, FText::FromString(FString::Printf(TEXT("无法实例化卡面材质 %s。"), FaceAssetPath)));
 	}
+	PerspectiveMaterial->EnsureIsComplete();
+	if (!PerspectiveMaterial->IsComplete())
+	{
+		return ReportSetupError(Descriptor, FText::FromString(FString::Printf(TEXT("整牌透视材质 %s 的着色器未能就绪。"),
+			CardPerspectiveAssetPath)));
+	}
+	Perspective = UMaterialInstanceDynamic::Create(PerspectiveMaterial, this);
+	if (!IsValid(Perspective))
+	{
+		return ReportSetupError(Descriptor, FText::FromString(FString::Printf(TEXT("无法实例化整牌透视材质 %s。"),
+			CardPerspectiveAssetPath)));
+	}
 
 	Portrait = Portraits->RequestPortrait(Descriptor, Board, Reason);
 	if (Portrait == nullptr)
@@ -153,13 +212,19 @@ bool UCastleShopCardWidget::Configure(const FCastleBuildingDescriptor& Descripto
 
 	Face->SetVectorParameterValue(TintParameter, Tint);
 	FaceImage->SetBrushFromMaterial(Face);
+	FaceImage->SetVisibility(ESlateVisibility::HitTestInvisible);
+	Perspective->SetScalarParameterValue(CardAspectParameter, CardHeight / CardWidth);
+	// 售罄样式只在合成的出口施加透明度，不能让卡面先淡一次，再让外层 Slate 淡一次。
+	Perspective->SetScalarParameterValue(CardOpacityParameter, bSold ? 0.40f : 1.0f);
+	ApplyProjection();
+	FaceRetainer->SetEffectMaterial(Perspective);
 	const FText CardNumber = FText::AsNumber(Descriptor.Number);
 	LeadingNumber->SetText(CardNumber);
 	TrailingNumber->SetText(CardNumber);
 	Title->SetText(Descriptor.Definition->DisplayName);
 	LevelLabel->SetText(FText::Format(NSLOCTEXT("CastleCard", "Level", "等级 {0}"), FText::AsNumber(Descriptor.Level)));
-	SetRenderOpacity(bSold ? 0.40f : 1.0f);
-	bHoverable = !bSold;
+	ShopOwner = &InShop;
+	bCanInspect = !bSold;
 	RefreshPortrait();
 	ApplyFaceState();
 	return true;
@@ -179,6 +244,7 @@ void UCastleShopCardWidget::SetPortraitStatus(const FText& Message, const FText&
 	{
 		PortraitStatus->SetText(Message);
 		PortraitStatus->SetVisibility(Message.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+		RequestFaceRender();
 	}
 	if (!StatusDetails.EqualTo(Details))
 	{
@@ -200,7 +266,43 @@ void UCastleShopCardWidget::ApplyFaceState()
 		// 动态材质实例属于单张卡。只有已经成像的纹理能打开建筑层，箔光不参与拍摄。
 		Face->SetVectorParameterValue(StateParameter, FLinearColor(Tilt.X, Tilt.Y, bFoilPreview ? 1.0f : 0.0f,
 			DisplayedTexture != nullptr ? 1.0f : 0.0f));
+		RequestFaceRender();
 	}
+}
+
+void UCastleShopCardWidget::RequestFaceRender()
+{
+	if (FaceRetainer != nullptr)
+	{
+		FaceRetainer->RequestRender();
+	}
+}
+
+void UCastleShopCardWidget::ApplyProjection()
+{
+	// 坐标为屏幕向右、向下、远离相机。右/下拖时相应边靠近，先绕牌的横轴再绕屏幕纵轴。
+	double SY, CY, SP, CP;
+	FMath::SinCos(&SY, &CY, FMath::DegreesToRadians(Tilt.X * CardYawLimitDegrees));
+	FMath::SinCos(&SP, &CP, FMath::DegreesToRadians(Tilt.Y * CardPitchLimitDegrees));
+	const FVector AxisX(CY, 0.0, -SY);
+	const FVector AxisY(-SY * SP, CP, -CY * SP);
+	const double HalfWidth = 0.5;
+	const double HalfHeight = 0.5 * static_cast<double>(CardHeight) / CardWidth;
+
+	// 先投影四角，按离槽位边缘最近的角统一调整焦距；不单独挤压某一轴，也不改变商店布局。
+	double FocalLength = CardProjectionDistance;
+	for (const double X : {-HalfWidth, HalfWidth})
+	{
+		for (const double Y : {-HalfHeight, HalfHeight})
+		{
+			const FVector Corner = X * AxisX + Y * AxisY;
+			const double Extent = FMath::Max(FMath::Abs(Corner.X) / HalfWidth, FMath::Abs(Corner.Y) / HalfHeight);
+			FocalLength = FMath::Min(FocalLength, (CardProjectionDistance + Corner.Z) / Extent);
+		}
+	}
+	// 材质从屏幕像素反投影到同一平面，确保圆角、建筑和文字不会沿三角形对角线扭曲。
+	Perspective->SetVectorParameterValue(CardProjectionXParameter, FLinearColor(FVector4(AxisX, CardProjectionDistance)));
+	Perspective->SetVectorParameterValue(CardProjectionYParameter, FLinearColor(FVector4(AxisY, FocalLength)));
 }
 
 void UCastleShopCardWidget::RefreshPortrait()
@@ -210,17 +312,18 @@ void UCastleShopCardWidget::RefreshPortrait()
 		return;
 	}
 	const FText* Error = Portrait->GetState() == ECastleCardPortraitState::Failed ? &Portrait->GetFailureReason()
-		: Portraits->GetHoverFailure(this);
+		: Portraits->GetDynamicFailure(this);
 	UTextureRenderTarget2D* NextTexture = nullptr;
+	uint64 CaptureNumber = 0;
 	if (Error != nullptr)
 	{
 		SetPortraitStatus(NSLOCTEXT("CastleCard", "CaptureFailed", "建筑成像失败"), *Error);
 	}
 	else if (Portrait->GetState() == ECastleCardPortraitState::Ready)
 	{
-		// 悬停还在等待自己第一帧的时候留在规定的静止姿态；实际失败走上方报错，不冒充成功。
-		UTextureRenderTarget2D* Hovered = Portraits->GetHoverTexture(this);
-		NextTexture = Hovered != nullptr ? Hovered : Portrait->GetTexture();
+		// 当前角度尚未提交首帧时仍显示本牌静止缓存；实际失败走上方报错，不冒充成功。
+		UTextureRenderTarget2D* Dynamic = Portraits->GetDynamicTexture(this, &CaptureNumber);
+		NextTexture = Dynamic != nullptr ? Dynamic : Portrait->GetTexture();
 		SetPortraitStatus(FText::GetEmpty(), FText::GetEmpty());
 	}
 	else
@@ -236,63 +339,160 @@ void UCastleShopCardWidget::RefreshPortrait()
 		}
 		ApplyFaceState();
 	}
+	if (DisplayedCaptureNumber != CaptureNumber)
+	{
+		// 摄影服务复用同一个动态目标。即使指针没变，目标里的新角度也要重新进入 Retainer。
+		DisplayedCaptureNumber = CaptureNumber;
+		RequestFaceRender();
+	}
 }
 
-void UCastleShopCardWidget::UpdateTilt(const FGeometry& Geometry, const FPointerEvent& Event)
+void UCastleShopCardWidget::SetInspectionOffset(const FVector2D& NewOffset)
 {
-	if (!bHoverable || !IsValid(Portrait) || !Geometry.IsUnderLocation(Event.GetScreenSpacePosition()))
+	if (NewOffset == InspectionOffset)
 	{
 		return;
 	}
-	const FVector2D Size = Geometry.GetLocalSize();
-	if (Size.X <= 0.0 || Size.Y <= 0.0)
-	{
-		return; // 尚未排版的控件不可交互，不构造无效的 UV 样本。
-	}
-	// 使用牌自己的局部坐标，在商店 ScaleBox 与系统 DPI 下保持相同倾角响应。
-	const FVector2D Local = Geometry.AbsoluteToLocal(Event.GetScreenSpacePosition());
-	Tilt = Local * 2.0 / Size - FVector2D(1.0, 1.0);
-	Portraits->SetHover(this, Portrait, Tilt);
+	InspectionOffset = NewOffset;
+	// 小幅拖动时灵敏，拖出卡位后角度逐渐趋于上限；没有突变，也不会因光标正好越过边缘而回正。
+	Tilt = FVector2D(NewOffset.X / FMath::Sqrt(1.0 + FMath::Square(NewOffset.X)),
+		NewOffset.Y / FMath::Sqrt(1.0 + FMath::Square(NewOffset.Y)));
+	ApplyProjection();
 	ApplyFaceState();
-}
-
-void UCastleShopCardWidget::EndHover()
-{
-	if (IsValid(Portraits))
+	if (InspectionOffset == FVector2D::ZeroVector)
 	{
-		Portraits->ClearHover(this);
+		Portraits->ClearDynamicView(this);
+		RefreshPortrait();
 	}
-	Tilt = FVector2D::ZeroVector;
-	RefreshPortrait();
-	ApplyFaceState();
+	else
+	{
+		Portraits->SetDynamicView(this, Portrait, Tilt);
+	}
 }
 
-void UCastleShopCardWidget::NativeOnMouseEnter(const FGeometry& MyGeometry, const FPointerEvent& InMouseEvent)
+void UCastleShopCardWidget::FinishInspection()
 {
-	Super::NativeOnMouseEnter(MyGeometry, InMouseEvent);
-	UpdateTilt(MyGeometry, InMouseEvent);
+	bReturning = false;
+	SetInspectionOffset(FVector2D::ZeroVector);
+	if (UCastleShopWidget* Shop = ShopOwner.Get())
+	{
+		Shop->ReleaseCardInspection(*this);
+	}
 }
 
-void UCastleShopCardWidget::NativeOnMouseLeave(const FPointerEvent& InMouseEvent)
+void UCastleShopCardWidget::CancelInspection()
 {
-	EndHover();
-	Super::NativeOnMouseLeave(InMouseEvent);
+	const TOptional<FCardGrab> CancelledGrab = Grab;
+	Grab.Reset();
+	FinishInspection();
+	// ReleaseCapture 会同步发出 CaptureLost。先清状态，且只归还本牌持有的那一个指针。
+	if (CancelledGrab.IsSet() && FSlateApplication::IsInitialized()
+		&& HasMouseCaptureByUser(CancelledGrab->UserIndex, CancelledGrab->PointerIndex))
+	{
+		if (const TSharedPtr<FSlateUser> User = FSlateApplication::Get().GetUser(CancelledGrab->UserIndex))
+		{
+			User->ReleaseCapture(CancelledGrab->PointerIndex);
+		}
+	}
+}
+
+FReply UCastleShopCardWidget::NativeOnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& InMouseEvent)
+{
+	if (!bCanInspect || Grab.IsSet() || InMouseEvent.IsTouchEvent() || InMouseEvent.GetEffectingButton() != EKeys::LeftMouseButton)
+	{
+		return Super::NativeOnMouseButtonDown(MyGeometry, InMouseEvent);
+	}
+	UCastleShopWidget* Shop = ShopOwner.Get();
+	const TSharedPtr<SWidget> Captor = GetCachedWidget();
+	if (Shop == nullptr || !Captor.IsValid())
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑卡牌 %s 无法抓取：商店或 Slate 接收控件已经失效。"), *GetPathName());
+		return FReply::Unhandled();
+	}
+	Shop->ActivateCardInspection(*this);
+	// 重新抓住同一张正在回正的牌时，从此刻的姿态接着拖，不突然重置角度。
+	bReturning = false;
+	Grab.Emplace(FCardGrab{static_cast<int32>(InMouseEvent.GetUserIndex()), InMouseEvent.GetPointerIndex(),
+		MyGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition()), InspectionOffset});
+	return FReply::Handled().CaptureMouse(Captor.ToSharedRef());
+}
+
+FReply UCastleShopCardWidget::NativeOnMouseButtonDoubleClick(const FGeometry& MyGeometry, const FPointerEvent& InMouseEvent)
+{
+	// Slate 将快速第二次按下作为双击发送；抓牌仍是同一个手势，不另加双击动作。
+	if (InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
+	{
+		return NativeOnMouseButtonDown(MyGeometry, InMouseEvent);
+	}
+	return Super::NativeOnMouseButtonDoubleClick(MyGeometry, InMouseEvent);
 }
 
 FReply UCastleShopCardWidget::NativeOnMouseMove(const FGeometry& MyGeometry, const FPointerEvent& InMouseEvent)
 {
-	UpdateTilt(MyGeometry, InMouseEvent);
-	return Super::NativeOnMouseMove(MyGeometry, InMouseEvent);
+	if (!Grab.IsSet() || !Grab->Matches(InMouseEvent.GetUserIndex(), InMouseEvent.GetPointerIndex()))
+	{
+		return Super::NativeOnMouseMove(MyGeometry, InMouseEvent);
+	}
+	// 使用未投影的局部坐标，商店 ScaleBox 或系统 DPI 不会改变手感。普通悬停没有抓牌起点。
+	const FVector2D Delta = MyGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition()) - Grab->Origin;
+	SetInspectionOffset(Grab->InitialOffset + Delta / FVector2D(CardWidth * 0.44, CardHeight * 0.35));
+	return FReply::Handled();
+}
+
+FReply UCastleShopCardWidget::NativeOnMouseButtonUp(const FGeometry& MyGeometry, const FPointerEvent& InMouseEvent)
+{
+	if (!Grab.IsSet() || !Grab->Matches(InMouseEvent.GetUserIndex(), InMouseEvent.GetPointerIndex())
+		|| InMouseEvent.GetEffectingButton() != EKeys::LeftMouseButton)
+	{
+		return Super::NativeOnMouseButtonUp(MyGeometry, InMouseEvent);
+	}
+	// 正常松手会触发 CaptureLost；先解绑抓牌状态，区别于窗口切走导致的强制取消。
+	Grab.Reset();
+	if (InspectionOffset == FVector2D::ZeroVector)
+	{
+		FinishInspection();
+	}
+	else
+	{
+		ReturnFromOffset = InspectionOffset;
+		ReturnElapsed = 0.0f;
+		bReturning = true;
+	}
+	return FReply::Handled().ReleaseMouseCapture();
+}
+
+void UCastleShopCardWidget::NativeOnMouseCaptureLost(const FCaptureLostEvent& CaptureLostEvent)
+{
+	if (Grab.IsSet() && Grab->Matches(CaptureLostEvent.UserIndex, CaptureLostEvent.PointerIndex))
+	{
+		Grab.Reset();
+		FinishInspection();
+	}
+	Super::NativeOnMouseCaptureLost(CaptureLostEvent);
 }
 
 void UCastleShopCardWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
+	if (bReturning)
+	{
+		ReturnElapsed += InDeltaTime;
+		if (ReturnElapsed >= CardInspectionReturnSeconds)
+		{
+			FinishInspection();
+		}
+		else
+		{
+			// 先快后慢归位。投影、卡窗与反射共用同一回正进度，结束后不再驱动摄影。
+			const double Remaining = 1.0 - ReturnElapsed / CardInspectionReturnSeconds;
+			SetInspectionOffset(ReturnFromOffset * FMath::Square(Remaining));
+		}
+	}
 	RefreshPortrait();
 }
 
 void UCastleShopCardWidget::NativeDestruct()
 {
-	EndHover();
+	CancelInspection();
 	Super::NativeDestruct();
 }

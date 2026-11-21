@@ -21,7 +21,7 @@ enum class ECastleCardPortraitState : uint8
 	Failed
 };
 
-/** 单种等级模型的静止成像；由卡片和世界缓存共享，不包含悬停画面与箔光。 */
+/** 单种等级模型的静止成像；由卡片和世界缓存共享，不包含拖动视角与箔光。 */
 UCLASS()
 class MOVING_CASTLE_API UCastleCardPortrait : public UObject
 {
@@ -50,7 +50,7 @@ private:
 
 /**
  * 仅供建筑牌摄影使用的世界服务。摄影场景不进入战斗世界，不运行 BeginPlay，也不拍世界背景。
- * 一台相机按需写入独立的静止纹理与一张悬停纹理；可见商店关闭后暂停整个队列。
+ * 一台相机按需写入独立的静止纹理与一张互动纹理；可见商店关闭后暂停整个队列。
  */
 UCLASS()
 class MOVING_CASTLE_API UCastleCardPortraitSubsystem : public UTickableWorldSubsystem
@@ -65,11 +65,12 @@ public:
 	/** 商店显式声明可见性；收起时停止相机，缓存的静止图可在再次打开时复用。 */
 	void SetShopVisible(UObject* Shop, bool bVisible);
 
-	/** 最后一个获得悬停的卡拥有动态纹理。变更倾角只排队，不在输入事件里阻塞渲染。 */
-	void SetHover(UObject* Consumer, UCastleCardPortrait* Portrait, const FVector2D& Tilt);
-	void ClearHover(const UObject* Consumer);
-	UTextureRenderTarget2D* GetHoverTexture(const UObject* Consumer) const;
-	const FText* GetHoverFailure(const UObject* Consumer) const;
+	/** 当前持牌者独占动态纹理。变更倾角只排队，不在输入事件里阻塞渲染。 */
+	void SetDynamicView(UObject* Consumer, UCastleCardPortrait* Portrait, const FVector2D& Tilt);
+	void ClearDynamicView(const UObject* Consumer);
+	/** 同一纹理可连续写入；成像编号让牌面知道何时必须重新合成。 */
+	UTextureRenderTarget2D* GetDynamicTexture(const UObject* Consumer, uint64* OutCaptureNumber = nullptr) const;
+	const FText* GetDynamicFailure(const UObject* Consumer) const;
 
 	virtual void Tick(float DeltaTime) override;
 	virtual bool IsTickable() const override;
@@ -85,9 +86,9 @@ private:
 	bool CaptureInto(UTextureRenderTarget2D* Target, const FVector2D& Tilt, FText& OutFailureReason);
 	void FailPortrait(UCastleCardPortrait* Portrait, const FText& Reason) const;
 	void DropStage();
-	void ResetHover();
+	void ResetDynamicView();
 
-	/** 同层模型的一次静止成像与入队状态共享，但悬停写进另外一张纹理。 */
+	/** 同层模型的一次静止成像与入队状态共享，但拖动视角写进另外一张纹理。 */
 	UPROPERTY(Transient)
 	TMap<FString, TObjectPtr<UCastleCardPortrait>> Portraits;
 
@@ -110,17 +111,18 @@ private:
 	float StageDistance = 0.0f;
 
 	UPROPERTY(Transient)
-	TObjectPtr<UTextureRenderTarget2D> HoverTexture;
+	TObjectPtr<UTextureRenderTarget2D> DynamicTexture;
 
 	UPROPERTY(Transient)
-	TObjectPtr<UCastleCardPortrait> HoverPortrait;
+	TObjectPtr<UCastleCardPortrait> DynamicPortrait;
 
 	TWeakObjectPtr<UObject> VisibleShop;
-	TWeakObjectPtr<UObject> HoverConsumer;
-	FVector2D HoverTilt = FVector2D::ZeroVector;
-	FText HoverFailure;
-	bool bHoverNeedsCapture = false;
-	bool bHoverReady = false;
+	TWeakObjectPtr<UObject> DynamicConsumer;
+	FVector2D DynamicTilt = FVector2D::ZeroVector;
+	FText DynamicFailure;
+	uint64 DynamicCaptureNumber = 0;
+	bool bDynamicNeedsCapture = false;
+	bool bDynamicReady = false;
 	double NextCaptureAt = 0.0;
 	double GeometryWaitStartedAt = 0.0;
 };

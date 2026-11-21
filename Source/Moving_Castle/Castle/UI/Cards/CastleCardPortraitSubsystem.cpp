@@ -94,54 +94,59 @@ void UCastleCardPortraitSubsystem::SetShopVisible(UObject* Shop, bool bVisible)
 	else if (VisibleShop.Get() == Shop)
 	{
 		VisibleShop.Reset();
-		ResetHover();
+		ResetDynamicView();
 	}
 }
 
-void UCastleCardPortraitSubsystem::SetHover(UObject* Consumer, UCastleCardPortrait* Portrait, const FVector2D& Tilt)
+void UCastleCardPortraitSubsystem::SetDynamicView(UObject* Consumer, UCastleCardPortrait* Portrait, const FVector2D& Tilt)
 {
-	if (HoverConsumer.Get() != Consumer || HoverPortrait != Portrait)
+	if (DynamicConsumer.Get() != Consumer || DynamicPortrait != Portrait)
 	{
 		// 上一张卡的动态纹理内容不是当前卡的画面，只有完成新的捕获才公开共享纹理。
-		ResetHover();
-		HoverConsumer = Consumer;
-		HoverPortrait = Portrait;
-		bHoverNeedsCapture = true;
+		ResetDynamicView();
+		DynamicConsumer = Consumer;
+		DynamicPortrait = Portrait;
+		bDynamicNeedsCapture = true;
 	}
-	if (!HoverTilt.Equals(Tilt, 0.005))
+	if (!DynamicTilt.Equals(Tilt, 0.005))
 	{
-		HoverTilt = Tilt;
-		bHoverNeedsCapture = true;
+		DynamicTilt = Tilt;
+		bDynamicNeedsCapture = true;
 	}
 }
 
-void UCastleCardPortraitSubsystem::ClearHover(const UObject* Consumer)
+void UCastleCardPortraitSubsystem::ClearDynamicView(const UObject* Consumer)
 {
-	// 刷新列表时旧 Widget 的析构可能晚于新 Widget 的鼠标进入，不允许旧卡清除新卡的请求。
-	if (HoverConsumer.Get() == Consumer)
+	// 刷新列表时旧 Widget 的析构可能晚于新卡被抓住，不允许旧卡清除新卡的请求。
+	if (DynamicConsumer.Get() == Consumer)
 	{
-		ResetHover();
+		ResetDynamicView();
 	}
 }
 
-void UCastleCardPortraitSubsystem::ResetHover()
+void UCastleCardPortraitSubsystem::ResetDynamicView()
 {
-	HoverConsumer.Reset();
-	HoverPortrait = nullptr;
-	HoverTilt = FVector2D::ZeroVector;
-	HoverFailure = FText::GetEmpty();
-	bHoverNeedsCapture = false;
-	bHoverReady = false;
+	DynamicConsumer.Reset();
+	DynamicPortrait = nullptr;
+	DynamicTilt = FVector2D::ZeroVector;
+	DynamicFailure = FText::GetEmpty();
+	bDynamicNeedsCapture = false;
+	bDynamicReady = false;
 }
 
-UTextureRenderTarget2D* UCastleCardPortraitSubsystem::GetHoverTexture(const UObject* Consumer) const
+UTextureRenderTarget2D* UCastleCardPortraitSubsystem::GetDynamicTexture(const UObject* Consumer, uint64* OutCaptureNumber) const
 {
-	return bHoverReady && HoverConsumer.Get() == Consumer ? HoverTexture.Get() : nullptr;
+	const bool bReadyForConsumer = bDynamicReady && DynamicConsumer.Get() == Consumer;
+	if (OutCaptureNumber != nullptr)
+	{
+		*OutCaptureNumber = bReadyForConsumer ? DynamicCaptureNumber : 0;
+	}
+	return bReadyForConsumer ? DynamicTexture.Get() : nullptr;
 }
 
-const FText* UCastleCardPortraitSubsystem::GetHoverFailure(const UObject* Consumer) const
+const FText* UCastleCardPortraitSubsystem::GetDynamicFailure(const UObject* Consumer) const
 {
-	return HoverConsumer.Get() == Consumer && !HoverFailure.IsEmpty() ? &HoverFailure : nullptr;
+	return DynamicConsumer.Get() == Consumer && !DynamicFailure.IsEmpty() ? &DynamicFailure : nullptr;
 }
 
 bool UCastleCardPortraitSubsystem::CreateStudio(FText& OutFailureReason)
@@ -272,7 +277,8 @@ bool UCastleCardPortraitSubsystem::CaptureInto(UTextureRenderTarget2D* Target, c
 		return false;
 	}
 	// 预览世界没有主视口，因此直接提交捕获，不能等待 CaptureSceneDeferred 所依赖的主视图。
-	const FRotator View(-20.0 + Tilt.Y * 5.5, -34.0 + Tilt.X * 10.0, 0.0);
+	// 右边或下边向玩家靠近时，从建筑右侧或较低处看进去；相机位置与 View 的前向反向。
+	const FRotator View(-20.0 + Tilt.Y * 5.5, -34.0 - Tilt.X * 10.0, 0.0);
 	Camera->SetWorldLocationAndRotation(StageCenter - View.Vector() * StageDistance, View);
 	Camera->TextureTarget = Target;
 	Camera->CaptureScene();
@@ -288,7 +294,7 @@ void UCastleCardPortraitSubsystem::Tick(float DeltaTime)
 		return;
 	}
 	const bool bIdleCapture = !PendingPortraits.IsEmpty();
-	UCastleCardPortrait* Portrait = bIdleCapture ? PendingPortraits[0].Get() : HoverPortrait.Get();
+	UCastleCardPortrait* Portrait = bIdleCapture ? PendingPortraits[0].Get() : DynamicPortrait.Get();
 	if (Portrait == nullptr)
 	{
 		return;
@@ -337,23 +343,24 @@ void UCastleCardPortraitSubsystem::Tick(float DeltaTime)
 		return;
 	}
 
-	bHoverNeedsCapture = false;
+	bDynamicNeedsCapture = false;
 	if (bCanCapture)
 	{
-		if (HoverTexture == nullptr)
+		if (DynamicTexture == nullptr)
 		{
-			HoverTexture = NewPortraitTarget(this);
+			DynamicTexture = NewPortraitTarget(this);
 		}
-		if (CaptureInto(HoverTexture, HoverTilt, Reason))
+		if (CaptureInto(DynamicTexture, DynamicTilt, Reason))
 		{
-			bHoverReady = true;
+			++DynamicCaptureNumber;
+			bDynamicReady = true;
 			return;
 		}
 	}
 	// 动态成像失败时不拿另一张卡的图或旧动态帧继续呈现，向当前卡公开失败原因。
-	bHoverReady = false;
-	HoverFailure = Reason;
-	UE_LOG(LogMoving_Castle, Error, TEXT("建筑卡牌 %s Lv%d 悬停捕获失败：%s"),
+	bDynamicReady = false;
+	DynamicFailure = Reason;
+	UE_LOG(LogMoving_Castle, Error, TEXT("建筑卡牌 %s Lv%d 互动视角捕获失败：%s"),
 		*GetPathNameSafe(Portrait->Descriptor.Definition.Get()), Portrait->Descriptor.Level, *Reason.ToString());
 	DropStage();
 }
@@ -361,8 +368,8 @@ void UCastleCardPortraitSubsystem::Tick(float DeltaTime)
 bool UCastleCardPortraitSubsystem::IsTickable() const
 {
 	return Super::IsTickable() && VisibleShop.IsValid() && (!PendingPortraits.IsEmpty()
-		|| (bHoverNeedsCapture && HoverFailure.IsEmpty() && HoverConsumer.IsValid() && IsValid(HoverPortrait)
-			&& HoverPortrait->State == ECastleCardPortraitState::Ready));
+		|| (bDynamicNeedsCapture && DynamicFailure.IsEmpty() && DynamicConsumer.IsValid() && IsValid(DynamicPortrait)
+			&& DynamicPortrait->State == ECastleCardPortraitState::Ready));
 }
 
 TStatId UCastleCardPortraitSubsystem::GetStatId() const
@@ -397,12 +404,12 @@ void UCastleCardPortraitSubsystem::Deinitialize()
 {
 	// 镜头先断开纹理和入镜物体，再销毁摄影场景，防止结束 PIE 时残留世界上下文。
 	VisibleShop.Reset();
-	ResetHover();
+	ResetDynamicView();
 	DropStage();
 	Camera = nullptr;
 	Studio.Reset();
 	PendingPortraits.Reset();
 	Portraits.Reset();
-	HoverTexture = nullptr;
+	DynamicTexture = nullptr;
 	Super::Deinitialize();
 }

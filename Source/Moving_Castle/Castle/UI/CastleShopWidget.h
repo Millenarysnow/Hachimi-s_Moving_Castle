@@ -100,9 +100,6 @@ protected:
 	UFUNCTION()
 	void HandleToggleFoil();
 
-	/** 停止旧卡的动态捕获；鼠标留在关闭的商店上也不会继续摄影。 */
-	void EndOfferHovers();
-
 	/** 结果保留在面板内，并写日志，金币不足或满包都有直接可见反馈。 */
 	void ShowResult(bool bSuccess, const FString& SuccessMessage, const FText& FailureReason);
 
@@ -145,4 +142,13 @@ protected:
 
 	bool bFoilPreview = false;
 	bool bWidgetTreeBuilt = false;
+
+private:
+	friend class UCastleShopCardWidget;
+
+	/** 新卡被抓住时旧卡立即归位；共享动态纹理不能同时交给仍在回正的旧卡。 */
+	void ActivateCardInspection(UCastleShopCardWidget& Card);
+	void ReleaseCardInspection(const UCastleShopCardWidget& Card);
+	void CancelOfferInspection();
+	TWeakObjectPtr<UCastleShopCardWidget> InspectedCard;
 };
