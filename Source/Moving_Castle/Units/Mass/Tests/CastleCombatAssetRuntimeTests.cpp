@@ -41,20 +41,37 @@ bool FCastleCombatDefaultAssetTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("普通表六场"), Curve->NormalBattles.Num(), 6);
 	TestEqual(TEXT("精英表两场"), Curve->EliteBattles.Num(), 2);
 	TestEqual(TEXT("初版增长率"), Curve->CountGrowthPerOrdinal, 0.25f);
-	TArray<FCastleCombatSpawnGroup> Plan;
-	if (TestTrue(TEXT("普通第四场"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 4, Plan, Failure)) && TestEqual(TEXT("第四场两组"), Plan.Num(), 2))
+	TArray<FCastleCombatWaveDefinition> Plan;
+	if (TestTrue(TEXT("普通第一场"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 1, Plan, Failure))
+		&& TestEqual(TEXT("第一场两波"), Plan.Num(), 2))
 	{
-		TestEqual(TEXT("巨骸先出场"), Plan[0].EnemyId, FName(TEXT("LavaGoliath")));
-		TestEqual(TEXT("巨骸一只"), Plan[0].Count, 1);
-		TestEqual(TEXT("群虫延迟八秒"), Plan[1].Delay, 8.0f);
+		TestTrue(TEXT("首波启用群虫曲线"), Plan[0].BugCurve.bEnabled);
+		TestEqual(TEXT("首波虫群引用名册"), Plan[0].BugCurve.BugEnemyId, FName(TEXT("ShadowSwarm")));
+		if (TestEqual(TEXT("首波一条带门槛的突袭"), Plan[0].RaidEntries.Num(), 1))
+		{
+			TestEqual(TEXT("龙崽需要解锁门槛"), Plan[0].RaidEntries[0].RequiredUnlockTag, FName(TEXT("Unlock.MiasmaWelp")));
+		}
 	}
-	if (TestTrue(TEXT("普通第八场外推"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 8, Plan, Failure)) && TestEqual(TEXT("第八场三组"), Plan.Num(), 3))
+	if (TestTrue(TEXT("普通第八场外推"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 8, Plan, Failure))
+		&& TestEqual(TEXT("第八场继承一波"), Plan.Num(), 1) && TestEqual(TEXT("末场两条突袭"), Plan[0].RaidEntries.Num(), 2))
 	{
-		TestEqual(TEXT("群虫 ceil(3*1.5)"), Plan[0].Count, 5);
-		TestEqual(TEXT("瘴翼 ceil(2*1.5)"), Plan[1].Count, 3);
-		TestEqual(TEXT("巨骸 ceil(1*1.5)"), Plan[2].Count, 2);
-		TestEqual(TEXT("第二组保留六秒"), Plan[1].Delay, 6.0f);
-		TestEqual(TEXT("第三组保留十二秒"), Plan[2].Delay, 12.0f);
+		TestEqual(TEXT("虫群首波基数继续来自虫群曲线"), Plan[0].BugCurve.BugBase, 4);
+		TestEqual(TEXT("瘴翼 ceil(2*1.5)"), Plan[0].RaidEntries[0].Count, 3);
+		TestEqual(TEXT("巨骸 ceil(1*1.5)"), Plan[0].RaidEntries[1].Count, 2);
+		TestEqual(TEXT("瘴翼保留六秒"), Plan[0].RaidEntries[0].TriggerDelay, 6.0f);
+		TestEqual(TEXT("巨骸保留十二秒"), Plan[0].RaidEntries[1].TriggerDelay, 12.0f);
+	}
+	for (int32 Index = 0; Index < 2; ++Index)
+	{
+		if (TestTrue(TEXT("精英示例能构建"), Curve->BuildBattlePlan(ECastleBattleKind::Elite, Index + 1, Plan, Failure))
+			&& TestTrue(TEXT("精英示例含首批"), !Plan.IsEmpty() && !Plan[0].RaidEntries.IsEmpty()))
+		{
+			const auto& Raid = Plan[0].RaidEntries[0];
+			TestEqual(TEXT("精英首批为龙崽或巨骸"), Raid.EnemyId,
+				FName(Index == 0 ? TEXT("MiasmaWelp") : TEXT("LavaGoliath")));
+			TestEqual(TEXT("精英为同模板生命五倍"), Raid.AttributeOverrides.HealthMultiplier, 5.0f);
+			TestTrue(TEXT("精英自身无需解锁"), Raid.RequiredUnlockTag.IsNone());
+		}
 	}
 	return true;
 }
@@ -99,7 +116,11 @@ namespace CastleCombatRuntime
 				Execute(TEXT("CastleStartBattle Normal 1"));
 				Test->TestTrue(TEXT("真实命令开启普通第一场"), Combat->IsBattleActive());
 				Units->CountEnemyEntities(Count);
-				Test->TestTrue(TEXT("默认第一场生成一簇六至八只群虫"), Count >= 6 && Count <= 8);
+				Test->TestTrue(TEXT("普通首波第一批为一簇六至八只群虫"), Count >= 6 && Count <= 8);
+				int32 Wave = 0, WaveCount = 0;
+				Test->TestTrue(TEXT("正式普通关返回波次进度"), Combat->GetCurrentWaveProgress(Wave, WaveCount));
+				Test->TestEqual(TEXT("正式普通关从第一波开始"), Wave, 1);
+				Test->TestEqual(TEXT("正式普通关两波"), WaveCount, 2);
 				Test->AddExpectedError(TEXT("已在战斗中"), EAutomationExpectedErrorFlags::Contains, 2);
 				Execute(TEXT("CastleStartBattle Normal 2"));
 				Execute(TEXT("CastleKillAllEnemies"));
@@ -108,12 +129,20 @@ namespace CastleCombatRuntime
 			}
 			if (Stage == 2)
 			{
-				if (Combat->IsBattleActive()) { return false; }
+				if (Combat->IsBattleActive())
+				{
+					int32 Wave = 0, WaveCount = 0;
+					Combat->GetCurrentWaveProgress(Wave, WaveCount);
+					bSawSecondWave |= Wave == 2;
+					if (Count > 0) { Execute(TEXT("CastleKillAllEnemies")); }
+					return false;
+				}
 				Test->TestEqual(TEXT("真实第一场清场一次"), Cleared, 1);
-				Execute(TEXT("CastleStartBattle Normal 4"));
+				Test->TestTrue(TEXT("清场前确实进入第二波"), bSawSecondWave);
+				Execute(TEXT("CastleStartBattle Elite 2"));
 				BattleTime = World->GetTimeSeconds();
 				Units->CountEnemyEntities(Count);
-				Test->TestEqual(TEXT("第四场立即只生成一只巨骸"), Count, 1);
+				Test->TestEqual(TEXT("精英第二场立即只生成一只巨骸"), Count, 1);
 				Execute(TEXT("CastleKillAllEnemies"));
 				Stage = 3;
 				return false;
@@ -129,7 +158,7 @@ namespace CastleCombatRuntime
 				Combat->GetBattleProgress(Count, Pending);
 				Test->TestEqual(TEXT("巨骸回收和分裂之间没有误清场"), Cleared, 1);
 				Test->TestTrue(TEXT("子体和待出场组使战斗继续"), Combat->IsBattleActive());
-				Test->TestEqual(TEXT("群虫仍在等待出场"), Pending, 1);
+				Test->TestEqual(TEXT("后续龙崽突袭仍在等待出场"), Pending, 1);
 				Stage = 4;
 				return false;
 			}
@@ -139,7 +168,7 @@ namespace CastleCombatRuntime
 				Combat->GetBattleProgress(Count, Pending);
 				Test->TestEqual(TEXT("第二组出场前不通知清场"), Cleared, 1);
 				if (Pending != 0) { return false; }
-				Test->TestTrue(TEXT("第二组按八秒游戏时间出场"), World->GetTimeSeconds() - BattleTime >= 8.0);
+				Test->TestTrue(TEXT("后续突袭按六秒游戏时间出场"), World->GetTimeSeconds() - BattleTime >= 6.0);
 				Execute(TEXT("CastleKillAllEnemies"));
 				Stage = 5;
 				return false;
@@ -159,6 +188,7 @@ namespace CastleCombatRuntime
 		FDelegateHandle ClearHandle, FailHandle;
 		double Started, BattleTime = 0;
 		int32 Stage = 0, Cleared = 0, Failed = 0;
+		bool bSawSecondWave = false;
 	};
 }
 

@@ -53,6 +53,50 @@ namespace CastleCombatDebug
 		Feedback(FString::Printf(TEXT("CastleStartBattle：%s %d 开战成功。"), *Args[0], Ordinal), true);
 	}));
 
+	FAutoConsoleCommandWithWorldAndArgs UnlockEnemyTagCommand(TEXT("CastleUnlockEnemyTag"),
+		TEXT("CastleUnlockEnemyTag <标签>：解锁后续战斗中的突袭条目。"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
+	{
+		auto* Combat = World ? World->GetSubsystem<UCastleCombatSubsystem>() : nullptr;
+		const FName Tag = Args.Num() == 1 ? FName(*Args[0]) : NAME_None;
+		if (!Combat || Tag.IsNone())
+		{
+			Feedback(TEXT("CastleUnlockEnemyTag：需要 Game/PIE 世界；用法 CastleUnlockEnemyTag <非空标签>。"), false);
+			return;
+		}
+		// 解锁只影响随后开战时构造的计划，进行中的波次仍使用自己的快照。
+		if (Combat->UnlockEnemyTag(Tag))
+		{
+			Feedback(FString::Printf(TEXT("CastleUnlockEnemyTag：已解锁 %s，随后开战时生效。"), *Tag.ToString()), true);
+		}
+	}));
+
+	FAutoConsoleCommandWithWorldAndArgs BattleStatusCommand(TEXT("CastleBattleStatus"),
+		TEXT("CastleBattleStatus：查看关内波次、剩余敌人、待出场批次和击杀进度。"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
+	{
+		auto* Combat = World ? World->GetSubsystem<UCastleCombatSubsystem>() : nullptr;
+		if (!Combat || !Args.IsEmpty())
+		{
+			Feedback(TEXT("CastleBattleStatus：命令不接受参数，需要 Game/PIE 世界。"), false);
+			return;
+		}
+		int32 CurrentWave = 0, TotalWaves = 0;
+		if (!Combat->GetCurrentWaveProgress(CurrentWave, TotalWaves))
+		{
+			Feedback(TEXT("CastleBattleStatus：当前没有进行中的战斗。"), true);
+			return;
+		}
+		int32 Enemies = 0, Pending = 0, Defeated = 0, Budget = 0;
+		if (!Combat->GetBattleProgress(Enemies, Pending) || !Combat->GetBattleDefeatedProgress(Defeated, Budget))
+		{
+			Feedback(TEXT("CastleBattleStatus：读取战斗实体统计失败。"), false);
+			return;
+		}
+		Feedback(FString::Printf(TEXT("CastleBattleStatus：第 %d/%d 波，剩余敌人 %d，待出场批次 %d，击杀进度 %d/%d。"),
+			CurrentWave, TotalWaves, Enemies, Pending, Defeated, Budget), true);
+	}));
+
 	FAutoConsoleCommandWithWorldAndArgs KillAllCommand(TEXT("CastleKillAllEnemies"),
 		TEXT("CastleKillAllEnemies：伤害当前世界全部存活敌人，保留正常分裂和回收。"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)

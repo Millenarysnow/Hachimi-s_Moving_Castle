@@ -24,14 +24,17 @@ namespace CastleCombatDataTests
 		Entry.Configuration = Mass;
 		Config->Roster.Add(Entry);
 		Config->DifficultyCurve = NewObject<UCastleDifficultyCurveDataAsset>(Config);
-		FCastleCombatSpawnGroup Group;
+		FCastleRaidSpawnEntry Group;
 		Group.EnemyId = Entry.EnemyId;
 		Group.Count = 3;
 		FCastleCombatBattleDefinition Battle;
-		Battle.Groups.Add(Group);
+		FCastleCombatWaveDefinition Wave;
+		Wave.BugCurve.bEnabled = false;
+		Wave.RaidEntries.Add(Group);
+		Battle.Waves.Add(Wave);
 		Config->DifficultyCurve->NormalBattles.Add(Battle);
-		Battle.Groups[0].Count = 5;
-		Battle.Groups[0].Delay = 8;
+		Battle.Waves[0].RaidEntries[0].Count = 5;
+		Battle.Waves[0].RaidEntries[0].TriggerDelay = 8;
 		Config->DifficultyCurve->NormalBattles.Add(Battle);
 		Config->DifficultyCurve->EliteBattles.Add(Battle);
 		return Config;
@@ -68,13 +71,34 @@ bool FCastleCombatDataValidationTest::RunTest(const FString& Parameters)
 		{TEXT("DifficultyCurve"), [](auto& C) { C.DifficultyCurve = nullptr; }},
 		{TEXT("NormalBattles[0]"), [](auto& C) { C.DifficultyCurve->NormalBattles.Reset(); }},
 		{TEXT("EliteBattles[0]"), [](auto& C) { C.DifficultyCurve->EliteBattles.Reset(); }},
-		{TEXT("NormalBattles[1].Groups[0]"), [](auto& C) { C.DifficultyCurve->NormalBattles[1].Groups.Reset(); }},
-		{TEXT("EliteBattles[0].Groups[0].EnemyId"), [](auto& C) { C.DifficultyCurve->EliteBattles[0].Groups[0].EnemyId = NAME_None; }},
-		{TEXT("NormalBattles[1].Groups[0].EnemyId"), [](auto& C) { C.DifficultyCurve->NormalBattles[1].Groups[0].EnemyId = TEXT("Unknown"); }},
-		{TEXT("EliteBattles[0].Groups[0].Count"), [](auto& C) { C.DifficultyCurve->EliteBattles[0].Groups[0].Count = 0; }},
-		{TEXT("NormalBattles[0].Groups[0].Delay"), [](auto& C) { C.DifficultyCurve->NormalBattles[0].Groups[0].Delay = -1; }},
-		{TEXT("NormalBattles[0].Groups[0].Delay"), [NaN](auto& C) { C.DifficultyCurve->NormalBattles[0].Groups[0].Delay = NaN; }},
-		{TEXT("NormalBattles[0].Groups[0].Delay"), [Infinity](auto& C) { C.DifficultyCurve->NormalBattles[0].Groups[0].Delay = Infinity; }},
+		{TEXT("NormalBattles[1].Waves[0]"), [](auto& C) { C.DifficultyCurve->NormalBattles[1].Waves[0].RaidEntries.Reset(); }},
+		{TEXT("EliteBattles[0].Waves[0].RaidEntries[0].EnemyId"), [](auto& C) { C.DifficultyCurve->EliteBattles[0].Waves[0].RaidEntries[0].EnemyId = NAME_None; }},
+		{TEXT("NormalBattles[1].Waves[0].RaidEntries[0].EnemyId"), [](auto& C) { C.DifficultyCurve->NormalBattles[1].Waves[0].RaidEntries[0].EnemyId = TEXT("Unknown"); }},
+		{TEXT("EliteBattles[0].Waves[0].RaidEntries[0].Count"), [](auto& C) { C.DifficultyCurve->EliteBattles[0].Waves[0].RaidEntries[0].Count = 0; }},
+		{TEXT("NormalBattles[0].Waves[0].RaidEntries[0].TriggerDelay"), [](auto& C) { C.DifficultyCurve->NormalBattles[0].Waves[0].RaidEntries[0].TriggerDelay = -1; }},
+		{TEXT("NormalBattles[0].Waves[0].RaidEntries[0].TriggerDelay"), [NaN](auto& C) { C.DifficultyCurve->NormalBattles[0].Waves[0].RaidEntries[0].TriggerDelay = NaN; }},
+		{TEXT("NormalBattles[0].Waves[0].RaidEntries[0].TriggerDelay"), [Infinity](auto& C) { C.DifficultyCurve->NormalBattles[0].Waves[0].RaidEntries[0].TriggerDelay = Infinity; }},
+		{TEXT("EliteBattles[0].Waves[0]"), [](auto& C) { C.DifficultyCurve->EliteBattles[0].Waves.Reset(); }},
+		{TEXT("Waves[0].WaveDuration"), [](auto& C)
+		{
+			auto& Wave = C.DifficultyCurve->NormalBattles[0].Waves[0];
+			Wave.bAdvanceOnClear = false;
+			Wave.WaveDuration = 0.0f;
+		}},
+		{TEXT("Waves[0].BugCurve.BugEnemyId"), [](auto& C)
+		{
+			auto& Bug = C.DifficultyCurve->NormalBattles[0].Waves[0].BugCurve;
+			Bug.bEnabled = true;
+			Bug.BugEnemyId = TEXT("Unknown");
+		}},
+		{TEXT("Waves[0].BugCurve.CurveK"), [NaN](auto& C) { C.DifficultyCurve->NormalBattles[0].Waves[0].BugCurve.CurveK = NaN; }},
+		{TEXT("Waves[0].BugCurve.BatchSize"), [](auto& C) { C.DifficultyCurve->NormalBattles[0].Waves[0].BugCurve.BatchSize = 0; }},
+		{TEXT("Waves[0].RaidEntries[0].AttributeOverrides.HealthOverride/HealthMultiplier"), [](auto& C)
+		{
+			auto& Overrides = C.DifficultyCurve->NormalBattles[0].Waves[0].RaidEntries[0].AttributeOverrides;
+			Overrides.HealthOverride = 1000.0f;
+			Overrides.HealthMultiplier = 2.0f;
+		}},
 		{TEXT("CountGrowthPerOrdinal"), [](auto& C) { C.DifficultyCurve->CountGrowthPerOrdinal = -0.1f; }},
 		{TEXT("CountGrowthPerOrdinal"), [](auto& C) { C.DifficultyCurve->CountGrowthPerOrdinal = 10.1f; }},
 		{TEXT("CountGrowthPerOrdinal"), [NaN](auto& C) { C.DifficultyCurve->CountGrowthPerOrdinal = NaN; }},
@@ -111,26 +135,26 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleCombatExtrapolationTest, "MovingCastle.C
 bool FCastleCombatExtrapolationTest::RunTest(const FString& Parameters)
 {
 	auto* Curve = CastleCombatDataTests::MakeConfig()->DifficultyCurve.Get();
-	TArray<FCastleCombatSpawnGroup> Plan;
+	TArray<FCastleCombatWaveDefinition> Plan;
 	FText Failure;
 	TestTrue(TEXT("表内第一场"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 1, Plan, Failure));
-	TestEqual(TEXT("直接取第一项"), Plan[0].Count, 3);
+	TestEqual(TEXT("直接取第一项"), Plan[0].RaidEntries[0].Count, 3);
 	TestTrue(TEXT("表内末场"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 2, Plan, Failure));
-	TestEqual(TEXT("直接取末项"), Plan[0].Count, 5);
+	TestEqual(TEXT("直接取末项"), Plan[0].RaidEntries[0].Count, 5);
 	TestTrue(TEXT("表外第一场"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 3, Plan, Failure));
-	TestEqual(TEXT("ceil(5 * 1.25)"), Plan[0].Count, 7);
-	TestEqual(TEXT("延迟保持不变"), Plan[0].Delay, 8.0f);
+	TestEqual(TEXT("ceil(5 * 1.25)"), Plan[0].RaidEntries[0].Count, 7);
+	TestEqual(TEXT("延迟保持不变"), Plan[0].RaidEntries[0].TriggerDelay, 8.0f);
 	TestTrue(TEXT("表外第二场"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 4, Plan, Failure));
-	TestEqual(TEXT("ceil(5 * 1.5)"), Plan[0].Count, 8);
+	TestEqual(TEXT("ceil(5 * 1.5)"), Plan[0].RaidEntries[0].Count, 8);
 	TestTrue(TEXT("精英独立表长"), Curve->BuildBattlePlan(ECastleBattleKind::Elite, 2, Plan, Failure));
-	TestEqual(TEXT("精英第二场已在表外"), Plan[0].Count, 7);
+	TestEqual(TEXT("精英第二场已在表外"), Plan[0].RaidEntries[0].Count, 7);
 	TestFalse(TEXT("零序号拒绝"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 0, Plan, Failure));
 	TestTrue(TEXT("失败不输出半份计划"), Plan.IsEmpty());
 	TestFalse(TEXT("非法种类拒绝"), Curve->BuildBattlePlan(static_cast<ECastleBattleKind>(255), 1, Plan, Failure));
-	Curve->NormalBattles.Last().Groups[0].Count = MAX_int32;
+	Curve->NormalBattles.Last().Waves[0].RaidEntries[0].Count = MAX_int32;
 	TestFalse(TEXT("外推溢出拒绝"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, MAX_int32, Plan, Failure));
-	TestTrue(TEXT("溢出原因有组下标"), Failure.ToString().Contains(TEXT("Groups[0].Count")));
-	TestTrue(TEXT("原曲线没有被外推改写"), Curve->NormalBattles[0].Groups[0].Count == 3);
+	TestTrue(TEXT("溢出原因有组下标"), Failure.ToString().Contains(TEXT("Waves[0].RaidEntries[0].Count")));
+	TestTrue(TEXT("原曲线没有被外推改写"), Curve->NormalBattles[0].Waves[0].RaidEntries[0].Count == 3);
 	return true;
 }
 
