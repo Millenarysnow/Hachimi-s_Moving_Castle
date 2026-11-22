@@ -323,7 +323,8 @@ public:
 			if (Director->ClearedSteps != 0 || Director->GetPhase() != ECastleDirectorPhase::Editing) { return false; }
 			Test->TestEqual(TEXT("重新加载重置等级"), Director->Level, 1);
 			Test->TestEqual(TEXT("重新加载重置经验"), Director->Experience, 0);
-			Test->TestEqual(TEXT("重新加载重置棋盘5x5"), Board->GridSize, FIntVector(5, 5, 8));
+			Test->TestEqual(TEXT("重新加载恢复 5×5×9 棋盘容量"), Board->GridSize, FIntVector(5, 5, 9));
+			Test->TestEqual(TEXT("重新加载恢复主塔开局三层"), Board->GetUnlockedLayerCount(), 3);
 			Test->TestTrue(TEXT("重新加载生成第一关节点"), Director->Nodes.Num() >= 2);
 			// 最后验证战斗失败事件可见，不在非法状态继续单局。
 			Test->AddExpectedError(TEXT("导演收到战斗失败"), EAutomationExpectedErrorFlags::Contains, 1);

@@ -87,6 +87,14 @@ public:
 	UFUNCTION(Exec)
 	void CastleSpawnEnemy(const FString& EnemyType, int32 WaveCount = 1);
 
+	/** 验收入口：通过真实受击入口扣血，同时驱动 HUD 与塔顶气球。 */
+	UFUNCTION(Exec)
+	void CastleDamageMainTower(float Damage);
+
+	/** 验收入口：升到指定等级（2～4），新气球上限使用棋盘等级配置。 */
+	UFUNCTION(Exec)
+	void CastleUpgradeMainTower(int32 Tier);
+
 protected:
 	/** 隐藏鼠标、锁定输入并创建指示器。 */
 	virtual void BeginPlay() override;

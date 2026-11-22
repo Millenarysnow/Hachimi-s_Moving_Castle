@@ -459,6 +459,45 @@ void ACastlePlayerController::ShowDirectorMessage(const FText& Message) const
 	ShowGameplayMessage(Message.ToString(), false);
 }
 
+void ACastlePlayerController::CastleDamageMainTower(const float Damage)
+{
+	UCastleMainTowerSubsystem* Towers = GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>();
+	if (!Towers || !Towers->ApplyMainTowerDamage(Damage))
+	{
+		ShowGameplayMessage(TEXT("无法对主塔结算伤害，请检查主塔状态与日志。"), false);
+	}
+}
+
+void ACastlePlayerController::CastleUpgradeMainTower(const int32 Tier)
+{
+	if (!IsValid(ActiveBoard)) { FindActiveBoard(); }
+	UCastleMainTowerSubsystem* Towers = GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>();
+	UCastleMainTowerComponent* Health = Towers ? Towers->GetRegisteredMainTower() : nullptr;
+	if (!IsValid(ActiveBoard) || !IsValid(Health) || Tier < 2 || Tier > 4
+		|| !ActiveBoard->TowerBalloonLimitsByTier.IsValidIndex(Tier - 1))
+	{
+		ShowGameplayMessage(TEXT("主塔升级验收需要已生成主塔，且等级必须为 2～4。"), false);
+		return;
+	}
+	const int32 Count = ActiveBoard->TowerBalloonLimitsByTier[Tier - 1];
+	const float BaseHealth = ActiveBoard->TowerHealthPerBalloon * Count;
+	FText Reason;
+	// 两部分都通过前置准备，才会向战斗与 HUD 发布升级后的生命数据。
+	if (!Health->PrepareTowerBalloonTier(Count, BaseHealth, true, Reason)
+		|| !ActiveBoard->ExpandMainTowerLayers(Tier * 2 + 1, Reason))
+	{
+		ShowDirectorMessage(Reason);
+		return;
+	}
+	if (!Health->SetTowerBalloonTier(Count, BaseHealth, true, Reason))
+	{
+		ShowDirectorMessage(Reason);
+		return;
+	}
+	ShowGameplayMessage(FString::Printf(TEXT("主塔升级到 Lv%d，开放 %d 层，补满 %d 个气球。"),
+		Tier, ActiveBoard->GetUnlockedLayerCount(), Count), true);
+}
+
 void ACastlePlayerController::SetDirectorModalState(const bool bRewardOpen, const bool bGameOverOpen, UUserWidget* FocusWidget)
 {
 	// 所有模态入口共享同一商店事件处理器，重复接线不会叠加监听者。

@@ -2,6 +2,7 @@
 
 #include "CastleMainTowerComponent.h"
 
+#include "CastleMainTowerBalloonComponent.h"
 #include "Engine/World.h"
 #include "Moving_Castle.h"
 
@@ -12,12 +13,15 @@ UCastleMainTowerComponent::UCastleMainTowerComponent()
 
 bool UCastleMainTowerComponent::InitializeHealth()
 {
-	if (!FMath::IsFinite(MaxHealth) || MaxHealth <= 0.0f)
+	if (!FMath::IsFinite(MaxHealth) || MaxHealth <= 0.0f
+		|| MaxBalloons < 1 || MaxBalloons > 100 || !FMath::IsFinite(HealthPerBalloon) || HealthPerBalloon <= 0.0f)
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("主塔生命初始化失败：MaxHealth 必须是有限正数。"));
+		UE_LOG(LogMoving_Castle, Error, TEXT("主塔 %s 生命初始化失败：最大生命、每球生命须为有限正数，气球容量须在 1～100。"), *GetPathName());
 		return false;
 	}
 
+	BaseMaxHealth = MaxHealth;
+	HealthMultiplier = 1.0f;
 	CurrentHealth = MaxHealth;
 	AttackCount = 0;
 	return true;
@@ -40,7 +44,7 @@ bool UCastleMainTowerComponent::ApplyDamage(const float Damage)
 	const float PreviousHealth = CurrentHealth;
 	CurrentHealth = FMath::Max(0.0f, CurrentHealth - Damage);
 	++AttackCount;
-	OnHealthChanged.Broadcast(PreviousHealth, CurrentHealth, Damage);
+	NotifyHealthChanged(PreviousHealth, Damage);
 
 	if (Damage > 0.0f)
 	{
@@ -64,9 +68,117 @@ bool UCastleMainTowerComponent::ApplyHealing(const float Amount)
 
 	const float PreviousHealth = CurrentHealth;
 	CurrentHealth = FMath::Min(MaxHealth, CurrentHealth + Amount);
-	OnHealthChanged.Broadcast(PreviousHealth, CurrentHealth, PreviousHealth - CurrentHealth);
+	NotifyHealthChanged(PreviousHealth, PreviousHealth - CurrentHealth);
 	UE_LOG(LogMoving_Castle, Display, TEXT("主塔恢复 %.2f 点生命：%.2f / %.2f。"),
 		CurrentHealth - PreviousHealth, CurrentHealth, MaxHealth);
+	return true;
+}
+
+void UCastleMainTowerComponent::GetBalloonCounts(int32& OutCurrentBalloons, int32& OutMaxBalloons) const
+{
+	OutMaxBalloons = MaxBalloons;
+	OutCurrentBalloons = CurrentHealth <= 0.0f ? 0
+		: FMath::Clamp(FMath::CeilToInt(static_cast<double>(CurrentHealth) * MaxBalloons / MaxHealth), 1, MaxBalloons);
+}
+
+void UCastleMainTowerComponent::NotifyHealthChanged(const float PreviousHealth, const float Damage)
+{
+	// 地面棋盘可继续使用仅有生命组件的主塔，已接入的塔顶先刷新再通知 HUD。
+	if (BalloonPresentation)
+	{
+		int32 CurrentBalloons, Capacity;
+		GetBalloonCounts(CurrentBalloons, Capacity);
+		BalloonPresentation->SetLiveCount(CurrentBalloons);
+	}
+	OnHealthChanged.Broadcast(PreviousHealth, CurrentHealth, Damage);
+}
+
+bool UCastleMainTowerComponent::AttachBalloonPresentation(UCastleMainTowerBalloonComponent* Presentation, FText& OutReason)
+{
+	OutReason = FText::GetEmpty();
+	if (BalloonPresentation || !IsValid(Presentation) || Presentation->GetOwner() != GetOwner())
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 无法登记气球表现：组件无效、不属于同一座主塔或已登记。"), *GetPathName()));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+		return false;
+	}
+	if (!Presentation->SetCapacity(MaxBalloons, OutReason)) { return false; }
+	int32 CurrentBalloons, Capacity;
+	GetBalloonCounts(CurrentBalloons, Capacity);
+	Presentation->SetLiveCount(CurrentBalloons);
+	BalloonPresentation = Presentation;
+	return true;
+}
+
+bool UCastleMainTowerComponent::PrepareTowerBalloonTier(const int32 NewMaxBalloons, const float NewBaseMaxHealth,
+	const bool bFullHeal, FText& OutReason)
+{
+	OutReason = FText::GetEmpty();
+	const float NewMaxHealth = NewBaseMaxHealth * HealthMultiplier;
+	if (NewMaxBalloons < 1 || NewMaxBalloons > 100 || !FMath::IsFinite(NewMaxHealth) || NewMaxHealth <= 0.0f
+		|| (!bFullHeal && CurrentHealth > NewMaxHealth))
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 拒绝气球等级变更：容量须在 1～100，且新上限须为有限正数并容纳保留的生命。"),
+			*GetPathName()));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+		return false;
+	}
+	// 表现组件先准备整批新容量，失败时不修改对外可见的生命或等级。
+	return !BalloonPresentation || BalloonPresentation->SetCapacity(NewMaxBalloons, OutReason);
+}
+
+bool UCastleMainTowerComponent::SetTowerBalloonTier(const int32 NewMaxBalloons, const float NewBaseMaxHealth,
+	const bool bFullHeal, FText& OutReason)
+{
+	if (!PrepareTowerBalloonTier(NewMaxBalloons, NewBaseMaxHealth, bFullHeal, OutReason)) { return false; }
+	const float PreviousHealth = CurrentHealth;
+	BaseMaxHealth = NewBaseMaxHealth;
+	MaxHealth = BaseMaxHealth * HealthMultiplier;
+	MaxBalloons = NewMaxBalloons;
+	if (bFullHeal) { CurrentHealth = MaxHealth; }
+	NotifyHealthChanged(PreviousHealth, PreviousHealth - CurrentHealth);
+	return true;
+}
+
+bool UCastleMainTowerComponent::SetMaxHealthMultiplier(const float Multiplier, const bool bScaleCurrentHealth)
+{
+	const float NewMaxHealth = BaseMaxHealth * Multiplier;
+	const float NewCurrentHealth = bScaleCurrentHealth
+		? static_cast<float>(static_cast<double>(CurrentHealth) / MaxHealth * NewMaxHealth) : CurrentHealth;
+	if (!FMath::IsFinite(MaxHealth) || MaxHealth <= 0.0f || !FMath::IsFinite(NewMaxHealth) || NewMaxHealth <= 0.0f
+		|| !FMath::IsFinite(NewCurrentHealth)
+		|| NewCurrentHealth > NewMaxHealth || (CurrentHealth > 0.0f && NewCurrentHealth <= 0.0f))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("主塔 %s 拒绝生命倍率 %g：新最大生命或缩放后的当前生命无效。"), *GetPathName(), Multiplier);
+		return false;
+	}
+	const float PreviousHealth = CurrentHealth;
+	HealthMultiplier = Multiplier;
+	MaxHealth = NewMaxHealth;
+	CurrentHealth = NewCurrentHealth;
+	NotifyHealthChanged(PreviousHealth, PreviousHealth - CurrentHealth);
+	return true;
+}
+
+bool UCastleMainTowerComponent::TryConsumeBalloons(const int32 BalloonCount, FText& OutReason)
+{
+	OutReason = FText::GetEmpty();
+	const float Cost = HealthPerBalloon * BalloonCount;
+	const float RemainingHealth = CurrentHealth - Cost;
+	int32 CurrentBalloons, Capacity;
+	GetBalloonCounts(CurrentBalloons, Capacity);
+	if (BalloonCount <= 0 || BalloonCount >= CurrentBalloons || !FMath::IsFinite(Cost) || Cost <= 0.0f
+		|| RemainingHealth <= 0.0f || RemainingHealth >= CurrentHealth)
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 无法回收 %d 个气球：数量须为正且回收后需要保留至少一个存活气球。"),
+			*GetPathName(), BalloonCount));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+		return false;
+	}
+	// 空岛消耗不是敌人攻击，因此保留攻击计数，但仍广播真实扣血量。
+	const float PreviousHealth = CurrentHealth;
+	CurrentHealth = RemainingHealth;
+	NotifyHealthChanged(PreviousHealth, Cost);
 	return true;
 }
 

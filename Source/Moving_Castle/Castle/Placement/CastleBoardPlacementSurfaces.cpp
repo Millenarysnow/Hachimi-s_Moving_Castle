@@ -13,7 +13,7 @@ bool ACastleBoard::ValidatePlacementSurface(FText& OutFailureReason) const
 	{
 		// 除了整个侧格集合，核对它确实属于本棋盘的主塔；旧地面不参与此状态判断。
 		if (!IsValid(MainTowerActor) || !IsValid(TowerSideGrid) || TowerSideGrid->GetOwner() != MainTowerActor.Get()
-			|| !TowerSideGrid->IsRegistered() || TowerSideGrid->GetCells().Num() != GridSize.Z * 4)
+			|| !TowerSideGrid->IsRegistered() || TowerSideGrid->GetCells().Num() != GetUnlockedLayerCount() * 4)
 		{
 			OutFailureReason = FText::FromString(FString::Printf(TEXT("棋盘 %s 的主塔 %s 或侧格配置未完整就绪。"),
 				*GetPathName(), *GetPathNameSafe(MainTowerActor.Get())));

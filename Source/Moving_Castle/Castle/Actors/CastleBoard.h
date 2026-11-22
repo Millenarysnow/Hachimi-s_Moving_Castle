@@ -23,6 +23,7 @@ class UCastleCombatDataAsset;
 class UCastleGroundGenerator;
 class UCastleMainTowerComponent;
 class UCastleTowerSideGridComponent;
+class UStaticMeshComponent;
 struct FCastleTowerSideCell;
 class USceneComponent;
 struct FCastleBuildingTriggerContext;
@@ -121,6 +122,31 @@ public:
 	/** 塔根至侧格面板中心的水平距离；塔侧地图必须按主塔模型明确配置。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|建造面", meta = (Units = "cm", EditCondition = "PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides"))
 	float TowerSideSurfaceOffset = 0.0f;
+
+	/** 由正式塔侧关卡开启；地面棋盘及旧塔侧夹具仍使用它们自己的 GridSize.Z。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|主塔扩层")
+	bool bEnableProgressiveTowerLayers = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|主塔扩层")
+	int32 InitialUnlockedLayers = 3;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|主塔扩层")
+	int32 MaxTowerLayers = 9;
+
+	/** 四个等级的气球容量；基础最大生命等于容量与基础每球生命的乘积。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|主塔扩层")
+	TArray<int32> TowerBalloonLimitsByTier = {5, 10, 20, 40};
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|主塔扩层")
+	float TowerHealthPerBalloon = 200.0f;
+
+	/** 查询与放置、合成登记共享的当前有效高度。 */
+	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
+	int32 GetUnlockedLayerCount() const;
+
+	/** 完整追加新塔身和侧格之后才发布新的建筑高度上限。 */
+	UFUNCTION(BlueprintCallable, Category = "移动城堡|棋盘")
+	bool ExpandMainTowerLayers(int32 TargetLayerCount, FText& OutReason);
 
 	/** 校验当前模式的实际数据，不能从缺失的塔侧格回退到地面。 */
 	bool ValidatePlacementSurface(FText& OutFailureReason) const;
@@ -438,6 +464,20 @@ protected:
 
 	/** 塔侧格归属于主塔 Actor；棋盘只查询由自身生成并登记的组件。 */
 	UPROPERTY(Transient) TObjectPtr<UCastleTowerSideGridComponent> TowerSideGrid;
+
+	/** 只有启用逐级扩层的塔侧关卡使用此运行时状态。 */
+	int32 CurrentUnlockedLayers = 0;
+	bool UsesProgressiveTowerLayers() const;
+	/** 塔身网格由主塔持有。这里记录每段的原碰撞状态，揭开新层时恢复。 */
+	struct FTowerBodyPart
+	{
+		TWeakObjectPtr<UStaticMeshComponent> Mesh;
+		ECollisionEnabled::Type Collision = ECollisionEnabled::NoCollision;
+		bool bAffectsNavigation = false;
+	};
+	TArray<TArray<FTowerBodyPart>> TowerBodySections;
+	UPROPERTY(Transient) TObjectPtr<USceneComponent> TowerCrownAnchor;
+	bool InitializeProgressiveTowerPresentation(AActor& Tower, UCastleMainTowerComponent& Health, FText& OutReason);
 
 	/** 塔侧模式的中心整列不可被房间占用，在预览和真正登记时共同校验。 */
 	bool IsMainTowerCellReserved(const FIntVector& Coordinate) const;
