@@ -58,16 +58,20 @@ namespace CastleCombatTests
 		FMassEntityManager& Manager() const { return World->GetSubsystem<UMassEntitySubsystem>()->GetMutableEntityManager(); }
 		UCastleCombatSubsystem& Combat() const { return *World->GetSubsystem<UCastleCombatSubsystem>(); }
 		UCastleMassUnitSubsystem& Units() const { return *World->GetSubsystem<UCastleMassUnitSubsystem>(); }
-		static FCastleCombatSpawnGroup Group(const int32 Count, const float Delay)
+		static FCastleRaidSpawnEntry Group(const int32 Count, const float Delay)
 		{
-			FCastleCombatSpawnGroup Result;
-			Result.EnemyId = TEXT("Enemy"); Result.Count = Count; Result.Delay = Delay;
+			FCastleRaidSpawnEntry Result;
+			Result.EnemyId = TEXT("Enemy"); Result.Count = Count; Result.TriggerDelay = Delay; Result.SpawnInterval = 0.0f;
 			return Result;
 		}
-		void SetGroups(const TArray<FCastleCombatSpawnGroup>& Groups)
+		void SetGroups(const TArray<FCastleRaidSpawnEntry>& Groups)
 		{
 			FCastleCombatBattleDefinition Battle;
-			Battle.Groups = Groups;
+			FCastleCombatWaveDefinition Wave;
+			// 旧场景使用单波、每组同时生成，继续检验已有生命周期和事件契约。
+			Wave.BugCurve.bEnabled = false;
+			Wave.RaidEntries = Groups;
+			Battle.Waves.Add(MoveTemp(Wave));
 			Config->DifficultyCurve->NormalBattles = {Battle};
 			Config->DifficultyCurve->EliteBattles = {Battle};
 		}
@@ -272,7 +276,7 @@ bool FCastleCombatDelayedFailureTest::RunTest(const FString& Parameters)
 	Scope.Combat().OnBattleFailed.AddLambda([&](auto Kind, auto Ordinal, const FText& Reason)
 	{
 		++Failed;
-		TestTrue(TEXT("失败原因带组下标和配置"), Reason.ToString().Contains(TEXT("Groups[1]")) && Reason.ToString().Contains(TEXT("配置")));
+		TestTrue(TEXT("失败原因带组下标和配置"), Reason.ToString().Contains(TEXT("RaidEntries[1]")) && Reason.ToString().Contains(TEXT("配置")));
 	});
 	Scope.Combat().InitializeCombat(Scope.Config, Failure);
 	TestTrue(TEXT("开战"), Scope.Combat().StartBattle(ECastleBattleKind::Normal, 1, Failure));
@@ -338,14 +342,14 @@ bool FCastleCombatPreflightTest::RunTest(const FString& Parameters)
 	FText Failure;
 	TestTrue(TEXT("初始化合法配置"), Scope.Combat().InitializeCombat(Scope.Config, Failure));
 	// 初始化后资产仍可编辑，StartBattle 必须再次校验完整计划，不能生成第一组后才发现后组无效。
-	Scope.Config->DifficultyCurve->NormalBattles[0].Groups[1].Count = 0;
+	Scope.Config->DifficultyCurve->NormalBattles[0].Waves[0].RaidEntries[1].Count = 0;
 	AddExpectedError(TEXT("StartBattle："), EAutomationExpectedErrorFlags::Contains, 2);
 	TestFalse(TEXT("延迟组非法也整场拒绝"), Scope.Combat().StartBattle(ECastleBattleKind::Normal, 1, Failure));
 	TestTrue(TEXT("拒绝原因带资产名和组下标"), Failure.ToString().Contains(Scope.Config->GetPathName())
-		&& Failure.ToString().Contains(TEXT("Groups[1].Count")));
+		&& Failure.ToString().Contains(TEXT("RaidEntries[1].Count")));
 	TestEqual(TEXT("第一组尚未生成"), Scope.Count(), 0);
 	TestEqual(TEXT("没有提前创建生成器"), Scope.Spawners(), 0);
-	Scope.Config->DifficultyCurve->NormalBattles[0].Groups[1].Count = MAX_int32;
+	Scope.Config->DifficultyCurve->NormalBattles[0].Waves[0].RaidEntries[1].Count = MAX_int32;
 	Scope.Config->Roster[0].MaxClusterCount = 2;
 	Scope.Config->Roster[0].ClusterSpreadRadius = 1;
 	TestFalse(TEXT("计划内簇数量溢出也整场拒绝"), Scope.Combat().StartBattle(ECastleBattleKind::Normal, 1, Failure));

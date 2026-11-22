@@ -9,6 +9,7 @@
 
 class UMassEntityConfigAsset;
 struct FMassEntityManager;
+struct FMassEntityTemplate;
 
 /** 蓝图/建筑系统与 Mass 的批量接口。批量命令延迟执行，农田增益与即时伤害同步修改值状态。 */
 UCLASS()
@@ -52,6 +53,18 @@ public:
 	bool SpawnUnits(UMassEntityConfigAsset* Configuration, const TArray<FTransform>& SpawnTransforms,
 		TArray<FCastleMassUnitHandle>& OutUnits, FText& OutFailureReason);
 
+	/** 整批验证覆写及实际模板，生成前失败时不会创建实体。 */
+	bool SpawnEnemies(UMassEntityConfigAsset* Configuration, const TArray<FTransform>& SpawnTransforms,
+		const FCastleMassEnemyAttributeOverrides& Overrides, TArray<FCastleMassUnitHandle>& OutUnits, FText& OutFailureReason);
+
+	/** 同一规则用于战前预检和实际生成，校验属性乘积及攻击能力是否匹配。 */
+	static bool ValidateEnemySpawnOverrides(const FMassEntityTemplate& Template,
+		const FCastleMassEnemyAttributeOverrides& Overrides, FText& OutFailureReason);
+
+	/** 游戏线程修改世界敌人攻速，非法输入保持旧值；已在倒数的冷却保持原时长。 */
+	bool SetGlobalEnemyAttackSpeedMultiplier(float Multiplier);
+	float GetGlobalEnemyAttackSpeedMultiplier() const { return GlobalEnemyAttackSpeedMultiplier; }
+
 	/** 三维直达目标接口；不自动查询 NavMesh 或建筑路网，仅作用于敌人/NPC。 */
 	UFUNCTION(BlueprintCallable, Category="移动城堡|Mass")
 	bool MoveUnitsTo(const TArray<FCastleMassUnitHandle>& Units, FVector Destination);
@@ -84,10 +97,15 @@ public:
 	virtual bool DoesSupportWorldType(EWorldType::Type WorldType) const override;
 
 private:
+	bool SpawnUnitsInternal(UMassEntityConfigAsset* Configuration, const TArray<FTransform>& SpawnTransforms,
+		const FCastleMassEnemyAttributeOverrides* EnemyOverrides, TArray<FCastleMassUnitHandle>& OutUnits, FText& OutFailureReason);
 	FMassEntityManager* GetManager() const;
 	bool CollectHandles(const TArray<FCastleMassUnitHandle>& Units, TArray<FMassEntityHandle>& OutHandles) const;
 
 	/** 配置只在首次使用时验证，热路径不重建模板或遍历 Trait。 */
 	UPROPERTY(Transient)
 	TSet<TObjectPtr<UMassEntityConfigAsset>> ValidatedConfigurations;
+
+	/** 仅游戏线程的敌方攻击处理器与玩法入口访问当前世界的倍率。 */
+	float GlobalEnemyAttackSpeedMultiplier = 1.0f;
 };

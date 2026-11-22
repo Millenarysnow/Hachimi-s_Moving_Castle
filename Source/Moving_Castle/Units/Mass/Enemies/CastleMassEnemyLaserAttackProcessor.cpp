@@ -7,6 +7,7 @@
 #include "CastleMassDeathSplitProcessor.h"
 #include "CastleMassFragments.h"
 #include "CastleMassProcessors.h"
+#include "CastleMassUnitSubsystem.h"
 #include "Engine/World.h"
 #include "MassCommonFragments.h"
 #include "MassCommonTypes.h"
@@ -48,8 +49,14 @@ void UCastleMassEnemyLaserAttackProcessor::Execute(FMassEntityManager& EntityMan
 		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 激光索敌失败：世界 %s 缺少支援塔子系统。"), *GetPathNameSafe(World));
 		return;
 	}
+	const auto* UnitSubsystem = World->GetSubsystem<UCastleMassUnitSubsystem>();
+	if (!UnitSubsystem)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 激光处理器：世界 %s 缺少 Mass 单位子系统，无法读取敌人攻速。"), *GetPathNameSafe(World));
+		return;
+	}
 	bool bAnyMissingTarget = false;
-	Query.ForEachEntityChunk(Context, [this, World, Shields, Main, Support, &bAnyMissingTarget](FMassExecutionContext& Chunk)
+	Query.ForEachEntityChunk(Context, [this, World, Shields, Main, Support, UnitSubsystem, &bAnyMissingTarget](FMassExecutionContext& Chunk)
 	{
 		const float DeltaTime = FMath::Max(0.0f, Chunk.GetDeltaTimeSeconds());
 		const auto Transforms = Chunk.GetMutableFragmentView<FTransformFragment>();
@@ -80,7 +87,7 @@ void UCastleMassEnemyLaserAttackProcessor::Execute(FMassEntityManager& EntityMan
 			{
 				bAnyMissingTarget = true;
 				Attack.bInAttackRange = false;
-				Attack.AttackCooldown = 0.0f;
+				Attack.AttackCooldown = 0.0;
 				Targets[It] = FCastleMassMoveTargetFragment();
 				Velocities[It].Value = FVector::ZeroVector;
 				if (!Animations.IsEmpty()) { Animations[It].bInAttackState = false; }
@@ -90,7 +97,7 @@ void UCastleMassEnemyLaserAttackProcessor::Execute(FMassEntityManager& EntityMan
 			if (!Attack.bInAttackRange)
 			{
 				// 再次进入射程视为新的引导，首次伤害立即发生。
-				Attack.AttackCooldown = 0.0f;
+				Attack.AttackCooldown = 0.0;
 				Targets[It].Target = TargetLocation;
 				Targets[It].DesiredVelocity = FVector::ZeroVector;
 				Targets[It].bHasTarget = true;
@@ -112,7 +119,7 @@ void UCastleMassEnemyLaserAttackProcessor::Execute(FMassEntityManager& EntityMan
 			Attack.BeamStart = Muzzle;
 			Attack.BeamEnd = TargetLocation;
 
-			Attack.AttackCooldown = FMath::Max(0.0f, Attack.AttackCooldown - DeltaTime);
+			Attack.AttackCooldown = FMath::Max(0.0, Attack.AttackCooldown - DeltaTime);
 			if (Attack.AttackCooldown > 0.0f) { continue; }
 			FCastleMassUnitHandle Attacker;
 			Attacker.World = World;
@@ -124,7 +131,8 @@ void UCastleMassEnemyLaserAttackProcessor::Execute(FMassEntityManager& EntityMan
 			if (bApplied)
 			{
 				++Attack.AttackCount;
-				Attack.AttackCooldown = Attack.AttackInterval;
+				// 引导期间每次伤害结算后使用当前世界倍率，离开射程仍立即清空冷却。
+				Attack.AttackCooldown = static_cast<double>(Attack.AttackInterval) / UnitSubsystem->GetGlobalEnemyAttackSpeedMultiplier();
 			}
 			if (Units[It].Health <= 0.0f)
 			{

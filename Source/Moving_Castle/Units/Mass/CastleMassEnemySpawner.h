@@ -45,6 +45,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mass|敌人|簇生成")
 	float ClusterSpreadRadius = 0.0f;
 
+	/** 本生成批次的实例属性，原有圆环生成器默认使用中性值。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mass|敌人")
+	FCastleMassEnemyAttributeOverrides AttributeOverrides;
+
 	/** 在主塔周围圆环随机生成敌人；范围错误或主塔缺失时整批拒绝。 */
 	virtual bool SpawnUnits() override;
 };

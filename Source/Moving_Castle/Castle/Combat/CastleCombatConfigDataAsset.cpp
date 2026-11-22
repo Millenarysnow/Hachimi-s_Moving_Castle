@@ -46,13 +46,25 @@ bool UCastleCombatConfigDataAsset::ValidateConfiguration(FText& OutFailureReason
 	{
 		for (int32 Battle = 0; Battle < Tables[Table]->Num(); ++Battle)
 		{
-			const auto& Groups = (*Tables[Table])[Battle].Groups;
-			for (int32 Group = 0; Group < Groups.Num(); ++Group)
+			const auto& Waves = (*Tables[Table])[Battle].Waves;
+			for (int32 WaveIndex = 0; WaveIndex < Waves.Num(); ++WaveIndex)
 			{
-				if (!EnemyIds.Contains(Groups[Group].EnemyId))
+				const auto& Wave = Waves[WaveIndex];
+				const FString Path = FString::Printf(TEXT("DifficultyCurve %s.%s[%d].Waves[%d]"),
+					*DifficultyCurve->GetPathName(), Names[Table], Battle, WaveIndex);
+				if (Wave.BugCurve.bEnabled && !EnemyIds.Contains(Wave.BugCurve.BugEnemyId))
 				{
-					return Reject(FString::Printf(TEXT("DifficultyCurve %s.%s[%d].Groups[%d].EnemyId"), *DifficultyCurve->GetPathName(), Names[Table], Battle, Group),
-						FString::Printf(TEXT("%s 不在名册中。"), *Groups[Group].EnemyId.ToString()));
+					return Reject(Path + TEXT(".BugCurve.BugEnemyId"),
+						FString::Printf(TEXT("%s 不在名册中。"), *Wave.BugCurve.BugEnemyId.ToString()));
+				}
+				for (int32 RaidIndex = 0; RaidIndex < Wave.RaidEntries.Num(); ++RaidIndex)
+				{
+					const FName Id = Wave.RaidEntries[RaidIndex].EnemyId;
+					if (!EnemyIds.Contains(Id))
+					{
+						return Reject(FString::Printf(TEXT("%s.RaidEntries[%d].EnemyId"), *Path, RaidIndex),
+							FString::Printf(TEXT("%s 不在名册中。"), *Id.ToString()));
+					}
 				}
 			}
 		}

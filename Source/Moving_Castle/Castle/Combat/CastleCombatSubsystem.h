@@ -11,17 +11,37 @@ class UCastleCombatConfigDataAsset;
 DECLARE_MULTICAST_DELEGATE_TwoParams(FCastleBattleCleared, ECastleBattleKind, int32);
 DECLARE_MULTICAST_DELEGATE_ThreeParams(FCastleBattleFailed, ECastleBattleKind, int32, const FText&);
 
-/** 开战时冻结的单组计划；强引用配置防止 GC，复制名册和曲线值避免延迟期间出场参数漂移。 */
+/** 开战时冻结的批次序列，按已生成批次数推导时刻，避免为每只定时突袭怪复制条目。 */
 USTRUCT()
-struct FCastleCombatScheduledGroup
+struct FCastleCombatScheduledEntry
 {
 	GENERATED_BODY()
 	UPROPERTY()
 	FCastleCombatEnemyEntry Enemy;
-	UPROPERTY()
-	FCastleCombatSpawnGroup Group;
+	FCastleMassEnemyAttributeOverrides AttributeOverrides;
+	FString FieldPath;
+	int32 RemainingPoints = 0;
+	int32 BatchSize = 1;
+	int32 SpawnedBatches = 0;
+	double FirstDelay = 0.0;
+	double Interval = 0.0;
 	int32 Seed = 0;
-	bool bSpawned = false;
+
+	int32 NextBatchSize() const { return FMath::Min(RemainingPoints, BatchSize); }
+	double NextBatchDelay() const { return FirstDelay + SpawnedBatches * Interval; }
+};
+
+/** 冻结整波设置并强引用出场模板。进入下一波以前只从当前波序列取到期批次。 */
+USTRUCT()
+struct FCastleCombatScheduledWave
+{
+	GENERATED_BODY()
+	UPROPERTY()
+	TArray<FCastleCombatScheduledEntry> Entries;
+	int64 GlobalIndex = 0;
+	int32 PendingBatches = 0;
+	bool bAdvanceOnClear = true;
+	double Duration = 0.0;
 };
 
 /** 世界级战斗调度，仅 Game/PIE；不负责导演流程、奖励、主塔失败界面或敌人 AI。 */
@@ -40,6 +60,12 @@ public:
 	bool GetBattleProgress(int32& OutEnemyEntities, int32& OutPendingGroups) const;
 	/** 读取本场战斗的已击杀进度（已击杀数与本场总预算数）；空闲或计数失败时返回 false。 */
 	bool GetBattleDefeatedProgress(int32& OutDefeatedCount, int32& OutTotalCount) const;
+	/** 返回关内从 1 开始的当前波次及总波数，空闲时返回 false。 */
+	bool GetCurrentWaveProgress(int32& OutCurrentWaveIndex, int32& OutTotalWaves) const;
+	/** 本局敌人门槛状态，开战时快照；空标签是非法调用。 */
+	bool UnlockEnemyTag(FName Tag);
+	bool HasUnlockedEnemyTag(FName Tag) const;
+	void ResetUnlockedEnemyTags();
 
 	FCastleBattleCleared OnBattleCleared;
 	FCastleBattleFailed OnBattleFailed;
@@ -53,31 +79,41 @@ public:
 	virtual TStatId GetStatId() const override;
 
 private:
-	/** 生成失败回滚与正常清场分开：回滚直接回收，不能走伤害而触发死亡分裂。 */
-	bool SpawnGroup(int32 GroupIndex, FText& OutFailureReason);
+	int64 ResolveFirstGlobalWaveIndex(ECastleBattleKind Kind, int32 KindOrdinal) const;
+	bool CanAdvanceCurrentWave(double WaveElapsed, int32 EnemyCount) const;
+	/** 冻结各波并预检有效条目，构建成功后才允许更改本场状态。 */
+	bool BuildScheduledWaves(ECastleBattleKind Kind, int32 KindOrdinal, int64 FirstGlobalWaveIndex,
+		int32 ExistingEnemies, TArray<FCastleCombatScheduledWave>& OutWaves,
+		int32& OutEstimatedEnemies, int32& OutPendingBatches, FText& OutFailureReason);
+	bool SpawnDueBatches(double WaveElapsed, FText& OutFailureReason);
+	bool SpawnScheduledBatch(FCastleCombatScheduledEntry& Entry, FText& OutFailureReason);
+	void BeginWave(int32 WaveIndex, double GameTime);
+	/** 回滚直接回收，避免伤害链路触发死亡分裂。 */
 	void RollbackNewSpawners(int32 FirstNewSpawner);
 	bool DestroyClearedSpawners();
 	void FailBattle(const FText& Reason);
 	void CancelForWorldEnd();
-	int32 CountPendingGroups() const;
-	/** 估算所有尚未出场组的总实体数；每组按簇范围均值估算，实际出场后按真实数量修正总预算。 */
-	int32 EstimatePendingGroupEntities() const;
+	void ResetBattlePlan();
 
 	UPROPERTY(Transient)
 	TObjectPtr<UCastleCombatConfigDataAsset> CombatConfig;
 	UPROPERTY(Transient)
-	TArray<FCastleCombatScheduledGroup> Plan;
+	TArray<FCastleCombatScheduledWave> Plan;
 	/** 包括延迟失败后仍有敌人的旧生成器，空闲时也 Tick 负责其生命周期，不遗留无人管理 Actor。 */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<ACastleMassEnemySpawner>> ManagedSpawners;
 
+	TSet<FName> UnlockedEnemyTags;
 	bool bBattleActive = false;
 	bool bWorldEnding = false;
 	ECastleBattleKind ActiveKind = ECastleBattleKind::Normal;
 	int32 ActiveOrdinal = 0;
+	int32 ActiveWaveIndex = INDEX_NONE;
+	int32 PendingBatches = 0;
+	int32 PendingEstimatedEnemies = 0;
 	/** 本场战斗用于计算骷髅击杀进度的总敌人数预算；随延迟组真实出场数与分裂增量同步修正。 */
-	int32 BattleTotalEnemyBudget = 0;
-	double BattleStartGameTime = 0;
+	int64 BattleTotalEnemyBudget = 0;
+	double WaveStartGameTime = 0.0;
 	float BattleInnerRadius = 0;
 	float BattleOuterRadius = 0;
 	float BattleHeightOffset = 0;

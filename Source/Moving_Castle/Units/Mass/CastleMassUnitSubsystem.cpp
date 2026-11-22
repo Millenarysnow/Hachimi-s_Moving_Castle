@@ -3,6 +3,7 @@
 #include "CastleMassFragments.h"
 #include "CastleMassTraits.h"
 #include "Enemies/CastleMassMeleeAttackFragments.h"
+#include "Enemies/CastleMassEnemyLaserAttackFragments.h"
 #include "Engine/World.h"
 #include "MassCommands.h"
 #include "MassCommonFragments.h"
@@ -21,8 +22,116 @@
 #include "Projectiles/CastleMassEnemyProjectileFragments.h"
 #include "Enemies/CastleMassEnemyRangedAttackFragments.h"
 #include "CastleMainTowerComponent.h"
+#include "Moving_Castle.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCastleMassHomingProjectile, Log, All);
+
+namespace
+{
+	bool IsFinitePositive(const float Value)
+	{
+		return FMath::IsFinite(Value) && Value > 0.0f;
+	}
+
+	template<typename TAttack>
+	void ApplyEnemyAttackOverrides(FMassEntityManager& Manager, const FMassEntityHandle Entity,
+		const FCastleMassEnemyAttributeOverrides& Overrides)
+	{
+		// 每个攻击能力只有自己的状态片段，远程发射随后从该片段读取逐发伤害。
+		if (auto* Attack = Manager.GetFragmentDataPtr<TAttack>(Entity))
+		{
+			Attack->AttackDamage *= Overrides.DamageMultiplier;
+			Attack->AttackInterval *= Overrides.AttackIntervalMultiplier;
+		}
+	}
+}
+
+const TCHAR* FCastleMassEnemyAttributeOverrides::GetInvalidField() const
+{
+	if (!FMath::IsFinite(HealthOverride) || HealthOverride < 0.0f) { return TEXT("HealthOverride"); }
+	if (!IsFinitePositive(HealthMultiplier) || (HealthOverride > 0.0f && HealthMultiplier != 1.0f))
+	{
+		return TEXT("HealthOverride/HealthMultiplier");
+	}
+	if (!IsFinitePositive(MoveSpeedMultiplier)) { return TEXT("MoveSpeedMultiplier"); }
+	if (!IsFinitePositive(DamageMultiplier)) { return TEXT("DamageMultiplier"); }
+	if (!IsFinitePositive(AttackIntervalMultiplier)) { return TEXT("AttackIntervalMultiplier"); }
+	if (!IsFinitePositive(ScaleMultiplier)) { return TEXT("ScaleMultiplier"); }
+	return nullptr;
+}
+
+bool UCastleMassUnitSubsystem::SetGlobalEnemyAttackSpeedMultiplier(const float Multiplier)
+{
+	if (!IsInGameThread() || !IsFinitePositive(Multiplier) || Multiplier > 10.0f)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("SetGlobalEnemyAttackSpeedMultiplier：世界 %s 必须在游戏线程使用 (0, 10] 的有限攻速倍率，收到 %g。"),
+			*GetPathNameSafe(GetWorld()), Multiplier);
+		return false;
+	}
+	GlobalEnemyAttackSpeedMultiplier = Multiplier;
+	return true;
+}
+
+bool UCastleMassUnitSubsystem::ValidateEnemySpawnOverrides(const FMassEntityTemplate& Template,
+	const FCastleMassEnemyAttributeOverrides& Overrides, FText& OutFailureReason)
+{
+	OutFailureReason = FText::GetEmpty();
+	const auto Reject = [&OutFailureReason](const TCHAR* Reason)
+	{
+		OutFailureReason = FText::FromString(Reason);
+		return false;
+	};
+	if (const TCHAR* Field = Overrides.GetInvalidField())
+	{
+		OutFailureReason = FText::FromString(FString::Printf(TEXT("AttributeOverrides.%s 无效。"), Field));
+		return false;
+	}
+
+	// 校验引擎实际使用的模板初值，避免继承配置或 Trait 顺序造成验证与实例数据不一致。
+	const FCastleMassUnitFragment* Unit = nullptr;
+	bool bHasAttack = false;
+	const auto ValidateAttack = [&Overrides, &bHasAttack](const auto* Attack)
+	{
+		if (!Attack) { return true; }
+		bHasAttack = true;
+		return FMath::IsFinite(Attack->AttackDamage * Overrides.DamageMultiplier)
+			&& IsFinitePositive(Attack->AttackInterval * Overrides.AttackIntervalMultiplier);
+	};
+	for (const FInstancedStruct& Fragment : Template.GetInitialFragmentValues())
+	{
+		if (const auto* InitialUnit = Fragment.GetPtr<FCastleMassUnitFragment>()) { Unit = InitialUnit; }
+		if (!ValidateAttack(Fragment.GetPtr<FCastleMassMeleeAttackFragment>())
+			|| !ValidateAttack(Fragment.GetPtr<FCastleMassEnemyRangedAttackFragment>())
+			|| !ValidateAttack(Fragment.GetPtr<FCastleMassEnemyLaserAttackFragment>()))
+		{
+			return Reject(TEXT("AttributeOverrides.DamageMultiplier/AttackIntervalMultiplier 的计算结果不可表示。"));
+		}
+	}
+	if (!Unit || Unit->Kind != ECastleMassUnitKind::Enemy)
+	{
+		return Reject(TEXT("属性覆写仅适用于含敌人单位片段的 Mass 模板。"));
+	}
+	if (Overrides.HealthOverride == 0.0f && !IsFinitePositive(Unit->Health * Overrides.HealthMultiplier))
+	{
+		return Reject(TEXT("AttributeOverrides.HealthMultiplier 的计算结果必须为可表示的正数。"));
+	}
+	if (!bHasAttack && (Overrides.DamageMultiplier != 1.0f || Overrides.AttackIntervalMultiplier != 1.0f))
+	{
+		return Reject(TEXT("AttributeOverrides.DamageMultiplier/AttackIntervalMultiplier 要求模板装配攻击能力。"));
+	}
+	for (const FConstSharedStruct& Shared : Template.GetSharedFragmentValues().GetConstSharedFragments())
+	{
+		if (const auto* Movement = Shared.GetPtr<FCastleMassMovementParameters>())
+		{
+			if (!FMath::IsFinite(Movement->Settings.MaxSpeed * Overrides.MoveSpeedMultiplier))
+			{
+				return Reject(TEXT("AttributeOverrides.MoveSpeedMultiplier 的计算结果不可表示。"));
+			}
+			return true;
+		}
+	}
+	return Reject(TEXT("AttributeOverrides.MoveSpeedMultiplier 要求模板装配共享移动参数。"));
+}
 
 bool UCastleMassUnitSubsystem::CountEnemyEntities(int32& OutCount) const
 {
@@ -369,6 +478,20 @@ bool UCastleMassUnitSubsystem::CollectHandles(const TArray<FCastleMassUnitHandle
 bool UCastleMassUnitSubsystem::SpawnUnits(UMassEntityConfigAsset* Configuration, const TArray<FTransform>& SpawnTransforms,
 	TArray<FCastleMassUnitHandle>& OutUnits, FText& OutFailureReason)
 {
+	return SpawnUnitsInternal(Configuration, SpawnTransforms, nullptr, OutUnits, OutFailureReason);
+}
+
+bool UCastleMassUnitSubsystem::SpawnEnemies(UMassEntityConfigAsset* Configuration, const TArray<FTransform>& SpawnTransforms,
+	const FCastleMassEnemyAttributeOverrides& Overrides, TArray<FCastleMassUnitHandle>& OutUnits, FText& OutFailureReason)
+{
+	if (SpawnUnitsInternal(Configuration, SpawnTransforms, &Overrides, OutUnits, OutFailureReason)) { return true; }
+	UE_LOG(LogMoving_Castle, Error, TEXT("SpawnEnemies：配置 %s：%s"), *GetPathNameSafe(Configuration), *OutFailureReason.ToString());
+	return false;
+}
+
+bool UCastleMassUnitSubsystem::SpawnUnitsInternal(UMassEntityConfigAsset* Configuration, const TArray<FTransform>& SpawnTransforms,
+	const FCastleMassEnemyAttributeOverrides* EnemyOverrides, TArray<FCastleMassUnitHandle>& OutUnits, FText& OutFailureReason)
+{
 	OutUnits.Reset();
 	OutFailureReason = FText::GetEmpty();
 	FMassEntityManager* Manager = GetManager();
@@ -402,6 +525,11 @@ bool UCastleMassUnitSubsystem::SpawnUnits(UMassEntityConfigAsset* Configuration,
 			OutFailureReason = FText::FromString(TEXT("生成变换包含无效数值或未归一化旋转，整批生成已取消。"));
 			return false;
 		}
+		if (EnemyOverrides && (Transform.GetScale3D() * EnemyOverrides->ScaleMultiplier).ContainsNaN())
+		{
+			OutFailureReason = FText::FromString(TEXT("AttributeOverrides.ScaleMultiplier 应用后生成变换的缩放不可表示。"));
+			return false;
+		}
 	}
 	if (!ValidatedConfigurations.Contains(Configuration))
 	{
@@ -419,16 +547,29 @@ bool UCastleMassUnitSubsystem::SpawnUnits(UMassEntityConfigAsset* Configuration,
 		OutFailureReason = FText::FromString(TEXT("Mass 模板或生成子系统未就绪。"));
 		return false;
 	}
+	if (EnemyOverrides && !ValidateEnemySpawnOverrides(Template, *EnemyOverrides, OutFailureReason)) { return false; }
 
 	TArray<FMassEntityHandle> Entities;
-	// 保持创建上下文直到全部变换与相位写入；Observer 不会提前看到半初始化实体。
+	// 保持创建上下文直到全部变换、相位及逐实体属性写完，确保创建 Observer 读到完整状态。
 	auto CreationContext = Spawner->SpawnEntities(Template, SpawnTransforms.Num(), Entities);
 	OutUnits.Reserve(Entities.Num());
 	const UCastleMassUnitTrait* Trait = CastChecked<UCastleMassUnitTrait>(Configuration->FindTrait(UCastleMassUnitTrait::StaticClass()));
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)
 	{
 		const FMassEntityHandle Entity = Entities[Index];
-		Manager->GetFragmentDataChecked<FTransformFragment>(Entity).GetMutableTransform() = SpawnTransforms[Index];
+		FTransform& Transform = Manager->GetFragmentDataChecked<FTransformFragment>(Entity).GetMutableTransform();
+		Transform = SpawnTransforms[Index];
+		if (EnemyOverrides)
+		{
+			auto& Unit = Manager->GetFragmentDataChecked<FCastleMassUnitFragment>(Entity);
+			Unit.Health = EnemyOverrides->HealthOverride > 0.0f
+				? EnemyOverrides->HealthOverride : Unit.Health * EnemyOverrides->HealthMultiplier;
+			Unit.SpawnMovementMultiplier = EnemyOverrides->MoveSpeedMultiplier;
+			Transform.SetScale3D(Transform.GetScale3D() * EnemyOverrides->ScaleMultiplier);
+			ApplyEnemyAttackOverrides<FCastleMassMeleeAttackFragment>(*Manager, Entity, *EnemyOverrides);
+			ApplyEnemyAttackOverrides<FCastleMassEnemyRangedAttackFragment>(*Manager, Entity, *EnemyOverrides);
+			ApplyEnemyAttackOverrides<FCastleMassEnemyLaserAttackFragment>(*Manager, Entity, *EnemyOverrides);
+		}
 		if (FCastleMassProjectileFragment* Projectile = Manager->GetFragmentDataPtr<FCastleMassProjectileFragment>(Entity))
 		{
 			Projectile->PreviousLocation = SpawnTransforms[Index].GetLocation();

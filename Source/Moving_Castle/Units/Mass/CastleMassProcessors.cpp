@@ -61,7 +61,8 @@ void UCastleMassMovementProcessor::Execute(FMassEntityManager& EntityManager, FM
 		for (FMassExecutionContext::FEntityIterator It = Chunk.CreateEntityIterator(); It; ++It)
 		{
 			if (Units[It].Health <= 0.0f || (!Patrols.IsEmpty() && (Patrols[It].bEnabled || Patrols[It].bSupportJourney))) { continue; }
-			const float Rate = Units[It].SupportMovementMultiplier;
+			// 按实例出场配置和当前支援效果共同计算速度，不写共享移动参数。
+			const float Rate = Units[It].SpawnMovementMultiplier * Units[It].SupportMovementMultiplier;
 			const float MaxSpeed = Settings.MaxSpeed * Rate;
 			FTransform& Transform = Transforms[It].GetMutableTransform();
 			FVector& Velocity = Velocities[It].Value;

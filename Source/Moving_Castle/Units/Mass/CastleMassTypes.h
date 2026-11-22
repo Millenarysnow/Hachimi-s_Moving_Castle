@@ -12,6 +12,40 @@ enum class ECastleMassUnitKind : uint8
 	Projectile
 };
 
+/** 敌人批次的实例属性；创建时应用一次，共享模板与死亡分裂子体仍使用自身配置。 */
+USTRUCT(BlueprintType)
+struct MOVING_CASTLE_API FCastleMassEnemyAttributeOverrides
+{
+	GENERATED_BODY()
+
+	/** 大于零时指定绝对生命；零表示继续使用模板生命及其倍率。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="敌人覆写")
+	float HealthOverride = 0.0f;
+
+	/** 生命倍率；设置绝对生命时必须为中性的 1。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="敌人覆写")
+	float HealthMultiplier = 1.0f;
+
+	/** 作用于模板移速上限，与支援塔实时移速修正相乘。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="敌人覆写")
+	float MoveSpeedMultiplier = 1.0f;
+
+	/** 作用于实体已有的近战、远程或激光伤害。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="敌人覆写")
+	float DamageMultiplier = 1.0f;
+
+	/** 作用于模板攻击间隔，大于 1 时两次攻击间隔更久。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="敌人覆写")
+	float AttackIntervalMultiplier = 1.0f;
+
+	/** 按比例缩放本次生成变换，骨骼实例消费该实体的变换。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="敌人覆写")
+	float ScaleMultiplier = 1.0f;
+
+	/** 返回首个非法字段，供战斗配置和 Mass 入口附上各自的资产与条目上下文。 */
+	const TCHAR* GetInvalidField() const;
+};
+
 /** 蓝图只持有值类型句柄；世界引用和 Mass 序列号共同防止误操作其他世界或复用后的实体。 */
 USTRUCT(BlueprintType)
 struct MOVING_CASTLE_API FCastleMassUnitHandle
