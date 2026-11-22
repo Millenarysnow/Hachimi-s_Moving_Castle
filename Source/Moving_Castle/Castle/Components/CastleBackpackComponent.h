@@ -7,6 +7,8 @@
 #include "CastleGameplayTypes.h"
 #include "CastleBackpackComponent.generated.h"
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FCastleBackpackChanged);
+
 /**
  * 经典固定容量背包组件。
  *
@@ -52,6 +54,24 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|背包")
 	bool TryAddItem(const FCastleBuildingDescriptor& Descriptor, int32& OutIndex, FText& OutFailureReason);
 
+	/** 道具专用入包接口。建筑栏满时，完整卡牌追加到临时栏队尾。 */
+	UFUNCTION(BlueprintCallable, Category = "移动城堡|背包")
+	bool TryAddItemAllowOverflow(const FCastleBuildingDescriptor& Descriptor, bool& bOutWentToTempBar,
+		int32& OutIndex, FText& OutFailureReason);
+
+	/** 先验证本批所有卡牌，再按顺序填入两栏。一次发放只通知一次。 */
+	bool TryAddItemsAllowOverflow(TConstArrayView<FCastleBuildingDescriptor> Descriptors, FText& OutFailureReason);
+
+	UPROPERTY(BlueprintAssignable, Category = "移动城堡|背包")
+	FCastleBackpackChanged OnBackpackChanged;
+
+	/** 临时栏保存完全确定的卡牌，索引 0 为队首。 */
+	UFUNCTION(BlueprintPure, Category = "移动城堡|背包")
+	TArray<FCastleBuildingDescriptor> GetTempItems() const { return TempItems; }
+
+	UFUNCTION(BlueprintPure, Category = "移动城堡|背包")
+	int32 GetTempItemCount() const { return TempItems.Num(); }
+
 	/** 在指定槽位插入建筑卡牌，供放置失败时恢复原有槽位顺序。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|背包")
 	bool TryInsertItemAt(int32 Index, const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason);
@@ -63,9 +83,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|背包")
 	bool TryAddBuilding(UCastleBuildingDefinition* Definition, int32 Level, ECastleTileColor Color, int32 Number, int32& OutIndex, FText& OutFailureReason);
 
-	/** 从指定槽位取出卡牌，成功时返回被取出的描述。 */
+	/** 从指定槽位取出卡牌，暂不补位或广播。事务失败时可以原索引插回。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|背包")
 	bool TryRemoveItemAt(int32 Index, FCastleBuildingDescriptor& OutDescriptor, FText& OutFailureReason);
+
+	/** 已完成的事务调用此入口，按 FIFO 填满空位并只通知一次最终状态。 */
+	UFUNCTION(BlueprintCallable, Category = "移动城堡|背包")
+	int32 CommitAutoRefillFromTempBar();
+
+	/** 不需要回滚的消费同步取牌、补位并通知。 */
+	UFUNCTION(BlueprintCallable, Category = "移动城堡|背包")
+	bool TryConsumeItemAt(int32 Index, FCastleBuildingDescriptor& OutDescriptor, FText& OutFailureReason);
 
 	/** 调整容量；新容量不能小于已有卡牌数量。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|背包")
@@ -88,4 +116,11 @@ protected:
 	/** 背包内的卡牌数据，顺序就是 UI 显示和取出时使用的槽位顺序。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "背包")
 	TArray<FCastleBuildingDescriptor> Items;
+
+private:
+	UPROPERTY(VisibleInstanceOnly, Category = "背包")
+	TArray<FCastleBuildingDescriptor> TempItems;
+
+	/** 只接收已通过整批校验的卡牌，由调用入口统一通知。 */
+	void AppendValidatedItem(const FCastleBuildingDescriptor& Descriptor);
 };
