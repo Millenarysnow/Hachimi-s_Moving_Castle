@@ -13,6 +13,10 @@ struct MOVING_CASTLE_API FCastleMassPatrolFragment : public FMassFragment
 	bool bEnabled = false;
 	/** 临时集结路线拥有本轮移动，巡逻距离和原移动目标均暂停。 */
 	bool bSupportJourney = false;
+	/** 调度器显式标记门 A 派出的 NPC；调试闭环的单位不读取战斗派兵模式。 */
+	bool bTowerDispatched = false;
+	/** 手动模式到门 B 后保持停止，直到调度器在 Mass 安全边界提交回收。 */
+	bool bReachedDispatchEntrance = false;
 	bool bBlocked = false;
 	int32 PathRevision = INDEX_NONE;
 	int32 RouteRevision = INDEX_NONE;

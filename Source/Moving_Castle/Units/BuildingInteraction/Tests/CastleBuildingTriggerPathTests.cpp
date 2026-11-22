@@ -119,6 +119,32 @@ bool FCastleBuildingTriggerIntervalTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleBuildingTriggerDispatchRouteTest, "MovingCastle.MainTower.DispatchBuildingEntries",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleBuildingTriggerDispatchRouteTest::RunTest(const FString& Parameters)
+{
+	using namespace CastleBuildingTriggerTests;
+	// A 到 B 在塔外绕行。A、B 连线上的第 3 栋楼只会被错误的穿塔扫掠击中。
+	auto Route = MakePath({FVector(0, 0, 1), FVector(0, 10, 1), FVector(10, 10, 1), FVector(10, 0, 1)});
+	Route.bClosedLoop = false;
+	Route.bTowerDispatch = true;
+	FCastleBuildingTriggerRegion AfterA, BeforeB, InsideTower;
+	AfterA.BuildingId = 1;
+	AfterA.LocalBoxes = {FBox(FVector(-1, 1, 0), FVector(1, 3, 2))};
+	BeforeB.BuildingId = 2;
+	BeforeB.LocalBoxes = {FBox(FVector(9, 1, 0), FVector(11, 3, 2))};
+	InsideTower.BuildingId = 3;
+	InsideTower.LocalBoxes = {FBox(FVector(4, -1, 0), FVector(6, 1, 2))};
+	FCastleBuildingTriggerPath Compiled;
+	FText Reason;
+	if (!TestTrue(TEXT("正式开环路线可编译进入标记"),
+		FCastleBuildingTriggerPath::Compile(Route, 0, {AfterA, BeforeB, InsideTower}, Compiled, Reason))) { return false; }
+	TestTrue(TEXT("手动模式在 B 截断，只触发到门前经过的楼"), Collect(Compiled, 25, 5) == TArray<uint64>({2}));
+	TestTrue(TEXT("自动重置保留 B 前与 A 后的实走事件"), Collect(Compiled, 25, 7) == TArray<uint64>({2, 1}));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleBuildingTriggerRegistrationTest, "MovingCastle.BuildingTriggers.BoardRegistration",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 

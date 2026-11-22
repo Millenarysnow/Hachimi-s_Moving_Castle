@@ -12,7 +12,7 @@ struct MOVING_CASTLE_API FCastleBuildingTriggerRegion
 	TArray<FBox> LocalBoxes;
 };
 
-/** 一次真实进入在闭环上的位置；同栋楼的多格区间先合并，再生成此标记。 */
+/** 一次真实进入在路线上的位置；同栋楼的多格区间先合并，再生成此标记。 */
 struct MOVING_CASTLE_API FCastleBuildingEntryMarker
 {
 	uint64 BuildingId = 0;
@@ -30,6 +30,8 @@ struct MOVING_CASTLE_API FCastleBuildingTriggerPath
 	uint64 RegistryRevision = 0;
 	double Length = 0.0;
 	bool bClosedLoop = true;
+	// 正式出兵的循环是终点到起点的瞬移，几何编译仍按开环处理。
+	bool bTowerDispatch = false;
 	TArray<FCastleBuildingEntryMarker> Entries;
 
 	/** 沿精确折线裁剪区域；相邻区间及闭环首尾的同次停留不重复生成标记。 */

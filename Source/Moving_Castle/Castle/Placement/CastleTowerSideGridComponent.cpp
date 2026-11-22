@@ -9,6 +9,7 @@
 #include "GameFramework/Actor.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Math/RotationMatrix.h"
+#include "Moving_Castle.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -69,35 +70,78 @@ bool UCastleTowerSideGridComponent::Initialize(const FIntVector& BaseCell, const
 		return false;
 	}
 
-	// 每个侧面与层号独立采样；同一局的显隐、编辑或房间变化都不重新抽取。
-	const float PanelWidth = CellWidth * 0.84f;
-	const float PanelHeight = LayerHeight * 0.88f;
-	Cells.Reserve(LayerCount * UE_ARRAY_COUNT(TowerFaces));
-	for (int32 Layer = 0; Layer < LayerCount; ++Layer)
+	TowerBaseCell = BaseCell;
+	TowerCellWidth = CellWidth;
+	TowerLayerHeight = LayerHeight;
+	TowerSurfaceOffset = SurfaceOffset;
+	RunSeed = Seed;
+	bInitialized = AppendLayers(LayerCount, OutReason);
+	return bInitialized;
+}
+
+bool UCastleTowerSideGridComponent::ExpandToLayerCount(const int32 TargetLayerCount, FText& OutReason)
+{
+	if (!ValidatePresentation(OutReason))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+		return false;
+	}
+	if (TargetLayerCount <= GeneratedLayerCount || TargetLayerCount > 64)
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 侧格扩层失败：目标层数 %d 必须大于当前层数 %d 且不超过 64。"),
+			*GetPathNameSafe(GetOwner()), TargetLayerCount, GeneratedLayerCount));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+		return false;
+	}
+	return AppendLayers(TargetLayerCount, OutReason);
+}
+
+bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, FText& OutReason)
+{
+	AActor* Tower = GetOwner();
+	USceneComponent* Root = Tower->GetRootComponent();
+	TArray<FCastleTowerSideCell> Pending;
+	Pending.Reserve((TargetLayerCount - GeneratedLayerCount) * UE_ARRAY_COUNT(TowerFaces));
+	const auto Reject = [&](const FCastleTowerSideCell& Cell)
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 塔身格 %s 面 %d 无法创建或注册表现组件。"),
+			*Tower->GetPathName(), *Cell.TowerCell.ToString(), static_cast<int32>(Cell.Face)));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+		for (const FCastleTowerSideCell& Added : Pending)
+		{
+			if (Added.Panel) { Added.Panel->DestroyComponent(); }
+			if (Added.Label) { Added.Label->DestroyComponent(); }
+		}
+		return false;
+	};
+	// 每个侧面与层号独立采样，已发布面板从创建到扩层始终保留。
+	const float PanelWidth = TowerCellWidth * 0.84f;
+	const float PanelHeight = TowerLayerHeight * 0.88f;
+	for (int32 Layer = GeneratedLayerCount; Layer < TargetLayerCount; ++Layer)
 	{
 		for (const FTowerFace& Face : TowerFaces)
 		{
 			const FIntVector SampleCell(Face.Outward.X, Face.Outward.Y, Layer);
 			const int32 ColorIndex = FMath::FloorToInt(UCastleDeterministicPCGNoise::SampleNoiseValue(
-				Seed, SampleCell, TEXT("TowerSideColor")) * UE_ARRAY_COUNT(TowerTileColors));
-			FCastleTowerSideCell& Cell = Cells.AddDefaulted_GetRef();
-			Cell.TowerCell = BaseCell + FIntVector(0, 0, Layer);
+				RunSeed, SampleCell, TEXT("TowerSideColor")) * UE_ARRAY_COUNT(TowerTileColors));
+			FCastleTowerSideCell& Cell = Pending.AddDefaulted_GetRef();
+			Cell.TowerCell = TowerBaseCell + FIntVector(0, 0, Layer);
 			Cell.Face = Face.Face;
 			Cell.Color = TowerTileColors[ColorIndex].Color;
 			Cell.Number = 1 + FMath::FloorToInt(UCastleDeterministicPCGNoise::SampleNoiseValue(
-				Seed, SampleCell, TEXT("TowerSideNumber")) * 9);
+				RunSeed, SampleCell, TEXT("TowerSideNumber")) * 9);
 
 			const FVector Outward(Face.Outward);
 			const FRotator Rotation = FRotationMatrix::MakeFromXZ(Outward, FVector::UpVector).Rotator();
-			const FVector Center = Outward * SurfaceOffset + FVector(0, 0, (Layer + 0.5) * LayerHeight);
+			const FVector Center = Outward * TowerSurfaceOffset + FVector(0, 0, (Layer + 0.5) * TowerLayerHeight);
 			UStaticMeshComponent* Panel = NewObject<UStaticMeshComponent>(Tower);
 			UTextRenderComponent* Label = NewObject<UTextRenderComponent>(Tower);
+			Cell.Panel = Panel;
+			Cell.Label = Label;
 			UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(PanelMaterial, Panel);
 			if (!Panel || !Label || !Material)
 			{
-				OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 塔身格 %s 面 %d 无法创建表现组件或动态材质。"),
-					*GetPathNameSafe(Tower), *Cell.TowerCell.ToString(), static_cast<int32>(Cell.Face)));
-				return false;
+				return Reject(Cell);
 			}
 			Material->SetVectorParameterValue(TEXT("Color"), TowerTileColors[ColorIndex].Tint);
 
@@ -108,7 +152,8 @@ bool UCastleTowerSideGridComponent::Initialize(const FIntVector& BaseCell, const
 			Panel->SetCanEverAffectNavigation(false);
 			Panel->SetGenerateOverlapEvents(false);
 			Panel->SetCollisionResponseToAllChannels(ECR_Ignore);
-			Panel->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+			Panel->SetCollisionResponseToChannel(ECC_Visibility, bPresentationHidden ? ECR_Ignore : ECR_Block);
+			Panel->SetVisibility(!bPresentationHidden);
 			Panel->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 			Panel->SetCastShadow(false);
 			Panel->SetStaticMesh(PanelMesh);
@@ -124,17 +169,18 @@ bool UCastleTowerSideGridComponent::Initialize(const FIntVector& BaseCell, const
 			Label->SetTextRenderColor(FColor::White);
 			Label->SetWorldSize(PanelWidth * 0.50f);
 			Label->SetText(FText::AsNumber(Cell.Number));
+			Label->SetVisibility(!bPresentationHidden);
 
-			Cell.Panel = Panel;
-			Cell.Label = Label;
 			Tower->AddInstanceComponent(Panel);
 			Tower->AddInstanceComponent(Label);
 			Panel->RegisterComponent();
 			Label->RegisterComponent();
+			if (!Panel->IsRegistered() || !Label->IsRegistered()) { return Reject(Cell); }
 		}
 	}
-	bInitialized = true;
-	return ValidatePresentation(OutReason);
+	Cells.Append(MoveTemp(Pending));
+	GeneratedLayerCount = TargetLayerCount;
+	return true;
 }
 
 bool UCastleTowerSideGridComponent::ValidatePresentation(FText& OutReason) const

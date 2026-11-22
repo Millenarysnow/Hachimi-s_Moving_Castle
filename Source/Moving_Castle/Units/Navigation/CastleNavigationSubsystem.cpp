@@ -1,5 +1,8 @@
 #include "CastleNavigationSubsystem.h"
 
+#include "CastleMainTowerComponent.h"
+#include "Interaction/CastleTowerDispatchDoors.h"
+
 #include "Algo/BinarySearch.h"
 
 #include "AssemblyFlightComponent.h"
@@ -364,6 +367,11 @@ bool UCastleNavigationSubsystem::RequestSharedPatrolRoute(const TArray<FVector>&
 	return RequestRoute(Waypoints, true, OutFailureReason);
 }
 
+bool UCastleNavigationSubsystem::RequestTowerDispatchRoute(const TArray<FVector>& Waypoints, FText& OutFailureReason)
+{
+	return RequestRoute(Waypoints, false, OutFailureReason, true);
+}
+
 void UCastleNavigationSubsystem::ClearSharedRoute()
 {
 	check(IsInGameThread());
@@ -377,7 +385,7 @@ void UCastleNavigationSubsystem::ClearSharedRoute()
 	PublishPath(MoveTemp(Empty));
 }
 
-bool UCastleNavigationSubsystem::RequestRoute(const TArray<FVector>& Waypoints, bool bClosedLoop, FText& OutFailureReason)
+bool UCastleNavigationSubsystem::RequestRoute(const TArray<FVector>& Waypoints, bool bClosedLoop, FText& OutFailureReason, bool bTowerDispatch)
 {
 	check(IsInGameThread());
 	OutFailureReason = FText::GetEmpty();
@@ -392,16 +400,21 @@ bool UCastleNavigationSubsystem::RequestRoute(const TArray<FVector>& Waypoints, 
 	for (int32 Index = 0; Index < Waypoints.Num(); ++Index)
 	{
 		if (Waypoints[Index].ContainsNaN()
-			|| (Waypoints.Num() > 1 && Waypoints[Index].Equals(Waypoints[(Index + 1) % Waypoints.Num()], 1.0)))
+			|| (Waypoints.Num() > 1 && (!bTowerDispatch || Index + 1 < Waypoints.Num())
+				&& Waypoints[Index].Equals(Waypoints[(Index + 1) % Waypoints.Num()], 1.0)))
 		{
-			OutFailureReason = FText::FromString(TEXT("路径点必须是有限坐标，相邻点（含末点与首点）不能重合。"));
+			OutFailureReason = FText::FromString(bTowerDispatch
+				? TEXT("主塔出兵的路径点必须是有限坐标，相邻点不能重合。")
+				: TEXT("路径点必须是有限坐标，相邻点（含末点与首点）不能重合。"));
 			return false;
 		}
 	}
 	if (!ValidateNavigation(Navigation, Data, OutFailureReason)) { return false; }
-	if (bHasPathRequest && bRequestedClosedLoop == bClosedLoop && RequestedWaypoints == Waypoints) { return true; }
+	if (bHasPathRequest && bRequestedClosedLoop == bClosedLoop && bRequestedTowerDispatch == bTowerDispatch
+		&& RequestedWaypoints == Waypoints) { return true; }
 	RequestedWaypoints = Waypoints;
 	bRequestedClosedLoop = bClosedLoop;
+	bRequestedTowerDispatch = bTowerDispatch;
 	++RouteRevision;
 	bHasPathRequest = true;
 	bPathPending = true;
@@ -539,43 +552,64 @@ void UCastleNavigationSubsystem::CalculateSharedPath()
 	Path.NavigationRevision = NavigationRevision;
 	Path.RouteRevision = RouteRevision;
 	Path.bClosedLoop = bRequestedClosedLoop;
+	Path.bTowerDispatch = bRequestedTowerDispatch;
 	if (!ValidateNavigation(Navigation, Data, Failure)) { FailNavigation(Failure); return; }
 	const ARecastNavMesh* Mesh = Cast<ARecastNavMesh>(Data);
 	LastFailure = FText::GetEmpty();
+	const bool bBuildPatrolSamples = bRequestedClosedLoop || bRequestedTowerDispatch;
+	TArray<FVector> RoutePoints = RequestedWaypoints;
+	if (bRequestedTowerDispatch)
+	{
+		const auto* Towers = GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>();
+		const auto* Tower = Towers ? Towers->GetRegisteredMainTower() : nullptr;
+		const auto* Doors = Tower ? Tower->GetOwner()->FindComponentByClass<UCastleTowerDispatchDoors>() : nullptr;
+		FVector Exit, Entrance;
+		if (!Doors)
+		{
+			LastFailure = FText::FromString(TEXT("正式出兵路线需要已注册主塔的双门组件。"));
+		}
+		else if (Doors->TryGetDoorWaypoints(Exit, Entrance, LastFailure))
+		{
+			// 两个端点属于塔，导航重建时重新读取房间站立面；草稿和玩家编号只显示输入点。
+			RoutePoints.Insert(Exit, 0);
+			RoutePoints.Add(Entrance);
+		}
+	}
 	TOptional<CastleGridSurfacePath::FGrid> Grid;
 	// 新增的格内失败以 Error 报告；保留已有原生不可达、NavLink 失败的日志边界。
-	bool bGridFailure = bRequestedClosedLoop && !CastleGridSurfacePath::ReadGrid(*GetWorld(), Grid, LastFailure);
+	bool bGridFailure = LastFailure.IsEmpty() && bBuildPatrolSamples && !CastleGridSurfacePath::ReadGrid(*GetWorld(), Grid, LastFailure);
 	// 所有路径点先统一投影；任一点无效时不开始各路段的 A*，也不发布上轮旧路线。
-	for (int32 Index = 0; Index < RequestedWaypoints.Num() && LastFailure.IsEmpty(); ++Index)
+	for (int32 Index = 0; Index < RoutePoints.Num() && LastFailure.IsEmpty(); ++Index)
 	{
 		FNavLocation Projected;
-		if (!Navigation->ProjectPointToNavigation(RequestedWaypoints[Index], Projected, ProjectionExtent, Data))
+		if (!Navigation->ProjectPointToNavigation(RoutePoints[Index], Projected, ProjectionExtent, Data))
 		{
 			LastFailure = FText::FromString(FString::Printf(TEXT("共享路线起点或终点附近没有可行走 NavMesh（路径点 %d），请检查楼板、楼梯碰撞及 Agent 尺寸。"), Index + 1));
 			break;
 		}
 		// 格心硬点不能被移动到障碍旁；没有棋盘语义的路线保留原来的路径点投影契约。
-		if (Grid.IsSet() && !CastleGridSurfacePath::IsExactAnchor(*Grid, RequestedWaypoints[Index], Projected.Location, ProjectionExtent.Z))
+		if (Grid.IsSet() && !CastleGridSurfacePath::IsExactAnchor(*Grid, RoutePoints[Index], Projected.Location, ProjectionExtent.Z))
 		{
 			LastFailure = FText::FromString(FString::Printf(TEXT("%s 的显式巡逻路径点 %d（%s）没有原位可行走表面，不能移到附近位置或其他楼层。"),
-				*Grid->BoardName, Index + 1, *RequestedWaypoints[Index].ToCompactString()));
+				*Grid->BoardName, Index + 1, *RoutePoints[Index].ToCompactString()));
 			bGridFailure = true;
 			break;
 		}
 		Path.Waypoints.Add(Projected.Location);
 	}
-	if (LastFailure.IsEmpty() && bRequestedClosedLoop && !Mesh)
+	if (LastFailure.IsEmpty() && bBuildPatrolSamples && !Mesh)
 	{
 		LastFailure = FText::FromString(TEXT("Mass 共享巡逻需要 Recast NavMesh 提供表面走廊。"));
 	}
-	if (LastFailure.IsEmpty() && bRequestedClosedLoop)
+	if (LastFailure.IsEmpty() && bBuildPatrolSamples)
 	{
 		Path.PatrolPoints.Add(Path.Waypoints[0]);
 		Path.PatrolDistances.Add(0.0);
 		Path.WaypointDistances.Add(0.0);
 	}
-	const int32 LegCount = bRequestedClosedLoop ? (RequestedWaypoints.Num() > 1 ? RequestedWaypoints.Num() : 0) : 1;
-	// 一次调用完整求解 1→2、2→3、…、N→1。循环内部只有本地临时结果，绝不逐段发布。
+	const int32 LegCount = bRequestedTowerDispatch ? RoutePoints.Num() - 1
+		: (bRequestedClosedLoop ? (RoutePoints.Num() > 1 ? RoutePoints.Num() : 0) : 1);
+	// 闭环求解末点到首点；双门路线求解至门 B。所有路段构建完毕后才发布。
 	for (int32 LegIndex = 0; LegIndex < LegCount && LastFailure.IsEmpty(); ++LegIndex)
 	{
 		const int32 Next = (LegIndex + 1) % Path.Waypoints.Num();
@@ -599,7 +633,7 @@ void UCastleNavigationSubsystem::CalculateSharedPath()
 				Path.PointFlags.Add(static_cast<int32>(Point.Flags));
 			}
 			Path.Length += Result.Path->GetLength();
-			if (bRequestedClosedLoop)
+			if (bBuildPatrolSamples)
 			{
 				const FNavMeshPath* Corridor = Result.Path->CastPath<FNavMeshPath>();
 				if (LastFailure.IsEmpty() && (!Corridor || !CastlePatrolNavigation::AppendSurfaceSamples(*Mesh, *Navigation, *this, Grid,
@@ -616,7 +650,7 @@ void UCastleNavigationSubsystem::CalculateSharedPath()
 		}
 	}
 	Path.bValid = LastFailure.IsEmpty();
-	if (Path.bValid && bRequestedClosedLoop)
+	if (Path.bValid && bBuildPatrolSamples)
 	{
 		Path.Length = Path.PatrolDistances.Last();
 		if (LegCount == 0) { Path.Points = Path.Waypoints; Path.PointFlags.Add(0); Path.WaypointDistances.Add(0.0); }

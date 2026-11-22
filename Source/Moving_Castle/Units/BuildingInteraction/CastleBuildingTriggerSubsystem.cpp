@@ -67,7 +67,7 @@ TSharedPtr<const FCastleBuildingTriggerPath, ESPMode::ThreadSafe> UCastleBuildin
 	const TSharedPtr<const FCastleSharedNavigationPath, ESPMode::ThreadSafe>& Path)
 {
 	check(IsInGameThread());
-	if (!Path || !Path->bValid || !Path->bClosedLoop) { CachedPath.Reset(); return nullptr; }
+	if (!Path || !Path->bValid || (!Path->bClosedLoop && !Path->bTowerDispatch)) { CachedPath.Reset(); return nullptr; }
 	if (CachedPath && CachedPath->PathRevision == Path->PathRevision && CachedPath->RegistryRevision == RegistryRevision)
 	{
 		return CachedPath;
@@ -111,7 +111,7 @@ bool UCastleBuildingTriggerSubsystem::CompileTemporaryPath(const FCastleSharedNa
 
 bool UCastleBuildingTriggerSubsystem::IsTemporaryPathCurrent(const FCastleBuildingTriggerPath& Path) const
 {
-	return !Path.bClosedLoop && RegistryRevision == Path.RegistryRevision;
+	return !Path.bClosedLoop && !Path.bTowerDispatch && RegistryRevision == Path.RegistryRevision;
 }
 
 void UCastleBuildingTriggerSubsystem::DispatchEntries(const FCastleBuildingTriggerPath& Path,
@@ -123,7 +123,7 @@ void UCastleBuildingTriggerSubsystem::DispatchEntries(const FCastleBuildingTrigg
 	{
 		// 效果回调可能销毁或合成建筑；每条消息重新核对登记版本，不继续消费过期批次。
 		if (RegistryRevision != Path.RegistryRevision) { return; }
-		if (Path.bClosedLoop)
+		if (Path.bClosedLoop || Path.bTowerDispatch)
 		{
 			const auto CurrentPath = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>()->AcquireSharedPath();
 			if (!CurrentPath || !CurrentPath->bValid || CurrentPath->PathRevision != Path.PathRevision) { return; }

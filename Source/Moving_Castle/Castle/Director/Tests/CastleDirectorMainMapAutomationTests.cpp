@@ -261,7 +261,7 @@ namespace
    FCastleBuildingDescriptor Probe;
    Probe.Definition = Board->FindBuildingDefinition(ECastleBuildingType::NormalRoom);
    Probe.Level = 1;
-   for (int32 Layer = 0; Layer < Board->GridSize.Z; ++Layer)
+   for (int32 Layer = 0; Layer < Board->GetUnlockedLayerCount(); ++Layer)
    {
     const FIntVector Cell = Base + FIntVector(0, 0, Layer);
     for (int32 Side = 0; Side < UE_ARRAY_COUNT(Faces); ++Side)

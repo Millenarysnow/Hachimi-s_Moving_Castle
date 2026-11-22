@@ -67,6 +67,8 @@ public:
 
 	/** 查询导演编辑权限；未运行导演的世界保持原有行为。 */
 	bool IsDirectorEditingAllowed(FText& OutReason) const;
+	/** 构筑输入同时服从导演阶段与独立出兵会话。 */
+	bool IsCastleEditingAllowed(FText& OutReason) const;
 
 	/** 对外显示流程门控原因，输入拒绝必须可见。 */
 	void ShowDirectorMessage(const FText& Message) const;
@@ -86,6 +88,25 @@ public:
 	/** 验收命令：CastleSpawnEnemy LavaGoliath|LavaPup|MiasmaWelp|ShadowSwarm [波数]。 */
 	UFUNCTION(Exec)
 	void CastleSpawnEnemy(const FString& EnemyType, int32 WaveCount = 1);
+
+	/** 验收入口：通过真实受击入口扣血，同时驱动 HUD 与塔顶气球。 */
+	UFUNCTION(Exec)
+	void CastleDamageMainTower(float Damage);
+
+	/** 验收入口：升到指定等级（2～4），新气球上限使用棋盘等级配置。 */
+	UFUNCTION(Exec)
+	void CastleUpgradeMainTower(int32 Tier);
+
+	/** 验收入口：调整玩家可再放置的草稿点数。 */
+	UFUNCTION(Exec)
+	void CastleAddPatrolWaypoints(int32 Delta);
+
+	/** 验收入口：在正式地图用已配置的待命数量和 NPC 模板开始出兵。 */
+	UFUNCTION(Exec)
+	void CastleStartTowerDispatch();
+
+	UFUNCTION(Exec)
+	void CastleEndTowerDispatch();
 
 protected:
 	/** 隐藏鼠标、锁定输入并创建指示器。 */
@@ -130,6 +151,15 @@ protected:
 
 	/** 战斗期快捷键入口（T 暂停/继续、F 切换 1x/2x 倍速、R 重试本局），均转交导演唯一状态入口。 */
 	void ToggleBattlePauseShortcut();
+
+	/** 监测已开始的连发，界面占用、松键或遮挡主塔立刻取消。 */
+	void UpdateTowerDispatchInput();
+	void ReleaseTowerDispatchInput();
+	void ToggleTowerAutoDispatchShortcut();
+	bool TryGetDispatchAim(FVector& OutStart, FVector& OutEnd) const;
+	bool IsMainTowerHit(const FVector& Start, const FVector& End) const;
+	bool bHoldingTowerDispatch = false;
+	FKey BoundTowerDispatchKey;
 	void ToggleBattleSpeedShortcut();
 	void RetryBattleShortcut();
 

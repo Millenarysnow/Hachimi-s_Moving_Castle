@@ -16,6 +16,9 @@
 #include "Moving_Castle.h"
 #include "Interaction/CastlePatrolRoute.h"
 #include "CastleMainTowerComponent.h"
+#include "CastleNavigationSubsystem.h"
+#include "CastleTowerDispatchConfigDataAsset.h"
+#include "CastleTowerDispatchSubsystem.h"
 #include "CastleMassEnemySpawner.h"
 #include "MassEntityConfigAsset.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
@@ -79,8 +82,9 @@ void ACastlePlayerController::Tick(float DeltaSeconds)
 
 	if (IsLocalController())
 	{
+		UpdateTowerDispatchInput();
 		FText EditReason;
-		if (!Shop->IsShopOpen() && IsDirectorEditingAllowed(EditReason))
+		if (!Shop->IsShopOpen() && IsCastleEditingAllowed(EditReason))
 		{
 			UpdateGridCursor();
 		}
@@ -125,6 +129,7 @@ void ACastlePlayerController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &ACastlePlayerController::SelectNextBackpackSlot);
 	InputComponent->BindKey(EKeys::B, IE_Pressed, this, &ACastlePlayerController::ToggleShop);
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ACastlePlayerController::PlacePrototypeBuildingAtCursor);
+	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &ACastlePlayerController::ReleaseTowerDispatchInput).bConsumeInput = false;
 	// 战斗控制快捷键允许在暂停期间继续响应，确保按 T 暂停后可再次按 T 恢复或按 F/R 操作。
 	InputComponent->BindKey(EKeys::T, IE_Pressed, this, &ACastlePlayerController::ToggleBattlePauseShortcut).bExecuteWhenPaused = true;
 	InputComponent->BindKey(EKeys::F, IE_Pressed, this, &ACastlePlayerController::ToggleBattleSpeedShortcut).bExecuteWhenPaused = true;
@@ -348,13 +353,12 @@ void ACastlePlayerController::PlacePrototypeBuildingAtCursor()
 		return;
 	}
 	// 气球点击属于战斗操作，在构筑门控前消费；同一次左键不会同时放置房间。
-	int32 Width = 0, Height = 0;
-	GetViewportSize(Width, Height);
-	FVector Origin, Direction;
-	if (Width > 0 && Height > 0 && DeprojectScreenPositionToWorld(Width * 0.5f, Height * 0.5f, Origin, Direction))
+	FVector Origin, End;
+	const bool bHasRay = TryGetDispatchAim(Origin, End);
+	if (bHasRay)
 	{
 		bool bConsumed;
-		const bool bPopped = TryPopBalloonFromRay(Origin, Origin + Direction * GridCursorTraceDistance, bConsumed);
+		const bool bPopped = TryPopBalloonFromRay(Origin, End, bConsumed);
 		if (bConsumed)
 		{
 			if (!bPopped) { ShowDirectorMessage(FText::FromString(TEXT("气球无法完成空投，请检查 Output Log。"))); }
@@ -362,7 +366,16 @@ void ACastlePlayerController::PlacePrototypeBuildingAtCursor()
 		}
 	}
 	FText EditReason;
-	if (!IsDirectorEditingAllowed(EditReason)) { ShowDirectorMessage(EditReason); return; }
+	const bool bCanEdit = IsCastleEditingAllowed(EditReason);
+	auto* Dispatch = GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>();
+	if (Dispatch && Dispatch->IsSessionActive() && bHasRay && IsMainTowerHit(Origin, End))
+	{
+		FText Reason;
+		bHoldingTowerDispatch = Dispatch->BeginManualDispatch(Reason);
+		if (!bHoldingTowerDispatch) { ShowDirectorMessage(Reason); }
+		return;
+	}
+	if (!bCanEdit) { ShowDirectorMessage(EditReason); return; }
 	if (ActiveBoard == nullptr)
 	{
 		FindActiveBoard();
@@ -374,6 +387,61 @@ void ACastlePlayerController::PlacePrototypeBuildingAtCursor()
 
 	FText FailureReason;
 	ActiveBoard->PlaceBackpackBuildingAtCursor(CurrentGridCursorTarget, SelectedBackpackIndex, FailureReason);
+}
+
+bool ACastlePlayerController::TryGetDispatchAim(FVector& OutStart, FVector& OutEnd) const
+{
+	int32 Width = 0, Height = 0;
+	GetViewportSize(Width, Height);
+	FVector Direction;
+	if (Width <= 0 || Height <= 0 || !DeprojectScreenPositionToWorld(Width * 0.5f, Height * 0.5f, OutStart, Direction))
+	{
+		return false;
+	}
+	OutEnd = OutStart + Direction * GridCursorTraceDistance;
+	return true;
+}
+
+bool ACastlePlayerController::IsMainTowerHit(const FVector& Start, const FVector& End) const
+{
+	const auto* Towers = GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>();
+	const auto* Tower = Towers ? Towers->GetRegisteredMainTower() : nullptr;
+	FHitResult Hit;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(CastleTowerDispatchClick), false, GetPawn());
+	return Tower && GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params) && Hit.GetActor() == Tower->GetOwner();
+}
+
+void ACastlePlayerController::ReleaseTowerDispatchInput()
+{
+	bHoldingTowerDispatch = false;
+	if (auto* Dispatch = GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>()) { Dispatch->StopManualDispatch(); }
+}
+
+void ACastlePlayerController::UpdateTowerDispatchInput()
+{
+	auto* Dispatch = GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>();
+	const auto* Config = Dispatch ? Dispatch->GetConfiguration() : nullptr;
+	// 棋盘与控制器的 BeginPlay 可按任一顺序进入；仅在配置已登记后绑定一次实际按键。
+	if (Config && InputComponent && !BoundTowerDispatchKey.IsValid())
+	{
+		BoundTowerDispatchKey = Config->ToggleAutoDispatchKey;
+		InputComponent->BindKey(BoundTowerDispatchKey, IE_Pressed, this, &ACastlePlayerController::ToggleTowerAutoDispatchShortcut);
+	}
+	if (!bHoldingTowerDispatch) { return; }
+	FVector Start, End;
+	if (!Dispatch || !Dispatch->IsSessionActive() || !IsInputKeyDown(EKeys::LeftMouseButton)
+		|| Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive
+		|| !TryGetDispatchAim(Start, End) || !IsMainTowerHit(Start, End))
+	{
+		ReleaseTowerDispatchInput();
+	}
+}
+
+void ACastlePlayerController::ToggleTowerAutoDispatchShortcut()
+{
+	if (Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive) { return; }
+	auto* Dispatch = GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>();
+	if (Dispatch && Dispatch->IsSessionActive()) { Dispatch->ToggleAutoDispatch(); }
 }
 
 void ACastlePlayerController::ToggleShop()
@@ -454,9 +522,103 @@ bool ACastlePlayerController::IsDirectorEditingAllowed(FText& OutReason) const
 	return !Director || Director->IsEditingAllowed(OutReason);
 }
 
+bool ACastlePlayerController::IsCastleEditingAllowed(FText& OutReason) const
+{
+	const auto* Dispatch = GetWorld() ? GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>() : nullptr;
+	if (Dispatch && Dispatch->IsSessionActive())
+	{
+		OutReason = FText::FromString(TEXT("主塔出兵会话期间无法构筑或编辑路径点。"));
+		return false;
+	}
+	return IsDirectorEditingAllowed(OutReason);
+}
+
 void ACastlePlayerController::ShowDirectorMessage(const FText& Message) const
 {
 	ShowGameplayMessage(Message.ToString(), false);
+}
+
+void ACastlePlayerController::CastleDamageMainTower(const float Damage)
+{
+	UCastleMainTowerSubsystem* Towers = GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>();
+	if (!Towers || !Towers->ApplyMainTowerDamage(Damage))
+	{
+		ShowGameplayMessage(TEXT("无法对主塔结算伤害，请检查主塔状态与日志。"), false);
+	}
+}
+
+void ACastlePlayerController::CastleUpgradeMainTower(const int32 Tier)
+{
+	if (!IsValid(ActiveBoard)) { FindActiveBoard(); }
+	UCastleMainTowerSubsystem* Towers = GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>();
+	UCastleMainTowerComponent* Health = Towers ? Towers->GetRegisteredMainTower() : nullptr;
+	if (!IsValid(ActiveBoard) || !IsValid(Health) || Tier < 2 || Tier > 4
+		|| !ActiveBoard->TowerBalloonLimitsByTier.IsValidIndex(Tier - 1))
+	{
+		ShowGameplayMessage(TEXT("主塔升级验收需要已生成主塔，且等级必须为 2～4。"), false);
+		return;
+	}
+	const int32 Count = ActiveBoard->TowerBalloonLimitsByTier[Tier - 1];
+	const float BaseHealth = ActiveBoard->TowerHealthPerBalloon * Count;
+	FText Reason;
+	// 两部分都通过前置准备，才会向战斗与 HUD 发布升级后的生命数据。
+	if (!Health->PrepareTowerBalloonTier(Count, BaseHealth, true, Reason)
+		|| !ActiveBoard->ExpandMainTowerLayers(Tier * 2 + 1, Reason))
+	{
+		ShowDirectorMessage(Reason);
+		return;
+	}
+	if (!Health->SetTowerBalloonTier(Count, BaseHealth, true, Reason))
+	{
+		ShowDirectorMessage(Reason);
+		return;
+	}
+	ShowGameplayMessage(FString::Printf(TEXT("主塔升级到 Lv%d，开放 %d 层，补满 %d 个气球。"),
+		Tier, ActiveBoard->GetUnlockedLayerCount(), Count), true);
+}
+
+void ACastlePlayerController::CastleAddPatrolWaypoints(const int32 Delta)
+{
+	ACastlePatrolRoute* Route = Cast<ACastlePatrolRoute>(UGameplayStatics::GetActorOfClass(GetWorld(), ACastlePatrolRoute::StaticClass()));
+	if (!IsValid(Route) || !Route->AddMaxPlayerWaypoints(Delta))
+	{
+		ShowGameplayMessage(TEXT("无法调整草稿路点限额，请检查路线入口和数值。"), false);
+		return;
+	}
+	ShowGameplayMessage(FString::Printf(TEXT("当前路径点上限为 %d。"), Route->GetMaxPlayerWaypoints()), true);
+}
+
+void ACastlePlayerController::CastleStartTowerDispatch()
+{
+	auto* Dispatch = GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>();
+	const auto* Config = Dispatch ? Dispatch->GetConfiguration() : nullptr;
+	if (!Config)
+	{
+		ShowGameplayMessage(TEXT("当前棋盘未配置主塔出兵 Data Asset。"), false);
+		return;
+	}
+	FText Reason;
+	if (!IsDirectorEditingAllowed(Reason)) { ShowDirectorMessage(Reason); return; }
+	const auto* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
+	if (!Navigation || Navigation->GetRequestedWaypoints().IsEmpty())
+	{
+		ShowGameplayMessage(TEXT("请先按 P 放置路径点，再按 Enter 提交后开始出兵。"), false);
+		return;
+	}
+	if (!Dispatch->StartBattleDispatchSession(Config->NPCConfiguration, Config->InitialNPCCount, Reason))
+	{
+		ShowDirectorMessage(Reason);
+		return;
+	}
+	ShowGameplayMessage(FString::Printf(TEXT("主塔出兵会话开始，待命 %d 名，自动出兵按键 %s。"),
+		Config->InitialNPCCount, *Config->ToggleAutoDispatchKey.GetDisplayName().ToString()), true);
+}
+
+void ACastlePlayerController::CastleEndTowerDispatch()
+{
+	auto* Dispatch = GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>();
+	FText Reason;
+	if (!Dispatch || !Dispatch->EndBattleDispatchSession(Reason)) { ShowDirectorMessage(Reason); }
 }
 
 void ACastlePlayerController::SetDirectorModalState(const bool bRewardOpen, const bool bGameOverOpen, UUserWidget* FocusWidget)
@@ -491,7 +653,7 @@ void ACastlePlayerController::RefreshModalInput(const bool bForceRefresh)
 	bShowMouseCursor = bNewOpen;
 	// 游戏结束会在本帧暂停世界，必须立即清理目标，不能等下一帧控制器 Tick。
 	FText EditReason;
-	if (bNewOpen || !IsDirectorEditingAllowed(EditReason))
+	if (bNewOpen || !IsCastleEditingAllowed(EditReason))
 	{
 		CurrentGridCursorTarget = FCastleGridCursorTarget();
 		if (GridCursor) { GridCursor->HideCursor(); }

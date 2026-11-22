@@ -324,7 +324,7 @@ namespace CastleGridSurfacePath
 			Board.GetBoardExtent(Min, Max);
 			const FIntPoint Overhang(Board.MaxOverhangCells, Board.MaxOverhangCells);
 			OutGrid = FGrid{Board.GetPathName(), Transform, Board.GridOrigin, Min - Overhang, Max + Overhang,
-				Board.GridSize.Z, Board.CellSize, Board.LayerHeight, Board.WorldBaseHeight - Board.LayerHeight * 0.5};
+				Board.GetUnlockedLayerCount(), Board.CellSize, Board.LayerHeight, Board.WorldBaseHeight - Board.LayerHeight * 0.5};
 		}
 		return true;
 	}
