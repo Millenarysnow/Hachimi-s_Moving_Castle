@@ -6,6 +6,7 @@
 #include "Blueprint/WidgetTree.h"
 #include "Castle/UI/Cards/CastleCardPortraitSubsystem.h"
 #include "Castle/UI/Cards/CastleShopCardWidget.h"
+#include "Castle/UI/Shop/CastleShopBenchSlotWidget.h"
 #include "CastleBoard.h"
 #include "CastleEconomyComponent.h"
 #include "CastlePlayerController.h"
@@ -111,13 +112,13 @@ namespace
 				}
 				TArray<UCastleShopCardWidget*> Widgets = ShopUI->GetOfferCards();
 				if (!Test.TestEqual(TEXT("实际 UMG 商品 Widget 数"), Widgets.Num(), 6)) { return true; }
+				RoomShop = ShopUI;
 				Card = Widgets[0];
 				OtherCard = Widgets[1];
 				FoilToggle = Cast<UButton>(ShopUI->WidgetTree->FindWidget(TEXT("FoilPreview")));
 				const FGeometry Geometry = Card->GetCachedGeometry();
 				if (!Test.TestTrue(TEXT("卡牌已在商店布局"), Geometry.GetLocalSize().X > 0.0)) { return true; }
-				UImage* CardFace = Cast<UImage>(Card->WidgetTree->FindWidget(TEXT("CardFace")));
-				UMaterialInstanceDynamic* Material = CardFace ? Cast<UMaterialInstanceDynamic>(CardFace->GetBrush().GetResourceObject()) : nullptr;
+				UMaterialInstanceDynamic* Material = GetFaceMaterial(*Card.Get());
 				if (!Test.TestNotNull(TEXT("可见卡面绑定真实 UI 合成材质"), Material)) { return true; }
 				UTexture* BoundTexture = nullptr;
 				FLinearColor State;
@@ -128,8 +129,7 @@ namespace
 				Face = Material;
 				Still = Cast<UTextureRenderTarget2D>(BoundTexture);
 				if (!CheckTransparentPixels(Still.Get(), StillPixels)) { return true; }
-				const URetainerBox* Retainer = Cast<URetainerBox>(Card->WidgetTree->FindWidget(TEXT("CardProjection")));
-				Projection = Retainer != nullptr ? Retainer->GetEffectMaterial() : nullptr;
+				Projection = GetProjectionMaterial(*Card.Get());
 				if (!Test.TestNotNull(TEXT("整张牌实际经过 Retainer 的透视材质"), Projection.Get())) { return true; }
 				if (FParse::Param(FCommandLine::Get(), TEXT("CastleCardScreenshots")))
 				{
@@ -143,8 +143,8 @@ namespace
 				if (FScreenshotRequest::IsScreenshotRequested()) { return false; }
 				if (!Test.TestNotNull(TEXT("有实际可点击的箔光对照按钮"), FoilToggle.Get())) { return true; }
 				FoilToggle->OnClicked.Broadcast();
-				Start = CardScreenPoint(*Card.Get(), FVector2D(0.50, 0.45));
-				Outside = CardScreenPoint(*Card.Get(), FVector2D(1.34, 0.45));
+				Start = WidgetScreenPoint(*Card.Get(), FVector2D(0.50, 0.45));
+				Outside = WidgetScreenPoint(*Card.Get(), FVector2D(1.34, 0.45));
 				const FWidgetPath Hit = HitAt(Start);
 				if (!Test.TestTrue(TEXT("真实鼠标命中稳定卡位"), Hit.ContainsWidget(Card->GetCachedWidget().Get())))
 				{
@@ -228,19 +228,19 @@ namespace
 				{
 					const FDragProbe& Last = Probes[DragProbeCount - 1];
 					if (!CheckDragDirection(Last.Name, Last.bHorizontal, Last.bDragPositive)) { Shop.CloseShop(); return true; }
-					Previous = CardScreenPoint(*Card.Get(), Last.UV);
+					Previous = WidgetScreenPoint(*Card.Get(), Last.UV);
 				}
 				FSlateApplication& Slate = FSlateApplication::Get();
 				if (DragProbeCount < UE_ARRAY_COUNT(Probes))
 				{
-					const FVector2D Next = CardScreenPoint(*Card.Get(), Probes[DragProbeCount].UV);
+					const FVector2D Next = WidgetScreenPoint(*Card.Get(), Probes[DragProbeCount].UV);
 					Slate.RoutePointerMoveEvent(HitAt(Next), MakePointer(Next, Previous, true), false);
 					++DragProbeCount;
 					return false;
 				}
 				// 在同一个动态纹理里拍下一角度，覆盖“纹理指针不变但内容已变”的更新路径。
 				Studio->GetDynamicTexture(Card.Get(), &CaptureBeforeDiagonal);
-				DiagonalPoint = CardScreenPoint(*Card.Get(), FVector2D(0.61, 0.78));
+				DiagonalPoint = WidgetScreenPoint(*Card.Get(), FVector2D(0.61, 0.78));
 				Slate.RoutePointerMoveEvent(HitAt(DiagonalPoint), MakePointer(DiagonalPoint, Previous, true), false);
 				++Phase;
 				return false;
@@ -255,6 +255,30 @@ namespace
 				++Phase;
 				return false;
 			}
+			if (Phase == 8)
+			{
+				CheckOfferPortraits(Shop, *Studio, TEXT("重开后"));
+				if (!BeginBenchSale(Shop, Controller->GetEconomy()->GetGold()))
+				{
+					Shop.CloseShop();
+					return true;
+				}
+				++Phase;
+				return false;
+			}
+			if (Phase == 9)
+			{
+				// 等回收区完成本帧布局，再以实际 Slate 路由松手并检查交易结果。
+				const FVector2D Drop = WidgetScreenPoint(*SellTarget.Get(), FVector2D(0.5, 0.5));
+				FSlateApplication& Slate = FSlateApplication::Get();
+				Slate.RoutePointerMoveEvent(HitAt(Drop), MakePointer(Drop, DragPoint, true), false);
+				Slate.RoutePointerUpEvent(HitAt(Drop), MakePointer(Drop, Drop, false, EKeys::LeftMouseButton));
+				Test.TestEqual(TEXT("拖入右侧回收区只售出一张背包牌"), Shop.GetBackpackItems().Num(), BackpackCountBeforeSale - 1);
+				Test.TestEqual(TEXT("拖拽出售增加准确报价"), Controller->GetEconomy()->GetGold(), GoldBeforeSale + QuotedSellPrice);
+				Test.TestFalse(TEXT("售出卡牌后关闭出售遮罩"), RoomShop->IsSellDropOverlayVisible());
+				Shop.CloseShop();
+				return true;
+			}
 			if (!IsCardNeutral()) { return false; }
 			Test.TestNull(TEXT("回正后解除动态画面"), Studio->GetDynamicTexture(Card.Get()));
 			Test.TestFalse(TEXT("静止时不再驱动摄影"), Studio->IsTickable());
@@ -266,7 +290,7 @@ namespace
 				Test.TestTrue(TEXT("售出一张备战席卡牌腾出购买空间"), Shop.TrySellBackpackItem(0, SellReason));
 			}
 			const int32 BackpackCountBeforeBuy = Shop.GetBackpackItems().Num();
-			const FVector2D BuyPoint = CardScreenPoint(*OtherCard.Get(), FVector2D(0.50, 0.50));
+			const FVector2D BuyPoint = WidgetScreenPoint(*OtherCard.Get(), FVector2D(0.50, 0.50));
 			const int32 GoldBeforeShortClick = Controller->GetEconomy()->GetGold();
 			const int32 OtherOfferPrice = Offers[1].Price;
 			{
@@ -280,6 +304,7 @@ namespace
 			Test.TestTrue(TEXT("方案 A 短点商品卡直接购入并标记售罄"), Shop.GetOffers()[1].bSold);
 			Test.TestEqual(TEXT("方案 A 短点购买扣除准确报价"), Controller->GetEconomy()->GetGold(), GoldBeforeShortClick - OtherOfferPrice);
 			Test.TestEqual(TEXT("方案 A 短点购买将卡牌送入备战席"), Shop.GetBackpackItems().Num(), BackpackCountBeforeBuy + 1);
+			CheckOfferPortraits(Shop, *Studio, TEXT("购买后"));
 
 			// 模拟窗口失去捕获，再在按住时关闭商店，两条路径都不得等一次鼠标移出。
 			FSlateApplication& Slate = FSlateApplication::Get();
@@ -293,7 +318,14 @@ namespace
 			Test.TestTrue(TEXT("关闭商店立即取消抓牌并回正"), IsCardNeutral() && !Card->HasMouseCapture());
 			Test.TestNull(TEXT("关闭商店解绑当前牌的动态画面"), Studio->GetDynamicTexture(Card.Get()));
 			Test.TestFalse(TEXT("商店关闭不再驱动摄影"), Studio->IsTickable());
-			return true;
+			FText Reason;
+			if (!Test.TestTrue(TEXT("正常重新打开保留原商品的商店"), Shop.TryOpenShop(Reason)))
+			{
+				Test.AddError(Reason.ToString());
+				return true;
+			}
+			++Phase;
+			return false;
 		}
 
 	private:
@@ -308,10 +340,74 @@ namespace
 			return FPointerEvent(0u, CardTestPointerIndex, Position, Previous, Pressed, Button, 0.0f, FModifierKeysState());
 		}
 
-		static FVector2D CardScreenPoint(const UCastleShopCardWidget& Widget, const FVector2D& UV)
+		static FVector2D WidgetScreenPoint(const UWidget& Widget, const FVector2D& UV)
 		{
 			const FGeometry Geometry = Widget.GetCachedGeometry();
 			return Geometry.LocalToAbsolute(FVector2D(Geometry.GetLocalSize()) * UV);
+		}
+
+		/** 从实际绘制控件取当前材质，覆盖刷新时重新创建的实例。 */
+		static UMaterialInstanceDynamic* GetFaceMaterial(const UCastleShopCardWidget& Widget)
+		{
+			const UImage* CardFace = Cast<UImage>(Widget.WidgetTree->FindWidget(TEXT("CardFace")));
+			return CardFace ? Cast<UMaterialInstanceDynamic>(CardFace->GetBrush().GetResourceObject()) : nullptr;
+		}
+
+		static UMaterialInstanceDynamic* GetProjectionMaterial(const UCastleShopCardWidget& Widget)
+		{
+			const URetainerBox* Retainer = Cast<URetainerBox>(Widget.WidgetTree->FindWidget(TEXT("CardProjection")));
+			return Retainer ? Retainer->GetEffectMaterial() : nullptr;
+		}
+
+		/** 同一缩略图可以由多个槽位共用。逐槽验证刷新后的材质实际绑定了对应纹理，包括售罄槽。 */
+		void CheckOfferPortraits(const UCastleShopComponent& Shop, UCastleCardPortraitSubsystem& Studio, const TCHAR* Context)
+		{
+			const TArray<UCastleShopCardWidget*> Widgets = RoomShop->GetOfferCards();
+			const TArray<FCastleShopOffer> CurrentOffers = Shop.GetOffers();
+			if (!Test.TestEqual(TEXT("刷新后的商品与控件数量匹配"), Widgets.Num(), CurrentOffers.Num())) { return; }
+			for (int32 Index = 0; Index < Widgets.Num(); ++Index)
+			{
+				FText Reason;
+				UCastleCardPortrait* Portrait = Studio.RequestPortrait(CurrentOffers[Index].Descriptor, Shop.GetBoundBoard(), Reason);
+				const UMaterialInstanceDynamic* Material = GetFaceMaterial(*Widgets[Index]);
+				UTexture* BoundTexture = nullptr;
+				FLinearColor State;
+				Test.TestTrue(FString::Printf(TEXT("%s第 %d 张商品牌仍显示对应建筑缩略图"), Context, Index + 1),
+					Portrait && Portrait->GetTexture() && Material
+					&& Material->GetTextureParameterValue(FMaterialParameterInfo(TEXT("Portrait")), BoundTexture)
+					&& BoundTexture == Portrait->GetTexture()
+					&& Material->GetVectorParameterValue(FMaterialParameterInfo(TEXT("CardState")), State) && State.A == 1.0f);
+			}
+		}
+
+		/** 用真实命中路径从备战席开始拖拽，避免直接调用交易组件掩盖槽位无法命中的问题。 */
+		bool BeginBenchSale(const UCastleShopComponent& Shop, const int32 CurrentGold)
+		{
+			BackpackCountBeforeSale = Shop.GetBackpackItems().Num();
+			GoldBeforeSale = CurrentGold;
+			FText Reason;
+			if (!Test.TestTrue(TEXT("备战席首张卡可取得卖价"), Shop.TryGetSellPrice(0, QuotedSellPrice, Reason)))
+			{
+				Test.AddError(Reason.ToString());
+				return false;
+			}
+			const UCastleShopBenchSlotWidget* BenchSlot = RoomShop->GetBenchSlots()[0];
+			SellTarget = RoomShop->WidgetTree->FindWidget(TEXT("RightSellTarget"));
+			if (!Test.TestNotNull(TEXT("运行中的商店有右侧回收区"), SellTarget.Get())) { return false; }
+			const FVector2D Origin = WidgetScreenPoint(*BenchSlot, FVector2D(0.5, 0.5));
+			const FWidgetPath Hit = HitAt(Origin);
+			if (!Test.TestTrue(TEXT("备战席整张卡片可被鼠标命中"), Hit.ContainsWidget(BenchSlot->GetCachedWidget().Get())))
+			{
+				return false;
+			}
+			DragPoint = WidgetScreenPoint(*SellTarget.Get(), FVector2D(0.5, 0.5));
+			FSlateApplication& Slate = FSlateApplication::Get();
+			const bool bPreviouslyAllowedBackgroundInput = Slate.GetHandleDeviceInputWhenApplicationNotActive();
+			Slate.SetHandleDeviceInputWhenApplicationNotActive(true);
+			Slate.RoutePointerDownEvent(Hit, MakePointer(Origin, Origin, true, EKeys::LeftMouseButton));
+			Slate.RoutePointerMoveEvent(HitAt(DragPoint), MakePointer(DragPoint, Origin, true), false);
+			Slate.SetHandleDeviceInputWhenApplicationNotActive(bPreviouslyAllowedBackgroundInput);
+			return Test.TestTrue(TEXT("左键拖动备战席卡牌后打开出售遮罩"), RoomShop->IsSellDropOverlayVisible());
 		}
 
 		FWidgetPath HitAt(const FVector2D& Position) const
@@ -335,10 +431,13 @@ namespace
 
 		bool IsCardNeutral() const
 		{
+			const UMaterialInstanceDynamic* CurrentFace = GetFaceMaterial(*Card.Get());
+			const UMaterialInstanceDynamic* CurrentProjection = GetProjectionMaterial(*Card.Get());
 			FLinearColor State, X, Y;
-			return Face->GetVectorParameterValue(FMaterialParameterInfo(TEXT("CardState")), State) && State.R == 0.0f && State.G == 0.0f
-				&& Projection->GetVectorParameterValue(FMaterialParameterInfo(TEXT("ProjectionX")), X) && X.B == 0.0f
-				&& Projection->GetVectorParameterValue(FMaterialParameterInfo(TEXT("ProjectionY")), Y) && Y.B == 0.0f && X.A == Y.A;
+			return CurrentFace && CurrentProjection
+				&& CurrentFace->GetVectorParameterValue(FMaterialParameterInfo(TEXT("CardState")), State) && State.R == 0.0f && State.G == 0.0f
+				&& CurrentProjection->GetVectorParameterValue(FMaterialParameterInfo(TEXT("ProjectionX")), X) && X.B == 0.0f
+				&& CurrentProjection->GetVectorParameterValue(FMaterialParameterInfo(TEXT("ProjectionY")), Y) && Y.B == 0.0f && X.A == Y.A;
 		}
 
 		/** 拖向一侧时，卡窗使用反向倾角，且最终像素中对侧比被拖一侧更长。 */
@@ -417,19 +516,25 @@ namespace
 
 		FAutomationTestBase& Test;
 		TArray<FCastleShopOffer> Offers;
+		TWeakObjectPtr<UCastleShopWidget> RoomShop;
 		TWeakObjectPtr<UCastleShopCardWidget> Card;
 		TWeakObjectPtr<UCastleShopCardWidget> OtherCard;
 		TWeakObjectPtr<UButton> FoilToggle;
 		TWeakObjectPtr<UMaterialInstanceDynamic> Face;
 		TWeakObjectPtr<UMaterialInstanceDynamic> Projection;
 		TWeakObjectPtr<UTextureRenderTarget2D> Still;
+		TWeakObjectPtr<UWidget> SellTarget;
 		TArray<FFloat16Color> StillPixels;
 		FVector2D Start;
 		FVector2D Outside;
 		FVector2D DiagonalPoint;
+		FVector2D DragPoint;
 		uint64 CaptureBeforeDiagonal = 0;
 		int32 DragProbeCount = 0;
 		int32 InitialGold = 0;
+		int32 BackpackCountBeforeSale = 0;
+		int32 GoldBeforeSale = 0;
+		int32 QuotedSellPrice = 0;
 		int32 Phase = 0;
 		double Deadline = 0.0;
 	};

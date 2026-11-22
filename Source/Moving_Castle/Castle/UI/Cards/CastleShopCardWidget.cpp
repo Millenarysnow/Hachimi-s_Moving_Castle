@@ -212,6 +212,9 @@ bool UCastleShopCardWidget::Configure(UCastleShopWidget& InShop, const FCastleBu
 		return ReportSetupError(Descriptor, Reason);
 	}
 
+	// 缓存记录的是已经写进当前卡面材质的数据。刷新商店会换材质，即使摄影纹理没变也必须重新绑定。
+	DisplayedTexture = nullptr;
+	DisplayedCaptureNumber = 0;
 	Face->SetVectorParameterValue(TintParameter, Tint);
 	FaceImage->SetBrushFromMaterial(Face);
 	FaceImage->SetVisibility(ESlateVisibility::HitTestInvisible);

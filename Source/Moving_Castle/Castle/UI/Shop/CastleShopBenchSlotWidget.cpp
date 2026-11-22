@@ -68,6 +68,8 @@ bool UCastleShopBenchSlotWidget::ConfigureBenchSlot(const int32 InSlotIndex, con
 
 	if (Card == nullptr)
 	{
+		// 空槽只绘制占位框，不参与卡牌悬停或出售交互。
+		SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 		bHasCard = false;
 		bCanSell = false;
 		QuotedSellPrice = 0;
@@ -119,6 +121,8 @@ bool UCastleShopBenchSlotWidget::ConfigureBenchSlot(const int32 InSlotIndex, con
 	QuotedSellPrice = bCanQuoteSell ? InSellPrice : 0;
 	CachedDescriptor = *Card;
 
+	// 备战席蓝图里的槽位默认自身不参与命中。填入卡牌后由槽位本身接收鼠标按下和拖拽检测。
+	SetVisibility(ESlateVisibility::Visible);
 	SlotNormalBg->SetVisibility(ESlateVisibility::HitTestInvisible);
 	SlotEmptyBg->SetVisibility(ESlateVisibility::Collapsed);
 	ColorStrip->SetColorAndOpacity(GameplayTint);
