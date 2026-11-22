@@ -5,6 +5,7 @@
 #include "CastleMassDeathSplitFragments.h"
 #include "CastleMassMeleeAttackFragments.h"
 #include "CastleMassProcessors.h"
+#include "CastleMassUnitSubsystem.h"
 #include "Engine/World.h"
 #include "MassCommonFragments.h"
 #include "MassCommonTypes.h"
@@ -47,8 +48,14 @@ void UCastleMassMeleeAttackProcessor::Execute(FMassEntityManager& EntityManager,
 		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 近战索敌失败：世界 %s 缺少支援塔子系统。"), *GetPathNameSafe(GetWorld()));
 		return;
 	}
+	const auto* UnitSubsystem = GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>();
+	if (!UnitSubsystem)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 近战处理器：世界 %s 缺少 Mass 单位子系统，无法读取敌人攻速。"), *GetPathNameSafe(GetWorld()));
+		return;
+	}
 	bool bAnyMissingTarget = false;
-	Query.ForEachEntityChunk(Context, [this, TowerSubsystem, Shields, Support, &bAnyMissingTarget](FMassExecutionContext& Chunk)
+	Query.ForEachEntityChunk(Context, [this, TowerSubsystem, Shields, Support, UnitSubsystem, &bAnyMissingTarget](FMassExecutionContext& Chunk)
 	{
 		const float DeltaTime = FMath::Max(0.0f, Chunk.GetDeltaTimeSeconds());
 		const auto Transforms = Chunk.GetFragmentView<FTransformFragment>();
@@ -101,7 +108,7 @@ void UCastleMassMeleeAttackProcessor::Execute(FMassEntityManager& EntityManager,
 			Targets[It] = FCastleMassMoveTargetFragment();
 			Velocities[It].Value = FVector::ZeroVector;
 			if (!Animations.IsEmpty()) { Animations[It].bInAttackState = true; }
-			Melee.AttackCooldown = FMath::Max(0.0f, Melee.AttackCooldown - DeltaTime);
+			Melee.AttackCooldown = FMath::Max(0.0, Melee.AttackCooldown - DeltaTime);
 			if (Melee.AttackCooldown > 0.0f) { continue; }
 			FCastleMassUnitHandle Attacker;
 			Attacker.World = GetWorld();
@@ -113,7 +120,8 @@ void UCastleMassMeleeAttackProcessor::Execute(FMassEntityManager& EntityManager,
 			if (bApplied)
 			{
 				++Melee.AttackCount;
-				Melee.AttackCooldown = Melee.AttackInterval;
+				// 每次命中重新读取世界倍率，当前已经开始的冷却计时维持原速度。
+				Melee.AttackCooldown = static_cast<double>(Melee.AttackInterval) / UnitSubsystem->GetGlobalEnemyAttackSpeedMultiplier();
 			}
 		}
 	});

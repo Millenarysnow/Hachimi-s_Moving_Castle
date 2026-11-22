@@ -20,7 +20,8 @@ struct MOVING_CASTLE_API FCastleMassEnemyLaserAttackFragment : public FMassFragm
 	UPROPERTY() float BeamThickness = 10.0f;
 	UPROPERTY() TWeakObjectPtr<UStaticMesh> BeamMesh;
 	UPROPERTY() TWeakObjectPtr<UMaterialInterface> BeamMaterial;
-	UPROPERTY() float AttackCooldown = 0.0f;
+	/** 倍率可以很接近零，有效冷却用双精度保存，避免变成无穷。 */
+	UPROPERTY() double AttackCooldown = 0.0;
 	UPROPERTY() int32 AttackCount = 0;
 	UPROPERTY() bool bInAttackRange = false;
 	/** 只由攻击处理器写端点，显示处理器在全部伤害结算后确认实体仍存活才提交。 */

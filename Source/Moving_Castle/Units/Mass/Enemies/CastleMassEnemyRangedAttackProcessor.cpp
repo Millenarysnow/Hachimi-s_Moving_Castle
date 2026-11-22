@@ -93,7 +93,7 @@ void UCastleMassEnemyRangedAttackProcessor::Execute(FMassEntityManager& EntityMa
 			Targets[It] = FCastleMassMoveTargetFragment();
 			Velocities[It].Value = FVector::ZeroVector;
 			if (!Animations.IsEmpty()) { Animations[It].bInAttackState = true; }
-			Attack.AttackCooldown = FMath::Max(0.0f, Attack.AttackCooldown - Chunk.GetDeltaTimeSeconds());
+			Attack.AttackCooldown = FMath::Max(0.0, Attack.AttackCooldown - Chunk.GetDeltaTimeSeconds());
 			if (Attack.AttackCooldown > 0.0f) { continue; }
 			FCastleMassEnemyProjectileSpawn Launch;
 			Launch.Origin = Origin;
@@ -115,13 +115,21 @@ void UCastleMassEnemyRangedAttackProcessor::Execute(FMassEntityManager& EntityMa
 				}
 				TArray<FCastleMassUnitHandle> Projectiles;
 				FText Reason;
-				if (!World->GetSubsystem<UCastleMassUnitSubsystem>()->SpawnEnemyProjectiles(Configuration, {Launch}, Projectiles, Reason)) { return; }
+				auto* UnitSubsystem = World->GetSubsystem<UCastleMassUnitSubsystem>();
+				if (!UnitSubsystem)
+				{
+					UE_LOG(LogMoving_Castle, Error, TEXT("敌方远程发射失败：世界 %s 缺少 Mass 单位子系统，配置 %s。"),
+						*GetPathNameSafe(World.Get()), *GetPathNameSafe(Configuration));
+					return;
+				}
+				if (!UnitSubsystem->SpawnEnemyProjectiles(Configuration, {Launch}, Projectiles, Reason)) { return; }
 				if (Manager.IsEntityActive(Launch.Attacker.Entity))
 				{
 					if (auto* State = Manager.GetFragmentDataPtr<FCastleMassEnemyRangedAttackFragment>(Launch.Attacker.Entity))
 					{
 						++State->AttackCount;
-						State->AttackCooldown = State->AttackInterval;
+						// 以弹体实际创建成功时的世界倍率重置冷却，模板间隔保持独立。
+						State->AttackCooldown = static_cast<double>(State->AttackInterval) / UnitSubsystem->GetGlobalEnemyAttackSpeedMultiplier();
 					}
 				}
 			});

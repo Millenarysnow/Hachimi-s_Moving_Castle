@@ -79,7 +79,7 @@ bool ACastleMassEnemySpawner::SpawnUnits()
 		}
 
 		FText FailureReason;
-		if (!Units->SpawnUnits(Configuration, Transforms, SpawnedUnits, FailureReason))
+		if (!Units->SpawnEnemies(Configuration, Transforms, AttributeOverrides, SpawnedUnits, FailureReason))
 		{
 			UE_LOG(LogMoving_Castle, Error, TEXT("Mass 敌人圆环批量生成失败：%s"), *FailureReason.ToString());
 			return false;

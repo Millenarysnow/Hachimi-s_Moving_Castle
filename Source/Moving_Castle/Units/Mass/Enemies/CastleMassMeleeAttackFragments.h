@@ -23,7 +23,8 @@ struct MOVING_CASTLE_API FCastleMassMeleeAttackFragment : public FMassFragment
 
 	/** 当前剩余攻击冷却；每个实体独立保存，不能写入共享配置。 */
 	UPROPERTY()
-	float AttackCooldown = 0.0f;
+	/** 倍率可以很接近零，有效冷却用双精度保存，避免变成无穷。 */
+	double AttackCooldown = 0.0;
 
 	/** 是否已经进入攻击距离，用于快照诊断和后续表现。 */
 	UPROPERTY()

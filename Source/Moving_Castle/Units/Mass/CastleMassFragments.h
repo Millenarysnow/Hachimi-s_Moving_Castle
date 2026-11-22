@@ -42,6 +42,9 @@ struct MOVING_CASTLE_API FCastleMassUnitFragment : public FMassFragment
 
 	/** 空投系统只修改此倍率；计时结束恢复中性值，不改共享模板移速。 */
 	float SupportMovementMultiplier = 1.0f;
+
+	/** 敌人所处分批的永久移速倍率；支援效果到期时不修改它。 */
+	float SpawnMovementMultiplier = 1.0f;
 };
 
 USTRUCT()
