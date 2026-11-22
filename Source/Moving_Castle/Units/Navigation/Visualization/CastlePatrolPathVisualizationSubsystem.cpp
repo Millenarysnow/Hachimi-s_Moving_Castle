@@ -195,9 +195,9 @@ bool UCastlePatrolPathVisualizationSubsystem::RefreshDrawing()
 		return RejectDrawing(TEXT("导航子系统或已加载的绘制资产失效。"));
 	}
 	const auto Path = Navigation->AcquireSharedPath();
-	if (!Path || !Path->bValid || !Path->bClosedLoop)
+	if (!Path || !Path->bValid || (!Path->bClosedLoop && !Path->bTowerDispatch))
 	{
-		// 尚未发布、已失效和单段导航演示都不代表有可绘制的 NPC 巡逻闭环。
+		// 尚未发布、已失效和单段导航演示都没有可绘制的 NPC 巡逻轨迹。
 		DestroyPathSegments();
 		return true;
 	}

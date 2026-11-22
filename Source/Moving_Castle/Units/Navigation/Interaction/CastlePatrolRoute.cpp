@@ -1,6 +1,7 @@
 #include "Interaction/CastlePatrolRoute.h"
 
 #include "CastleNavigationSubsystem.h"
+#include "CastleTowerDispatchSubsystem.h"
 #include "Interaction/CastlePatrolWaypointMarker.h"
 #include "CastlePlayerController.h"
 #include "CastleShopComponent.h"
@@ -59,7 +60,7 @@ namespace
 		const double Layer = FMath::RoundToDouble(HeightFromFirstFloor / Board->LayerHeight);
 		if (Hit.bStartPenetrating || !Building.IsComponentRelevantForNavigation(Hit.GetComponent())
 			|| FVector::DotProduct(Hit.ImpactNormal, Board->GetActorUpVector()) < 0.99
-			|| Layer < 0 || Layer >= Board->GridSize.Z)
+			|| Layer < 0 || Layer >= Board->GetUnlockedLayerCount())
 		{
 			// 功能分支也能存放护栏和障碍；首个功能碰撞不是本层楼板时拒绝放点，不继续查下方。
 			return Reject(TEXT("不是棋盘该层的功能楼板顶面"));
@@ -103,6 +104,15 @@ ACastlePatrolRoute::ACastlePatrolRoute()
 void ACastlePatrolRoute::BeginPlay()
 {
 	Super::BeginPlay();
+	if (MaxPlayerWaypoints < 1 || MaxPlayerWaypoints > ACastlePatrolWaypointMarker::MaxDisplayedNumber)
+	{
+		const FString Reason = FString::Printf(TEXT("巡逻入口 %s 的 MaxPlayerWaypoints 必须在 1～%d 之间。"),
+			*GetPathName(), ACastlePatrolWaypointMarker::MaxDisplayedNumber);
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *Reason);
+		ShowMessage(Reason, false);
+		SetActorTickEnabled(false);
+		return;
+	}
 	for (TActorIterator<ACastlePatrolRoute> It(GetWorld()); It; ++It)
 	{
 		if (*It != this && It->bOwnsRoute)
@@ -136,7 +146,12 @@ bool ACastlePatrolRoute::SetWorldWaypoints(const TArray<FVector>& Waypoints, FTe
 {
 	if (!bOwnsRoute) { OutFailureReason = FText::FromString(TEXT("此 Actor 没有全局巡逻路线的编辑权。")); return false; }
 	UCastleNavigationSubsystem* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
-	if (!Navigation->RequestSharedPatrolRoute(Waypoints, OutFailureReason)) { return false; }
+	const auto* Dispatch = GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>();
+	// 出兵会话的门由导航求解时插入；会话之外保留玩家闭环供旧导演与调试入口消费。
+	const bool bAccepted = Dispatch && Dispatch->IsSessionActive()
+		? Navigation->RequestTowerDispatchRoute(Waypoints, OutFailureReason)
+		: Navigation->RequestSharedPatrolRoute(Waypoints, OutFailureReason);
+	if (!bAccepted) { return false; }
 	LocalWaypoints.Reset(Waypoints.Num());
 	for (FVector Point : Waypoints) { LocalWaypoints.Add(GetActorTransform().InverseTransformPosition(Point)); }
 	return true;
@@ -146,7 +161,30 @@ bool ACastlePatrolRoute::CanEdit() const
 {
 	const auto* Controller = Cast<ACastlePlayerController>(GetWorld()->GetFirstPlayerController());
 	FText Reason;
-	return bOwnsRoute && bAllowPlayerEditing && (!Controller || (!Controller->GetShop()->IsShopOpen() && Controller->IsDirectorEditingAllowed(Reason)));
+	return bOwnsRoute && bAllowPlayerEditing && (!Controller || (!Controller->GetShop()->IsShopOpen() && Controller->IsCastleEditingAllowed(Reason)));
+}
+
+bool ACastlePatrolRoute::SetMaxPlayerWaypoints(const int32 NewLimit)
+{
+	if (NewLimit < 1 || NewLimit > ACastlePatrolWaypointMarker::MaxDisplayedNumber)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("巡逻入口 %s 拒绝路点上限 %d：结果必须在 1～%d 之间。"),
+			*GetPathName(), NewLimit, ACastlePatrolWaypointMarker::MaxDisplayedNumber);
+		return false;
+	}
+	MaxPlayerWaypoints = NewLimit;
+	return true;
+}
+
+bool ACastlePatrolRoute::AddMaxPlayerWaypoints(const int32 Delta)
+{
+	const int64 Candidate = static_cast<int64>(MaxPlayerWaypoints) + Delta;
+	if (Candidate < 1 || Candidate > ACastlePatrolWaypointMarker::MaxDisplayedNumber)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("巡逻入口 %s 拒绝路点上限变更 %d：结果必须在 1～99 之间。"), *GetPathName(), Delta);
+		return false;
+	}
+	return SetMaxPlayerWaypoints(static_cast<int32>(Candidate));
 }
 
 void ACastlePatrolRoute::CancelEditingDraft()
@@ -186,7 +224,7 @@ void ACastlePatrolRoute::ToggleEditing()
 {
 	const auto* Controller = Cast<ACastlePlayerController>(GetWorld()->GetFirstPlayerController());
 	FText Reason;
-	if (Controller && !Controller->IsDirectorEditingAllowed(Reason)) { ShowMessage(Reason.ToString(), false); return; }
+	if (Controller && !Controller->IsCastleEditingAllowed(Reason)) { ShowMessage(Reason.ToString(), false); return; }
 	if (!CanEdit()) { return; }
 	if (bEditing)
 	{
@@ -196,7 +234,7 @@ void ACastlePatrolRoute::ToggleEditing()
 	}
 	DraftWaypoints = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>()->GetRequestedWaypoints();
 	SetEditing(true);
-	ShowMessage(TEXT("巡逻编辑：瞄准建筑楼顶或地面后左键添加路径点；建筑取本层楼内地板，棋盘内地面取格心；Backspace 撤回，Enter 提交完整闭环，Delete 清空，P 取消。"), true);
+	ShowMessage(TEXT("巡逻编辑：瞄准建筑楼顶或地面后左键添加路径点；建筑取本层楼内地板，棋盘内地面取格心；Backspace 撤回，Enter 提交路线，Delete 清空，P 取消。"), true);
 }
 
 void ACastlePatrolRoute::AddPointAtViewCenter()
@@ -209,6 +247,12 @@ void ACastlePatrolRoute::AddPointAtViewCenter()
 			*GetPathName(), ACastlePatrolWaypointMarker::MaxDisplayedNumber);
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *Failure);
 		ShowMessage(Failure, false);
+		return;
+	}
+	FText CapacityFailure;
+	if (!CheckDraftWaypointCapacity(CapacityFailure))
+	{
+		ShowMessage(CapacityFailure.ToString(), false);
 		return;
 	}
 	APlayerController* Controller = GetWorld()->GetFirstPlayerController();
@@ -227,13 +271,33 @@ void ACastlePatrolRoute::AddPointAtViewCenter()
 		ShowMessage(Failure.ToString(), false);
 		return;
 	}
-	if (!DraftWaypoints.IsEmpty() && DraftWaypoints.Last().Equals(Point, 1.0))
+	if (!TryAppendDraftWaypoint(Point, Failure))
 	{
-		ShowMessage(TEXT("新路径点与上一点重合，请选择不同位置。"), false);
+		ShowMessage(Failure.ToString(), false);
 		return;
 	}
-	DraftWaypoints.Add(Point);
 	ShowMessage(FString::Printf(TEXT("已放置草稿路径点 %d，Enter 后统一求解全部路段。"), DraftWaypoints.Num()), true);
+}
+
+bool ACastlePatrolRoute::CheckDraftWaypointCapacity(FText& OutReason) const
+{
+	OutReason = FText::GetEmpty();
+	if (DraftWaypoints.Num() < MaxPlayerWaypoints) { return true; }
+	OutReason = FText::FromString(FString::Printf(TEXT("已达到当前路径点上限 %d。"), MaxPlayerWaypoints));
+	UE_LOG(LogMoving_Castle, Warning, TEXT("巡逻入口 %s：%s"), *GetPathName(), *OutReason.ToString());
+	return false;
+}
+
+bool ACastlePatrolRoute::TryAppendDraftWaypoint(const FVector Point, FText& OutReason)
+{
+	if (!CheckDraftWaypointCapacity(OutReason)) { return false; }
+	if (!DraftWaypoints.IsEmpty() && DraftWaypoints.Last().Equals(Point, 1.0))
+	{
+		OutReason = FText::FromString(TEXT("新路径点与上一点重合，请选择不同位置。"));
+		return false;
+	}
+	DraftWaypoints.Add(Point);
+	return true;
 }
 
 bool ACastlePatrolRoute::TryResolveWaypointFromRay(UWorld* World, const FVector& RayStart, const FVector& RayEnd,

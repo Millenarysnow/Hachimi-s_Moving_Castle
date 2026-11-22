@@ -55,6 +55,7 @@ bool FCastleBuildingTriggerPath::Compile(const FCastleSharedNavigationPath& Path
 	OutPath.RegistryRevision = InRegistryRevision;
 	OutPath.Length = Path.Length;
 	OutPath.bClosedLoop = Path.bClosedLoop;
+	OutPath.bTowerDispatch = Path.bTowerDispatch;
 	if (Path.Length <= UE_DOUBLE_SMALL_NUMBER) { return true; }
 	for (const FCastleBuildingTriggerRegion& Region : Regions)
 	{
@@ -113,11 +114,16 @@ void FCastleBuildingTriggerPath::ForEachEntry(const double StartDistance, const 
 	if (Entries.IsEmpty() || Length <= UE_DOUBLE_SMALL_NUMBER || TravelDistance <= 0.0) { return; }
 	// 二分跳过本帧起点及之前的标记；停在进入边界后，下一帧不会再次消费相同标记。
 	int32 Index = Algo::UpperBoundBy(Entries, StartDistance, &FCastleBuildingEntryMarker::Distance);
+	// 回塔不经过任何塔外区域。门 A 重置与出生一致，忽略零距离的楼内标记，
+	// 余下帧时间仍沿下一趟实际路段消费。普通闭环照旧枚举接缝上的进入。
+	const int32 FirstOnNextLap = bTowerDispatch
+		? Algo::UpperBoundBy(Entries, 0.0, &FCastleBuildingEntryMarker::Distance) : 0;
+	const bool bCanWrap = (bClosedLoop || bTowerDispatch) && FirstOnNextLap < Entries.Num();
 	double LapBase = 0.0;
 	if (Index == Entries.Num())
 	{
-		if (!bClosedLoop) { return; }
-		Index = 0;
+		if (!bCanWrap) { return; }
+		Index = FirstOnNextLap;
 		LapBase = Length;
 	}
 	const double End = StartDistance + TravelDistance;
@@ -126,8 +132,8 @@ void FCastleBuildingTriggerPath::ForEachEntry(const double StartDistance, const 
 		Visitor(Entries[Index]);
 		if (++Index == Entries.Num())
 		{
-			if (!bClosedLoop) { return; }
-			Index = 0;
+			if (!bCanWrap) { return; }
+			Index = FirstOnNextLap;
 			LapBase += Length;
 		}
 	}

@@ -17,6 +17,9 @@
 #include "CastleMainTowerComponent.h"
 #include "CastleMassEnemySpawner.h"
 #include "CastleNavigationSubsystem.h"
+#include "CastleTowerDispatchConfigDataAsset.h"
+#include "CastleTowerDispatchSubsystem.h"
+#include "Interaction/CastleTowerDispatchDoors.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
@@ -307,6 +310,18 @@ bool ACastleBoard::SpawnMainTower(FText& OutFailureReason)
 		{
 			TowerActor->Destroy();
 			return false;
+		}
+		if (TowerDispatchConfig)
+		{
+			UCastleTowerDispatchDoors* Doors = NewObject<UCastleTowerDispatchDoors>(TowerActor, TEXT("TowerDispatchDoors"));
+			TowerActor->AddInstanceComponent(Doors);
+			Doors->RegisterComponent();
+			UCastleTowerDispatchSubsystem* Dispatch = GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>();
+			if (!Doors->Initialize(*this, OutFailureReason) || !Dispatch->Configure(TowerDispatchConfig, OutFailureReason))
+			{
+				TowerActor->Destroy();
+				return false;
+			}
 		}
 		TowerSideGrid = Grid;
 		UE_LOG(LogMoving_Castle, Display, TEXT("主塔 %s 已生成 %d 个侧格（种子 %d）；本局不生成地面棋盘。"),

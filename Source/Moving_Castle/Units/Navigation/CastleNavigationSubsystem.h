@@ -60,22 +60,25 @@ struct MOVING_CASTLE_API FCastleSharedNavigationPath
 	UPROPERTY(BlueprintReadOnly, Category="共享路线")
 	int32 RouteRevision = 0;
 
-	/** 循环巡逻与旧的单段调试请求共用发布机制，只有循环路线可由 Mass 巡逻器消费。 */
+	/** 标记含塔外返程的旧巡逻路线；正式出兵使用独立的双门开环标记。 */
 	UPROPERTY(BlueprintReadOnly, Category="共享路线")
 	bool bClosedLoop = false;
 
-	/** 投影后的玩家路径点，顺序就是 1→2→…→N→1，不能用求解器的转折点代替。 */
+	/** 门到门出兵与调试闭环各有消费入口；两种路线共用贴地轨迹。 */
+	bool bTowerDispatch = false;
+
+	/** 投影后的显式端点。双门路线在玩家点两端含门 A 和门 B。 */
 	UPROPERTY(BlueprintReadOnly, Category="共享路线")
 	TArray<FVector> Waypoints;
 
-	/** 整条闭环一次性生成的贴 NavMesh 采样；所有实体共享，运行时不再逐实体投影或寻路。 */
+	/** 整条巡逻路线一次性生成的贴 NavMesh 采样；所有实体共享，运行时不再逐实体投影或寻路。 */
 	UPROPERTY(BlueprintReadOnly, Category="共享路线")
 	TArray<FVector> PatrolPoints;
 
 	/** 与 PatrolPoints 一一对应的累计距离，可二分定位，支持一帧跨多个转折或整圈。 */
 	TArray<double> PatrolDistances;
 
-	/** 每个玩家路径点在闭环中的累计距离，最后额外存整圈长度，明确保留 N→1 路段。 */
+	/** 各显式端点的累计距离；闭环末端另存返回首点的累计距离。 */
 	TArray<double> WaypointDistances;
 
 	/** 只包含梯底到梯顶的攀爬区间，不包含两侧楼板接驳走段。 */
@@ -125,6 +128,9 @@ public:
 	/** 一次接收整组路径点，集中算完相邻通路及格内轨迹后才原子发布；单点表示原地待命。 */
 	UFUNCTION(BlueprintCallable, Category="移动城堡|NPC导航")
 	bool RequestSharedPatrolRoute(const TArray<FVector>& Waypoints, FText& OutFailureReason);
+
+	/** 只保存玩家原始点列，求解时把当前塔门邻格加到两端。 */
+	bool RequestTowerDispatchRoute(const TArray<FVector>& Waypoints, FText& OutFailureReason);
 
 	/** 清除全局巡逻请求并立即失效；NPC 停止，不沿旧快照继续走。 */
 	UFUNCTION(BlueprintCallable, Category="移动城堡|NPC导航")
@@ -196,6 +202,7 @@ private:
 	double BuildStartTime = 0.0;
 	TArray<FVector> RequestedWaypoints;
 	bool bRequestedClosedLoop = false;
+	bool bRequestedTowerDispatch = false;
 	int32 RouteRevision = 0;
 	int32 PathRevision = 0;
 	mutable FRWLock PathLock;
@@ -206,10 +213,11 @@ private:
 	void InvalidatePath();
 	void PublishPath(FCastleSharedNavigationPath&& Path);
 	void CalculateSharedPath();
-	bool RequestRoute(const TArray<FVector>& Waypoints, bool bClosedLoop, FText& OutFailureReason);
+	bool RequestRoute(const TArray<FVector>& Waypoints, bool bClosedLoop, FText& OutFailureReason, bool bTowerDispatch = false);
 	void FailNavigation(const FText& Reason);
 	void HandleAssemblyFinished(UAssemblyFlightComponent* Flight, bool bCompleted);
 	void HandleMergeFinished(UBuildingMergeComponent* Merge, bool bCompleted);
+	friend class FCastleMainTowerDispatchTest;
 };
 
 /** 同步放置/替换/删除的栈作用域。与动画观察共享计数，函数返回不会提前解锁后续合并。 */

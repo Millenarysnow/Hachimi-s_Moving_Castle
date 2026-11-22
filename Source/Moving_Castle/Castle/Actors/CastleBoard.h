@@ -23,6 +23,7 @@ class UCastleCombatDataAsset;
 class UCastleGroundGenerator;
 class UCastleMainTowerComponent;
 class UCastleTowerSideGridComponent;
+class UCastleTowerDispatchConfigDataAsset;
 class UStaticMeshComponent;
 struct FCastleTowerSideCell;
 class USceneComponent;
@@ -139,6 +140,10 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|主塔扩层")
 	float TowerHealthPerBalloon = 200.0f;
+
+	/** 正式塔侧关卡显式配置，旧测试关卡保留原有巡逻入口。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|主塔出兵")
+	TObjectPtr<UCastleTowerDispatchConfigDataAsset> TowerDispatchConfig;
 
 	/** 查询与放置、合成登记共享的当前有效高度。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")

@@ -3,6 +3,7 @@
 #include "CastleMassFragments.h"
 #include "CastleMassProcessors.h"
 #include "CastleNavigationSubsystem.h"
+#include "CastleTowerDispatchSubsystem.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Mass/CastleMassPatrolFragments.h"
@@ -38,9 +39,11 @@ void UCastleMassPatrolProcessor::ConfigureQueries(const TSharedRef<FMassEntityMa
 void UCastleMassPatrolProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
 	const auto Path = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>()->AcquireSharedPath();
+	const auto* Dispatch = GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>();
+	const bool bAutoDispatch = Dispatch && Dispatch->IsAutoDispatchEnabled();
 	TAtomic<int32> NewlyBlocked(0);
 	TAtomic<int32> InvalidLadderSettings(0);
-	Query.ParallelForEachEntityChunk(Context, [Path, &NewlyBlocked, &InvalidLadderSettings](FMassExecutionContext& Chunk)
+	Query.ParallelForEachEntityChunk(Context, [Path, bAutoDispatch, &NewlyBlocked, &InvalidLadderSettings](FMassExecutionContext& Chunk)
 	{
 		const double DeltaTime = FMath::Max(0.0f, Chunk.GetDeltaTimeSeconds());
 		const auto Transforms = Chunk.GetMutableFragmentView<FTransformFragment>();
@@ -63,7 +66,8 @@ void UCastleMassPatrolProcessor::Execute(FMassEntityManager& EntityManager, FMas
 			FVector& Velocity = Velocities[It].Value;
 			Targets[It] = FCastleMassMoveTargetFragment();
 			// 几何开始变化后立即停速；即使持有旧快照，也不允许沿过期的楼板继续走。
-			if (!Path || !Path->bValid || !Path->bClosedLoop)
+			if (!Path || !Path->bValid || Patrol.bReachedDispatchEntrance
+				|| (Patrol.bTowerDispatched ? !Path->bTowerDispatch : !Path->bClosedLoop))
 			{
 				Velocity = FVector::ZeroVector;
 				Patrol.Speed = 0.0;
@@ -90,7 +94,8 @@ void UCastleMassPatrolProcessor::Execute(FMassEntityManager& EntityManager, FMas
 			double Travel = 0.0;
 			FCastleMassMovementSettings EffectiveSettings = Settings;
 			EffectiveSettings.MaxSpeed *= Units[It].SupportMovementMultiplier;
-			if (!CastlePatrolMovement::Advance(*Path, EffectiveSettings, Patrol.Distance, DeltaTime, Patrol.Speed, Travel))
+			const bool bFinishAtEntrance = Patrol.bTowerDispatched && !bAutoDispatch;
+			if (!CastlePatrolMovement::Advance(*Path, EffectiveSettings, Patrol.Distance, DeltaTime, Patrol.Speed, Travel, bFinishAtEntrance))
 			{
 				++InvalidLadderSettings;
 			}
@@ -102,8 +107,18 @@ void UCastleMassPatrolProcessor::Execute(FMassEntityManager& EntityManager, FMas
 				Traversal.StartDistance = Patrol.Distance;
 				Traversal.TravelDistance = Travel;
 				const double Total = Patrol.Distance + Travel;
-				Patrol.CompletedLaps += static_cast<int64>(Total / Path->Length);
-				Patrol.Distance = FMath::Fmod(Total, Path->Length);
+				if (bFinishAtEntrance && Total >= Path->Length - UE_DOUBLE_SMALL_NUMBER)
+				{
+					// 只写值状态，绝不在并行查询中改变实体组成；调度器会在安全边界确认销毁。
+					Patrol.Distance = Path->Length;
+					Patrol.Speed = 0.0;
+					Patrol.bReachedDispatchEntrance = true;
+				}
+				else
+				{
+					Patrol.CompletedLaps += static_cast<int64>(Total / Path->Length);
+					Patrol.Distance = FMath::Fmod(Total, Path->Length);
+				}
 			}
 			else { Patrol.Speed = 0.0; Patrol.Distance = 0.0; }
 			FVector Location;

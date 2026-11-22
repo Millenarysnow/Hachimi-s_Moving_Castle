@@ -33,6 +33,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category="移动城堡|NPC导航")
 	bool SetWorldWaypoints(const TArray<FVector>& Waypoints, FText& OutFailureReason);
 
+	/** 改变玩家草稿的放点上限，已经提交的路线保持原样。 */
+	UFUNCTION(BlueprintCallable, Category="移动城堡|NPC导航")
+	bool SetMaxPlayerWaypoints(int32 NewLimit);
+
+	/** 外部升级可以在现有上限上增加点数，同样检查结果是否合法。 */
+	UFUNCTION(BlueprintCallable, Category="移动城堡|NPC导航")
+	bool AddMaxPlayerWaypoints(int32 Delta);
+
+	UFUNCTION(BlueprintPure, Category="移动城堡|NPC导航")
+	int32 GetMaxPlayerWaypoints() const { return MaxPlayerWaypoints; }
+
 	virtual void Tick(float DeltaSeconds) override;
 	bool IsEditing() const { return bEditing; }
 
@@ -57,6 +68,10 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** 只约束玩家放点，关卡作者提交的预设路线继续走原导航校验。 */
+	UPROPERTY(EditAnywhere, Category="共享巡逻")
+	int32 MaxPlayerWaypoints = 2;
+
 	/** 正式蓝图类随入口一起加载，既有地图不需要再布置标记 Actor。 */
 	UPROPERTY()
 	TSubclassOf<ACastlePatrolWaypointMarker> WaypointMarkerClass;
@@ -76,10 +91,14 @@ private:
 	bool bOwnsRoute = false;
 	void ToggleEditing();
 	void AddPointAtViewCenter();
+	bool CheckDraftWaypointCapacity(FText& OutReason) const;
+	bool TryAppendDraftWaypoint(FVector Point, FText& OutReason);
 	void UndoPoint();
 	void ApplyDraft();
 	void ClearRoute();
 	void SetEditing(bool bNewEditing);
 	bool CanEdit() const;
 	void ShowMessage(const FString& Message, bool bSuccess) const;
+
+	friend class FCastleMainTowerWaypointLimitTest;
 };
