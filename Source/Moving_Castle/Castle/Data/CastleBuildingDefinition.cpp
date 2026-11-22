@@ -51,10 +51,11 @@ bool UCastleBuildingDefinition::ValidateConfiguration(FText& OutFailureReason) c
 		OutFailureReason = FText::FromString(TEXT("建筑定义必须填写名称，并配置 1 至 5 个连续等级。"));
 		return false;
 	}
-	// 普通房间保持单级，功能建筑仍严格校验连续等级。
-	if (BuildingType > ECastleBuildingType::BalloonTower || (BuildingType == ECastleBuildingType::NormalRoom && Levels.Num() != 1))
+	// 普通房和加速房只有一级。后者没有任何下一级定义，因此原有合成入口也不会合成。
+	const bool bSingleLevelRoom = BuildingType == ECastleBuildingType::NormalRoom || BuildingType == ECastleBuildingType::SpeedRoom;
+	if (BuildingType > ECastleBuildingType::SpeedRoom || (bSingleLevelRoom && Levels.Num() != 1))
 	{
-		OutFailureReason = FText::FromString(TEXT("建筑类别无效，或普通房间配置了一级以外的等级。"));
+		OutFailureReason = FText::FromString(TEXT("建筑类别无效，或普通房间、加速房间配置了一级以外的等级。"));
 		return false;
 	}
 	if (BuildingType == ECastleBuildingType::ArcherTower || BuildingType == ECastleBuildingType::CannonTower)

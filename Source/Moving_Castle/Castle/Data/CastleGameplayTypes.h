@@ -39,7 +39,8 @@ enum class ECastleBuildingType : uint8
 	Farm UMETA(DisplayName = "农田"),
 	ShieldTower UMETA(DisplayName = "盾塔"),
 	BeeHive UMETA(DisplayName = "蜂巢塔"),
-	BalloonTower UMETA(DisplayName = "气球空投塔")
+	BalloonTower UMETA(DisplayName = "气球空投塔"),
+	SpeedRoom UMETA(DisplayName = "加速房间")
 };
 
 /**

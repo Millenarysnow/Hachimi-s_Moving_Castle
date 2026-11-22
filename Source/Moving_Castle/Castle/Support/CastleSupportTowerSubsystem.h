@@ -36,6 +36,8 @@ public:
 	bool PopBalloon(uint64 Id);
 	float GetTowerDamageMultiplier(const ACastleBuildingBase& Tower) const;
 	float GetArcherRateMultiplier(const ACastleBuildingBase& Tower) const;
+	/** NPC 进入时登记移速增益；统一由支援 Tick 写入实体并按世界时间恢复。 */
+	bool ApplyNPCMovementSpeedBoost(const FCastleMassUnitHandle& NPC, float Multiplier, float DurationSeconds);
 	/** 导演结束本场时清理尚未结算的支援效果和蓝色空投增援，不影响其他兵团。 */
 	bool EndBattleSupport();
 
