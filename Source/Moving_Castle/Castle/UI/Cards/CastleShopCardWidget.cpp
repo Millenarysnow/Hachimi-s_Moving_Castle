@@ -31,6 +31,8 @@ namespace
 	constexpr double CardYawLimitDegrees = 22.0;
 	constexpr double CardPitchLimitDegrees = 18.0;
 	constexpr float CardInspectionReturnSeconds = 0.20f;
+	/** 方案 A 判定阈值：局部位移小于 6px 视为短点购买，达到或超过则进入 3D 赏牌拖拽。 */
+	constexpr double CardClickDragThresholdPx = 6.0;
 	constexpr TCHAR FaceAssetPath[] = TEXT("/Game/MovingCastle/UI/Cards/M_CastleCardFace.M_CastleCardFace");
 	constexpr TCHAR CardPerspectiveAssetPath[] = TEXT("/Game/MovingCastle/UI/Cards/M_CastleCardPerspective.M_CastleCardPerspective");
 	const FName PortraitParameter(TEXT("Portrait"));
@@ -224,6 +226,7 @@ bool UCastleShopCardWidget::Configure(UCastleShopWidget& InShop, const FCastleBu
 	Title->SetText(Descriptor.Definition->DisplayName);
 	LevelLabel->SetText(FText::Format(NSLOCTEXT("CastleCard", "Level", "等级 {0}"), FText::AsNumber(Descriptor.Level)));
 	ShopOwner = &InShop;
+	DisplayedDescriptor = Descriptor;
 	bCanInspect = !bSold;
 	RefreshPortrait();
 	ApplyFaceState();
@@ -397,6 +400,18 @@ void UCastleShopCardWidget::CancelInspection()
 	}
 }
 
+void UCastleShopCardWidget::NativeOnMouseEnter(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
+{
+	Super::NativeOnMouseEnter(InGeometry, InMouseEvent);
+	OnCardHovered.Broadcast(*this, true);
+}
+
+void UCastleShopCardWidget::NativeOnMouseLeave(const FPointerEvent& InMouseEvent)
+{
+	Super::NativeOnMouseLeave(InMouseEvent);
+	OnCardHovered.Broadcast(*this, false);
+}
+
 FReply UCastleShopCardWidget::NativeOnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& InMouseEvent)
 {
 	if (!bCanInspect || Grab.IsSet() || InMouseEvent.IsTouchEvent() || InMouseEvent.GetEffectingButton() != EKeys::LeftMouseButton)
@@ -411,10 +426,11 @@ FReply UCastleShopCardWidget::NativeOnMouseButtonDown(const FGeometry& MyGeometr
 		return FReply::Unhandled();
 	}
 	Shop->ActivateCardInspection(*this);
-	// 重新抓住同一张正在回正的牌时，从此刻的姿态接着拖，不突然重置角度。
+	// 重新抓住同一张正在回正的牌时，从此刻的姿态接着拖，且直接视为拖拽态不误触短点购买。
 	bReturning = false;
+	const bool bResumingTilt = !InspectionOffset.IsZero();
 	Grab.Emplace(FCardGrab{static_cast<int32>(InMouseEvent.GetUserIndex()), InMouseEvent.GetPointerIndex(),
-		MyGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition()), InspectionOffset});
+		MyGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition()), InspectionOffset, bResumingTilt});
 	return FReply::Handled().CaptureMouse(Captor.ToSharedRef());
 }
 
@@ -436,6 +452,14 @@ FReply UCastleShopCardWidget::NativeOnMouseMove(const FGeometry& MyGeometry, con
 	}
 	// 使用未投影的局部坐标，商店 ScaleBox 或系统 DPI 不会改变手感。普通悬停没有抓牌起点。
 	const FVector2D Delta = MyGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition()) - Grab->Origin;
+	if (!Grab->bExceededDragThreshold)
+	{
+		if (Delta.Size() < CardClickDragThresholdPx)
+		{
+			return FReply::Handled();
+		}
+		Grab->bExceededDragThreshold = true;
+	}
 	SetInspectionOffset(Grab->InitialOffset + Delta / FVector2D(CardWidth * 0.44, CardHeight * 0.35));
 	return FReply::Handled();
 }
@@ -447,8 +471,18 @@ FReply UCastleShopCardWidget::NativeOnMouseButtonUp(const FGeometry& MyGeometry,
 	{
 		return Super::NativeOnMouseButtonUp(MyGeometry, InMouseEvent);
 	}
+	// 方案 A：位移未超过拖拽阈值且在卡面范围内松手视为短点购买；否则进入平滑回正。
+	const bool bWasShortClick = !Grab->bExceededDragThreshold
+		&& MyGeometry.IsUnderLocation(InMouseEvent.GetScreenSpacePosition());
 	// 正常松手会触发 CaptureLost；先解绑抓牌状态，区别于窗口切走导致的强制取消。
 	Grab.Reset();
+	if (bWasShortClick)
+	{
+		FinishInspection();
+		const FReply Reply = FReply::Handled().ReleaseMouseCapture();
+		OnCardClicked.Broadcast(*this);
+		return Reply;
+	}
 	if (InspectionOffset == FVector2D::ZeroVector)
 	{
 		FinishInspection();

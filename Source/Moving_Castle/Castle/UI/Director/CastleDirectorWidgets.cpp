@@ -6,6 +6,7 @@
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/UI/Common/CastleHUDControls.h"
 #include "CastleMainTowerComponent.h"
+#include "CastleShopComponent.h"
 #include "Components/Button.h"
 #include "Components/Image.h"
 #include "Components/TextBlock.h"
@@ -197,9 +198,36 @@ bool UCastleDirectorHUDWidget::BindMainTowerHealth(UCastleMainTowerComponent* Ma
 	}
 
 	EnsurePatrolRouteBinding();
+	if (ACastlePlayerController* CastleController = Cast<ACastlePlayerController>(GetOwningPlayer()))
+	{
+		if (IsValid(CastleController->GetShop()))
+		{
+			BoundShop = CastleController->GetShop();
+			BoundShop->OnShopChanged.AddUniqueDynamic(this, &UCastleDirectorHUDWidget::HandleShopVisibilityChanged);
+		}
+	}
 	SyncScreenMode();
 	SyncBattleControlButtons();
+	HandleShopVisibilityChanged();
 	return true;
+}
+
+void UCastleDirectorHUDWidget::HandleShopVisibilityChanged()
+{
+	if (!BoundShop.IsValid())
+	{
+		return;
+	}
+	if (BoundShop->IsShopOpen())
+	{
+		// 透景房间商店打开时临时收起底层主界面 HUD，避免顶部血条和四角按钮透出重影。
+		SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+	const UCastleDirectorSubsystem* Director = BoundDirector.Get();
+	const bool bModalPhase = IsValid(Director)
+		&& (Director->GetPhase() == ECastleDirectorPhase::Reward || Director->GetPhase() == ECastleDirectorPhase::GameOver);
+	SetVisibility(bModalPhase ? ESlateVisibility::HitTestInvisible : ESlateVisibility::SelfHitTestInvisible);
 }
 
 void UCastleDirectorHUDWidget::EnsurePatrolRouteBinding()
@@ -437,6 +465,11 @@ void UCastleDirectorHUDWidget::NativeDestruct()
 	{
 		Route->OnEditingStateChanged.Remove(PatrolEditingHandle);
 		BoundPatrolRoute.Reset();
+	}
+	if (UCastleShopComponent* Shop = BoundShop.Get())
+	{
+		Shop->OnShopChanged.RemoveDynamic(this, &UCastleDirectorHUDWidget::HandleShopVisibilityChanged);
+		BoundShop.Reset();
 	}
 	Super::NativeDestruct();
 }

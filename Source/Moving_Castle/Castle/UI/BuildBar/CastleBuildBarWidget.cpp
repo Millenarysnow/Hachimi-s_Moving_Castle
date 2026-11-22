@@ -10,6 +10,7 @@
 #include "CastleBuildBarSlotWidget.h"
 #include "CastleBuildingDefinition.h"
 #include "CastlePlayerController.h"
+#include "CastleShopComponent.h"
 #include "Components/Image.h"
 #include "Components/TextBlock.h"
 #include "Kismet/GameplayStatics.h"
@@ -76,6 +77,11 @@ void UCastleBuildBarWidget::NativeDestruct()
 		Route->OnEditingStateChanged.Remove(PatrolEditingHandle);
 		BoundPatrolRoute.Reset();
 	}
+	if (UCastleShopComponent* Shop = BoundShop.Get())
+	{
+		Shop->OnShopChanged.RemoveDynamic(this, &UCastleBuildBarWidget::HandleShopChanged);
+		BoundShop.Reset();
+	}
 	Super::NativeDestruct();
 }
 
@@ -102,10 +108,20 @@ void UCastleBuildBarWidget::EnsureModeBindings()
 			PatrolEditingHandle = Route->OnEditingStateChanged.AddUObject(this, &UCastleBuildBarWidget::HandlePatrolEditingChanged);
 		}
 	}
+	if (!BoundShop.IsValid() && Controller.IsValid() && IsValid(Controller->GetShop()))
+	{
+		BoundShop = Controller->GetShop();
+		BoundShop->OnShopChanged.AddUniqueDynamic(this, &UCastleBuildBarWidget::HandleShopChanged);
+	}
 }
 
 bool UCastleBuildBarWidget::ShouldDisplayInCurrentScreen() const
 {
+	// 透景房间商店打开时自带 10 格备战席，此时隐藏建造栏避免底部重影。
+	if (BoundShop.IsValid() && BoundShop->IsShopOpen())
+	{
+		return false;
+	}
 	// 路径编辑界面底部居中留空，战斗界面底部居中显示骷髅条；建造栏只在建造页面展示。
 	if (BoundPatrolRoute.IsValid() && BoundPatrolRoute->IsEditing())
 	{
@@ -133,6 +149,11 @@ void UCastleBuildBarWidget::HandleDirectorPhaseChanged(const ECastleDirectorPhas
 }
 
 void UCastleBuildBarWidget::HandlePatrolEditingChanged(const bool bIsEditing)
+{
+	RefreshScreenVisibility();
+}
+
+void UCastleBuildBarWidget::HandleShopChanged()
 {
 	RefreshScreenVisibility();
 }

@@ -99,19 +99,21 @@ namespace
 					TArray<FFloat16Color> Pixels;
 					CheckTransparentPixels(Portrait->GetTexture(), Pixels);
 				}
-				// 只从当前视口商店实际挂着的 WidgetTree 取商品，不把刷新后等待 GC 的旧卡计进测试。
+				// 只从当前视口商店实际挂着的商品槽取卡，不把旧实例计进测试。
 				TArray<UUserWidget*> Shops;
 				UWidgetBlueprintLibrary::GetAllWidgetsOfClass(World, Shops, UCastleShopWidget::StaticClass(), true);
 				if (!Test.TestEqual(TEXT("视口有一个正式商店"), Shops.Num(), 1)) { return true; }
-				TArray<UCastleShopCardWidget*> Widgets;
-				Shops[0]->WidgetTree->ForEachWidget([&Widgets](UWidget* Widget)
+				UCastleShopWidget* ShopUI = Cast<UCastleShopWidget>(Shops[0]);
+				if (!Test.TestNotNull(TEXT("正式商店类型有效"), ShopUI)
+					|| !Test.TestTrue(TEXT("货币战争风格商店 WBP 校验通过"), ShopUI->ValidatePresentation()))
 				{
-					if (UCastleShopCardWidget* OfferCard = Cast<UCastleShopCardWidget>(Widget)) { Widgets.Add(OfferCard); }
-				});
+					return true;
+				}
+				TArray<UCastleShopCardWidget*> Widgets = ShopUI->GetOfferCards();
 				if (!Test.TestEqual(TEXT("实际 UMG 商品 Widget 数"), Widgets.Num(), 6)) { return true; }
 				Card = Widgets[0];
 				OtherCard = Widgets[1];
-				FoilToggle = Cast<UButton>(Shops[0]->WidgetTree->FindWidget(TEXT("FoilPreview")));
+				FoilToggle = Cast<UButton>(ShopUI->WidgetTree->FindWidget(TEXT("FoilPreview")));
 				const FGeometry Geometry = Card->GetCachedGeometry();
 				if (!Test.TestTrue(TEXT("卡牌已在商店布局"), Geometry.GetLocalSize().X > 0.0)) { return true; }
 				UImage* CardFace = Cast<UImage>(Card->WidgetTree->FindWidget(TEXT("CardFace")));
@@ -163,9 +165,7 @@ namespace
 				FSlateApplication& Slate = FSlateApplication::Get();
 				if (!Test.TestTrue(TEXT("按下牌面获得鼠标捕获"), PressCard(Start))) { Shop.CloseShop(); return true; }
 				Test.TestTrue(TEXT("只按下不拖动，仍使用正面"), IsCardNeutral());
-				Slate.RoutePointerUpEvent(HitAt(Start), MakePointer(Start, Start, false, EKeys::LeftMouseButton));
-				Test.TestTrue(TEXT("普通点击没有改变牌姿态或留下鼠标捕获"), IsCardNeutral() && !Card->HasMouseCapture());
-				if (!Test.TestTrue(TEXT("再次按下开始拖动"), PressCard(Start))) { Shop.CloseShop(); return true; }
+				// 方案 A：位移超过拖拽阈值进入 3D 赏牌，不触发购买。
 				Slate.RoutePointerMoveEvent(HitAt(Outside), MakePointer(Outside, Start, true), false);
 				Test.TestTrue(TEXT("越过卡位边界仍由抓住的卡持有鼠标"), Card->HasMouseCapture());
 				++Phase;
@@ -258,6 +258,28 @@ namespace
 			if (!IsCardNeutral()) { return false; }
 			Test.TestNull(TEXT("回正后解除动态画面"), Studio->GetDynamicTexture(Card.Get()));
 			Test.TestFalse(TEXT("静止时不再驱动摄影"), Studio->IsTickable());
+
+			// 方案 A 验收：若开局背包已满先售出 1 张腾出备战席，再短点商品卡直接购入并扣款入包。
+			if (Shop.GetBackpackItems().Num() >= 10)
+			{
+				FText SellReason;
+				Test.TestTrue(TEXT("售出一张备战席卡牌腾出购买空间"), Shop.TrySellBackpackItem(0, SellReason));
+			}
+			const int32 BackpackCountBeforeBuy = Shop.GetBackpackItems().Num();
+			const FVector2D BuyPoint = CardScreenPoint(*OtherCard.Get(), FVector2D(0.50, 0.50));
+			const int32 GoldBeforeShortClick = Controller->GetEconomy()->GetGold();
+			const int32 OtherOfferPrice = Offers[1].Price;
+			{
+				FSlateApplication& Slate = FSlateApplication::Get();
+				const bool bPrevActive = Slate.GetHandleDeviceInputWhenApplicationNotActive();
+				Slate.SetHandleDeviceInputWhenApplicationNotActive(true);
+				Slate.RoutePointerDownEvent(HitAt(BuyPoint), MakePointer(BuyPoint, BuyPoint, true, EKeys::LeftMouseButton));
+				Slate.RoutePointerUpEvent(HitAt(BuyPoint), MakePointer(BuyPoint, BuyPoint, false, EKeys::LeftMouseButton));
+				Slate.SetHandleDeviceInputWhenApplicationNotActive(bPrevActive);
+			}
+			Test.TestTrue(TEXT("方案 A 短点商品卡直接购入并标记售罄"), Shop.GetOffers()[1].bSold);
+			Test.TestEqual(TEXT("方案 A 短点购买扣除准确报价"), Controller->GetEconomy()->GetGold(), GoldBeforeShortClick - OtherOfferPrice);
+			Test.TestEqual(TEXT("方案 A 短点购买将卡牌送入备战席"), Shop.GetBackpackItems().Num(), BackpackCountBeforeBuy + 1);
 
 			// 模拟窗口失去捕获，再在按住时关闭商店，两条路径都不得等一次鼠标移出。
 			FSlateApplication& Slate = FSlateApplication::Get();

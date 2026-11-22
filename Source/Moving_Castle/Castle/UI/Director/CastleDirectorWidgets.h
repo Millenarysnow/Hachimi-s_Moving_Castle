@@ -12,6 +12,7 @@ class UCastleDirectorSubsystem;
 class UCastleHUDIconButtonWidget;
 class UCastleIconBarWidget;
 class UCastleMainTowerComponent;
+class UCastleShopComponent;
 class UImage;
 class UTextBlock;
 class UWidgetSwitcher;
@@ -137,6 +138,9 @@ private:
 	UFUNCTION()
 	void HandleTowerHealthChanged(float PreviousHealth, float CurrentHealth, float Damage);
 
+	UFUNCTION()
+	void HandleShopVisibilityChanged();
+
 	void HandleDirectorPhaseChanged(ECastleDirectorPhase NewPhase);
 	void HandleBattleControlStateChanged();
 	void HandlePatrolEditingChanged(bool bIsEditing);
@@ -170,6 +174,7 @@ private:
 	TWeakObjectPtr<UCastleMainTowerComponent> HealthSource;
 	TWeakObjectPtr<UCastleDirectorSubsystem> BoundDirector;
 	TWeakObjectPtr<ACastlePatrolRoute> BoundPatrolRoute;
+	TWeakObjectPtr<UCastleShopComponent> BoundShop;
 	FDelegateHandle DirectorPhaseHandle;
 	FDelegateHandle BattleControlHandle;
 	FDelegateHandle PatrolEditingHandle;

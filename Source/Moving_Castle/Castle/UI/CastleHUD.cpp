@@ -19,6 +19,8 @@ namespace
 	constexpr TCHAR BuildBarAssetPath[] = TEXT("/Game/MovingCastle/UI/BuildBar/WBP_BuildBar");
 	/** 金币与快捷键提示的正式 WBP；保留硬引用，保证与 HUD 一同烘焙。 */
 	constexpr TCHAR EconomyHUDAssetPath[] = TEXT("/Game/MovingCastle/UI/Economy/WBP_EconomyHUD");
+	/** 货币战争风格房间商店的正式 WBP；缺失或绑定错误时直接报错拒绝挂载。 */
+	constexpr TCHAR RoomShopAssetPath[] = TEXT("/Game/MovingCastle/UI/Shop/WBP_RoomShop");
 }
 
 ACastleHUD::ACastleHUD()
@@ -27,6 +29,8 @@ ACastleHUD::ACastleHUD()
 	BuildBarWidgetClass = BuildBarClass.Class;
 	static const ConstructorHelpers::FClassFinder<UCastleEconomyHUDWidget> EconomyHUDClass(EconomyHUDAssetPath);
 	EconomyWidgetClass = EconomyHUDClass.Class;
+	static const ConstructorHelpers::FClassFinder<UCastleShopWidget> RoomShopClass(RoomShopAssetPath);
+	ShopWidgetClass = RoomShopClass.Class;
 }
 
 void ACastleHUD::BeginPlay()
@@ -41,11 +45,17 @@ void ACastleHUD::BeginPlay()
 		return;
 	}
 
-	// 商店不依赖建造栏的显示状态，保持原有高层级及开关行为。
-	ShopWidget = CreateWidget<UCastleShopWidget>(PlayerOwner);
-	if (ShopWidget == nullptr)
+	// 商店使用正式 WBP 资产，缺失类或必需 BindWidget 时直接报错，绝不回退旧布局。
+	if (!IsValid(ShopWidgetClass.Get()))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("城堡 HUD 创建商店 UI 失败。"));
+		UE_LOG(LogMoving_Castle, Error, TEXT("城堡 HUD 无法找到有效的房间商店 WBP：%s。"), RoomShopAssetPath);
+		return;
+	}
+	ShopWidget = CreateWidget<UCastleShopWidget>(PlayerOwner, ShopWidgetClass);
+	if (!IsValid(ShopWidget) || !ShopWidget->ValidatePresentation())
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("城堡 HUD 创建或校验房间商店 WBP 失败：%s。"), RoomShopAssetPath);
+		ShopWidget = nullptr;
 		return;
 	}
 	ShopWidget->AddToViewport(40);
@@ -86,10 +96,39 @@ void ACastleHUD::BeginPlay()
 	EconomyWidget = NewEconomyWidget;
 	EconomyWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
 	EconomyWidget->AddToViewport(20);
+
+	if (ACastlePlayerController* CastleController = Cast<ACastlePlayerController>(PlayerOwner))
+	{
+		if (IsValid(CastleController->GetShop()))
+		{
+			CastleController->GetShop()->OnShopChanged.AddUniqueDynamic(this, &ACastleHUD::HandleShopVisibilityChanged);
+			HandleShopVisibilityChanged();
+		}
+	}
+}
+
+void ACastleHUD::HandleShopVisibilityChanged()
+{
+	if (!IsValid(EconomyWidget))
+	{
+		return;
+	}
+	const ACastlePlayerController* CastleController = Cast<ACastlePlayerController>(PlayerOwner);
+	const bool bShopOpen = IsValid(CastleController) && IsValid(CastleController->GetShop())
+		&& CastleController->GetShop()->IsShopOpen();
+	// 透景商店顶部自带金币栏，开店期间隐藏独立金币 HUD 避免重影。
+	EconomyWidget->SetVisibility(bShopOpen ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
 }
 
 void ACastleHUD::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (ACastlePlayerController* CastleController = Cast<ACastlePlayerController>(PlayerOwner))
+	{
+		if (IsValid(CastleController->GetShop()))
+		{
+			CastleController->GetShop()->OnShopChanged.RemoveDynamic(this, &ACastleHUD::HandleShopVisibilityChanged);
+		}
+	}
 	// 移除视口上的金币 WBP，触发 NativeDestruct 清理账户事件订阅。
 	if (EconomyWidget != nullptr)
 	{

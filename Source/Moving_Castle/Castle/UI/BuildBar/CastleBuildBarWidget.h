@@ -13,6 +13,7 @@ class ACastlePlayerController;
 class UCastleBackpackComponent;
 class UCastleBuildBarSlotWidget;
 class UCastleDirectorSubsystem;
+class UCastleShopComponent;
 class UTextBlock;
 enum class ECastleDirectorPhase : uint8;
 
@@ -64,6 +65,7 @@ private:
 	TWeakObjectPtr<ACastlePlayerController> Controller;
 	TWeakObjectPtr<UCastleDirectorSubsystem> BoundDirector;
 	TWeakObjectPtr<ACastlePatrolRoute> BoundPatrolRoute;
+	TWeakObjectPtr<UCastleShopComponent> BoundShop;
 	FDelegateHandle DirectorPhaseHandle;
 	FDelegateHandle PatrolEditingHandle;
 
@@ -91,4 +93,7 @@ private:
 	void RefreshScreenVisibility();
 	void HandleDirectorPhaseChanged(ECastleDirectorPhase NewPhase);
 	void HandlePatrolEditingChanged(bool bIsEditing);
+
+	UFUNCTION()
+	void HandleShopChanged();
 };

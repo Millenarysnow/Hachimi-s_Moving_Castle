@@ -50,7 +50,10 @@ protected:
 	UPROPERTY(Transient)
 	TObjectPtr<UCastleEconomyHUDWidget> EconomyWidget;
 
-	/** 商店覆盖层独立控制自己的开关，复用玩家的账户和商店逻辑组件。 */
+	/** 商店 WBP 类与覆盖层实例；加载失败或绑定无效直接报错，不回退动态拼树。 */
+	UPROPERTY()
+	TSubclassOf<UCastleShopWidget> ShopWidgetClass;
+
 	UPROPERTY(Transient)
 	TObjectPtr<UCastleShopWidget> ShopWidget;
 
@@ -69,4 +72,9 @@ protected:
 	/** 准星线宽。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "中心指针", meta = (ClampMin = "0.5"))
 	float CrosshairThickness = 2.0f;
+
+private:
+	/** 商店打开时隐藏左上角独立金币条，关闭时恢复，避免与商店顶部金币栏重影。 */
+	UFUNCTION()
+	void HandleShopVisibilityChanged();
 };

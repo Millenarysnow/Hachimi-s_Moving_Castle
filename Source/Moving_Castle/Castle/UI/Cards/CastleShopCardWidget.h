@@ -28,7 +28,12 @@ public:
 	UCastleCardFaceRetainer(const FObjectInitializer& ObjectInitializer);
 };
 
-/** 商店建筑牌管理自己的旋转预览；卡位、焦点和交易仍由商店管理。 */
+/** 卡面短点（位移小于阈值松手）时通知所属商品槽执行购买。 */
+DECLARE_MULTICAST_DELEGATE_OneParam(FCastleShopCardClicked, UCastleShopCardWidget&);
+/** 卡面鼠标悬停状态变化时通知父级展示或隐藏战术详情浮卡。 */
+DECLARE_MULTICAST_DELEGATE_TwoParams(FCastleShopCardHovered, UCastleShopCardWidget&, bool);
+
+/** 商店建筑牌管理自己的旋转预览与短点购买分流；卡位、焦点和交易仍由商店管理。 */
 UCLASS()
 class MOVING_CASTLE_API UCastleShopCardWidget : public UUserWidget
 {
@@ -47,10 +52,24 @@ public:
 	/** 关闭、重建或换牌时直接回正并归还这一张牌的鼠标捕获。 */
 	void CancelInspection();
 
+	/** 返回当前绑定的建筑卡牌描述，只读供悬停详情与测试核对。 */
+	const FCastleBuildingDescriptor& GetDescriptor() const { return DisplayedDescriptor; }
+
+	/** 返回当前是否处于已售罄态（已售罄禁止拖转与短点购买）。 */
+	bool IsSold() const { return !bCanInspect; }
+
+	/** 短点卡面触发购买事件（方案 A：位移未超过拖拽阈值且在卡面内松手）。 */
+	FCastleShopCardClicked OnCardClicked;
+
+	/** 悬停进入/离开通知，供商店显示左侧建筑机制浮卡。 */
+	FCastleShopCardHovered OnCardHovered;
+
 protected:
 	virtual void NativeOnInitialized() override;
 	virtual void NativeDestruct() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+	virtual void NativeOnMouseEnter(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
+	virtual void NativeOnMouseLeave(const FPointerEvent& InMouseEvent) override;
 	virtual FReply NativeOnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& InMouseEvent) override;
 	virtual FReply NativeOnMouseButtonDoubleClick(const FGeometry& MyGeometry, const FPointerEvent& InMouseEvent) override;
 	virtual FReply NativeOnMouseMove(const FGeometry& MyGeometry, const FPointerEvent& InMouseEvent) override;
@@ -58,13 +77,14 @@ protected:
 	virtual void NativeOnMouseCaptureLost(const FCaptureLostEvent& CaptureLostEvent) override;
 
 private:
-	/** 记录抓牌的指针和未投影的局部坐标，拖出卡位仍由同一个指针控制。 */
+	/** 记录抓牌的指针、未投影局部起点以及是否已越过短点购买的拖拽阈值。 */
 	struct FCardGrab
 	{
 		int32 UserIndex;
 		uint32 PointerIndex;
 		FVector2D Origin;
 		FVector2D InitialOffset;
+		bool bExceededDragThreshold = false;
 
 		bool Matches(int32 InUserIndex, uint32 InPointerIndex) const
 		{
@@ -125,6 +145,7 @@ private:
 
 	/** 商店只授予一张牌动态摄影权；投影和内部效果则都使用本卡的 Tilt。 */
 	TWeakObjectPtr<UCastleShopWidget> ShopOwner;
+	FCastleBuildingDescriptor DisplayedDescriptor;
 	TOptional<FCardGrab> Grab;
 	FVector2D InspectionOffset = FVector2D::ZeroVector;
 	FVector2D Tilt = FVector2D::ZeroVector;
