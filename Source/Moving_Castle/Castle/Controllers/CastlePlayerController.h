@@ -14,6 +14,8 @@ class UCastleShopComponent;
 class ACastleMassSpawner;
 class ACastleMassEnemySpawner;
 class UUserWidget;
+class UCastleBackpackComponent;
+class UCastleBadgeReplaceModalWidget;
 
 /**
  * 移动城堡的自有玩家控制器。
@@ -61,6 +63,8 @@ public:
 
 	/** 导演界面与商店共用单一输入状态，避免 IgnoreInput 计数叠加或遗漏恢复。 */
 	void SetDirectorModalState(bool bRewardOpen, bool bGameOverOpen, UUserWidget* FocusWidget);
+	/** 正式导演启动时挂接道具 HUD；三个 WBP 全部绑定成功才加入视口。 */
+	bool MountDirectorItemHUD(UCastleBackpackComponent* Backpack, FText& OutReason);
 
 	/** 开战事务准备时立即清除高亮，避免等下一帧控制器 Tick 才撤下旧建造目标。 */
 	void HideDirectorEditingPresentation();
@@ -170,6 +174,10 @@ protected:
 	/** 从商店和导演界面最终状态计算鼠标、输入模式及忽略计数。 */
 	void RefreshModalInput(bool bForceRefresh = false);
 
+	/** 徽章弹窗监听者在 WBP 刷新可见性后更新控制器的唯一输入锁。 */
+	UFUNCTION()
+	void HandleItemBadgeChanged();
+
 	/** 统一把收支、选牌和商店失败原因写入日志及屏幕，保证无资源时也有反馈。 */
 	void ShowGameplayMessage(const FString& Message, bool bSuccess) const;
 
@@ -191,6 +199,8 @@ protected:
 	bool bGameOverInputActive = false;
 	UPROPERTY(Transient)
 	TObjectPtr<UUserWidget> DirectorFocusWidget;
+	UPROPERTY(Transient) TArray<TObjectPtr<UUserWidget>> DirectorItemWidgets;
+	UPROPERTY(Transient) TObjectPtr<UCastleBadgeReplaceModalWidget> BadgeReplaceWidget;
 
 	/** 当前关卡的棋盘实例。 */
 	UPROPERTY(Transient)

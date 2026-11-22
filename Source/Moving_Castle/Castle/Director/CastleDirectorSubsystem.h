@@ -38,6 +38,10 @@ public:
 	bool IsShopAccessAllowed(FText& OutReason) const;
 	ECastleDirectorPhase GetPhase() const { return Phase; }
 	int32 GetLevel() const { return Level; }
+	/** 阶段门控保证上场战斗的受击增益不会泄漏到下一场。 */
+	bool IsFirstTowerDamageTriggeredInBattle() const { return Phase == ECastleDirectorPhase::Battle && bFirstTowerDamageInBattle; }
+	/** 本局已解锁的出牌数字上限，供功能塔领奖及万能卡共用。 */
+	int32 GetCurrentMaxShopNumber() const;
 	int32 GetExperience() const { return Experience; }
 	int32 GetClearedSteps() const { return ClearedSteps; }
 	int32 GetNextStep() const { return ClearedSteps + 1; }
@@ -100,6 +104,8 @@ private:
 
 	UFUNCTION()
 	void HandleTowerHealthChanged(float PreviousHealth, float CurrentHealth, float Damage);
+	UFUNCTION()
+	void HandleBadgesChanged();
 
 	/** 引用只属于当前世界，不允许跨地图继续使用。 */
 	UPROPERTY(Transient) TObjectPtr<UCastleDirectorConfigDataAsset> Config;
@@ -133,6 +139,7 @@ private:
 	bool bApplyingReward = false;
 	bool bBattlePaused = false;
 	bool bBattleDoubleSpeed = false;
+	bool bFirstTowerDamageInBattle = false;
 	bool bAutomation = false;
 	uint64 LastNodeSelectionFrame = MAX_uint64;
 };

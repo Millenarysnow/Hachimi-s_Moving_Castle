@@ -44,7 +44,7 @@ bool UCastleSupportTowerSubsystem::BuildHiveSchedule(const ACastleBoard& Board, 
 		for (ACastleBuildingBase* Neighbor : Neighbors)
 		{
 			if (Neighbor == &Source) { continue; }
-			const int32 Difference = Neighbor->GetBuildingNumber() - Visit.Building->GetBuildingNumber();
+			const int32 Difference = Neighbor->GetEffectiveBuildingNumber() - Visit.Building->GetEffectiveBuildingNumber();
 			// 只有主巢接出口允许同号；进入备用链后不能再经过同号或改变递增/递减方向。
 			if (Visit.Building == &Source ? FMath::Abs(Difference) > 1
 				: (FMath::Abs(Difference) != 1 || (Visit.Step != 0 && Difference != Visit.Step))) { continue; }
@@ -156,7 +156,7 @@ void UCastleSupportTowerSubsystem::TickSwarms(const float DeltaTime, TArray<FCas
 				Backup.Source = Batch.Source;
 				Backup.Home = Next;
 				Backup.Schedule = Batch.Schedule;
-				Backup.Count = Next->GetBuildingNumber();
+				Backup.Count = Next->GetEffectiveBuildingNumber();
 				Backup.Level = Batch.Level;
 				Backup.Damage = Batch.Damage;
 				Backup.Speed = Batch.Speed;

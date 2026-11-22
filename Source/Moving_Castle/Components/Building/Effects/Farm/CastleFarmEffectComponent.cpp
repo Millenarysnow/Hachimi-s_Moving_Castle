@@ -12,12 +12,12 @@ bool UCastleFarmEffectComponent::ExecuteEffect(const FCastleBuildingTriggerConte
 {
 	ACastleBuildingBase* Farm = CastChecked<ACastleBuildingBase>(GetOwner());
 	const int32 Level = Farm->GetBuildingLevel();
-	if (Level < 1 || Level > 5 || Farm->GetBuildingNumber() <= 0)
+	if (Level < 1 || Level > 5 || Farm->GetEffectiveBuildingNumber() <= 0)
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("农田 %s 结算失败：等级或自身数字无效。"), *Farm->GetPathName());
 		return false;
 	}
-	int64 Total = Farm->GetBuildingNumber();
+	int64 Total = Farm->GetEffectiveBuildingNumber();
 	if (Level > 1)
 	{
 		ACastleBoard* Board = ACastleBoard::FindBoardForBuilding(Farm);
@@ -37,7 +37,7 @@ bool UCastleFarmEffectComponent::ExecuteEffect(const FCastleBuildingTriggerConte
 		TArray<ACastleBuildingBase*> Connected;
 		if (!Board->GetConnectedBuildings(Farm, Candidates, Connected)) { return false; }
 		Total = 0;
-		for (const ACastleBuildingBase* Other : Connected) { Total += Other->GetBuildingNumber(); }
+		for (const ACastleBuildingBase* Other : Connected) { Total += Other->GetEffectiveBuildingNumber(); }
 	}
 	if (Total <= 0 || Total > MAX_int32)
 	{
@@ -64,7 +64,7 @@ bool UCastleFarmEffectComponent::ExecuteEffect(const FCastleBuildingTriggerConte
 	}
 	UCastleMassUnitSubsystem* Units = nullptr;
 	const bool bGrantBuff = Level == 5 && Context.Source == ECastleBuildingTriggerSource::NPCEntry;
-	const float BonusDelta = 0.1f * Farm->GetBuildingNumber();
+	const float BonusDelta = 0.1f * Farm->GetEffectiveBuildingNumber();
 	if (bGrantBuff)
 	{
 		Units = GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>();

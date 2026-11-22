@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #include "CastleDirectorSubsystem.h"
 #include "Castle/Support/CastleSupportTowerSubsystem.h"
+#include "Castle/Items/CastleBadgeSubsystem.h"
 
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
@@ -121,6 +122,12 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 		for (ACastleDirectorNodeActor* Node : Candidates) { Node->Destroy(); }
 		return false;
 	}
+	if (!Controller->GetShop()->TrySetOfferNumberRange(1, 3, OutReason)
+		|| !Controller->MountDirectorItemHUD(Board->PrototypeBackpack, OutReason))
+	{
+		for (ACastleDirectorNodeActor* Node : Candidates) { Node->Destroy(); }
+		return false;
+	}
 	Level = 1;
 	Experience = 0;
 	ClearedSteps = 0;
@@ -131,6 +138,11 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 	Controller->GetShop()->CloseShop();
 	Nodes = MoveTemp(Candidates);
 	Tower->OnHealthChanged.AddUniqueDynamic(this, &UCastleDirectorSubsystem::HandleTowerHealthChanged);
+	if (UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld()))
+	{
+		Badges->OnBadgesChanged.AddUniqueDynamic(this, &UCastleDirectorSubsystem::HandleBadgesChanged);
+		HandleBadgesChanged();
+	}
 	SetPhase(ECastleDirectorPhase::Editing);
 	for (ACastleDirectorNodeActor* Node : Nodes) { Node->ActivateNode(); }
 	// 下一关指引由 WBP HUD 读取，避免同一句话叠加到屏幕调试层。
@@ -321,6 +333,8 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 	ActiveBattleOrdinal = PreviousCount + 1;
 	if (Kind == ECastleBattleKind::Elite) { ++EliteBattles; } else { ++NormalBattles; }
 	DestroyNodes();
+	// 各场战斗独立触发，开战前的掉血也不计入本场。
+	bFirstTowerDamageInBattle = false;
 	SetPhase(ECastleDirectorPhase::Battle);
 	ShowMessage(FText::FromString(TEXT("战斗进行中")), false);
 	UE_LOG(LogMoving_Castle, Display, TEXT("导演开战提交：第 %d 关，本类第 %d 场，沿闭环派出 %d 个 NPC。"), GetNextStep(), ActiveBattleOrdinal, Config->NPCCount);
@@ -466,7 +480,36 @@ void UCastleDirectorSubsystem::SetPhase(const ECastleDirectorPhase NewPhase)
 
 void UCastleDirectorSubsystem::HandleTowerHealthChanged(float PreviousHealth, float CurrentHealth, float Damage)
 {
+	if (Phase == ECastleDirectorPhase::Battle && Damage > 0.0f && !bFirstTowerDamageInBattle)
+	{
+		bFirstTowerDamageInBattle = true;
+		UE_LOG(LogMoving_Castle, Display, TEXT("本场主塔首次受伤，攻击塔和召唤物可应用已持有的首次掉血徽章。"));
+	}
+	if (const UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld()))
+	{
+		if (UCastleMassUnitSubsystem* Mass = GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>())
+		{
+			Mass->SetGlobalEnemyAttackSpeedMultiplier(Badges->GetEnemyAttackSpeedMultiplier(CurrentHealth / Tower->MaxHealth));
+		}
+	}
 	if (bRunning && CurrentHealth <= 0.0f) { EnterGameOver(FText::GetEmpty()); }
+}
+
+void UCastleDirectorSubsystem::HandleBadgesChanged()
+{
+	const UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
+	if (!IsValid(Tower) || !Badges || !Tower->SetMaxHealthMultiplier(Badges->GetMainTowerHealthMultiplier()))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演无法同步主塔 %s 的徽章生命倍率。"), *GetPathNameSafe(Tower));
+		return;
+	}
+	// 低血攻速徽章可独立改变，主塔生命上限相同也必须更新敌人倍率。
+	HandleTowerHealthChanged(Tower->CurrentHealth, Tower->CurrentHealth, 0.0f);
+}
+
+int32 UCastleDirectorSubsystem::GetCurrentMaxShopNumber() const
+{
+	return Controller->GetShop()->GetMaxOfferNumber();
 }
 
 void UCastleDirectorSubsystem::EnterGameOver(const FText& Failure)
@@ -696,6 +739,10 @@ void UCastleDirectorSubsystem::Deinitialize()
 	// 先移除外部生命事件，再销毁当前世界的节点和界面，避免关卡重载后遗留回调。
 	ResetBattleControls(false);
 	if (Tower) { Tower->OnHealthChanged.RemoveDynamic(this, &UCastleDirectorSubsystem::HandleTowerHealthChanged); }
+	if (UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld()))
+	{
+		Badges->OnBadgesChanged.RemoveDynamic(this, &UCastleDirectorSubsystem::HandleBadgesChanged);
+	}
 	UnbindCombatEvents();
 	DestroyNodes();
 	for (UUserWidget* Widget : {HUDWidget.Get(), RewardWidget.Get(), GameOverWidget.Get()}) { if (Widget) { Widget->RemoveFromParent(); } }

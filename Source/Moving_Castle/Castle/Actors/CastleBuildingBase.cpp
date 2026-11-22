@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleBuildingBase.h"
+#include "Castle/Items/CastleBadgeSubsystem.h"
 
 #include "CastleBuildingDefinition.h"
 #include "CastleBoard.h"
@@ -20,6 +21,13 @@
 #include "Moving_Castle.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Units/BuildingInteraction/CastleBuildingTriggerSubsystem.h"
+
+int32 ACastleBuildingBase::GetEffectiveBuildingNumber() const
+{
+	// 实时读取已持有的徽章，替换徽章时现有建筑立即按新数字结算。
+	const UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
+	return Color == ECastleTileColor::Blue && Badges ? Number + Badges->GetBlueRoomNumberBonus() : Number;
+}
 
 ACastleBuildingBase::ACastleBuildingBase(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)

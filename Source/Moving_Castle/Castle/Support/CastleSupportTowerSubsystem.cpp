@@ -7,6 +7,8 @@
 #include "CastleMassUnitSubsystem.h"
 #include "CastleSupportFlightActors.h"
 #include "CastleSupportTowerData.h"
+#include "Castle/Director/CastleDirectorSubsystem.h"
+#include "Castle/Items/CastleBadgeSubsystem.h"
 #include "Engine/World.h"
 #include "Mass/CastleMassPatrolFragments.h"
 #include "MassCommonFragments.h"
@@ -90,7 +92,7 @@ void UCastleSupportTowerSubsystem::Launch(ACastleBuildingBase& Source)
 	FSwarm Batch;
 	Batch.Source = Batch.Home = &Source;
 	Batch.Level = Source.GetBuildingLevel();
-	Batch.Count = Source.GetBuildingNumber() * Source.GetOccupiedCoordinates().Num();
+	Batch.Count = Source.GetEffectiveBuildingNumber() * Source.GetOccupiedCoordinates().Num();
 	Batch.Damage = Data->BeeDamage;
 	Batch.Speed = Data->BeeFlightSpeed;
 	// 巢口在塔上方，以已放置格的最高层定位，避免高层塔从底层模型中心出蜂。
@@ -186,6 +188,20 @@ float UCastleSupportTowerSubsystem::GetArcherRateMultiplier(const ACastleBuildin
 	return Result;
 }
 
+float UCastleSupportTowerSubsystem::GetTowerFireRateMultiplier(const ACastleBuildingBase& Tower) const
+{
+	const bool bArcher = Tower.GetBuildingType() == ECastleBuildingType::ArcherTower;
+	float Rate = bArcher ? GetArcherRateMultiplier(Tower) : 1.0f;
+	if (const UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld()))
+	{
+		// 箭塔专属倍率与全攻击塔倍率相乘，炮塔只受全局效果影响。
+		const auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
+		Rate *= Badges->GetGlobalTowerFireRateMultiplier(Director && Director->IsFirstTowerDamageTriggeredInBattle());
+		if (bArcher) { Rate *= Badges->GetArcherFireRateMultiplier(); }
+	}
+	return Rate;
+}
+
 float UCastleSupportTowerSubsystem::GetFlightMultiplier() const
 {
 	float Result = 1.0f;
@@ -193,6 +209,12 @@ float UCastleSupportTowerSubsystem::GetFlightMultiplier() const
 	for (const FTimeModifier& Entry : FlightModifiers)
 	{
 		if (Entry.Expires > Now) { Result = FMath::Max(Result, Entry.Multiplier); }
+	}
+	// 随帧查询首次受击效果，飞行中的蜜蜂与气球无需重新生成。
+	if (const UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld()))
+	{
+		const auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
+		Result *= Badges->GetSummonSpeedMultiplier(Director && Director->IsFirstTowerDamageTriggeredInBattle());
 	}
 	return Result;
 }

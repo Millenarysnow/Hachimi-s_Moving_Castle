@@ -95,10 +95,10 @@ bool UCastleShopComponent::GenerateOffers(FRandomStream& Stream, TArray<FCastleS
 	for (int32 Index = 0; Index < 6; ++Index)
 	{
 		UCastleBuildingDefinition* Definition = Board->BuildingDefinitions[Stream.RandRange(0, Board->BuildingDefinitions.Num() - 1)];
-		// 普通房间与功能建筑共用五色、1～9 数字规则；商品可以重复。
+		// 普通房间与功能建筑共用五色和本局当前解锁的数字区间，允许重复出牌。
 		const ECastleTileColor Color = static_cast<ECastleTileColor>(Stream.RandRange(
 			static_cast<int32>(ECastleTileColor::Red), static_cast<int32>(ECastleTileColor::Purple)));
-		const int32 Number = Stream.RandRange(1, 9);
+		const int32 Number = Stream.RandRange(MinOfferNumber, MaxOfferNumber);
 		FCastleShopOffer Offer;
 		if (!Definition->CreateDescriptor(1, Color, Number, Offer.Descriptor, OutFailureReason))
 		{
@@ -198,6 +198,9 @@ bool UCastleShopComponent::TryOpenForReward(UCastleEconomyComponent* InEconomy, 
 	Candidate->RandomSeed = RandomSeed;
 	Candidate->RefreshCost = RefreshCost;
 	Candidate->RoomLimit = RoomLimit;
+	// 免费换批与普通刷新使用同一解锁区间；候选组件不隐式改回原型的 1～9。
+	Candidate->MinOfferNumber = MinOfferNumber;
+	Candidate->MaxOfferNumber = MaxOfferNumber;
 	if (bInitialized)
 	{
 		Candidate->Economy = Economy;
@@ -235,6 +238,20 @@ bool UCastleShopComponent::TrySetRoomLimit(const int32 NewRoomLimit, FText& OutF
 		return false;
 	}
 	RoomLimit = NewRoomLimit;
+	return true;
+}
+
+bool UCastleShopComponent::TrySetOfferNumberRange(const int32 MinNumber, const int32 MaxNumber, FText& OutReason)
+{
+	OutReason = FText::GetEmpty();
+	if (MinNumber < 1 || MinNumber > MaxNumber || MaxNumber > 9)
+	{
+		OutReason = INVTEXT("商品数字区间必须满足 1 ≤ 最小值 ≤ 最大值 ≤ 9。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("商店 %s 拒绝商品数字区间 [%d, %d]。"), *GetPathName(), MinNumber, MaxNumber);
+		return false;
+	}
+	MinOfferNumber = MinNumber;
+	MaxOfferNumber = MaxNumber;
 	return true;
 }
 
@@ -370,6 +387,8 @@ bool UCastleShopComponent::TrySellBackpackItem(int32 BackpackIndex, FText& OutFa
 		}
 		return false;
 	}
+	// 金币已入账，暂取的空槽现在可以由临时栏队首补位。
+	Backpack->CommitAutoRefillFromTempBar();
 	OnShopChanged.Broadcast();
 	return true;
 }

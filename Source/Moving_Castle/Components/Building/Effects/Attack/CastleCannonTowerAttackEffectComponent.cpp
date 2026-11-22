@@ -9,7 +9,7 @@ bool UCastleCannonTowerAttackEffectComponent::GetAmmunitionBuildings(TArray<ACas
 {
 	OutBuildings.Reset();
 	const ACastleBuildingBase* Cannon = Cast<ACastleBuildingBase>(GetOwner());
-	if (!IsValid(Cannon) || Cannon->GetBuildingLevel() < 1 || Cannon->GetBuildingLevel() > 5 || Cannon->GetBuildingNumber() <= 0)
+	if (!IsValid(Cannon) || Cannon->GetBuildingLevel() < 1 || Cannon->GetBuildingLevel() > 5 || Cannon->GetEffectiveBuildingNumber() <= 0)
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("炮塔 %s 查询弹药库失败：拥有者、等级或数字无效。"), *GetPathNameSafe(Cannon));
 		return false;
@@ -29,7 +29,7 @@ bool UCastleCannonTowerAttackEffectComponent::GetAmmunitionBuildings(TArray<ACas
 	for (ACastleBuildingBase* Other : Candidates)
 	{
 		// D9 允许任意类别，仅用自身排除、建造状态和同数字定义弹药库集合。
-		if (Other != Cannon && Other->GetBuildingNumber() == Cannon->GetBuildingNumber()) { OutBuildings.Add(Other); }
+		if (Other != Cannon && Other->GetEffectiveBuildingNumber() == Cannon->GetEffectiveBuildingNumber()) { OutBuildings.Add(Other); }
 	}
 	return true;
 }
@@ -42,8 +42,8 @@ bool UCastleCannonTowerAttackEffectComponent::ExecuteEffect(const FCastleBuildin
 	const ACastleBuildingBase* Cannon = CastChecked<ACastleBuildingBase>(GetOwner());
 	TArray<ACastleBuildingBase*> Ammunition;
 	if (!GetAmmunitionBuildings(Ammunition)) { return false; }
-	int64 Numbers = Cannon->GetBuildingNumber();
-	for (const ACastleBuildingBase* Other : Ammunition) { Numbers += Other->GetBuildingNumber() + (Cannon->GetBuildingLevel() == 5 ? 1 : 0); }
+	int64 Numbers = Cannon->GetEffectiveBuildingNumber();
+	for (const ACastleBuildingBase* Other : Ammunition) { Numbers += Other->GetEffectiveBuildingNumber() + (Cannon->GetBuildingLevel() == 5 ? 1 : 0); }
 	float FarmBonus = 0.0f;
 	if (!GetTriggerFarmBonus(Context, FarmBonus)) { return false; }
 	const double Damage = (static_cast<double>(Numbers) + FarmBonus) * LevelData->ProjectileDamage;

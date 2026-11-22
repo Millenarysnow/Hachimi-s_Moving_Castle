@@ -38,7 +38,7 @@ bool UCastleSupportTowerSubsystem::LaunchBalloon(ACastleBuildingBase& Source, AC
 	Flight.Source = &Source;
 	Flight.Board = &Board;
 	Flight.Level = Source.GetBuildingLevel();
-	Flight.Number = Source.GetBuildingNumber();
+	Flight.Number = Source.GetEffectiveBuildingNumber();
 	Flight.Color = Source.GetBuildingColor();
 	Flight.Health = Data.BalloonHealth;
 	const TArray<FIntVector> Cells = Source.GetOccupiedCoordinates();
@@ -322,7 +322,7 @@ bool UCastleSupportTowerSubsystem::FireAdjacentAttacks(const FBalloon& Flight, c
 		Shot.Target = Target->Handle;
 		Shot.Origin = Muzzle;
 		// 不走原建筑触发或弹药库联动，避免连锁及总伤害串入；伤害精确取本邻居卡面的一半。
-		Shot.Damage = Neighbor->GetBuildingNumber() / 2;
+		Shot.Damage = Neighbor->GetEffectiveBuildingNumber() / 2;
 		TArray<FCastleMassUnitHandle> Projectiles;
 		FText Reason;
 		if (!Units->SpawnHomingProjectiles(Data->ProjectileConfiguration, {Shot}, Projectiles, Reason))

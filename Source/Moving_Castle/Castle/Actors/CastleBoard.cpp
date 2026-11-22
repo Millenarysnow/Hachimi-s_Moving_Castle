@@ -1,6 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleBoard.h"
+#include "Castle/Director/CastleDirectorSubsystem.h"
+#include "Castle/Items/CastleBadgeSubsystem.h"
 #include "Castle/Placement/CastleTowerSideGridComponent.h"
 #include "Castle/PCG/CastleBuildingPCGSubsystem.h"
 #include "Units/BuildingInteraction/CastleBuildingTriggerSubsystem.h"
@@ -1086,6 +1088,8 @@ ACastleBuildingBase* ACastleBoard::PlaceBuildingFromBackpackInternal(const FIntV
 	ACastleBuildingBase* PlacedBuilding = PlaceBuildingInternal(Coordinate, RemovedDescriptor, bTryMerge, CursorTarget, OutFailureReason);
 	if (PlacedBuilding != nullptr)
 	{
+		// 建筑放置成功后才提交消费，失败时仍可将卡牌回插原槽。
+		Backpack->CommitAutoRefillFromTempBar();
 		return PlacedBuilding;
 	}
 
@@ -2038,6 +2042,35 @@ ACastleBuildingBase* ACastleBoard::MergeBuildings(ACastleBuildingBase* First, AC
 	MergedDescriptor.Number = First->GetBuildingNumber();
 	MergedDescriptor.Level = NextLevel;
 
+	// 先准备本次功能塔升级的整批赠牌。候选有任何错误时不替换原塔，也不写背包。
+	TArray<FCastleBuildingDescriptor> RewardCards;
+	const UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
+	const int32 RewardCount = Badges ? Badges->GetUpgradeBonusRoomCards() : 0;
+	if (RewardCount > 0 && First->GetBuildingType() != ECastleBuildingType::NormalRoom
+		&& First->GetBuildingType() != ECastleBuildingType::SpeedRoom)
+	{
+		const UCastleDirectorSubsystem* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
+		if (!Director || !Director->IsRunning() || !IsValid(PrototypeBackpack) || !ValidateBuildingDefinitions(OutFailureReason))
+		{
+			if (OutFailureReason.IsEmpty()) { OutFailureReason = INVTEXT("徽章赠牌需要运行中的导演和有效背包。"); }
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 合成资产 %s 的徽章赠牌准备失败：%s"),
+				*GetPathName(), *GetPathNameSafe(MergedDescriptor.Definition), *OutFailureReason.ToString());
+			return nullptr;
+		}
+		for (int32 Index = 0; Index < RewardCount; ++Index)
+		{
+			const UCastleBuildingDefinition* Definition = BuildingDefinitions[FMath::RandRange(0, BuildingDefinitions.Num() - 1)];
+			const auto Color = static_cast<ECastleTileColor>(FMath::RandRange(
+				static_cast<int32>(ECastleTileColor::Red), static_cast<int32>(ECastleTileColor::Purple)));
+			if (!Definition->CreateDescriptor(1, Color, FMath::RandRange(1, Director->GetCurrentMaxShopNumber()),
+				RewardCards.AddDefaulted_GetRef(), OutFailureReason))
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("合成赠牌资产 %s 无法创建一级卡牌：%s"), *Definition->GetPathName(), *OutFailureReason.ToString());
+				return nullptr;
+			}
+		}
+	}
+
 	// 先生成新 Actor，成功后才注销和销毁旧 Actor，避免生成失败时丢失原建筑。
 	ACastleBuildingBase* MergedBuilding = SpawnBuildingActor(MergedDescriptor, MergedFootprint, OutFailureReason);
 	if (MergedBuilding == nullptr)
@@ -2072,6 +2105,24 @@ ACastleBuildingBase* ACastleBoard::MergeBuildings(ACastleBuildingBase* First, AC
 		MergedBuilding->Destroy();
 		OutFailureReason = RegisterReason;
 		return nullptr;
+	}
+	if (!RewardCards.IsEmpty() && !PrototypeBackpack->TryAddItemsAllowOverflow(RewardCards, OutFailureReason))
+	{
+		// 发牌入口一次校验完整批次，失败时库存未变，因此可以恢复双方原有占用。
+		FText RestoreReason;
+		const bool bRemoved = UnregisterBuilding(MergedBuilding, RestoreReason);
+		const bool bFirstRestored = RegisterBuilding(First, RestoreReason);
+		const bool bSecondRestored = RegisterBuilding(Second, RestoreReason);
+		if (!bRemoved || !bFirstRestored || !bSecondRestored)
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 合成赠牌失败后无法恢复原占用：%s"), *GetPathName(), *RestoreReason.ToString());
+		}
+		MergedBuilding->Destroy();
+		return nullptr;
+	}
+	if (!RewardCards.IsEmpty())
+	{
+		UE_LOG(LogMoving_Castle, Display, TEXT("功能塔 %s 升级徽章赠送 %d 张一级房间卡。"), *MergedBuilding->GetPathName(), RewardCards.Num());
 	}
 
 	// 调用方完成连续合成并抓取所有真实输入零件后统一销毁旧 Actor。

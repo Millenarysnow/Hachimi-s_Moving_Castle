@@ -13,6 +13,8 @@ class MOVING_CASTLE_API UCastleBadgeSubsystem : public UGameInstanceSubsystem
 	GENERATED_BODY()
 
 public:
+	/** 从当前世界读取跨地图徽章；没有 GameInstance 的隔离世界没有已持有徽章。 */
+	static UCastleBadgeSubsystem* GetForWorld(const UWorld* World);
 	static constexpr int32 MaxBadges = 6;
 
 	/** 库存或待替换选择改变后通知界面，此时所有字段均已提交。 */
