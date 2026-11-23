@@ -9,7 +9,7 @@
 class ACastleBoard;
 class UStaticMesh;
 
-/** 塔底两个门的占位标识和导航锚点，共用棋盘底层的 ±X 邻格。 */
+/** 塔底两个门的占位标识、主塔一楼内部隐式导航地板和门内导航锚点。 */
 UCLASS()
 class UCastleTowerDispatchDoors final : public UActorComponent
 {
@@ -19,10 +19,11 @@ public:
 	UCastleTowerDispatchDoors();
 	bool Initialize(const ACastleBoard& Board, FText& OutReason);
 
-	/** 返回门外实际房间的站立面格心；缺少任一房间时拒绝建立有效路线。 */
+	/** 校验门外房间已就绪，并返回主塔内部一楼门 A、门 B 内侧的站立面锚点。 */
 	bool TryGetDoorWaypoints(FVector& OutExit, FVector& OutEntrance, FText& OutReason) const;
 
 private:
 	UPROPERTY() TObjectPtr<UStaticMesh> DoorMarkerMesh;
+	TWeakObjectPtr<UStaticMeshComponent> DoorFloors[2];
 	TWeakObjectPtr<const ACastleBoard> Board;
 };

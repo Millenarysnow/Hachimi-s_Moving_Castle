@@ -252,7 +252,7 @@ namespace CastleRoomPCG
 		FCastlePCGApplyPlan& Plan, FString& Error)
 	{
 		const bool bRoomNeighbor = IsRoom(Other);
-		const bool bOpen = Other && CanTraverse(Building, *Other);
+		const bool bOpen = IsMainTowerDoorFace(Board, Cell, Side) || (Other && CanTraverse(Building, *Other));
 		if (bRoomNeighbor)
 		{
 			if (Building.GetBuildingColor() == Other->GetBuildingColor()) { return true; }
@@ -314,7 +314,7 @@ namespace CastleRoomPCG
 		}
 		AddWallCollision(Plan, Mount, Board.CellSize + 0.2, bOpen ? Kit->Opening : 0.0,
 			Mount.InverseTransformPosition(CellCenter).X, Building.HachimisLayout->StandingHeight, Rules.BarrierHeight);
-		if (bOpen && !Other->HachimisLayout) { AddHeightTransition(Board, Building, Cell, Side, Rules, Plan); }
+		if (bOpen && Other && !Other->HachimisLayout) { AddHeightTransition(Board, Building, Cell, Side, Rules, Plan); }
 		return true;
 	}
 }

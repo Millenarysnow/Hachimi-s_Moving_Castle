@@ -12,6 +12,17 @@
 #include "Moving_Castle.h"
 #include "UObject/ConstructorHelpers.h"
 
+namespace
+{
+	// 与 V4 建筑功能地板保持同一默认站立面标高和 5 cm 厚度；门外房间配置特殊标高时同步对齐。
+	constexpr double DefaultStandingHeight = 40.8;
+	constexpr double FloorThickness = 5.0;
+	// 主塔一楼内部在 X=0 留出 60 cm 隔断空隙，防止 A* 从门 A 直接穿塔到门 B 抄近路。
+	constexpr double InnerGapHalfWidth = 30.0;
+	// 主塔 ±Y 两侧无门，地板向内收进 77.5 cm，防止与 ±Y 紧邻的开放底盘房间意外连通。
+	constexpr double SideInsetY = 77.5;
+}
+
 UCastleTowerDispatchDoors::UCastleTowerDispatchDoors()
 {
 	PrimaryComponentTick.bCanEverTick = false;
@@ -24,15 +35,33 @@ bool UCastleTowerDispatchDoors::Initialize(const ACastleBoard& InBoard, FText& O
 	OutReason = FText::GetEmpty();
 	AActor* Tower = GetOwner();
 	USceneComponent* Root = IsValid(Tower) ? Tower->GetRootComponent() : nullptr;
-	if (Board.IsValid() || !IsValid(Root) || !IsValid(DoorMarkerMesh) || Tower->GetOwner() != &InBoard)
+	const double SlabLengthX = InBoard.CellSize * 0.5 - InnerGapHalfWidth;
+	const double SlabWidthY = InBoard.CellSize - 2.0 * SideInsetY;
+	if (Board.IsValid() || !IsValid(Root) || !IsValid(DoorMarkerMesh) || Tower->GetOwner() != &InBoard
+		|| !FMath::IsFinite(InBoard.CellSize) || SlabLengthX <= 100.0 || SlabWidthY <= 100.0)
 	{
-		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 无法初始化双门：棋盘、塔根或占位 Cube 无效，或已初始化。"), *GetPathNameSafe(Tower)));
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 无法初始化双门：棋盘、塔根、格距或占位 Cube 无效，或已初始化。"), *GetPathNameSafe(Tower)));
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
 	}
-	TArray<USceneComponent*, TInlineAllocator<4>> Parts;
-	for (const int32 Sign : {1, -1})
+	// 主塔美术网格不参与导航也不阻挡 Pawn，防止闭合外墙模型截断门 A/B 内外连通；仅由下方不可见功能地板提供行走面与 Pawn 碰撞。
+	TInlineComponentArray<UStaticMeshComponent*> ExistingMeshes(Tower);
+	for (UStaticMeshComponent* Mesh : ExistingMeshes)
 	{
+		if (!IsValid(Mesh)) { continue; }
+		if (Mesh->GetCollisionEnabled() != ECollisionEnabled::NoCollision)
+		{
+			Mesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		}
+		Mesh->SetCollisionResponseToAllChannels(ECR_Ignore);
+		Mesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+		Mesh->SetCanEverAffectNavigation(false);
+	}
+	TArray<USceneComponent*, TInlineAllocator<6>> Parts;
+	const int32 Signs[] = {1, -1};
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Signs); ++Index)
+	{
+		const int32 Sign = Signs[Index];
 		const FVector Outward(Sign, 0, 0);
 		const FRotator Rotation = FRotationMatrix::MakeFromXZ(Outward, FVector::UpVector).Rotator();
 		// 门标识位于侧格下沿，保留格号可读性。正对塔外的标记使用 A/B，默认字体也能完整显示。
@@ -41,9 +70,10 @@ bool UCastleTowerDispatchDoors::Initialize(const ACastleBoard& InBoard, FText& O
 		Marker->SetupAttachment(Root);
 		Marker->SetRelativeLocationAndRotation(Center, Rotation);
 		Marker->SetRelativeScale3D(FVector(0.08, 0.44, 0.54));
-		Marker->SetStaticMesh(DoorMarkerMesh);
-		Marker->SetCanEverAffectNavigation(false);
+		// 先关闭碰撞与导航资格再赋静态网格，防止未注册组件在 SetStaticMesh 时被写入导航仓库。
 		Marker->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Marker->SetCanEverAffectNavigation(false);
+		Marker->SetStaticMesh(DoorMarkerMesh);
 		Parts.Add(Marker);
 		UTextRenderComponent* Label = NewObject<UTextRenderComponent>(Tower);
 		Label->SetupAttachment(Root);
@@ -56,6 +86,25 @@ bool UCastleTowerDispatchDoors::Initialize(const ACastleBoard& InBoard, FText& O
 		Label->SetTextRenderColor(Sign > 0 ? FColor::Green : FColor::Cyan);
 		Label->SetText(FText::FromString(Sign > 0 ? TEXT("A") : TEXT("B")));
 		Parts.Add(Label);
+
+		// 主塔一楼内部门 A (+X) 与门 B (−X) 各置一块不可见功能导航地板，外沿齐平主塔 ±X 格界以衔接门外房间。
+		const double DoorAnchorX = Sign * (InBoard.CellSize * 0.5 + InnerGapHalfWidth) * 0.5;
+		UStaticMeshComponent* Floor = NewObject<UStaticMeshComponent>(Tower, Index == 0 ? TEXT("MainTowerDoorAFloor") : TEXT("MainTowerDoorBFloor"));
+		Floor->SetupAttachment(Root);
+		Floor->SetMobility(EComponentMobility::Movable);
+		Floor->SetRelativeLocation(FVector(DoorAnchorX, 0.0, DefaultStandingHeight - FloorThickness * 0.5));
+		Floor->SetRelativeScale3D(FVector(SlabLengthX / 100.0, SlabWidthY / 100.0, FloorThickness / 100.0));
+		Floor->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		Floor->SetCollisionResponseToAllChannels(ECR_Ignore);
+		Floor->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+		Floor->SetCanEverAffectNavigation(false);
+		Floor->SetGenerateOverlapEvents(false);
+		Floor->SetVisibility(false);
+		Floor->SetHiddenInGame(true);
+		Floor->SetStaticMesh(DoorMarkerMesh);
+		Floor->SetCanEverAffectNavigation(true);
+		DoorFloors[Index] = Floor;
+		Parts.Add(Floor);
 	}
 	for (USceneComponent* Part : Parts)
 	{
@@ -64,7 +113,8 @@ bool UCastleTowerDispatchDoors::Initialize(const ACastleBoard& InBoard, FText& O
 		if (!Part->IsRegistered())
 		{
 			for (USceneComponent* Added : Parts) { Added->DestroyComponent(); }
-			OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 的双门标识注册失败。"), *Tower->GetPathName()));
+			DoorFloors[0] = DoorFloors[1] = nullptr;
+			OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 的双门标识或内部导航地板注册失败。"), *Tower->GetPathName()));
 			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 			return false;
 		}
@@ -77,9 +127,9 @@ bool UCastleTowerDispatchDoors::TryGetDoorWaypoints(FVector& OutExit, FVector& O
 {
 	OutReason = FText::GetEmpty();
 	const ACastleBoard* OwnerBoard = Board.Get();
-	if (!IsValid(OwnerBoard))
+	if (!IsValid(OwnerBoard) || !DoorFloors[0].IsValid() || !DoorFloors[1].IsValid())
 	{
-		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 没有已登记的双门棋盘。"), *GetPathNameSafe(GetOwner())));
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 没有已登记的双门棋盘或内部导航地板。"), *GetPathNameSafe(GetOwner())));
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
 	}
@@ -87,7 +137,8 @@ bool UCastleTowerDispatchDoors::TryGetDoorWaypoints(FVector& OutExit, FVector& O
 	FVector Points[2];
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Points); ++Index)
 	{
-		const FIntVector Cell = Base + FIntVector(Index == 0 ? 1 : -1, 0, 0);
+		const int32 Sign = Index == 0 ? 1 : -1;
+		const FIntVector Cell = Base + FIntVector(Sign, 0, 0);
 		const ACastleBuildingBase* Room = OwnerBoard->GetBuildingAt(Cell);
 		if (!IsValid(Room) || !Room->bHasCompletedPlacement)
 		{
@@ -114,8 +165,14 @@ bool UCastleTowerDispatchDoors::TryGetDoorWaypoints(FVector& OutExit, FVector& O
 			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 			return false;
 		}
-		Points[Index] = OwnerBoard->GetGridWorldLocation(Cell)
-			+ OwnerBoard->GetActorTransform().TransformVector(FVector(0, 0, StandingHeight - OwnerBoard->LayerHeight * 0.5));
+		const double DoorAnchorX = Sign * (OwnerBoard->CellSize * 0.5 + InnerGapHalfWidth) * 0.5;
+		const FVector DesiredFloorLocation(DoorAnchorX, 0.0, StandingHeight - FloorThickness * 0.5);
+		if (!DoorFloors[Index]->GetRelativeLocation().Equals(DesiredFloorLocation, 0.01))
+		{
+			DoorFloors[Index]->SetRelativeLocation(DesiredFloorLocation);
+		}
+		Points[Index] = OwnerBoard->GetGridWorldLocation(Base)
+			+ OwnerBoard->GetActorTransform().TransformVector(FVector(DoorAnchorX, 0.0, StandingHeight - OwnerBoard->LayerHeight * 0.5));
 	}
 	OutExit = Points[0];
 	OutEntrance = Points[1];

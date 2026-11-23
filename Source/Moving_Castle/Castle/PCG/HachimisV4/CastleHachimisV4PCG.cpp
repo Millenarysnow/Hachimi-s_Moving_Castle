@@ -29,6 +29,13 @@ namespace CastleV4PCG
 		return A.GetBuildingColor() == B.GetBuildingColor() || A.GetBuildingNumber() == B.GetBuildingNumber();
 	}
 
+	bool IsMainTowerDoorFace(const ACastleBoard& Board, const FIntVector& Cell, const FIntVector& BoardSide)
+	{
+		return Board.PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides
+			&& BoardSide.Y == 0 && BoardSide.Z == 0 && FMath::Abs(BoardSide.X) == 1
+			&& Cell + BoardSide == Board.GetBoardCenterCoordinate();
+	}
+
 	bool IsRoom(const ACastleBuildingBase* Building)
 	{
 		return Building && Building->IsNormalRoom() && Building->HachimisLayout;
@@ -274,7 +281,7 @@ namespace CastleV4PCG
 	{
 		const UCastleHachimisV4Layout& Layout = *Building.HachimisLayout;
 		const ACastleBuildingBase* Neighbor = Occupancy.FindRef(Cell + BoardSide);
-		const bool bOpen = Neighbor && CanTraverse(Building, *Neighbor);
+		const bool bOpen = IsMainTowerDoorFace(Board, Cell, BoardSide) || (Neighbor && CanTraverse(Building, *Neighbor));
 		const UCastleV4WallKit& Kit = *Slot.Kit;
 		if (!FMath::IsFinite(Kit.Opening) || Kit.Opening < 150.0 || Kit.Open.IsEmpty() || Kit.Closed.IsEmpty())
 		{
@@ -294,7 +301,7 @@ namespace CastleV4PCG
 		}
 		const double Tangent = Mount.InverseTransformPosition(Layout.CellBottom(Slot.Cell)).X;
 		AddWallCollision(Plan, Mount, Board.CellSize + 0.2, bOpen ? Kit.Opening : 0.0, Tangent, Layout.StandingHeight, Rules.BarrierHeight);
-		if (bOpen && !Neighbor->HachimisLayout) { AddHeightTransition(Board, Building, Cell, BoardSide, Rules, Plan); }
+		if (bOpen && Neighbor && !Neighbor->HachimisLayout) { AddHeightTransition(Board, Building, Cell, BoardSide, Rules, Plan); }
 		return true;
 	}
 

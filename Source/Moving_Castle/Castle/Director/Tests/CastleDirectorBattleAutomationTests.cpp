@@ -155,6 +155,22 @@ public:
 				if (!Test->TestTrue(TEXT("本层NavMesh投影通过"), FloorPath && FloorPath->bValid && FloorPath->bClosedLoop)) { Test->AddError(Navigation->LastFailure.ToString()); return true; }
 				Test->TestTrue(TEXT("投影没有落到错误楼层"), FMath::Abs(FloorPath->Waypoints[0].Z - FloorPoint.Z) <= Navigation->ProjectionExtent.Z);
 			}
+			// 验证玩家直接将路径点 1、2 放在门 A 与门 B 外侧紧邻房间时，不会与门内隐式点重合，且路线绕塔外通行而不穿塔。
+			TArray<FVector> DoorNeighborPoints;
+			for (const FIntVector DoorCell : {Base + FIntVector(1, 0, 0), Base + FIntVector(-1, 0, 0)})
+			{
+				const ACastleBuildingBase* DoorOwner = Board->GetBuildingAt(DoorCell);
+				if (!Test->TestNotNull(TEXT("双门外邻格存在实际建筑"), DoorOwner)
+					|| !Test->TestNotNull(TEXT("双门外建筑具有 V4 站立面"), DoorOwner->HachimisLayout.Get())) { return true; }
+				DoorNeighborPoints.Add(Board->GetGridWorldLocation(DoorCell) + Board->GetActorTransform().TransformVector(
+					FVector(0, 0, DoorOwner->HachimisLayout->StandingHeight - Board->LayerHeight * 0.5)));
+			}
+			if (!Test->TestTrue(TEXT("门 A 与门 B 外邻格直接作为路径点 1、2 提交"), Director->PatrolRoute->SetWorldWaypoints(DoorNeighborPoints, Reason)))
+			{ Test->AddError(Reason.ToString()); return true; }
+			const auto DoorNeighborPath = Navigation->AcquireSharedPath();
+			if (!Test->TestTrue(TEXT("门外邻格路径点与门内隐式点不重合且绕塔外生成完整开环"),
+				DoorNeighborPath && DoorNeighborPath->bValid && DoorNeighborPath->bTowerDispatch && DoorNeighborPath->Length > Board->CellSize * 3.0))
+			{ Test->AddError(Navigation->LastFailure.ToString()); return true; }
 			// 用两次斜瞄得到的落点提交正式路线，第二点来自此前被墙盒遮挡的弓箭塔。
 			if (!Test->TestTrue(TEXT("由玩家路径入口提交两个点击点"), Director->PatrolRoute->SetWorldWaypoints(ClickedPoints, Reason)))
 			{ Test->AddError(Reason.ToString()); return true; }

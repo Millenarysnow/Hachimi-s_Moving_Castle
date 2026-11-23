@@ -575,6 +575,16 @@ void UCastleNavigationSubsystem::CalculateSharedPath()
 			RoutePoints.Add(Entrance);
 		}
 	}
+	const auto DescribeRoutePoint = [&](const int32 PointIndex) -> FString
+	{
+		if (bRequestedTowerDispatch)
+		{
+			if (PointIndex == 0) { return TEXT("主塔门 A"); }
+			if (PointIndex + 1 == RoutePoints.Num()) { return TEXT("主塔门 B"); }
+			return FString::Printf(TEXT("路径点 %d"), PointIndex);
+		}
+		return FString::Printf(TEXT("路径点 %d"), PointIndex + 1);
+	};
 	TOptional<CastleGridSurfacePath::FGrid> Grid;
 	// 新增的格内失败以 Error 报告；保留已有原生不可达、NavLink 失败的日志边界。
 	bool bGridFailure = LastFailure.IsEmpty() && bBuildPatrolSamples && !CastleGridSurfacePath::ReadGrid(*GetWorld(), Grid, LastFailure);
@@ -584,14 +594,14 @@ void UCastleNavigationSubsystem::CalculateSharedPath()
 		FNavLocation Projected;
 		if (!Navigation->ProjectPointToNavigation(RoutePoints[Index], Projected, ProjectionExtent, Data))
 		{
-			LastFailure = FText::FromString(FString::Printf(TEXT("共享路线起点或终点附近没有可行走 NavMesh（路径点 %d），请检查楼板、楼梯碰撞及 Agent 尺寸。"), Index + 1));
+			LastFailure = FText::FromString(FString::Printf(TEXT("共享路线起点或终点附近没有可行走 NavMesh（%s），请检查楼板、楼梯碰撞及 Agent 尺寸。"), *DescribeRoutePoint(Index)));
 			break;
 		}
 		// 格心硬点不能被移动到障碍旁；没有棋盘语义的路线保留原来的路径点投影契约。
 		if (Grid.IsSet() && !CastleGridSurfacePath::IsExactAnchor(*Grid, RoutePoints[Index], Projected.Location, ProjectionExtent.Z))
 		{
-			LastFailure = FText::FromString(FString::Printf(TEXT("%s 的显式巡逻路径点 %d（%s）没有原位可行走表面，不能移到附近位置或其他楼层。"),
-				*Grid->BoardName, Index + 1, *RoutePoints[Index].ToCompactString()));
+			LastFailure = FText::FromString(FString::Printf(TEXT("%s 的显式巡逻%s（%s）没有原位可行走表面，不能移到附近位置或其他楼层。"),
+				*Grid->BoardName, *DescribeRoutePoint(Index), *RoutePoints[Index].ToCompactString()));
 			bGridFailure = true;
 			break;
 		}
@@ -615,7 +625,7 @@ void UCastleNavigationSubsystem::CalculateSharedPath()
 		const int32 Next = (LegIndex + 1) % Path.Waypoints.Num();
 		if (Path.Waypoints[LegIndex].Equals(Path.Waypoints[Next], 1.0))
 		{
-			LastFailure = FText::FromString(FString::Printf(TEXT("路径点 %d 与 %d 投影后重合，请增大间距。"), LegIndex + 1, Next + 1));
+			LastFailure = FText::FromString(FString::Printf(TEXT("%s 与 %s 投影后重合，请增大间距。"), *DescribeRoutePoint(LegIndex), *DescribeRoutePoint(Next)));
 			break;
 		}
 		FPathFindingQuery Query(this, *Data, Path.Waypoints[LegIndex], Path.Waypoints[Next]);
@@ -646,7 +656,7 @@ void UCastleNavigationSubsystem::CalculateSharedPath()
 		}
 		else
 		{
-			LastFailure = FText::FromString(FString::Printf(TEXT("共享路线不可达：路径点 %d→%d 之间没有完整最短路，整条路线不发布。"), LegIndex + 1, Next + 1));
+			LastFailure = FText::FromString(FString::Printf(TEXT("共享路线不可达：%s→%s 之间没有完整最短路，整条路线不发布。"), *DescribeRoutePoint(LegIndex), *DescribeRoutePoint(Next)));
 		}
 	}
 	Path.bValid = LastFailure.IsEmpty();

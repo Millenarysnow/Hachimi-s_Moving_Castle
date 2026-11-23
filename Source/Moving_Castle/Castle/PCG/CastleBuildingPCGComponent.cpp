@@ -179,7 +179,7 @@ bool UCastleBuildingPCGComponent::Prepare(const ACastleBoard* Board, const UCast
 		Center += FVector(Offset) * (Board->CellSize * 0.5);
 		const double HalfLength = (Board->CellSize - Board->GroundTileSize) * 0.5 + 40.0;
 		const FQuat Rotation(FVector::UpVector, Offset.Y != 0 ? HALF_PI : 0.0);
-		if (Face.bConnected)
+		if (Face.bConnected || CastleV4PCG::IsMainTowerDoorFace(*Board, Face.Cell, Offset))
 		{
 			Center.Z -= Rules->FloorThickness * 0.5;
 			AddBox(Center, FVector(HalfLength, Rules->BridgeWidth * 0.5, Rules->FloorThickness * 0.5), false, Rotation);

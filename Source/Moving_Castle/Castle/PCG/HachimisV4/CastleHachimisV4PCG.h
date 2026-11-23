@@ -37,6 +37,8 @@ namespace CastleV4PCG
 	using FStairs = TMap<FIntVector, FStairInterface>;
 
 	bool CanTraverse(const ACastleBuildingBase& A, const ACastleBuildingBase& B);
+	/** 仅塔侧棋盘首层主塔的 ±X 门 A/B 外壁开启门洞通行，±Y 侧面与二层以上保持封闭。 */
+	bool IsMainTowerDoorFace(const ACastleBoard& Board, const FIntVector& Cell, const FIntVector& BoardSide);
 	bool IsRoom(const ACastleBuildingBase* Building);
 	FTransform CellFrame(const ACastleBoard& Board, const FIntVector& Cell);
 	bool MapCells(const ACastleBuildingBase& Building, const ACastleBoard& Board, TMap<FIntVector, FIntVector>& Out, FString& Error);

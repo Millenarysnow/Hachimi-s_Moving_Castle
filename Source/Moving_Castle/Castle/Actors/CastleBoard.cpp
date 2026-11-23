@@ -374,6 +374,13 @@ bool ACastleBoard::InitializeProgressiveTowerPresentation(AActor& Tower, UCastle
 		}
 		// 0.01 cm 只用于抵消世界变换往返误差，确保位于段界的原始分件稳定归组。
 		const double Base = Bounds.Min.Z + 0.01;
+		// 主塔美术分件如同普通建筑视觉根，只保留 Visibility 射线查询与遮挡，不阻挡 Pawn 也不参与导航。
+		const ECollisionEnabled::Type VisualCollision = Part->GetCollisionEnabled() != ECollisionEnabled::NoCollision
+			? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision;
+		Part->SetCollisionEnabled(VisualCollision);
+		Part->SetCollisionResponseToAllChannels(ECR_Ignore);
+		Part->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+		Part->SetCanEverAffectNavigation(false);
 		if (Base >= SourceCrownBase)
 		{
 			Crown.Add(Part);
@@ -382,7 +389,7 @@ bool ACastleBoard::InitializeProgressiveTowerPresentation(AActor& Tower, UCastle
 		else
 		{
 			const int32 Section = FMath::FloorToInt(Base / SourceSectionHeight);
-			TowerBodySections[Section].Add({Part, Part->GetCollisionEnabled(), Part->CanEverAffectNavigation()});
+			TowerBodySections[Section].Add({Part, VisualCollision, false});
 		}
 	}
 	if (Crown.Num() != CrownPartCount || TowerBodySections.ContainsByPredicate([](const auto& Section)

@@ -271,11 +271,24 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 		AddError(Reason.ToString());
 		return false;
 	}
-	TestTrue(TEXT("门 A 使用 +X 邻格中心"), FVector::DistSquared2D(DoorA, Board->GetGridWorldLocation(ExitTarget.AdjacentCell)) < 0.01);
-	TestTrue(TEXT("门 B 使用 −X 邻格中心"), FVector::DistSquared2D(DoorB, Board->GetGridWorldLocation(OldRoomCell)) < 0.01);
+	const FVector TowerCenter = Board->GetGridWorldLocation(Center);
+	const double ExpectedDoorOffsetX = (Board->CellSize * 0.5 + 30.0) * 0.5;
+	TestTrue(TEXT("门 A 锚点位于主塔一楼内部 +X 侧"), FVector::DistSquared2D(DoorA, TowerCenter + FVector(ExpectedDoorOffsetX, 0, 0)) < 0.01);
+	TestTrue(TEXT("门 B 锚点位于主塔一楼内部 −X 侧"), FVector::DistSquared2D(DoorB, TowerCenter - FVector(ExpectedDoorOffsetX, 0, 0)) < 0.01);
 	const double FloorZ = Board->GetGridWorldLocation(OldRoomCell).Z - Board->LayerHeight * 0.5 + 25.0;
 	TestTrue(TEXT("双门均采用房间站立面标高"), FMath::IsNearlyEqual(DoorA.Z, FloorZ, 0.01)
 		&& FMath::IsNearlyEqual(DoorB.Z, FloorZ, 0.01));
+	FHitResult FloorHit;
+	for (const FVector& DoorPoint : {DoorA, DoorB})
+	{
+		TestTrue(TEXT("主塔一楼内部门点下方具备不可见导航地板碰撞"),
+			World->LineTraceSingleByChannel(FloorHit, DoorPoint + FVector(0, 0, 10), DoorPoint - FVector(0, 0, 10), ECC_Pawn)
+			&& FloorHit.GetActor() == Board->MainTowerActor
+			&& FMath::IsNearlyEqual(FloorHit.ImpactPoint.Z, FloorZ, 0.1));
+	}
+	TestFalse(TEXT("主塔一楼中央留有隔断空隙防止穿塔抄近道"),
+		World->LineTraceSingleByChannel(FloorHit, FVector(TowerCenter.X, TowerCenter.Y, FloorZ + 10.0),
+			FVector(TowerCenter.X, TowerCenter.Y, FloorZ - 10.0), ECC_Pawn));
 	return true;
 }
 
