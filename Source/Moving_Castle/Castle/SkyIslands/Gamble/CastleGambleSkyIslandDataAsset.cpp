@@ -52,9 +52,13 @@ bool UCastleGambleSkyIslandDataAsset::Validate(FText& OutReason) const
 	{
 		return Reject(INVTEXT("轮盘三色格数必须为正整数且总格数可索引，返还倍率至少为 2。"));
 	}
-	if (!FMath::IsFinite(MiniBoardCellScale) || MiniBoardCellScale <= 0.02f || MiniBoardCellScale > 0.5f)
+	if (!(MiniBoardCellScale > 0.05f && MiniBoardCellScale <= 0.5f))
 	{
-		return Reject(INVTEXT("微缩格比例必须大于 0.02 且不超过 0.5。"));
+		return Reject(INVTEXT("微缩格比例必须大于 0.05 且不超过 0.5。"));
+	}
+	if (MiniBoardGridSize.X < 1 || MiniBoardGridSize.X > 9 || MiniBoardGridSize.Y < 1 || MiniBoardGridSize.Y > 9)
+	{
+		return Reject(INVTEXT("微缩棋盘的两轴格数必须分别在 1 到 9 之间。"));
 	}
 	if (SlotMachineCost < 1 || BalloonRecycleGold < 1)
 	{

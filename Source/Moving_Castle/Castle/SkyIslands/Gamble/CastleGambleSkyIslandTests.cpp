@@ -4,20 +4,27 @@
 #include "CastleGambleRouletteWidget.h"
 #include "CastleGambleAcceptanceIsland.h"
 
+#include "Blueprint/GameViewportSubsystem.h"
+#include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Blueprint/WidgetBlueprintGeneratedClass.h"
 #include "Blueprint/WidgetTree.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "CastleBackpackComponent.h"
 #include "CastleBuildingDefinition.h"
 #include "CastleEconomyComponent.h"
+#include "CastleGroundTileActor.h"
 #include "CastleMainTowerComponent.h"
 #include "CastlePlayerController.h"
 #include "Components/Button.h"
+#include "Components/BoxComponent.h"
+#include "Components/TextBlock.h"
+#include "Engine/Font.h"
 #include "Editor.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "FileHelpers.h"
 #include "HAL/IConsoleManager.h"
 #include "Items/CastleBadgeDataAsset.h"
 #include "Items/CastleBadgeSubsystem.h"
@@ -26,9 +33,15 @@
 #include "Items/CastleRoomGroupDataAsset.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/OutputDeviceNull.h"
+#include "Misc/PackageName.h"
 #include "Misc/ScopeExit.h"
+#include "PlayInEditorDataTypes.h"
+#include "Settings/LevelEditorPlaySettings.h"
 #include "Tests/AutomationCommon.h"
 #include "UI/Items/CastleWildcardRoomPickerWidget.h"
+#include "UI/Items/CastleBadgeBarWidget.h"
+#include "UI/Items/CastleBadgeReplaceModalWidget.h"
+#include "UI/Items/CastleTempBuildBarWidget.h"
 
 namespace
 {
@@ -86,6 +99,8 @@ bool FCastleGambleIslandAutomationTest::RunTest(const FString& Parameters)
 	Island->Tower = NewObject<UCastleMainTowerComponent>(Island);
 	Island->Badges = NewObject<UCastleBadgeSubsystem>(NewObject<UGameInstance>());
 	Island->MiniCellSize = 40.0;
+	Island->MiniTileSize = 38.0;
+	Island->MiniLayerHeight = 43.0;
 	UCastleBackpackComponent& Backpack = *Island->Backpack;
 	FCastleBuildingDescriptor RedOne, RedTwo, BlueOne, GreenThree;
 	if (!TestTrue(TEXT("生成正式测试房间"),
@@ -94,10 +109,15 @@ bool FCastleGambleIslandAutomationTest::RunTest(const FString& Parameters)
 		&& Definition->CreateDescriptor(1, ECastleTileColor::Blue, 1, BlueOne, Reason)
 		&& Definition->CreateDescriptor(1, ECastleTileColor::Green, 3, GreenThree, Reason))) { return false; }
 	const FCastleBuildingDescriptor Initial[] = {RedOne, GreenThree, RedTwo, BlueOne};
+	// 第二格与原点不同色号，用它区分地面匹配和已放房间的相邻匹配。
+	const FCastleGroundCell Ground[] = {
+		{FIntVector::ZeroValue, ECastleTileColor::Red, 9}, {FIntVector(1, 0, 0), ECastleTileColor::Purple, 8}
+	};
+	if (!TestTrue(TEXT("初始化带色号的测试地面"), Island->MiniBoard.InitializeGround(Ground, FIntPoint(2, 1), Reason))) { return false; }
 	if (!TestTrue(TEXT("填入测试牌"), Backpack.TryAddItemsAllowOverflow(Initial, Reason))) { return false; }
 	TestFalse(TEXT("空微缩区拒绝开转"), Island->TrySpinRoulette(ECastleRouletteColor::Black, Reason));
-	TestFalse(TEXT("首块不能放在非原点"), Island->TryPlaceCard(0, FIntVector(1, 0, 0), Reason));
-	if (!TestTrue(TEXT("首块放在原点"), Island->TryPlaceCard(0, FIntVector::ZeroValue, Reason))) { return false; }
+	TestFalse(TEXT("首块不能放在不同色且不同号的地面"), Island->TryPlaceCard(0, FIntVector(1, 0, 0), Reason));
+	if (!TestTrue(TEXT("首块可与地面同色放置"), Island->TryPlaceCard(0, FIntVector::ZeroValue, Reason))) { return false; }
 	TestFalse(TEXT("异色且异号被拒"), Island->TryPlaceCard(0, FIntVector(1, 0, 0), Reason));
 	TestEqual(TEXT("拒绝后仍有三张"), Backpack.GetItemCount(), 3);
 	TestTrue(TEXT("同色横向相邻"), Island->TryPlaceCard(1, FIntVector(1, 0, 0), Reason));
@@ -259,10 +279,24 @@ bool FCastleGambleLuckAutomationTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("保存后的轮盘面板为原生基类的 Widget Blueprint"), GeneratedPanel)) { return false; }
 	const UWidgetTree* Tree = GeneratedPanel->GetWidgetTreeArchetype();
 	if (!TestNotNull(TEXT("占位面板含持久化控件树"), Tree)) { return false; }
-	for (const FName Name : {FName(TEXT("CardOptions")), FName(TEXT("CellOptions")), FName(TEXT("SpinButton")), FName(TEXT("CloseButton"))})
+	for (const FName Name : {FName(TEXT("ReturnAllButton")), FName(TEXT("ReturnButton")), FName(TEXT("SpinButton")), FName(TEXT("CloseButton"))})
 	{
 		TestNotNull(FString::Printf(TEXT("保存后的控件树包含 %s"), *Name.ToString()), Tree->FindWidget(Name));
 	}
+	TestNull(TEXT("轮盘面板不再包含选牌和坐标下拉框"), Tree->FindWidget(TEXT("CardOptions")));
+	TestNull(TEXT("轮盘面板不再包含坐标下拉框"), Tree->FindWidget(TEXT("CellOptions")));
+	Tree->ForEachWidget([this](UWidget* Widget)
+	{
+		if (const auto* Text = Cast<UTextBlock>(Widget))
+		{
+			const FSlateFontInfo& Font = Text->GetFont();
+			const UFont* Asset = Cast<UFont>(Font.FontObject);
+			TestTrue(FString::Printf(TEXT("%s 使用有效的微软雅黑字重"), *Text->GetName()),
+				Asset && Asset->GetFName() == TEXT("MicrosoftYaHei_Font")
+				&& Asset->GetInternalCompositeFont().DefaultTypeface.Fonts.ContainsByPredicate(
+					[&Font](const FTypefaceEntry& Entry) { return Entry.Name == Font.TypefaceFontName; }));
+		}
+	});
 	return true;
 }
 
@@ -299,6 +333,7 @@ public:
 		if (bDeparting)
 		{
 			if (TActorIterator<ACastleGambleAcceptanceIsland>(World)) { return false; }
+			for (const auto& Tile : Tiles) { Test.TestFalse(TEXT("离岛销毁微缩地块"), Tile.IsValid()); }
 			Test.TestTrue(TEXT("离岛返回原来的飞行位置"), Controller->GetPawn()->GetActorLocation().Equals(ReturnLocation, 5.0));
 			Test.TestTrue(TEXT("离岛退回 1 张未下注原牌"), Backpack.IsValid()
 				&& Backpack->GetItemCount() + Backpack->GetTempItemCount() == CardsBeforeDeparture);
@@ -315,11 +350,53 @@ public:
 		auto* Island = *IslandIt;
 		Test.TestTrue(TEXT("玩家传送至赌博岛到达锚点"), Controller->GetPawn()->GetActorLocation().Equals(
 			Island->GetPlayerArrivalTransform().GetLocation(), 5.0));
+		Test.TestEqual(TEXT("生成 5×5 个真实地块"), Island->MiniTiles.Num(), 25);
+		Backpack = Island->GetBackpack();
+		FCastleBuildingDescriptor Card;
+		if (!Test.TestTrue(TEXT("从实际手牌读取首个槽位"), Backpack->TryGetItemAt(0, Card))) { return true; }
+		const int32 InitialCards = Backpack->GetItemCount() + Backpack->GetTempItemCount();
+		const ACastleGroundTileActor* Match = nullptr;
+		const ACastleGroundTileActor* Mismatch = nullptr;
+		for (const auto& Entry : Island->MiniTiles)
+		{
+			Tiles.Add(Entry.Value.Get());
+			const FCastleGroundCell Cell = Entry.Value->GetGroundCell();
+			if (Cell.Color == Card.Color || Cell.Number == Card.Number) { Match = Entry.Value.Get(); }
+			else { Mismatch = Entry.Value.Get(); }
+		}
+		const auto AimDown = [Island](FVector Surface, double Distance, FCastleGridCursorTarget& Target)
+		{
+			return Island->TryResolveIslandGridCursorTarget(Surface + FVector::UpVector * Distance,
+				Surface - FVector::UpVector * 10.0, Target);
+		};
+		FText Reason;
+		FCastleGridCursorTarget Target;
+		if (!Test.TestNotNull(TEXT("生成与首张手牌同色或同号的地面"), Match)
+			|| !Test.TestNotNull(TEXT("生成与首张手牌异色异号的地面"), Mismatch)) { return true; }
+		Test.TestTrue(TEXT("真实射线命中不合法地块且高亮校验拒绝"),
+			AimDown(Mismatch->GetActorLocation(), 250.0, Target) && !Island->CanPlaceCardAtIslandCursor(Target, 0));
+		if (!Test.TestTrue(TEXT("真实射线命中合法微缩地块并消费手牌"),
+			AimDown(Match->GetActorLocation(), 250.0, Target) && Island->CanPlaceCardAtIslandCursor(Target, 0)
+			&& Island->TryPlaceBackpackAtIslandCursor(Target, 0, Reason))) { return true; }
+		Test.TestEqual(TEXT("地面建造消耗一张原卡"), Backpack->GetItemCount() + Backpack->GetTempItemCount(), InitialCards - 1);
+		const auto MatchingCell = Target.AdjacentCell;
+		const auto* Room = Island->MiniRooms.FindRef(MatchingCell).Get();
+		if (!Test.TestNotNull(TEXT("已放房间生成独立六面查询盒"), Room)) { return true; }
+		Test.TestTrue(TEXT("真实射线命中已放房间顶面并定位上一层"),
+			AimDown(Room->GetComponentLocation(), Island->MiniLayerHeight, Target)
+			&& Target.AdjacentCell == MatchingCell + FIntVector(0, 0, 1));
+		const int32 OriginalCount = Backpack->GetItemCount();
+		int32 SlotIndex = INDEX_NONE;
+		if (!Test.TestTrue(TEXT("添加同牌验证垂直叠放"), Backpack->TryAddItem(Card, SlotIndex, Reason)
+			&& Island->TryPlaceBackpackAtIslandCursor(Target, SlotIndex, Reason)
+			&& Island->TryRetractLastIslandPlacement(Reason))) { return true; }
+		FCastleBuildingDescriptor Returned;
+		Test.TestTrue(TEXT("撤回叠放房间后原卡还回手牌"),
+			Backpack->TryGetItemAt(OriginalCount, Returned) && IsSameCard(Returned, Card));
 		const FVector RouletteCenter = Island->Roulette->GetComponentLocation();
 		FHitResult Hit;
 		const FCollisionQueryParams Query(SCENE_QUERY_STAT(CastleGambleAcceptanceAutomation), false, Controller->GetPawn());
 		World->LineTraceSingleByChannel(Hit, RouletteCenter - Island->GetActorForwardVector() * 300.0, RouletteCenter, ECC_Visibility, Query);
-		FText Reason;
 		const FCastleSkyIslandInteractContext HitContext{Island, Controller, Hit};
 		if (!Test.TestTrue(TEXT("真实射线命中轮盘并开启 WBP"), Island->Roulette->ExecuteInteract(HitContext, Reason)))
 		{
@@ -327,9 +404,29 @@ public:
 			return true;
 		}
 		Test.TestTrue(TEXT("轮盘显示鼠标并锁定飞行视角"), Controller->bShowMouseCursor && Controller->IsLookInputIgnored());
+		if (auto* Viewport = UGameViewportSubsystem::Get())
+		{
+			const FGameViewportWidgetSlot Slot = Viewport->GetWidgetSlot(Island->RoulettePanel);
+			Test.TestTrue(TEXT("轮盘槽位锚点和对齐保持在右侧居中"),
+				Slot.Anchors.Minimum.Equals(FVector2D(1.0, 0.5)) && Slot.Anchors.Maximum.Equals(FVector2D(1.0, 0.5))
+				&& Slot.Alignment.Equals(FVector2D(1.0, 0.5)));
+			const auto VerifyHUD = [this, World, Viewport](TSubclassOf<UUserWidget> Class, FVector2D Anchor)
+			{
+				TArray<UUserWidget*> Widgets;
+				UWidgetBlueprintLibrary::GetAllWidgetsOfClass(World, Widgets, Class, true);
+				if (!Test.TestEqual(TEXT("每种道具 HUD 只挂载一次"), Widgets.Num(), 1)) { return; }
+				const FAnchors Anchors = Viewport->GetWidgetSlot(Widgets[0]).Anchors;
+				Test.TestTrue(Class->GetName() + TEXT(" 锚点"), Anchors.Minimum.Equals(Anchor) && Anchors.Maximum.Equals(Anchor));
+			};
+			VerifyHUD(UCastleTempBuildBarWidget::StaticClass(), FVector2D(0.0, 0.58));
+			VerifyHUD(UCastleBadgeBarWidget::StaticClass(), FVector2D(0.0, 0.12));
+			VerifyHUD(UCastleBadgeReplaceModalWidget::StaticClass(), FVector2D(0.5, 0.5));
+		}
+		else { Test.AddError(TEXT("轮盘槽位验证缺少视口子系统。")); }
 		Test.TestFalse(TEXT("轮盘打开时其它机台受模态门控"), Island->CanUseMachine(HitContext, Reason));
 		if (!Test.TestTrue(TEXT("关闭轮盘后归还飞行输入"), Island->TryCloseRoulettePanel(Reason)
 			&& !Controller->bShowMouseCursor && !Controller->IsMoveInputIgnored() && !Controller->IsLookInputIgnored())) { return true; }
+		Test.TestEqual(TEXT("关闭后保留一张微缩赌注"), Island->GetMiniBoard().GetPlacements().Num(), 1);
 
 		// 测试资产副本只用于确定性地跑到两种弹窗档位，正式 DA 和当前关数保持原样。
 		Island->Config = DuplicateObject(Island->Config.Get(), Island);
@@ -362,8 +459,7 @@ public:
 		Test.TestTrue(TEXT("徽章弹窗结束后恢复飞行"), !Controller->bShowMouseCursor && !Controller->IsMoveInputIgnored());
 
 		Backpack = Island->GetBackpack();
-		CardsBeforeDeparture = Backpack->GetItemCount() + Backpack->GetTempItemCount();
-		if (!Test.TestTrue(TEXT("离岛前保留一张尚未下注房间"), Island->TryPlaceCard(0, FIntVector::ZeroValue, Reason))) { return true; }
+		CardsBeforeDeparture = Backpack->GetItemCount() + Backpack->GetTempItemCount() + 1;
 		Island->OnDepartureRequested.Broadcast();
 		bDeparting = true;
 		return false;
@@ -372,6 +468,7 @@ public:
 private:
 	FAutomationTestBase& Test;
 	TWeakObjectPtr<UCastleBackpackComponent> Backpack;
+	TArray<TWeakObjectPtr<const ACastleGroundTileActor>> Tiles;
 	FVector ReturnLocation;
 	int32 OriginalStep = 0;
 	int32 CardsBeforeDeparture = 0;
@@ -402,7 +499,18 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleGambleAcceptanceTest, "MovingCastle.SkyI
 
 bool FCastleGambleAcceptanceTest::RunTest(const FString& Parameters)
 {
-	if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/MainMap"), true)) { return false; }
+	// 离屏编辑器不依赖通用地图等待器的窗口就绪状态，由当前 PIE 世界的导演判定就绪。
+	const FString Map = FPackageName::LongPackageNameToFilename(TEXT("/Game/MovingCastle/Maps/MainMap"),
+		FPackageName::GetMapPackageExtension());
+	if (!TestTrue(TEXT("加载赌博验收用的 MainMap"), FEditorFileUtils::LoadMap(Map, false, false))) { return false; }
+	auto* Settings = DuplicateObject(GetDefault<ULevelEditorPlaySettings>(), GetTransientPackage());
+	Settings->SetPlayNetMode(PIE_Standalone);
+	Settings->SetRunUnderOneProcess(true);
+	Settings->SetPlayNumberOfClients(1);
+	FRequestPlaySessionParams Request;
+	Request.EditorPlaySettings = Settings;
+	Request.bAllowOnlineSubsystem = false;
+	GEditor->RequestPlaySession(Request);
 	ADD_LATENT_AUTOMATION_COMMAND(FCastleGambleAcceptanceScenario(*this));
 	ADD_LATENT_AUTOMATION_COMMAND(FCastleStopGamblePIE(*this));
 	return true;

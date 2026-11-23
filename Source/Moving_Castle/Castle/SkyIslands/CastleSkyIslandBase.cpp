@@ -74,7 +74,15 @@ bool ACastleSkyIslandBase::InitializeIsland(const FCastleSkyIslandContext& Conte
 	Title->SetText(FText::FromString(FString::Printf(TEXT("%s  |  DEPART"), *Label)));
 	IslandContext = Context;
 	bInitialized = OnInitializeIsland(Context, OutFailureReason);
+	if (bInitialized) { Context.Controller->RegisterActiveSkyIsland(this); }
 	return bInitialized;
+}
+
+void ACastleSkyIslandBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	// 只注销当前实例，较早销毁的空岛不能清掉新空岛的输入目标。
+	if (auto* Controller = IslandContext.Controller.Get()) { Controller->UnregisterActiveSkyIsland(this); }
+	Super::EndPlay(EndPlayReason);
 }
 
 FTransform ACastleSkyIslandBase::GetPlayerArrivalTransform() const

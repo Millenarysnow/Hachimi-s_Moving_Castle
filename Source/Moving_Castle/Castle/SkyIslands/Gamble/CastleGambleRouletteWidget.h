@@ -2,14 +2,13 @@
 
 #include "Blueprint/UserWidget.h"
 #include "CastleGambleSkyIslandDataAsset.h"
-#include "Components/ComboBoxString.h"
 #include "CastleGambleRouletteWidget.generated.h"
 
 class ACastleGambleSkyIsland;
 class UButton;
 class UTextBlock;
 
-/** 占位 WBP 提供静态布局，C++ 负责把每个选项映射到实际背包槽位和微缩格。 */
+/** WBP 提供布局，押色、退牌与开转均通过微缩棋盘的唯一交易入口。 */
 UCLASS(Abstract)
 class UCastleGambleRouletteWidget : public UUserWidget
 {
@@ -20,25 +19,23 @@ public:
 	/** 成功开奖后，等待指针停稳才展示结果并重新开放本轮操作。 */
 	void FinishSpin(const FText& Result);
 
+protected:
+	/** 在按钮等子控件拥有键盘焦点时，仍可用 Esc 关闭面板。 */
+	virtual FReply NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
+
 private:
-	void RefreshBackpack();
-	void RefreshCells();
 	void RefreshActions();
 	void SelectBet(ECastleRouletteColor Color);
 
-	UFUNCTION() void HandleCardSelected(FString Item, ESelectInfo::Type SelectionType);
-	UFUNCTION() void HandleCellSelected(FString Item, ESelectInfo::Type SelectionType);
-	UFUNCTION() void HandlePlace();
 	UFUNCTION() void HandleReturn();
+	UFUNCTION() void HandleReturnAll();
 	UFUNCTION() void HandleBlack();
 	UFUNCTION() void HandleRed();
 	UFUNCTION() void HandleGreen();
 	UFUNCTION() void HandleSpin();
 	UFUNCTION() void HandleClose();
 
-	UPROPERTY(meta = (BindWidget)) TObjectPtr<UComboBoxString> CardOptions;
-	UPROPERTY(meta = (BindWidget)) TObjectPtr<UComboBoxString> CellOptions;
-	UPROPERTY(meta = (BindWidget)) TObjectPtr<UButton> PlaceButton;
+	UPROPERTY(meta = (BindWidget)) TObjectPtr<UButton> ReturnAllButton;
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UButton> ReturnButton;
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UButton> BlackButton;
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UButton> RedButton;
@@ -52,7 +49,5 @@ private:
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UTextBlock> CountLabel;
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UTextBlock> ResultLabel;
 	UPROPERTY(Transient) TWeakObjectPtr<ACastleGambleSkyIsland> Island;
-	TArray<FIntVector> LegalCells;
 	TOptional<ECastleRouletteColor> Bet;
-	bool bRefreshingOptions = false;
 };

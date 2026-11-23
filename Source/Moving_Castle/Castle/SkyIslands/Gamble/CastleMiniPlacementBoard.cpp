@@ -25,6 +25,30 @@ namespace
 	}
 }
 
+bool FCastleMiniPlacementBoard::InitializeGround(TConstArrayView<FCastleGroundCell> Cells, FIntPoint GridSize, FText& OutReason)
+{
+	if (!GroundCells.IsEmpty() || GridSize.X <= 0 || GridSize.Y <= 0 || Cells.Num() != int64(GridSize.X) * GridSize.Y)
+	{
+		OutReason = INVTEXT("微缩地面格数量错误或已经初始化。");
+		return false;
+	}
+	TMap<FIntVector, FCastleGroundCell> Generated;
+	for (const FCastleGroundCell& Cell : Cells)
+	{
+		const FIntVector& Position = Cell.Coordinate;
+		if (Position.Z != 0 || Position.X < 0 || Position.X >= GridSize.X || Position.Y < 0 || Position.Y >= GridSize.Y
+			|| Cell.Color < ECastleTileColor::Red || Cell.Color > ECastleTileColor::Purple || Cell.Number < 1 || Cell.Number > 9
+			|| Generated.Contains(Position))
+		{
+			OutReason = FText::Format(INVTEXT("微缩地面格 {0} 重复、越界或色号无效。"), FText::FromString(Position.ToString()));
+			return false;
+		}
+		Generated.Add(Position, Cell);
+	}
+	GroundCells = MoveTemp(Generated);
+	return true;
+}
+
 bool FCastleMiniPlacementBoard::CanPlace(const FCastleBuildingDescriptor& Card, const FIntVector& Cell, FText& OutReason) const
 {
 	OutReason = FText::GetEmpty();
@@ -33,7 +57,11 @@ bool FCastleMiniPlacementBoard::CanPlace(const FCastleBuildingDescriptor& Card, 
 		OutReason = INVTEXT("该微缩格在底板下方或已被占用。");
 		return false;
 	}
-	if (Placements.IsEmpty() && Cell == FIntVector::ZeroValue) { return true; }
+	// 地面格只支持自身正上方的首层房间；高层和悬挑只查询房间的六面邻居。
+	if (const FCastleGroundCell* Ground = GroundCells.Find(Cell))
+	{
+		if (Ground->Color == Card.Color || Ground->Number == Card.Number) { return true; }
+	}
 	for (const FIntVector& Face : Faces)
 	{
 		FIntVector Neighbor;
@@ -41,31 +69,8 @@ bool FCastleMiniPlacementBoard::CanPlace(const FCastleBuildingDescriptor& Card, 
 		const int32* Index = Occupied.Find(Neighbor);
 		if (Index && MatchesCard(Card, Placements[*Index].Card)) { return true; }
 	}
-	OutReason = Placements.IsEmpty() ? INVTEXT("第一张房间卡必须放在底板原点。") : INVTEXT("房间必须与一面相邻的房间同色或同数字。");
+	OutReason = INVTEXT("房间必须与下方地面格或面相邻的已放房间同色或同数字。");
 	return false;
-}
-
-TArray<FIntVector> FCastleMiniPlacementBoard::GetLegalCells(const FCastleBuildingDescriptor& Card) const
-{
-	if (Placements.IsEmpty()) { return {FIntVector::ZeroValue}; }
-	TSet<FIntVector> Candidates;
-	for (const FCastleMiniPlacement& Placement : Placements)
-	{
-		if (!MatchesCard(Card, Placement.Card)) { continue; }
-		for (const FIntVector& Face : Faces)
-		{
-			FIntVector Cell;
-			if (TryAdjacentCell(Placement.Cell, Face, Cell) && !Occupied.Contains(Cell)) { Candidates.Add(Cell); }
-		}
-	}
-	TArray<FIntVector> Cells = Candidates.Array();
-	Cells.Sort([](const FIntVector& A, const FIntVector& B)
-	{
-		if (A.Z != B.Z) { return A.Z < B.Z; }
-		if (A.Y != B.Y) { return A.Y < B.Y; }
-		return A.X < B.X;
-	});
-	return Cells;
 }
 
 bool FCastleMiniPlacementBoard::TryPlace(UCastleBackpackComponent& Backpack, const int32 BackpackIndex,

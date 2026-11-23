@@ -1,15 +1,14 @@
 #include "CastleGambleRouletteWidget.h"
 
-#include "CastleBackpackComponent.h"
-#include "CastleBuildingDefinition.h"
 #include "CastleGambleSkyIsland.h"
 #include "Components/Button.h"
 #include "Components/ComboBoxString.h"
 #include "Components/TextBlock.h"
+#include "Input/Events.h"
 
 bool UCastleGambleRouletteWidget::BindIsland(ACastleGambleSkyIsland* InIsland, FText& OutReason)
 {
-	if (!IsValid(InIsland) || !CardOptions || !CellOptions || !PlaceButton || !ReturnButton || !BlackButton
+	if (!IsValid(InIsland) || !ReturnAllButton || !ReturnButton || !BlackButton
 		|| !RedButton || !GreenButton || !SpinButton || !CloseButton || !BlackLabel || !RedLabel || !GreenLabel
 		|| !BetLabel || !CountLabel || !ResultLabel)
 	{
@@ -17,9 +16,8 @@ bool UCastleGambleRouletteWidget::BindIsland(ACastleGambleSkyIsland* InIsland, F
 		return false;
 	}
 	Island = InIsland;
-	CardOptions->OnSelectionChanged.AddUniqueDynamic(this, &UCastleGambleRouletteWidget::HandleCardSelected);
-	CellOptions->OnSelectionChanged.AddUniqueDynamic(this, &UCastleGambleRouletteWidget::HandleCellSelected);
-	PlaceButton->OnClicked.AddUniqueDynamic(this, &UCastleGambleRouletteWidget::HandlePlace);
+	SetIsFocusable(true);
+	ReturnAllButton->OnClicked.AddUniqueDynamic(this, &UCastleGambleRouletteWidget::HandleReturnAll);
 	ReturnButton->OnClicked.AddUniqueDynamic(this, &UCastleGambleRouletteWidget::HandleReturn);
 	BlackButton->OnClicked.AddUniqueDynamic(this, &UCastleGambleRouletteWidget::HandleBlack);
 	RedButton->OnClicked.AddUniqueDynamic(this, &UCastleGambleRouletteWidget::HandleRed);
@@ -32,58 +30,22 @@ bool UCastleGambleRouletteWidget::BindIsland(ACastleGambleSkyIsland* InIsland, F
 	GreenLabel->SetText(FText::Format(INVTEXT("绿 ×{0}"), FText::AsNumber(Config.RouletteGreenMultiplier)));
 	BetLabel->SetText(INVTEXT("请选择押注颜色。"));
 	ResultLabel->SetText(InIsland->IsRouletteSpinning() ? INVTEXT("轮盘转动中…") : InIsland->GetRouletteResult());
-	RefreshBackpack();
-	return true;
-}
-
-void UCastleGambleRouletteWidget::RefreshBackpack()
-{
-	// 背包消费时主栏可能重排并补位，旧索引无法代表旧牌，要求玩家重新选择实际槽位。
-	TGuardValue<bool> Refresh(bRefreshingOptions, true);
-	CardOptions->ClearOptions();
-	const TArray<FCastleBuildingDescriptor> Cards = Island->GetBackpack()->GetItems();
-	for (int32 Index = 0; Index < Cards.Num(); ++Index)
-	{
-		const FCastleBuildingDescriptor& Card = Cards[Index];
-		const FText Color = StaticEnum<ECastleTileColor>()->GetDisplayNameTextByValue(static_cast<int64>(Card.Color));
-		const FText Label = FText::Format(INVTEXT("{0}. {1} · {2} {3}"), FText::AsNumber(Index + 1),
-			Card.Definition->DisplayName, Color, FText::AsNumber(Card.Number));
-		CardOptions->AddOption(Label.ToString());
-	}
-	RefreshCells();
-}
-
-void UCastleGambleRouletteWidget::RefreshCells()
-{
-	TGuardValue<bool> Refresh(bRefreshingOptions, true);
-	CellOptions->ClearOptions();
-	LegalCells.Reset();
-	FCastleBuildingDescriptor Card;
-	if (Island->GetBackpack()->TryGetItemAt(CardOptions->GetSelectedIndex(), Card))
-	{
-		LegalCells = Island->GetMiniBoard().GetLegalCells(Card);
-		for (const FIntVector& Cell : LegalCells)
-		{
-			CellOptions->AddOption(FString::Printf(TEXT("(%d, %d, %d)"), Cell.X, Cell.Y, Cell.Z));
-		}
-		if (LegalCells.IsEmpty()) { ResultLabel->SetText(INVTEXT("该房间没有同色或同数字的可用相邻格。")); }
-	}
 	RefreshActions();
+	return true;
 }
 
 void UCastleGambleRouletteWidget::RefreshActions()
 {
 	const bool bReady = !Island->IsRouletteSpinning();
 	const int32 Count = Island->GetMiniBoard().GetPlacements().Num();
-	CountLabel->SetText(FText::Format(INVTEXT("微缩区 {0} 张 · 以底板原点为 (0, 0, 0)"), FText::AsNumber(Count)));
-	CardOptions->SetIsEnabled(bReady);
-	CellOptions->SetIsEnabled(bReady && !LegalCells.IsEmpty());
-	PlaceButton->SetIsEnabled(bReady && LegalCells.IsValidIndex(CellOptions->GetSelectedIndex()));
+	CountLabel->SetText(FText::Format(INVTEXT("已下注 {0} 张房间卡"), FText::AsNumber(Count)));
+	ReturnAllButton->SetIsEnabled(bReady && Count > 0);
 	ReturnButton->SetIsEnabled(bReady && Count > 0);
 	BlackButton->SetIsEnabled(bReady);
 	RedButton->SetIsEnabled(bReady);
 	GreenButton->SetIsEnabled(bReady);
-	SpinButton->SetIsEnabled(bReady && Count > 0 && Bet.IsSet());
+	SpinButton->SetIsEnabled(bReady && Bet.IsSet());
+	CloseButton->SetIsEnabled(bReady);
 }
 
 void UCastleGambleRouletteWidget::SelectBet(const ECastleRouletteColor Color)
@@ -94,24 +56,13 @@ void UCastleGambleRouletteWidget::SelectBet(const ECastleRouletteColor Color)
 	RefreshActions();
 }
 
-void UCastleGambleRouletteWidget::HandleCardSelected(FString Item, ESelectInfo::Type SelectionType)
+void UCastleGambleRouletteWidget::HandleReturnAll()
 {
-	if (!bRefreshingOptions && Island.IsValid()) { RefreshCells(); }
-}
-
-void UCastleGambleRouletteWidget::HandleCellSelected(FString Item, ESelectInfo::Type SelectionType)
-{
-	if (!bRefreshingOptions && Island.IsValid()) { RefreshActions(); }
-}
-
-void UCastleGambleRouletteWidget::HandlePlace()
-{
-	const int32 CellIndex = CellOptions->GetSelectedIndex();
-	if (!Island.IsValid() || !LegalCells.IsValidIndex(CellIndex)) { return; }
+	if (!Island.IsValid()) { return; }
 	FText Reason;
-	const bool bPlaced = Island->TryPlaceCard(CardOptions->GetSelectedIndex(), LegalCells[CellIndex], Reason);
-	if (bPlaced) { RefreshBackpack(); }
-	ResultLabel->SetText(bPlaced ? INVTEXT("房间已放入微缩区。") : Reason);
+	const bool bReturned = Island->TryReturnAllCards(Reason);
+	if (bReturned) { RefreshActions(); }
+	ResultLabel->SetText(bReturned ? INVTEXT("未开转的房间卡已全部退回。") : Reason);
 }
 
 void UCastleGambleRouletteWidget::HandleReturn()
@@ -119,7 +70,7 @@ void UCastleGambleRouletteWidget::HandleReturn()
 	if (!Island.IsValid()) { return; }
 	FText Reason;
 	const bool bReturned = Island->TryReturnLastCard(Reason);
-	if (bReturned) { RefreshBackpack(); }
+	if (bReturned) { RefreshActions(); }
 	ResultLabel->SetText(bReturned ? INVTEXT("最后一张房间卡已撤回。") : Reason);
 }
 
@@ -132,13 +83,13 @@ void UCastleGambleRouletteWidget::HandleSpin()
 	if (!Island.IsValid() || !Bet.IsSet()) { return; }
 	FText Reason;
 	const bool bStarted = Island->TrySpinRoulette(Bet.GetValue(), Reason);
-	if (bStarted) { RefreshBackpack(); }
+	if (bStarted) { RefreshActions(); }
 	ResultLabel->SetText(bStarted ? INVTEXT("轮盘转动中…") : Reason);
 }
 
 void UCastleGambleRouletteWidget::FinishSpin(const FText& Result)
 {
-	RefreshBackpack();
+	RefreshActions();
 	ResultLabel->SetText(Result);
 }
 
@@ -146,4 +97,15 @@ void UCastleGambleRouletteWidget::HandleClose()
 {
 	FText Reason;
 	if (Island.IsValid() && !Island->TryCloseRoulettePanel(Reason)) { ResultLabel->SetText(Reason); }
+}
+
+FReply UCastleGambleRouletteWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
+{
+	if (InKeyEvent.GetKey() == EKeys::Escape)
+	{
+		// 开转期间也消费 Esc，保留轮盘模态直到结算动画结束。
+		HandleClose();
+		return FReply::Handled();
+	}
+	return Super::NativeOnPreviewKeyDown(InGeometry, InKeyEvent);
 }

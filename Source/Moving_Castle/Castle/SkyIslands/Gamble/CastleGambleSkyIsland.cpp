@@ -2,12 +2,22 @@
 
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
+#include "CastleBuildingBase.h"
+#include "CastleBuildingDefinition.h"
 #include "CastleEconomyComponent.h"
 #include "CastleGambleRouletteWidget.h"
+#include "CastleGroundGenerator.h"
+#include "CastleGroundTileActor.h"
 #include "CastleMainTowerComponent.h"
 #include "CastlePlayerController.h"
+#include "Blueprint/GameViewportSubsystem.h"
+#include "Components/BoxComponent.h"
+#include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
+#include "Engine/BlueprintGeneratedClass.h"
+#include "Engine/SCS_Node.h"
+#include "Engine/SimpleConstructionScript.h"
 #include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
 #include "Items/CastleBadgeDataAsset.h"
@@ -21,7 +31,6 @@
 namespace
 {
 	constexpr float SpinDuration = 1.5f;
-	const FVector MiniOrigin(-100.0, -315.0, 107.0);
 	const FLinearColor WheelColors[] = {{0.015f, 0.014f, 0.022f}, {0.86f, 0.045f, 0.055f}, {0.06f, 0.66f, 0.19f}};
 
 	FText GetColorName(const ECastleRouletteColor Color)
@@ -48,6 +57,31 @@ namespace
 	double SampleUnit(FRandomStream& Random)
 	{
 		return static_cast<double>(Random.GetUnsignedInt()) / 4294967296.0;
+	}
+
+	/** 用烹饪后仍存在的节点名解析跨蓝图或原生父组件，打包游戏也能读取造型。 */
+	const USceneComponent* FindMiniatureTemplateParent(USCS_Node& Node, const USimpleConstructionScript& Script,
+		UBlueprintGeneratedClass& BuildingClass)
+	{
+		if (const USCS_Node* Parent = Script.FindParentNode(&Node))
+		{
+			return Cast<USceneComponent>(Parent->GetActualComponentTemplate(&BuildingClass));
+		}
+		const FName ParentName = Node.ParentComponentOrVariableName;
+		if (ParentName.IsNone()) { return nullptr; }
+		if (Node.bIsParentComponentNative)
+		{
+			return Cast<USceneComponent>(BuildingClass.GetDefaultObject<AActor>()->GetDefaultSubobjectByName(ParentName));
+		}
+		for (auto* Class = &BuildingClass; Class; Class = Cast<UBlueprintGeneratedClass>(Class->GetSuperClass()))
+		{
+			if (Class->GetFName() != Node.ParentComponentOwnerClassName || !Class->SimpleConstructionScript) { continue; }
+			if (const auto* Parent = Class->SimpleConstructionScript->FindSCSNode(ParentName))
+			{
+				return Cast<USceneComponent>(Parent->GetActualComponentTemplate(&BuildingClass));
+			}
+		}
+		return nullptr;
 	}
 }
 
@@ -145,8 +179,6 @@ ACastleGambleSkyIsland::ACastleGambleSkyIsland()
 	MakeLabel(TEXT("RecyclerSign"), TEXT("BALLOON RECYCLER"), {-70, 530, 295}, 32);
 	SlotResultLabel = MakeLabel(TEXT("SlotResult"), TEXT("READY"), {-106, 10, 155}, 24);
 	RecyclerResultLabel = MakeLabel(TEXT("RecyclerResult"), TEXT("READY"), {-126, 530, 155}, 24);
-	MiniBoardSurface = MakeDisplay(TEXT("MiniBoardSurface"), GetRootComponent(), MiniOrigin - FVector(0, 0, 6), {1.65, 1.65, 0.12});
-	MakeLabel(TEXT("MiniBoardSign"), TEXT("ROOM BETS"), {-120, -315, 198}, 23);
 	WheelCenter = CreateDefaultSubobject<USceneComponent>(TEXT("WheelCenter"));
 	WheelCenter->SetupAttachment(GetRootComponent());
 	WheelCenter->SetRelativeLocation(FVector(-80, -550, 141));
@@ -190,15 +222,13 @@ bool ACastleGambleSkyIsland::OnInitializeIsland(const FCastleSkyIslandContext& C
 		return Reject(INVTEXT("赌博空岛需要已初始化的棋盘、背包、主塔、金币账户和徽章子系统。"), OutReason);
 	}
 	Backpack = Board->PrototypeBackpack;
-	MiniCellSize = Board->CellSize * Config->MiniBoardCellScale;
-	if (!FMath::IsFinite(MiniCellSize) || MiniCellSize <= 0) { return Reject(INVTEXT("微缩格的世界尺寸无效。"), OutReason); }
+	if (!BuildMiniGround(*Board, Context.Seed, OutReason)) { return false; }
 
 	RouletteRandom.Initialize(Context.Seed);
 	SlotRandom.Initialize(static_cast<int32>(static_cast<uint32>(Context.Seed) ^ 0x6f8135e9u));
 	SetTint(*Roulette, {0.12f, 0.07f, 0.11f});
 	SetTint(*Slot, {0.31f, 0.085f, 0.53f});
 	SetTint(*Recycler, {0.05f, 0.38f, 0.49f});
-	SetTint(*MiniBoardSurface, {0.065f, 0.11f, 0.17f});
 	SetTint(*RoulettePointer, {1.0f, 0.78f, 0.19f});
 	BuildWheel();
 	return true;
@@ -239,18 +269,27 @@ bool ACastleGambleSkyIsland::OpenRoulettePanel(FText& OutReason)
 	if (RoulettePanel) { return Reject(INVTEXT("轮盘面板已经打开。"), OutReason); }
 	UClass* Class = RoulettePanelClass.LoadSynchronous();
 	ACastlePlayerController* Controller = GetIslandContext().Controller.Get();
-	if (!Class || !Controller)
+	auto* Viewport = UGameViewportSubsystem::Get();
+	if (!Class || !Controller || !Viewport)
 	{
-		return Reject(FText::Format(INVTEXT("缺少轮盘面板 {0} 或有效玩家控制器。"), FText::FromString(RoulettePanelClass.ToString())), OutReason);
+		return Reject(FText::Format(INVTEXT("缺少轮盘面板 {0}、有效玩家控制器或视口子系统。"), FText::FromString(RoulettePanelClass.ToString())), OutReason);
 	}
 	auto* Panel = CreateWidget<UCastleGambleRouletteWidget>(Controller, Class);
 	if (!Panel) { return Reject(INVTEXT("无法实例化轮盘 WBP。"), OutReason); }
 	if (!Panel->BindIsland(this, OutReason)) { return Reject(OutReason, OutReason); }
+	// 在加入视口之前完整设置槽位，尺寸由 Border 内部布局决定。
+	FGameViewportWidgetSlot ViewportSlot;
+	ViewportSlot.Anchors = FAnchors(1.0f, 0.5f);
+	ViewportSlot.Alignment = FVector2D(1.0, 0.5);
+	ViewportSlot.Offsets = FMargin(-32.0f, 0.0f, 0.0f, 0.0f);
+	ViewportSlot.ZOrder = 53;
+	Viewport->SetWidgetSlot(Panel, ViewportSlot);
+	if (!Viewport->AddWidget(Panel, ViewportSlot))
+	{
+		Panel->RemoveFromParent();
+		return Reject(INVTEXT("无法将轮盘面板加入玩家视口。"), OutReason);
+	}
 	RoulettePanel = Panel;
-	Panel->AddToViewport(53);
-	Panel->SetAnchorsInViewport(FAnchors(1.0f, 0.5f));
-	Panel->SetAlignmentInViewport(FVector2D(1.0, 0.5));
-	Panel->SetPositionInViewport(FVector2D(-32.0, 0.0), false);
 	// E 键、视角和鼠标使用控制器同一份输入锁，老虎机只能在面板关闭后通过实际交互开启奖励弹窗。
 	Controller->SetDirectorModalState(true, false, Panel);
 	return true;
@@ -258,7 +297,12 @@ bool ACastleGambleSkyIsland::OpenRoulettePanel(FText& OutReason)
 
 bool ACastleGambleSkyIsland::TryCloseRoulettePanel(FText& OutReason)
 {
-	if (!TryReturnAllCards(OutReason)) { return false; }
+	if (IsRouletteSpinning())
+	{
+		OutReason = INVTEXT("请等待轮盘停稳后关闭面板。");
+		return false;
+	}
+	// 关闭模态只还回输入，赌注可继续在场景中摆放或撤回。
 	RemoveRoulettePanel();
 	return true;
 }
@@ -276,38 +320,78 @@ void ACastleGambleSkyIsland::RemoveRoulettePanel()
 
 bool ACastleGambleSkyIsland::TryPlaceCard(const int32 BackpackIndex, const FIntVector& Cell, FText& OutReason)
 {
-	if (bTransacting || IsRouletteSpinning() || !IsValid(Backpack))
+	if (!IsValid(Backpack))
 	{
-		return Reject(INVTEXT("轮盘正在结算或背包失效，无法放牌。"), OutReason);
+		return Reject(INVTEXT("背包失效，无法放牌。"), OutReason);
+	}
+	if (bTransacting || IsRouletteSpinning())
+	{
+		OutReason = INVTEXT("请等待轮盘停稳后放牌。");
+		UE_LOG(LogMoving_Castle, Warning, TEXT("赌博空岛 %s：%s"), *GetPathName(), *OutReason.ToString());
+		return false;
 	}
 	TGuardValue<bool> Transaction(bTransacting, true);
-	if (!MiniBoard.TryPlace(*Backpack, BackpackIndex, Cell, OutReason))
+	FCastleBuildingDescriptor Card;
+	if (!Backpack->TryGetItemAt(BackpackIndex, Card))
+	{
+		OutReason = INVTEXT("选中的背包槽位没有房间卡。");
+		UE_LOG(LogMoving_Castle, Warning, TEXT("赌博空岛 %s：%s"), *GetPathName(), *OutReason.ToString());
+		return false;
+	}
+	if (!MiniBoard.CanPlace(Card, Cell, OutReason))
 	{
 		UE_LOG(LogMoving_Castle, Warning, TEXT("赌博空岛 %s 拒绝微缩放牌：%s"), *GetPathName(), *OutReason.ToString());
 		return false;
 	}
-	DrawMiniCard(MiniBoard.GetPlacements().Last());
+	// 完成模型资产检查和表现创建后才消费卡；库存拒绝提交时销毁本次未提交的表现。
+	UBoxComponent* Room = CreateMiniCard(Card, Cell, OutReason);
+	if (!Room) { return false; }
+	MiniRooms.Add(Cell, Room);
+	if (!MiniBoard.TryPlace(*Backpack, BackpackIndex, Cell, OutReason))
+	{
+		RemoveMiniCard(Cell);
+		UE_LOG(LogMoving_Castle, Warning, TEXT("赌博空岛 %s 拒绝微缩放牌：%s"), *GetPathName(), *OutReason.ToString());
+		return false;
+	}
 	UE_LOG(LogMoving_Castle, Display, TEXT("赌博空岛 %s 下注区放入房间：%s。"), *GetPathName(), *Cell.ToString());
 	return true;
 }
 
 bool ACastleGambleSkyIsland::TryReturnLastCard(FText& OutReason)
 {
-	if (bTransacting || IsRouletteSpinning() || !IsValid(Backpack))
+	if (!IsValid(Backpack))
 	{
-		return Reject(INVTEXT("轮盘正在结算或背包失效，无法撤牌。"), OutReason);
+		return Reject(INVTEXT("背包失效，无法撤牌。"), OutReason);
+	}
+	if (bTransacting || IsRouletteSpinning())
+	{
+		OutReason = INVTEXT("请等待轮盘停稳后撤牌。");
+		UE_LOG(LogMoving_Castle, Warning, TEXT("赌博空岛 %s：%s"), *GetPathName(), *OutReason.ToString());
+		return false;
 	}
 	TGuardValue<bool> Transaction(bTransacting, true);
+	const auto Placements = MiniBoard.GetPlacements();
+	if (Placements.IsEmpty())
+	{
+		OutReason = INVTEXT("微缩区没有可撤回的房间卡。");
+		return false;
+	}
+	const FIntVector Cell = Placements.Last().Cell;
 	if (!MiniBoard.TryReturnLast(*Backpack, OutReason)) { return false; }
-	RemoveLastMiniCard();
+	RemoveMiniCard(Cell);
 	UE_LOG(LogMoving_Castle, Display, TEXT("赌博空岛 %s 已撤回最后一张房间卡。"), *GetPathName());
 	return true;
 }
 
 bool ACastleGambleSkyIsland::TryReturnAllCards(FText& OutReason)
 {
+	if (bTransacting || IsRouletteSpinning())
+	{
+		OutReason = INVTEXT("请等待轮盘停稳后退牌。");
+		return false;
+	}
 	if (MiniBoard.GetPlacements().IsEmpty()) { return true; }
-	if (bTransacting || !IsValid(Backpack))
+	if (!IsValid(Backpack))
 	{
 		return Reject(INVTEXT("未下注房间无法退回，背包失效或结算仍在进行。"), OutReason);
 	}
@@ -329,6 +413,7 @@ bool ACastleGambleSkyIsland::TrySpinRoulette(const ECastleRouletteColor Bet, FTe
 	if (Count == 0)
 	{
 		OutReason = INVTEXT("请先放入至少一张房间卡再开转。");
+		UE_LOG(LogMoving_Castle, Warning, TEXT("赌博空岛 %s：%s"), *GetPathName(), *OutReason.ToString());
 		return false;
 	}
 	TGuardValue<bool> Transaction(bTransacting, true);
@@ -377,7 +462,11 @@ void ACastleGambleSkyIsland::Tick(const float DeltaSeconds)
 void ACastleGambleSkyIsland::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	FText Reason;
+	// 已开转的牌在开始动画时已结算；停止动画后再返还仍在微缩区的原卡。
+	SpinTimeRemaining = 0.0f;
 	ensureAlwaysMsgf(TryReturnAllCards(Reason), TEXT("赌博空岛 %s 离岛退牌失败：%s"), *GetPathName(), *Reason.ToString());
+	ClearMiniCards();
+	ClearMiniGround();
 	RemoveRoulettePanel();
 	Super::EndPlay(EndPlayReason);
 }
@@ -536,43 +625,278 @@ void ACastleGambleSkyIsland::BuildWheel()
 	}
 }
 
-void ACastleGambleSkyIsland::DrawMiniCard(const FCastleMiniPlacement& Placement)
+bool ACastleGambleSkyIsland::BuildMiniGround(const ACastleBoard& Board, int32 Seed, FText& OutReason)
 {
+	const double Scale = Config->MiniBoardCellScale;
+	MiniCellSize = Board.CellSize * Scale;
+	MiniTileSize = Board.GroundTileSize * Scale;
+	MiniLayerHeight = Board.LayerHeight * Scale;
+	if (!FMath::IsFinite(MiniCellSize) || !FMath::IsFinite(MiniTileSize) || !FMath::IsFinite(MiniLayerHeight)
+		|| MiniCellSize <= 0.0 || MiniTileSize <= 0.0 || MiniTileSize > MiniCellSize || MiniLayerHeight <= 0.0)
+	{
+		return Reject(INVTEXT("主棋盘的格距、地面边长或层高无法用于微缩棋盘。"), OutReason);
+	}
+	const FIntPoint Size = Config->MiniBoardGridSize;
+	// 以轮盘后方、中央通道左侧的两个近边界定位；增大格数只向远离机台的方向扩展。
+	MiniOrigin = FVector(100.0 + MiniTileSize * 0.5, -275.0 - MiniTileSize * 0.5 - (Size.Y - 1) * MiniCellSize,
+		12.0 * Scale + 0.1);
+	FCastleGroundGenerationRequest Request;
+	Request.GridSize = FIntVector(Size.X, Size.Y, 1);
+	Request.Seed = Seed;
+	const auto Generated = GetDefault<UCastleRandomGroundGenerator>()->GenerateGround(Request);
+	if (!MiniBoard.InitializeGround(Generated.Cells, Size, OutReason)) { return Reject(OutReason, OutReason); }
+
+	FActorSpawnParameters Params;
+	Params.Owner = this;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	for (const FCastleGroundCell& Cell : Generated.Cells)
+	{
+		// 原地块厚 12 cm。出生点下移半厚，使实际顶面正好是零层建筑基底。
+		const FTransform Local(FQuat::Identity, GetMiniCellBase(Cell.Coordinate) - FVector::UpVector * (6.0 * Scale), FVector(Scale));
+		auto* Tile = GetWorld()->SpawnActor<ACastleGroundTileActor>(
+			ACastleGroundTileActor::StaticClass(), Local * GetActorTransform(), Params);
+		if (!Tile || !Tile->InitializeGroundCell(Cell, Board.GroundTileSize, Board.LayerHeight))
+		{
+			if (Tile) { Tile->Destroy(); }
+			ClearMiniGround();
+			return Reject(FText::Format(INVTEXT("微缩地面格 {0} 创建失败。"), FText::FromString(Cell.Coordinate.ToString())), OutReason);
+		}
+		Tile->AttachToActor(this, FAttachmentTransformRules::KeepWorldTransform);
+		MiniTiles.Add(Cell.Coordinate, Tile);
+	}
+	return true;
+}
+
+void ACastleGambleSkyIsland::ClearMiniGround()
+{
+	for (const auto& Entry : MiniTiles)
+	{
+		if (IsValid(Entry.Value)) { Entry.Value->Destroy(); }
+	}
+	MiniTiles.Reset();
+}
+
+FVector ACastleGambleSkyIsland::GetMiniCellBase(const FIntVector& Cell) const
+{
+	return MiniOrigin + FVector(Cell.X * MiniCellSize, Cell.Y * MiniCellSize, Cell.Z * MiniLayerHeight);
+}
+
+bool ACastleGambleSkyIsland::TryResolveIslandGridCursorTarget(const FVector& Start, const FVector& End,
+	FCastleGridCursorTarget& OutTarget) const
+{
+	OutTarget = FCastleGridCursorTarget();
+	FHitResult Hit;
+	// 保留首个真实遮挡命中，避免穿过机台、岛平台或其他房间选中后方格子。
+	const auto* Controller = GetIslandContext().Controller.Get();
+	const FCollisionQueryParams Query(SCENE_QUERY_STAT(CastleGambleGridCursor), false, Controller ? Controller->GetPawn() : nullptr);
+	if (!GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Query)) { return false; }
+	const FTransform Transform = GetActorTransform();
+	const FVector Normal = Transform.InverseTransformVectorNoScale(Hit.ImpactNormal);
+	const FVector Abs = Normal.GetAbs();
+	const int32 Axis = Abs.Z >= Abs.X && Abs.Z >= Abs.Y ? 2 : (Abs.X >= Abs.Y ? 0 : 1);
+	const bool bPositive = Normal[Axis] > 0.0;
+	FIntVector Cell;
+	bool bGround = false;
+	if (const auto* Tile = Cast<ACastleGroundTileActor>(Hit.GetActor()))
+	{
+		Cell = Tile->GetGroundCell().Coordinate;
+		if (MiniTiles.FindRef(Cell) != Tile || Hit.GetComponent() != Tile->GetTileMeshComponent() || Axis != 2 || !bPositive)
+		{
+			return false;
+		}
+		bGround = true;
+	}
+	else
+	{
+		if (Hit.GetActor() != this) { return false; }
+		const auto* RoomCell = MiniRooms.FindKey(Cast<UBoxComponent>(Hit.GetComponent()));
+		if (!RoomCell) { return false; }
+		Cell = *RoomCell;
+	}
+
+	// 地面顶面直接映射至 Z=0，房间的每一面都映射至其外侧一格。
+	const ECastleGridFace Faces[3][2] = {
+		{ECastleGridFace::NegativeX, ECastleGridFace::PositiveX},
+		{ECastleGridFace::NegativeY, ECastleGridFace::PositiveY},
+		{ECastleGridFace::Down, ECastleGridFace::Up}
+	};
+	FIntVector Adjacent = Cell;
+	if (!bGround) { Adjacent[Axis] += bPositive ? 1 : -1; }
+	const double Skin = Config->MiniBoardCellScale;
+	FVector Center = GetMiniCellBase(Cell) + FVector::UpVector * (bGround ? 0.0 : MiniLayerHeight * 0.5);
+	Center[Axis] = Transform.InverseTransformPosition(Hit.ImpactPoint)[Axis] + Normal[Axis] * 1.5 * Skin;
+	FVector Size(MiniTileSize, MiniTileSize, MiniLayerHeight);
+	Size[Axis] = 2.0 * Skin;
+	OutTarget.Cell = Cell;
+	OutTarget.Face = Faces[Axis][bPositive];
+	OutTarget.AdjacentCell = Adjacent;
+	OutTarget.Surface = bGround ? ECastleGridCursorSurface::Ground : ECastleGridCursorSurface::Building;
+	OutTarget.WorldNormal = Hit.ImpactNormal;
+	OutTarget.IndicatorTransform = FTransform(Transform.GetRotation(), Transform.TransformPosition(Center),
+		Size * Transform.GetScale3D() / 100.0);
+	OutTarget.bValid = true;
+	return true;
+}
+
+bool ACastleGambleSkyIsland::CanPlaceCardAtIslandCursor(const FCastleGridCursorTarget& Target, int32 BackpackIndex) const
+{
+	FCastleBuildingDescriptor Card;
+	FText Reason;
+	return Target.bValid && !IsRouletteSpinning() && !bTransacting && IsValid(Backpack)
+		&& Backpack->TryGetItemAt(BackpackIndex, Card) && MiniBoard.CanPlace(Card, Target.AdjacentCell, Reason);
+}
+
+bool ACastleGambleSkyIsland::TryPlaceBackpackAtIslandCursor(const FCastleGridCursorTarget& Target, int32 BackpackIndex,
+	FText& OutReason)
+{
+	return Target.bValid && TryPlaceCard(BackpackIndex, Target.AdjacentCell, OutReason);
+}
+
+bool ACastleGambleSkyIsland::TryRetractLastIslandPlacement(FText& OutReason)
+{
+	return TryReturnLastCard(OutReason);
+}
+
+UBoxComponent* ACastleGambleSkyIsland::CreateMiniCard(const FCastleBuildingDescriptor& Card, const FIntVector& Cell,
+	FText& OutReason)
+{
+	const auto* Level = IsValid(Card.Definition) ? Card.Definition->FindLevel(Card.Level) : nullptr;
+	if (!Level || !Level->BuildingClass)
+	{
+		Reject(FText::Format(INVTEXT("房间定义 {0} 缺少 {1} 级建筑类。"),
+			FText::FromString(GetPathNameSafe(Card.Definition)), Card.Level), OutReason);
+		return nullptr;
+	}
+
+	// 读取原生和蓝图组件模板的层级。这里只创建普通网格组件，从不生成或初始化建筑 Actor。
+	UClass* BuildingClass = Level->BuildingClass.Get();
+	auto* GeneratedClass = Cast<UBlueprintGeneratedClass>(BuildingClass);
+	TMap<const USceneComponent*, const USceneComponent*> ScriptParents;
+	for (auto* Class = GeneratedClass; Class; Class = Cast<UBlueprintGeneratedClass>(Class->GetSuperClass()))
+	{
+		auto* Script = Class->SimpleConstructionScript.Get();
+		if (!Script) { continue; }
+		for (USCS_Node* Node : Script->GetAllNodes())
+		{
+			auto* Component = Cast<USceneComponent>(Node->GetActualComponentTemplate(GeneratedClass));
+			if (!Component) { continue; }
+			const USceneComponent* Parent = FindMiniatureTemplateParent(*Node, *Script, *GeneratedClass);
+			if (!Parent && !Node->ParentComponentOrVariableName.IsNone())
+			{
+				Reject(FText::Format(INVTEXT("建筑类 {0} 的模型组件 {1} 缺少已配置的父组件 {2}。"),
+					FText::FromString(BuildingClass->GetPathName()), FText::FromName(Node->GetVariableName()),
+					FText::FromName(Node->ParentComponentOrVariableName)), OutReason);
+				return nullptr;
+			}
+			ScriptParents.Add(Component, Parent);
+		}
+	}
+	TArray<const UStaticMeshComponent*> Templates;
+	AActor::GetActorClassDefaultComponents<UStaticMeshComponent>(BuildingClass, Templates);
+	TArray<TPair<const UStaticMeshComponent*, FTransform>> Parts;
+	FBox Bounds(ForceInit);
+	for (const UStaticMeshComponent* Template : Templates)
+	{
+		if (!Template->IsVisible() || !Template->GetStaticMesh()) { continue; }
+		FTransform Local = FTransform::Identity;
+		bool bGameplayPart = false;
+		for (const USceneComponent* Part = Template; Part;)
+		{
+			if (Part->IsA<UBuildingGameplayRootComponent>())
+			{
+				bGameplayPart = true;
+				break;
+			}
+			Local = Local * Part->GetRelativeTransform();
+			const auto* ScriptParent = ScriptParents.Find(Part);
+			Part = ScriptParent ? *ScriptParent : Part->GetAttachParent();
+		}
+		if (bGameplayPart) { continue; }
+		Parts.Emplace(Template, Local);
+		Bounds += Template->GetStaticMesh()->GetBoundingBox().TransformBy(Local);
+	}
+	const FVector ModelSize = Bounds.GetSize();
+	if (Parts.IsEmpty() || ModelSize.ContainsNaN() || ModelSize.GetMin() <= UE_SMALL_NUMBER)
+	{
+		Reject(FText::Format(INVTEXT("建筑类 {0} 缺少有效的可见静态网格。"),
+			FText::FromString(BuildingClass->GetPathName())), OutReason);
+		return nullptr;
+	}
+
+	// 押注卡固定占一微缩格；保留作者造型比例并把多格等级模型收进同一格。
+	const double Scale = FMath::Min(Config->MiniBoardCellScale, FMath::Min(
+		MiniTileSize * 0.94 / FMath::Max(ModelSize.X, ModelSize.Y), MiniLayerHeight * 0.94 / ModelSize.Z));
+	const FVector Extent(MiniTileSize * 0.5, MiniTileSize * 0.5, MiniLayerHeight * 0.5);
+	auto* Room = NewObject<UBoxComponent>(this);
+	Room->SetupAttachment(GetRootComponent());
+	Room->SetRelativeLocation(GetMiniCellBase(Cell) + FVector::UpVector * Extent.Z);
+	Room->SetBoxExtent(Extent);
+	Room->SetCanEverAffectNavigation(false);
+	Room->SetGenerateOverlapEvents(false);
+	Room->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	Room->SetCollisionResponseToAllChannels(ECR_Ignore);
+	Room->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+	Room->RegisterComponent();
+	const FVector ModelBase(Bounds.GetCenter().X, Bounds.GetCenter().Y, Bounds.Min.Z);
+	for (const auto& Part : Parts)
+	{
+		auto* Mesh = NewObject<UStaticMeshComponent>(this);
+		Mesh->SetupAttachment(Room);
+		Mesh->SetCanEverAffectNavigation(false);
+		Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Mesh->SetRelativeTransform(FTransform(Part.Value.GetRotation(),
+			(Part.Value.GetLocation() - ModelBase) * Scale - FVector::UpVector * Extent.Z,
+			Part.Value.GetScale3D() * Scale));
+		Mesh->SetStaticMesh(Part.Key->GetStaticMesh());
+		for (int32 Index = 0; Index < Part.Key->GetNumMaterials(); ++Index)
+		{
+			Mesh->SetMaterial(Index, Part.Key->GetMaterial(Index));
+		}
+		Mesh->RegisterComponent();
+	}
+	// 色号牌沿近端立面显示。数字仍来自原卡，徽章和建筑运算均不介入。
 	const FLinearColor Colors[] = {{0.84f, 0.06f, 0.07f}, {0.06f, 0.25f, 0.82f}, {0.05f, 0.61f, 0.18f},
 		{0.94f, 0.64f, 0.04f}, {0.54f, 0.12f, 0.77f}};
-	const int32 Color = static_cast<int32>(Placement.Card.Color) - static_cast<int32>(ECastleTileColor::Red);
+	const int32 Color = static_cast<int32>(Card.Color) - static_cast<int32>(ECastleTileColor::Red);
 	check(Color >= 0 && Color < UE_ARRAY_COUNT(Colors));
-	const FVector Position = MiniOrigin + (FVector(Placement.Cell) + FVector(0, 0, 0.5)) * MiniCellSize;
-	auto* Block = NewObject<UStaticMeshComponent>(this);
-	Block->SetupAttachment(GetRootComponent());
-	Block->SetStaticMesh(CubeMesh);
-	Block->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	Block->SetRelativeLocation(Position);
-	Block->SetRelativeScale3D(FVector(MiniCellSize * 0.92 / 100.0));
-	SetTint(*Block, Colors[Color]);
-	MiniBlocks.Add(Block);
-	Block->RegisterComponent();
-
-	// 在朝向到达点的侧面写实际卡号，并保留桌面俯视时也能看到的彩色方块。
+	auto* Plate = NewObject<UStaticMeshComponent>(this);
+	Plate->SetupAttachment(Room);
+	Plate->SetCanEverAffectNavigation(false);
+	Plate->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Plate->SetStaticMesh(CubeMesh);
+	Plate->SetRelativeLocation(FVector(-Extent.X, 0, 0));
+	Plate->SetRelativeScale3D(FVector(0.025, MiniTileSize * 0.35 / 100.0, MiniTileSize * 0.32 / 100.0));
+	SetTint(*Plate, Colors[Color]);
+	Plate->RegisterComponent();
 	auto* Label = NewObject<UTextRenderComponent>(this);
-	Label->SetupAttachment(GetRootComponent());
-	Label->SetRelativeLocation(Position - FVector(MiniCellSize * 0.47, 0, 0));
+	Label->SetupAttachment(Room);
+	Label->SetRelativeLocation(FVector(-Extent.X - 2.0, 0, 0));
 	Label->SetRelativeRotation(FRotator(0, 180, 0));
 	Label->SetHorizontalAlignment(EHTA_Center);
 	Label->SetVerticalAlignment(EVRTA_TextCenter);
-	Label->SetWorldSize(MiniCellSize * 0.53);
-	Label->SetText(FText::AsNumber(Placement.Card.Number));
-	MiniLabels.Add(Label);
+	Label->SetWorldSize(MiniTileSize * 0.3);
+	Label->SetText(FText::AsNumber(Card.Number));
+	Label->SetCanEverAffectNavigation(false);
 	Label->RegisterComponent();
+	return Room;
 }
 
-void ACastleGambleSkyIsland::RemoveLastMiniCard()
+void ACastleGambleSkyIsland::RemoveMiniCard(const FIntVector& Cell)
 {
-	MiniLabels.Pop(EAllowShrinking::No)->DestroyComponent();
-	MiniBlocks.Pop(EAllowShrinking::No)->DestroyComponent();
+	auto* Room = MiniRooms.FindRef(Cell).Get();
+	check(Room);
+	TArray<USceneComponent*> VisualParts;
+	Room->GetChildrenComponents(false, VisualParts);
+	for (USceneComponent* Part : VisualParts) { Part->DestroyComponent(); }
+	Room->DestroyComponent();
+	MiniRooms.Remove(Cell);
 }
 
 void ACastleGambleSkyIsland::ClearMiniCards()
 {
-	while (!MiniBlocks.IsEmpty()) { RemoveLastMiniCard(); }
+	while (!MiniRooms.IsEmpty())
+	{
+		const FIntVector Cell = MiniRooms.CreateConstIterator().Key();
+		RemoveMiniCard(Cell);
+	}
 }

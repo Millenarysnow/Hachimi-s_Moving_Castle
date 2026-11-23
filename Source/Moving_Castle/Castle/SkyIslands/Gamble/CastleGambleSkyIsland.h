@@ -5,6 +5,9 @@
 #include "CastleMiniPlacementBoard.h"
 #include "CastleGambleSkyIsland.generated.h"
 
+class ACastleBoard;
+class ACastleGroundTileActor;
+class UBoxComponent;
 class UCastleBadgeSubsystem;
 class UCastleEconomyComponent;
 class UCastleGambleRouletteWidget;
@@ -38,13 +41,20 @@ public:
 	ACastleGambleSkyIsland();
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void EndPlay(EEndPlayReason::Type EndPlayReason) override;
+	virtual bool TryResolveIslandGridCursorTarget(const FVector& Start, const FVector& End,
+		FCastleGridCursorTarget& OutTarget) const override;
+	virtual bool CanPlaceCardAtIslandCursor(const FCastleGridCursorTarget& Target, int32 BackpackIndex) const override;
+	virtual bool TryPlaceBackpackAtIslandCursor(const FCastleGridCursorTarget& Target, int32 BackpackIndex,
+		FText& OutReason) override;
+	virtual bool TryRetractLastIslandPlacement(FText& OutReason) override;
 
-	/** 面板使用正式背包槽位和微缩格坐标，变动时重新枚举。 */
+	/** 验收和玩家原生输入共享正式背包及微缩格数据。 */
 	UCastleBackpackComponent* GetBackpack() const { return Backpack; }
 	const FCastleMiniPlacementBoard& GetMiniBoard() const { return MiniBoard; }
 	const UCastleGambleSkyIslandDataAsset* GetGambleConfig() const { return Config; }
 	bool TryPlaceCard(int32 BackpackIndex, const FIntVector& Cell, FText& OutReason);
 	bool TryReturnLastCard(FText& OutReason);
+	bool TryReturnAllCards(FText& OutReason);
 	bool TrySpinRoulette(ECastleRouletteColor Bet, FText& OutReason);
 	bool TryCloseRoulettePanel(FText& OutReason);
 	bool IsRouletteSpinning() const { return SpinTimeRemaining > 0; }
@@ -65,16 +75,18 @@ private:
 	bool CanUseMachine(const FCastleSkyIslandInteractContext& Context, FText& OutReason) const;
 	bool OpenRoulettePanel(FText& OutReason);
 	void RemoveRoulettePanel();
-	bool TryReturnAllCards(FText& OutReason);
 	bool TryPlaySlot(FText& OutReason);
 	bool TrySettleSlot(ECastleSlotPrize Prize, FRandomStream& Candidate, FText& OutSummary, FText& OutReason);
 	bool TryRecycleBalloon(FText& OutReason);
 	bool Reject(const FText& Reason, FText& OutReason) const;
 	void ShowResult(const FText& Result) const;
 
-	/** 微缩块和条纹仅为展示；只允许主机台被空岛交互射线命中。 */
-	void DrawMiniCard(const FCastleMiniPlacement& Placement);
-	void RemoveLastMiniCard();
+	/** 模型由静态网格模板构建；六面查询盒与房间的业务 Actor 完全独立。 */
+	bool BuildMiniGround(const ACastleBoard& Board, int32 Seed, FText& OutReason);
+	void ClearMiniGround();
+	FVector GetMiniCellBase(const FIntVector& Cell) const;
+	UBoxComponent* CreateMiniCard(const FCastleBuildingDescriptor& Card, const FIntVector& Cell, FText& OutReason);
+	void RemoveMiniCard(const FIntVector& Cell);
 	void ClearMiniCards();
 	void BuildWheel();
 	void SetTint(UStaticMeshComponent& Surface, const FLinearColor& Color);
@@ -94,14 +106,13 @@ private:
 	UPROPERTY() TObjectPtr<UCastleGambleMachineComponent> Roulette;
 	UPROPERTY() TObjectPtr<UCastleGambleMachineComponent> Slot;
 	UPROPERTY() TObjectPtr<UCastleGambleMachineComponent> Recycler;
-	UPROPERTY() TObjectPtr<UStaticMeshComponent> MiniBoardSurface;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> RoulettePointer;
 	UPROPERTY() TObjectPtr<USceneComponent> WheelCenter;
 	UPROPERTY() TArray<TObjectPtr<UInstancedStaticMeshComponent>> WheelStripes;
 	UPROPERTY() TObjectPtr<UStaticMesh> CubeMesh;
 	UPROPERTY() TObjectPtr<UMaterialInterface> TintMaterial;
-	UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> MiniBlocks;
-	UPROPERTY() TArray<TObjectPtr<UTextRenderComponent>> MiniLabels;
+	UPROPERTY(Transient) TMap<FIntVector, TObjectPtr<ACastleGroundTileActor>> MiniTiles;
+	UPROPERTY(Transient) TMap<FIntVector, TObjectPtr<UBoxComponent>> MiniRooms;
 	UPROPERTY() TObjectPtr<UTextRenderComponent> SlotResultLabel;
 	UPROPERTY() TObjectPtr<UTextRenderComponent> RecyclerResultLabel;
 	UPROPERTY(Transient) TObjectPtr<UCastleGambleRouletteWidget> RoulettePanel;
@@ -112,6 +123,9 @@ private:
 	double SpinStartYaw = 0;
 	double SpinTargetYaw = 0;
 	double MiniCellSize = 0;
+	double MiniTileSize = 0;
+	double MiniLayerHeight = 0;
+	FVector MiniOrigin = FVector::ZeroVector;
 	bool bTransacting = false;
 	FText RouletteResult;
 };
