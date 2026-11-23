@@ -134,8 +134,10 @@ private:
 		if (!Test.TestTrue(TEXT("准备确定性空岛节点"), Director.PrepareNodes(2, Director.Nodes, Reason))) { return; }
 		for (ACastleDirectorNodeActor* Node : Director.Nodes) { Node->ActivateNode(); }
 		ACastleDirectorNodeActor* IslandNode = Director.Nodes.Last();
+		// 正式资产已登记四类玩法；仅清空当前用例的世界内副本，独立验证缺少映射的拒绝路径。
+		Director.Config->SkyIslandClasses.Reset();
 		Test.AddExpectedError(TEXT("尚未配置具体玩法类"), EAutomationExpectedErrorFlags::Contains, 1);
-		Test.TestFalse(TEXT("正式配置留空时拒绝进入"), Director.TryEnterSkyIsland(*IslandNode, *Director.Config, Reason));
+		Test.TestFalse(TEXT("配置副本留空时拒绝进入"), Director.TryEnterSkyIsland(*IslandNode, *Director.Config, Reason));
 		Test.TestEqual(TEXT("拒绝后仍可选择其他节点"), Director.Phase, ECastleDirectorPhase::Editing);
 		Director.Config->SkyIslandClasses.Add(ECastleSkyIslandType::Rest, ACastleSkyIslandTestFixture::StaticClass());
 		BeforeIsland = Director.ClearedSteps;

@@ -19,6 +19,7 @@ class UCastlePendingRoomReward;
 class UCastleTowerUpgradeRewardWidget;
 class UCastleWildcardRoomPickerWidget;
 class ACastleSkyIslandBase;
+enum class ECastleSkyIslandType : uint8;
 struct FCastleBadgeDefinition;
 
 /** 原生阶段事件不承担流程决策，界面和输入只监听最终状态。 */
@@ -56,6 +57,8 @@ public:
 	bool RequestIslandRoomReward(ACastleSkyIslandBase* Island, UCastlePendingRoomReward* Reward, FText& OutReason);
 	bool RequestIslandBadgeReward(ACastleSkyIslandBase* Island, const FCastleBadgeDefinition& Badge, FText& OutReason);
 #if !UE_BUILD_SHIPPING
+	/** 在编辑阶段从本局正式配置指定空岛，沿用节点入岛与离岛的事务。 */
+	bool TryEnterSkyIslandByTypeForDebug(ECastleSkyIslandType Type, FText& OutReason);
 	bool TryEnterSkyIslandFixture(FText& OutReason);
 #endif
 	int32 GetExperience() const { return Experience; }
@@ -113,8 +116,11 @@ private:
 	void UpdatePresentation();
 	/** 节点重叠只入队；实际开战、NPC 回收都在 Mass 未处理的游戏线程边界执行。 */
 	bool TryStartSelectedBattle(ACastleDirectorNodeActor* Node, FText& OutReason);
-	/** 节点与验收命令共用同一工厂和传送事务。 */
+	/** 真实节点先根据关数和节点序号确定类型及玩法种子。 */
 	bool TryEnterSkyIsland(ACastleDirectorNodeActor& Node, const UCastleDirectorConfigDataAsset& IslandConfig, FText& OutReason);
+	/** 统一提交配置查表、生成和传送。节点参数用于报告真实节点的路径。 */
+	bool TryEnterConfiguredSkyIsland(const UCastleDirectorConfigDataAsset& IslandConfig, ECastleSkyIslandType Type,
+		int32 Seed, const ACastleDirectorNodeActor* Node, FText& OutReason);
 	bool TryDepartSkyIsland(FText& OutReason);
 	bool ValidateIslandAction(const ACastleSkyIslandBase* Island, FText& OutReason) const;
 	bool RecallBattleNPCs(FText& OutReason);

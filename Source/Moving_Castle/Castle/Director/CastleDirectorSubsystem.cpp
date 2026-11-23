@@ -445,33 +445,52 @@ bool UCastleDirectorSubsystem::RecallBattleNPCs(FText& OutReason)
 bool UCastleDirectorSubsystem::TryEnterSkyIsland(ACastleDirectorNodeActor& Node,
 	const UCastleDirectorConfigDataAsset& IslandConfig, FText& OutReason)
 {
-	const auto Reject = [&](const FText& Reason)
-	{
-		OutReason = Reason;
-		UE_LOG(LogMoving_Castle, Error, TEXT("导演配置 %s 空岛节点 %s 进入失败：%s"),
-			*IslandConfig.GetPathName(), *Node.GetPathName(), *Reason.ToString());
-		return false;
-	};
-	APawn* Pawn = Controller ? Controller->GetPawn() : nullptr;
-	if (!bRunning || Phase != ECastleDirectorPhase::Editing || !UpgradeRewards.IsEmpty() || WildcardPicker
-		|| !IsValid(Pawn) || !Pawn->GetMovementComponent() || !IsValid(Board) || !IsValid(Tower) || !IsValid(Tower->GetOwner())
-		|| !IsValid(PatrolRoute) || ActiveSkyIsland || !Nodes.Contains(&Node)
+	const int32 NodeIndex = Nodes.IndexOfByKey(&Node);
+	if (NodeIndex == INDEX_NONE
 		|| (Node.GetKind() != ECastleDirectorNodeKind::RewardIsland && Node.GetKind() != ECastleDirectorNodeKind::RestIsland))
 	{
-		return Reject(INVTEXT("当前阶段、玩家、主塔或空岛节点无效。"));
+		OutReason = INVTEXT("当前节点批次中没有该空岛节点。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演配置 %s 空岛节点 %s 进入失败：%s"),
+			*IslandConfig.GetPathName(), *Node.GetPathName(), *OutReason.ToString());
+		return false;
 	}
 	// 仅用本局种子、关数和节点序号决策；拒绝进入或再次选择不推进随机流。
 	const uint32 Seed = static_cast<uint32>(IslandConfig.RunSeed) ^ (static_cast<uint32>(GetNextStep()) * 0x9e3779b9u)
-		^ (static_cast<uint32>(Nodes.IndexOfByKey(&Node)) * 0x85ebca6bu);
+		^ (static_cast<uint32>(NodeIndex) * 0x85ebca6bu);
 	FRandomStream Random(static_cast<int32>(Seed));
 	const auto Type = Node.GetKind() == ECastleDirectorNodeKind::RestIsland ? ECastleSkyIslandType::Rest
 		: static_cast<ECastleSkyIslandType>(Random.RandRange(0, 2));
-	const TSubclassOf<ACastleSkyIslandBase> Class = IslandConfig.SkyIslandClasses.FindRef(Type);
-	if (!Class || Class->HasAnyClassFlags(CLASS_Abstract))
+	return TryEnterConfiguredSkyIsland(IslandConfig, Type, Random.GetCurrentSeed(), &Node, OutReason);
+}
+
+bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirectorConfigDataAsset& IslandConfig,
+	const ECastleSkyIslandType Type, const int32 Seed, const ACastleDirectorNodeActor* Node, FText& OutReason)
+{
+	OutReason = FText::GetEmpty();
+	const FText TypeName = StaticEnum<ECastleSkyIslandType>()->GetDisplayNameTextByValue(static_cast<int64>(Type));
+	const auto Reject = [&](const FText& Reason)
 	{
-		return Reject(FText::Format(INVTEXT("空岛类型 {0} 尚未配置具体玩法类。"),
-			StaticEnum<ECastleSkyIslandType>()->GetDisplayNameTextByValue(static_cast<int64>(Type))));
+		OutReason = Reason;
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演配置 %s 空岛类型 %s，入口 %s：%s"),
+			*IslandConfig.GetPathName(), *TypeName.ToString(), Node ? *Node->GetPathName() : TEXT("CastleEnterSkyIsland"),
+			*Reason.ToString());
+		return false;
+	};
+	// 待领奖励或已激活的空岛仍占用单局事务，任何入口都必须先通过同一组编辑阶段检查。
+	APawn* Pawn = IsValid(Controller) ? Controller->GetPawn() : nullptr;
+	if (!bRunning || Phase != ECastleDirectorPhase::Editing || !UpgradeRewards.IsEmpty() || WildcardPicker
+		|| !IsValid(Pawn) || !Pawn->GetMovementComponent() || !IsValid(Board) || !IsValid(Tower) || !IsValid(Tower->GetOwner())
+		|| !IsValid(PatrolRoute) || ActiveSkyIsland)
+	{
+		return Reject(INVTEXT("只有可操作的编辑阶段且玩家、主塔与路线有效时才能进入空岛。"));
 	}
+	UClass* Class = IslandConfig.SkyIslandClasses.FindRef(Type).Get();
+	if (!IsValid(Class) || Class->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists))
+	{
+		return Reject(FText::Format(INVTEXT("空岛类型 {0} 尚未配置具体玩法类，或已登记的类无效：{1}。"),
+			TypeName, FText::FromString(GetPathNameSafe(Class))));
+	}
+	// 所有玩法依赖由空岛初始化验证。准备失败的岛立即销毁，玩家和当前节点留在主塔。
 	const FVector Origin = Tower->GetOwner()->GetActorLocation() + Board->GetActorForwardVector() * IslandConfig.SkyIslandSpawnDistance
 		+ FVector::UpVector * IslandConfig.SkyIslandHeightOffset;
 	const FRotator Rotation(0, Board->GetActorRotation().Yaw, 0);
@@ -479,15 +498,15 @@ bool UCastleDirectorSubsystem::TryEnterSkyIsland(ACastleDirectorNodeActor& Node,
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	ACastleSkyIslandBase* Island = GetWorld()->SpawnActor<ACastleSkyIslandBase>(Class, Origin, Rotation, Params);
 	if (!IsValid(Island)) { return Reject(INVTEXT("已登记的空岛类无法生成。")); }
-	const FCastleSkyIslandContext Context{this, Controller.Get(), Type, GetNextStep(), Random.GetCurrentSeed()};
+	const FCastleSkyIslandContext Context{this, Controller.Get(), Type, GetNextStep(), Seed};
 	if (!Island->InitializeIsland(Context, OutReason) || !Board->SetPlacementSurfacePresentationHidden(true, OutReason))
 	{
 		Island->Destroy();
 		return Reject(OutReason);
 	}
 	const FTransform Arrival = Island->GetPlayerArrivalTransform();
-	IslandReturnTransform = Pawn->GetActorTransform();
-	IslandReturnControlRotation = Controller->GetControlRotation();
+	const FTransform ReturnTransform = Pawn->GetActorTransform();
+	const FRotator ReturnControlRotation = Controller->GetControlRotation();
 	if (!Pawn->TeleportTo(Arrival.GetLocation(), Arrival.Rotator()))
 	{
 		Island->Destroy();
@@ -495,6 +514,9 @@ bool UCastleDirectorSubsystem::TryEnterSkyIsland(ACastleDirectorNodeActor& Node,
 		if (!Board->SetPlacementSurfacePresentationHidden(false, RestoreReason)) { return Reject(RestoreReason); }
 		return Reject(INVTEXT("玩家无法传送至空岛到达锚点。"));
 	}
+	// 传送成功后再提交返塔信息，并移除已离开编辑阶段的节点及其待处理重叠。
+	IslandReturnTransform = ReturnTransform;
+	IslandReturnControlRotation = ReturnControlRotation;
 	Pawn->GetMovementComponent()->StopMovementImmediately();
 	Controller->SetControlRotation(Arrival.Rotator());
 	Controller->GetShop()->CloseShop();
@@ -504,6 +526,7 @@ bool UCastleDirectorSubsystem::TryEnterSkyIsland(ACastleDirectorNodeActor& Node,
 	ActiveSkyIsland = Island;
 	bIslandShopGranted = false;
 	Island->OnDepartureRequested.AddWeakLambda(this, [this] { bDepartureRequested = true; });
+	PendingNode.Reset();
 	DestroyNodes();
 	SetPhase(ECastleDirectorPhase::SkyIsland);
 	ShowMessage(FText::Format(INVTEXT("已到达空岛。瞄准物件并按 {0} 交互。"), IslandConfig.SkyIslandInteractKey.GetDisplayName()), false);
@@ -542,6 +565,10 @@ bool UCastleDirectorSubsystem::TryDepartSkyIsland(FText& OutReason)
 	Controller->GetShop()->CloseShop();
 	ActiveSkyIsland->Destroy();
 	ActiveSkyIsland = nullptr;
+	// 返塔成功才丢弃本次访问的锚点与临时商店领取状态。
+	IslandReturnTransform = FTransform::Identity;
+	IslandReturnControlRotation = FRotator::ZeroRotator;
+	bIslandShopGranted = false;
 	++ClearedSteps;
 	Nodes = MoveTemp(Candidates);
 	SetPhase(ECastleDirectorPhase::Editing);
@@ -616,6 +643,20 @@ bool UCastleDirectorSubsystem::RequestIslandBadgeReward(ACastleSkyIslandBase* Is
 }
 
 #if !UE_BUILD_SHIPPING
+bool UCastleDirectorSubsystem::TryEnterSkyIslandByTypeForDebug(const ECastleSkyIslandType Type, FText& OutReason)
+{
+	if (!IsValid(Config))
+	{
+		const FString ConfigPath = GetDefault<UCastleDirectorSettings>()->DirectorConfig.ToString();
+		OutReason = FText::FromString(FString::Printf(TEXT("正式导演配置 %s 未加载。"), *ConfigPath));
+		UE_LOG(LogMoving_Castle, Error, TEXT("CastleEnterSkyIsland：%s"), *OutReason.ToString());
+		return false;
+	}
+	// 调试入口无需场上有奖励节点，按本局种子和步数生成稳定的玩法种子。
+	const uint32 Seed = static_cast<uint32>(Config->RunSeed) ^ (static_cast<uint32>(GetNextStep()) * 0x9e3779b9u);
+	return TryEnterConfiguredSkyIsland(*Config, Type, static_cast<int32>(Seed), nullptr, OutReason);
+}
+
 bool UCastleDirectorSubsystem::TryEnterSkyIslandFixture(FText& OutReason)
 {
 	ACastleDirectorNodeActor* Selected = nullptr;
