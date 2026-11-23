@@ -100,10 +100,13 @@ public:
 				}
 				CastleBuildingTests::CompletePlacement(Placed);
 			}
-			// 双门在相反两侧，补齐绕塔的两个直角连接格，确保开环不会穿过塔身。
+			// 双门在相反两侧。每个拐角用炮塔的颜色与门侧房间的数字，保证两道接缝都同色或同号。
 			BridgeCard.Definition = Board->FindBuildingDefinition(ECastleBuildingType::NormalRoom);
-			for (const int32 Side : {1, -1})
+			for (const int32 Side : {-1, 1})
 			{
+				const ACastleBuildingBase* DoorRoom = Board->GetBuildingAt(Base + FIntVector(Side, 0, 0));
+				if (!Test->TestNotNull(TEXT("双门外各有站立房间"), DoorRoom)) { return true; }
+				BridgeCard.Number = DoorRoom->GetBuildingNumber();
 				FCastleGridCursorTarget Corner;
 				Corner.bValid = true;
 				Corner.Surface = ECastleGridCursorSurface::Building;
@@ -144,7 +147,8 @@ public:
 			const FVector Center = Board->GetGridWorldLocation(Base + FIntVector(0, -1, 0));
 			if (!Test->TestTrue(TEXT("楼顶射线解析到楼内地板"), ACastlePatrolRoute::TryResolveWaypointFromRay(
 				World, Center + FVector(0, 0, 2000), Center - FVector(0, 0, 1000), Point, Reason))) { Test->AddError(Reason.ToString()); return true; }
-			if (!Test->TestTrue(TEXT("提交正式门到门路线"), Navigation->RequestTowerDispatchRoute({Point}, Reason))) { Test->AddError(Reason.ToString()); return true; }
+			if (!Test->TestTrue(TEXT("由玩家路径入口提交正式门到门路线"), Director->PatrolRoute->SetWorldWaypoints({Point}, Reason)))
+			{ Test->AddError(Reason.ToString()); return true; }
 			const auto Path = Navigation->AcquireSharedPath();
 			if (!Test->TestTrue(TEXT("生成前实际开环已就绪"), Path && Path->bValid && !Path->bClosedLoop && Path->bTowerDispatch)) { Test->AddError(Navigation->LastFailure.ToString()); return true; }
 			// NPC 已生成后令战斗配置非法，证明最后一步失败仍能收回整批 NPC 并恢复塔侧格。

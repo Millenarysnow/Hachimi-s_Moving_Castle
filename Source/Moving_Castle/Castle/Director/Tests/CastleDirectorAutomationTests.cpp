@@ -113,6 +113,12 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("商店奖励成功"), Director->TryChooseReward(ECastleDirectorReward::Shop, Reason))) { AddError(Reason.ToString()); return false; }
 	TestTrue(TEXT("商店自动打开"), Controller->GetShop()->IsShopOpen());
 	TestTrue(TEXT("本轮商店权限可用"), Director->IsShopAccessAllowed(Reason));
+	// 商店奖励实际生成的每件商品都必须服从已提交的 Lv1 数字范围。
+	TestEqual(TEXT("商店奖励时仍为Lv1"), Director->GetLevel(), 1);
+	for (const auto& Offer : Controller->GetShop()->GetOffers())
+	{
+		TestTrue(TEXT("Lv1 商品数字在 1 至 3 之间"), Offer.Descriptor.Number >= 1 && Offer.Descriptor.Number <= 3);
+	}
 	Controller->GetShop()->CloseShop();
 	Director->SetPhaseForAutomation(ECastleDirectorPhase::Battle);
 	Director->SetPhaseForAutomation(ECastleDirectorPhase::Reward);

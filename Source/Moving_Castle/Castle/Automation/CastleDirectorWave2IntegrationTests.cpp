@@ -1,5 +1,6 @@
 #if WITH_EDITOR && WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
 #include "Tests/AutomationCommon.h"
 #include "Castle/Combat/CastleCombatSubsystem.h"
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
@@ -9,6 +10,7 @@
 #include "Castle/Items/CastlePendingRoomReward.h"
 #include "Castle/SkyIslands/CastleSkyIslandTestFixture.h"
 #include "Castle/Support/CastleSupportTowerSubsystem.h"
+#include "Castle/Support/CastleSupportFlightActors.h"
 #include "Castle/Placement/CastleTowerSideGridComponent.h"
 #include "Castle/UI/Director/CastleTowerUpgradeRewardWidget.h"
 #include "Castle/UI/Items/CastleWildcardRoomPickerWidget.h"
@@ -19,6 +21,8 @@
 #include "CastleBuildingTestUtilities.h"
 #include "CastleMainTowerComponent.h"
 #include "CastleMassUnitSubsystem.h"
+#include "CastleMassTraits.h"
+#include "MassEntityConfigAsset.h"
 #include "CastlePlayerController.h"
 #include "CastleShopComponent.h"
 #include "Interaction/CastlePatrolRoute.h"
@@ -120,6 +124,7 @@ private:
 			Shop->CloseShop();
 		}
 		VerifyBadgesAndSale(Director);
+		VerifySupportTravel(Director);
 		Director.DestroyNodes();
 		// 测试只改变内存中的 DA，用权重产生确定的第 2 步休息岛。
 		Director.ClearedSteps = 1;
@@ -293,6 +298,81 @@ private:
 			Test.TestTrue(TEXT("赠牌是有效一级房间且数字在当前 1–6"),
 				Reward.Level == 1 && Reward.Number >= 1 && Reward.Number <= Director.GetCurrentMaxShopNumber());
 		}
+	}
+
+	/** 同一批飞行实体跨过首次受击事件，等时测量位置，排除重新生成和航点切换的影响。 */
+	void VerifySupportTravel(UCastleDirectorSubsystem& Director)
+	{
+		FText Reason;
+		ACastleBoard* Board = Director.Board.Get();
+		UWorld* World = Director.GetWorld();
+		const FIntVector Top = Board->GetBoardCenterCoordinate() + FIntVector(0, 0, Board->GetUnlockedLayerCount() - 1);
+		const FVector Center = Board->GetGridWorldLocation(Top);
+		const auto Place = [&](const ECastleBuildingType Type, const FVector& Direction) -> ACastleBuildingBase*
+		{
+			// 选三级成长后新开放的塔顶层，直接用该侧格色号定义正式一级测试塔。
+			FCastleGridCursorTarget Target;
+			if (!Test.TestTrue(TEXT("高层塔侧射线命中"), Board->TryResolveGridCursorTarget(
+				Center + Direction * Board->CellSize * 2.0, Center, Target)
+				&& Target.Surface == ECastleGridCursorSurface::MainTowerSide)) { return nullptr; }
+			const auto* Cell = Board->FindTowerSideCell(Target.Cell, Target.Face);
+			const auto* Definition = Board->FindBuildingDefinition(Type);
+			FCastleBuildingDescriptor Card;
+			if (!Test.TestTrue(TEXT("正式定义生成蓝色测试塔"), Cell && Definition
+				&& Definition->CreateDescriptor(1, ECastleTileColor::Blue, Cell->Number, Card, Reason))) { return nullptr; }
+			ACastleBuildingBase* Building = Board->PlaceBuildingAtCursor(Target, Card, false, Reason);
+			if (!Test.TestTrue(TEXT("测试塔完成正式放置"), CastleBuildingTests::CompletePlacement(Building)))
+			{
+				Test.AddError(Reason.ToString());
+				return nullptr;
+			}
+			return Building;
+		};
+		ACastleBuildingBase* Cannon = Place(ECastleBuildingType::CannonTower, FVector(1, 0, 0));
+		ACastleBuildingBase* Hive = Place(ECastleBuildingType::BeeHive, FVector(0, 1, 0));
+		ACastleBuildingBase* Balloon = Place(ECastleBuildingType::BalloonTower, FVector(0, -1, 0));
+		if (!Cannon || !Hive || !Balloon) { return; }
+		auto* Support = World->GetSubsystem<UCastleSupportTowerSubsystem>();
+		auto* Mass = World->GetSubsystem<UCastleMassUnitSubsystem>();
+		auto* EnemyConfig = NewObject<UMassEntityConfigAsset>();
+		auto* Trait = NewObject<UCastleMassEnemyTrait>(EnemyConfig);
+		Trait->MaxHealth = 1000.0f;
+		EnemyConfig->GetMutableConfig().AddTrait(*Trait);
+		TArray<FCastleMassUnitHandle> Enemies;
+		if (!Test.TestTrue(TEXT("生成不移动的正式 Mass 飞行目标"), Mass->SpawnUnits(EnemyConfig,
+			{FTransform(Hive->GetActorLocation() + FVector(0, 0, 3000))}, Enemies, Reason)))
+		{
+			Test.AddError(Reason.ToString());
+			return;
+		}
+		ON_SCOPE_EXIT
+		{
+			Test.TestTrue(TEXT("回收飞行对象"), Support->EndBattleSupport());
+			Test.TestTrue(TEXT("回收固定 Mass 目标"), Mass->DespawnUnits(Enemies));
+			Director.SetPhase(ECastleDirectorPhase::Editing);
+		};
+		Director.SetPhase(ECastleDirectorPhase::Battle);
+		Test.TestEqual(TEXT("首次受击前炮塔共用冷却倍率为 1"), Support->GetTowerFireRateMultiplier(*Cannon), 1.0f);
+		if (!Test.TestTrue(TEXT("真实蜂巢和空投塔请求发射"), Support->QueueLaunch(*Hive) && Support->QueueLaunch(*Balloon))) { return; }
+		Support->Tick(0.0f);
+		TActorIterator<ACastleBeeSwarmVisual> Bees(World);
+		TActorIterator<ACastleSupplyBalloon> Balloons(World);
+		if (!Test.TestTrue(TEXT("实际生成两类飞行对象"), Bees && Balloons)) { return; }
+		const FVector BeeStart = Bees->GetActorLocation();
+		const FVector BalloonStart = Balloons->GetActorLocation();
+		constexpr float StepSeconds = 0.01f;
+		Support->Tick(StepSeconds);
+		const FVector BeeMid = Bees->GetActorLocation();
+		const FVector BalloonMid = Balloons->GetActorLocation();
+		Director.Tower->ApplyDamage(1.0f);
+		Test.TestEqual(TEXT("首次受击后炮塔共用冷却倍率为 2"), Support->GetTowerFireRateMultiplier(*Cannon), 2.0f);
+		Support->Tick(StepSeconds);
+		const double BeeBase = FVector::Dist(BeeStart, BeeMid);
+		const double BalloonBase = FVector::Dist(BalloonStart, BalloonMid);
+		Test.TestTrue(TEXT("同一蜂群实际飞行位移翻倍"), BeeBase > 0.0
+			&& FMath::IsNearlyEqual(FVector::Dist(BeeMid, Bees->GetActorLocation()), 2.0 * BeeBase, 0.01));
+		Test.TestTrue(TEXT("同一气球实际飞行位移翻倍"), BalloonBase > 0.0
+			&& FMath::IsNearlyEqual(FVector::Dist(BalloonMid, Balloons->GetActorLocation()), 2.0 * BalloonBase, 0.01));
 	}
 
 	FAutomationTestBase& Test;

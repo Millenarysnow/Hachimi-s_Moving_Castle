@@ -74,10 +74,18 @@ bool UCastleDirectorConfigDataAsset::ValidateConfig(FText& OutFailureReason) con
 		return Reject(TEXT("NodeCountMin/NodeCountMax"), FString::Printf(TEXT("%d/%d"), NodeCountMin, NodeCountMax));
 	}
 	if (EliteEveryNSteps < 2) { return Reject(TEXT("EliteEveryNSteps"), FString::FromInt(EliteEveryNSteps)); }
-	const int64 TotalNodeWeight = static_cast<int64>(NormalNodeWeight) + RewardNodeWeight + RestNodeWeight;
+	const int64 NormalAndRewardWeight = static_cast<int64>(NormalNodeWeight) + RewardNodeWeight;
+	const int64 TotalNodeWeight = NormalAndRewardWeight + RestNodeWeight;
 	if (NormalNodeWeight < 0 || RewardNodeWeight < 0 || RestNodeWeight < 0 || TotalNodeWeight <= 0)
 	{
 		return Reject(TEXT("NodeWeights"), FString::Printf(TEXT("%d/%d/%d"), NormalNodeWeight, RewardNodeWeight, RestNodeWeight));
+	}
+	// 三节点有两个抽样位。首个抽样位抽到休息岛后，第二个必须仍有普通战斗或奖励空岛可抽。
+	if (NodeCountMax >= 3 && NormalAndRewardWeight <= 0)
+	{
+		return Reject(TEXT("NodeWeights/NodeCountMax"), FString::Printf(
+			TEXT("普通=%d 奖励=%d 休息=%d 最大节点数=%d（普通与奖励权重之和须大于零）"),
+			NormalNodeWeight, RewardNodeWeight, RestNodeWeight, NodeCountMax));
 	}
 	if (!FMath::IsFinite(SkyIslandSpawnDistance) || SkyIslandSpawnDistance < 3000.0f || !FMath::IsFinite(SkyIslandHeightOffset))
 	{
