@@ -34,6 +34,9 @@
 
 namespace
 {
+	// 主塔原件每段的美术高度独立于棋盘逻辑层高；开局布置和扩层共用这个段高。
+	constexpr double SourceSectionHeight = 500.0;
+
 	/** 将局部空间法线转换成六面枚举，优先使用绝对值最大的轴。 */
 	ECastleGridFace GetGridFaceFromNormal(const FVector& LocalNormal)
 	{
@@ -350,7 +353,6 @@ bool ACastleBoard::InitializeProgressiveTowerPresentation(AActor& Tower, UCastle
 	constexpr int32 SourceSectionCount = 10;
 	constexpr int32 PartsPerSection = 42;
 	constexpr int32 CrownPartCount = 54;
-	constexpr double SourceSectionHeight = 500.0;
 	constexpr double SourceCrownBase = SourceSectionCount * SourceSectionHeight;
 	USceneComponent* Root = Tower.GetRootComponent();
 	if (!IsValid(Root)) { return Reject(TEXT("塔根缺失")); }
@@ -407,7 +409,7 @@ bool ACastleBoard::InitializeProgressiveTowerPresentation(AActor& Tower, UCastle
 		Group->RegisterComponent();
 		if (!Group->IsRegistered()) { return Reject(TEXT("运行时塔身或塔冠锚点未注册")); }
 	}
-	// 按原始变换挂接全部美术，再拉伸塔身到棋盘层高。塔冠只平移，保留原有比例。
+	// 按原始变换挂接塔身，保留每个分件的原始比例。
 	for (int32 Layer = 0; Layer < TowerBodySections.Num(); ++Layer)
 	{
 		for (const FTowerBodyPart& Entry : TowerBodySections[Layer])
@@ -427,7 +429,6 @@ bool ACastleBoard::InitializeProgressiveTowerPresentation(AActor& Tower, UCastle
 			}
 		}
 	}
-	BodyAnchor->SetRelativeScale3D(FVector(1.0, 1.0, LayerHeight / SourceSectionHeight));
 	for (UStaticMeshComponent* Part : Crown)
 	{
 		Part->SetMobility(EComponentMobility::Movable);
@@ -436,7 +437,8 @@ bool ACastleBoard::InitializeProgressiveTowerPresentation(AActor& Tower, UCastle
 			return Reject(FString::Printf(TEXT("无法挂载塔尖分件 %s"), *Part->GetName()));
 		}
 	}
-	Anchor->SetRelativeLocation(FVector(0, 0, CurrentUnlockedLayers * LayerHeight - SourceCrownBase));
+	// 用最高可见塔身段的顶面减去塔冠原始底面，得到塔冠和下挂气球的初始偏移。
+	Anchor->SetRelativeLocation(FVector(0, 0, CurrentUnlockedLayers * SourceSectionHeight - SourceCrownBase));
 
 	USceneComponent* BalloonAnchor = NewObject<USceneComponent>(&Tower, TEXT("TowerBalloonAnchor"));
 	BalloonAnchor->SetupAttachment(Anchor);
@@ -491,8 +493,8 @@ bool ACastleBoard::ExpandMainTowerLayers(const int32 TargetLayerCount, FText& Ou
 		}
 	}
 
-	// 塔尖美术和气球锚点共用父组件，恰好上移所增加的格高。
-	TowerCrownAnchor->AddRelativeLocation(FVector(0, 0, (TargetLayerCount - CurrentUnlockedLayers) * LayerHeight));
+	// 塔冠和气球一起上移新增塔身的美术高度，跟随最高可见段的顶面。
+	TowerCrownAnchor->AddRelativeLocation(FVector(0, 0, (TargetLayerCount - CurrentUnlockedLayers) * SourceSectionHeight));
 	CurrentUnlockedLayers = TargetLayerCount;
 	UE_LOG(LogMoving_Castle, Display, TEXT("棋盘 %s 的主塔已扩展到 %d 层。"), *GetPathName(), CurrentUnlockedLayers);
 	return true;

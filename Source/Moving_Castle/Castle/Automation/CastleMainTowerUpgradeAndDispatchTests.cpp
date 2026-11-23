@@ -200,7 +200,9 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("再上一层超出高度"), Board->IsCoordinateWithinBoard(Highest + FIntVector(0, 0, 1)));
 		TestFalse(TEXT("第一层以下超出高度"), Board->IsCoordinateWithinBoard(Center + FIntVector(1, 0, -1)));
 		const FVector LocalCrown = Board->MainTowerActor->GetActorTransform().InverseTransformPosition(Crown->GetComponentLocation());
-		TestTrue(TEXT("塔冠落在当前最高层插入面"), FMath::IsNearlyEqual(LocalCrown.Z + 5000.0, Layers * 560.0, 0.01));
+		// 正式塔身原件每段 500 cm，塔冠底面与当前最高可见段的顶面对齐。
+		constexpr double SourceSectionHeight = 500.0;
+		TestTrue(TEXT("塔冠落在当前最高塔身段顶面"), FMath::IsNearlyEqual(LocalCrown.Z + 5000.0, Layers * SourceSectionHeight, 0.01));
 		int32 VisibleBodyParts = 0;
 		int32 HiddenBodyParts = 0;
 		int32 CrownParts = 0;
@@ -222,8 +224,8 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("每层显示原蓝图的 42 件塔身"), VisibleBodyParts, 42 * Layers);
 		TestEqual(TEXT("未开放层及第十段仍隐藏"), HiddenBodyParts, 42 * (10 - Layers));
 		TestEqual(TEXT("塔冠完整保留 54 件"), CrownParts, 54);
-		const double HeightDelta = (Layers - 3) * Board->LayerHeight;
-		TestTrue(TEXT("塔尖上移与新增层高相等"), Crown->GetComponentLocation().Equals(InitialCrown + Up * HeightDelta, 0.1));
+		const double HeightDelta = (Layers - 3) * SourceSectionHeight;
+		TestTrue(TEXT("塔尖上移与新增塔身段高度相等"), Crown->GetComponentLocation().Equals(InitialCrown + Up * HeightDelta, 0.1));
 		TestTrue(TEXT("气球跟随塔尖"), Balloons->GetComponentLocation().Equals(InitialBalloons + Up * HeightDelta, 0.1));
 		const auto* Cell = Board->FindTowerSideCell(Highest - FIntVector(1, 0, 0), ECastleGridFace::PositiveX);
 		if (!TestNotNull(TEXT("最高开放层存在侧格"), Cell)) { return false; }
