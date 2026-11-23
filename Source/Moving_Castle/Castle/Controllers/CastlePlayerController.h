@@ -71,6 +71,8 @@ public:
 	/** 空岛完成初始化才接管当前岛引用，销毁时按实例注销。 */
 	void RegisterActiveSkyIsland(ACastleSkyIslandBase* Island);
 	void UnregisterActiveSkyIsland(const ACastleSkyIslandBase* Island);
+	/** 查询可接收建造输入的已登记空岛，供控制器与 HUD 共用。 */
+	ACastleSkyIslandBase* GetInteractiveSkyIsland() const;
 	UFUNCTION(Exec) void CastleTestSkyIsland();
 
 	/** 开战事务准备时立即清除高亮，避免等下一帧控制器 Tick 才撤下旧建造目标。 */
@@ -140,8 +142,6 @@ protected:
 
 	/** 执行屏幕中心反投影和棋盘吸附。 */
 	void UpdateGridCursor(ACastleSkyIslandBase* Island = nullptr);
-	/** 只有空岛阶段且界面未占用输入时才向空岛转发建造。 */
-	ACastleSkyIslandBase* GetInteractiveSkyIsland() const;
 	void RetractIslandPlacement();
 
 	/** 数字键按当前背包顺序选牌，1 至 9、0 对应十个实际槽位。 */

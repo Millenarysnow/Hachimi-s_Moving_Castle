@@ -160,9 +160,10 @@ void ACastleHUD::DrawHUD()
 	const ACastlePlayerController* Controller = Cast<ACastlePlayerController>(PlayerOwner);
 	if (Controller != nullptr)
 	{
-		// 金币与提示由 WBP 接管；Canvas 保留独立的中心准星和既有可见条件。
+		// 金币与提示由 WBP 接管，Canvas 为主塔编辑和空岛建造绘制中心准星。
 		FText EditReason;
-		if (Controller->GetShop()->IsShopOpen() || !Controller->IsDirectorEditingAllowed(EditReason))
+		if (Controller->GetShop()->IsShopOpen()
+			|| (!Controller->IsDirectorEditingAllowed(EditReason) && !Controller->GetInteractiveSkyIsland()))
 		{
 			return;
 		}

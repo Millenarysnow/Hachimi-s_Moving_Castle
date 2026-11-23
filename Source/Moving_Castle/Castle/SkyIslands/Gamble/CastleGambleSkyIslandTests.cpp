@@ -8,6 +8,8 @@
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Blueprint/WidgetBlueprintGeneratedClass.h"
 #include "Blueprint/WidgetTree.h"
+#include "Camera/CameraActor.h"
+#include "Camera/PlayerCameraManager.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "CastleBackpackComponent.h"
 #include "CastleBuildingDefinition.h"
@@ -17,6 +19,7 @@
 #include "CastlePlayerController.h"
 #include "Components/Button.h"
 #include "Components/BoxComponent.h"
+#include "Components/InputComponent.h"
 #include "Components/TextBlock.h"
 #include "Engine/Font.h"
 #include "Editor.h"
@@ -333,6 +336,7 @@ public:
 		if (bDeparting)
 		{
 			if (TActorIterator<ACastleGambleAcceptanceIsland>(World)) { return false; }
+			Test.TestNull(TEXT("离岛后控制器清除交互空岛"), Controller->GetInteractiveSkyIsland());
 			for (const auto& Tile : Tiles) { Test.TestFalse(TEXT("离岛销毁微缩地块"), Tile.IsValid()); }
 			Test.TestTrue(TEXT("离岛返回原来的飞行位置"), Controller->GetPawn()->GetActorLocation().Equals(ReturnLocation, 5.0));
 			Test.TestTrue(TEXT("离岛退回 1 张未下注原牌"), Backpack.IsValid()
@@ -348,6 +352,7 @@ public:
 		TActorIterator<ACastleGambleAcceptanceIsland> IslandIt(World);
 		if (!Test.TestTrue(TEXT("命令生成实际赌博空岛"), static_cast<bool>(IslandIt))) { return true; }
 		auto* Island = *IslandIt;
+		if (!Test.TestTrue(TEXT("验收岛注册为控制器的交互空岛"), Controller->GetInteractiveSkyIsland() == Island)) { return true; }
 		Test.TestTrue(TEXT("玩家传送至赌博岛到达锚点"), Controller->GetPawn()->GetActorLocation().Equals(
 			Island->GetPlayerArrivalTransform().GetLocation(), 5.0));
 		Test.TestEqual(TEXT("生成 5×5 个真实地块"), Island->MiniTiles.Num(), 25);
@@ -364,32 +369,70 @@ public:
 			if (Cell.Color == Card.Color || Cell.Number == Card.Number) { Match = Entry.Value.Get(); }
 			else { Mismatch = Entry.Value.Get(); }
 		}
-		const auto AimDown = [Island](FVector Surface, double Distance, FCastleGridCursorTarget& Target)
-		{
-			return Island->TryResolveIslandGridCursorTarget(Surface + FVector::UpVector * Distance,
-				Surface - FVector::UpVector * 10.0, Target);
-		};
 		FText Reason;
-		FCastleGridCursorTarget Target;
 		if (!Test.TestNotNull(TEXT("生成与首张手牌同色或同号的地面"), Match)
 			|| !Test.TestNotNull(TEXT("生成与首张手牌异色异号的地面"), Mismatch)) { return true; }
+
+		// 仅移动测试相机，保留玩家落点和返回位置，让控制器用真实 PIE 视口中心反投影。
+		AActor* OriginalViewTarget = Controller->GetViewTarget();
+		auto* AimCamera = World->SpawnActor<ACameraActor>();
+		if (!Test.TestNotNull(TEXT("创建用于准星瞄准的 PIE 相机"), AimCamera)) { return true; }
+		ON_SCOPE_EXIT
+		{
+			Controller->SetViewTarget(OriginalViewTarget);
+			AimCamera->Destroy();
+		};
+		Controller->SetViewTarget(AimCamera);
+		const auto AimDown = [Controller, AimCamera](const FVector& Surface, double Distance)
+		{
+			AimCamera->SetActorLocationAndRotation(Surface + FVector::UpVector * Distance, FRotator(-90.0, 0.0, 0.0));
+			Controller->PlayerCameraManager->UpdateCamera(0.0f);
+			static_cast<AActor*>(Controller)->Tick(0.0f);
+			return Controller->GetCurrentGridCursorTarget();
+		};
+		// 直接派发已登记的按下绑定，避免无头 PIE 的窗口焦点影响真实控制器处理入口。
+		if (!Test.TestNotNull(TEXT("控制器已创建输入组件"), Controller->InputComponent.Get())) { return true; }
+		const auto PressKey = [this, Controller](const FKey& Key)
+		{
+			const FInputKeyBinding* Binding = Controller->InputComponent->KeyBindings.FindByPredicate(
+				[&Key, Controller](const FInputKeyBinding& Entry)
+				{
+					return Entry.Chord == FInputChord(Key) && Entry.KeyEvent == IE_Pressed
+						&& Entry.KeyDelegate.IsBoundToObject(Controller);
+				});
+			if (!Test.TestNotNull(FString::Printf(TEXT("控制器已绑定按键 %s"), *Key.ToString()), Binding)) { return false; }
+			Binding->KeyDelegate.Execute(Key);
+			return true;
+		};
+		if (!PressKey(EKeys::Two) || !PressKey(EKeys::MouseScrollUp)) { return true; }
+		Test.TestEqual(TEXT("数字键后向上滚轮回到首张"), Controller->GetSelectedBackpackIndex(), 0);
+		if (!PressKey(EKeys::MouseScrollDown)) { return true; }
+		Test.TestEqual(TEXT("向下滚轮选择第二张"), Controller->GetSelectedBackpackIndex(), 1);
+		if (!PressKey(EKeys::One)) { return true; }
+		const int32 SelectedSlot = Controller->GetSelectedBackpackIndex();
+		Test.TestEqual(TEXT("数字键 1 选中第一张手牌"), SelectedSlot, 0);
+		FCastleGridCursorTarget Target = AimDown(Mismatch->GetActorLocation(), 250.0);
 		Test.TestTrue(TEXT("真实射线命中不合法地块且高亮校验拒绝"),
-			AimDown(Mismatch->GetActorLocation(), 250.0, Target) && !Island->CanPlaceCardAtIslandCursor(Target, 0));
-		if (!Test.TestTrue(TEXT("真实射线命中合法微缩地块并消费手牌"),
-			AimDown(Match->GetActorLocation(), 250.0, Target) && Island->CanPlaceCardAtIslandCursor(Target, 0)
-			&& Island->TryPlaceBackpackAtIslandCursor(Target, 0, Reason))) { return true; }
-		Test.TestEqual(TEXT("地面建造消耗一张原卡"), Backpack->GetItemCount() + Backpack->GetTempItemCount(), InitialCards - 1);
+			Target.bValid && Target.AdjacentCell == Mismatch->GetGroundCell().Coordinate
+			&& !Island->CanPlaceCardAtIslandCursor(Target, SelectedSlot));
+		Target = AimDown(Match->GetActorLocation(), 250.0);
+		if (!Test.TestTrue(TEXT("控制器准星命中合法微缩地块"),
+			Target.bValid && Target.AdjacentCell == Match->GetGroundCell().Coordinate
+			&& Island->CanPlaceCardAtIslandCursor(Target, SelectedSlot))) { return true; }
+		if (!PressKey(EKeys::LeftMouseButton)) { return true; }
+		Test.TestEqual(TEXT("左键建造消耗一张原卡"), Backpack->GetItemCount() + Backpack->GetTempItemCount(), InitialCards - 1);
 		const auto MatchingCell = Target.AdjacentCell;
 		const auto* Room = Island->MiniRooms.FindRef(MatchingCell).Get();
 		if (!Test.TestNotNull(TEXT("已放房间生成独立六面查询盒"), Room)) { return true; }
-		Test.TestTrue(TEXT("真实射线命中已放房间顶面并定位上一层"),
-			AimDown(Room->GetComponentLocation(), Island->MiniLayerHeight, Target)
-			&& Target.AdjacentCell == MatchingCell + FIntVector(0, 0, 1));
+		Target = AimDown(Room->GetComponentLocation(), Island->MiniLayerHeight);
+		if (!Test.TestTrue(TEXT("控制器准星命中已放房间顶面并定位上一层"),
+			Target.bValid && Target.AdjacentCell == MatchingCell + FIntVector(0, 0, 1))) { return true; }
 		const int32 OriginalCount = Backpack->GetItemCount();
 		int32 SlotIndex = INDEX_NONE;
 		if (!Test.TestTrue(TEXT("添加同牌验证垂直叠放"), Backpack->TryAddItem(Card, SlotIndex, Reason)
-			&& Island->TryPlaceBackpackAtIslandCursor(Target, SlotIndex, Reason)
-			&& Island->TryRetractLastIslandPlacement(Reason))) { return true; }
+			&& Island->TryPlaceBackpackAtIslandCursor(Target, SlotIndex, Reason))) { return true; }
+		if (!PressKey(EKeys::RightMouseButton)) { return true; }
+		Test.TestFalse(TEXT("右键撤回从微缩棋盘移除叠放房间"), Island->MiniRooms.Contains(Target.AdjacentCell));
 		FCastleBuildingDescriptor Returned;
 		Test.TestTrue(TEXT("撤回叠放房间后原卡还回手牌"),
 			Backpack->TryGetItemAt(OriginalCount, Returned) && IsSameCard(Returned, Card));
@@ -404,6 +447,7 @@ public:
 			return true;
 		}
 		Test.TestTrue(TEXT("轮盘显示鼠标并锁定飞行视角"), Controller->bShowMouseCursor && Controller->IsLookInputIgnored());
+		Test.TestNull(TEXT("轮盘模态期间控制器暂停空岛建造输入"), Controller->GetInteractiveSkyIsland());
 		if (auto* Viewport = UGameViewportSubsystem::Get())
 		{
 			const FGameViewportWidgetSlot Slot = Viewport->GetWidgetSlot(Island->RoulettePanel);
