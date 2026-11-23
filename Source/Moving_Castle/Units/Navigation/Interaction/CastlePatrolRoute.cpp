@@ -83,9 +83,16 @@ namespace
 		{
 			return EBuildingFloorHit::OtherSurface;
 		}
+		const auto IsStandingPlane = [&](const ACastleBuildingBase& FloorOwner)
+		{
+			const double StandingHeight = FloorOwner.HachimisLayout ? FloorOwner.HachimisLayout->StandingHeight : 0.0;
+			return FMath::IsNearlyEqual(HeightFromFirstFloor, Layer * Board->LayerHeight + StandingHeight, FloorPlaneTolerance);
+		};
+		// 未解锁、越界或未登记处无法查询站立面的实际楼体。只在命中符合碰撞所属建筑的
+		// 作者标高时报告非法楼板；其余水平障碍顶面仍让射线继续。
 		if (Layer < 0 || Layer >= Board->GetUnlockedLayerCount())
 		{
-			return Reject(TEXT("位于棋盘已解锁楼层之外"));
+			return IsStandingPlane(Building) ? Reject(TEXT("位于棋盘已解锁楼层之外")) : EBuildingFloorHit::OtherSurface;
 		}
 
 		const FVector2D XY = GetHorizontalGridCell(*Board, LocalHit);
@@ -94,14 +101,16 @@ namespace
 		if (XY.X < Min.X - Board->MaxOverhangCells || XY.X > Max.X + Board->MaxOverhangCells
 			|| XY.Y < Min.Y - Board->MaxOverhangCells || XY.Y > Max.Y + Board->MaxOverhangCells)
 		{
-			return Reject(TEXT("不在棋盘允许占用的平面范围内"));
+			return IsStandingPlane(Building) ? Reject(TEXT("不在棋盘允许占用的平面范围内")) : EBuildingFloorHit::OtherSurface;
 		}
 		const FIntVector Cell(static_cast<int32>(XY.X), static_cast<int32>(XY.Y), Board->GridOrigin.Z + static_cast<int32>(Layer));
 		const ACastleBuildingBase* FloorOwner = Board->GetBuildingAt(Cell);
-		if (!IsValid(FloorOwner)) { return Reject(TEXT("命中楼层的对应格没有登记建筑")); }
+		if (!IsValid(FloorOwner))
+		{
+			return IsStandingPlane(Building) ? Reject(TEXT("命中楼层的对应格没有登记建筑")) : EBuildingFloorHit::OtherSurface;
+		}
 		// 下层可拥有楼板美术或碰撞。功能高度以命中层实际登记的楼体为准。
-		const double StandingHeight = FloorOwner->HachimisLayout ? FloorOwner->HachimisLayout->StandingHeight : 0.0;
-		if (!FMath::IsNearlyEqual(HeightFromFirstFloor, Layer * Board->LayerHeight + StandingHeight, FloorPlaneTolerance))
+		if (!IsStandingPlane(*FloorOwner))
 		{
 			return EBuildingFloorHit::OtherSurface;
 		}
