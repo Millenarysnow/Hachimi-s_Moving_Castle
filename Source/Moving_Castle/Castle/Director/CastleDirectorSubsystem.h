@@ -155,6 +155,8 @@ private:
 	FRotator IslandReturnControlRotation;
 	bool bDepartureRequested = false;
 	bool bIslandShopGranted = false;
+	/** 作为本次空岛访问的快照，仅在成功返塔时恢复给主塔商店。 */
+	bool bShopPermissionBeforeIsland = false;
 	UPROPERTY(Transient) TArray<TObjectPtr<UCastlePendingRoomReward>> UpgradeRoomRewards;
 	TArray<FCastleTowerUpgradeRewardEntry> UpgradeRewards;
 	int32 ActiveUpgradeRewardIndex = INDEX_NONE;

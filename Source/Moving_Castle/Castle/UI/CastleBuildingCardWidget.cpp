@@ -12,7 +12,24 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
+#include "Engine/Font.h"
 #include "Moving_Castle.h"
+
+namespace
+{
+	constexpr TCHAR BuildingCardFontAssetPath[] = TEXT("/Game/MovingCastle/Fonts/MicrosoftYaHei_Font.MicrosoftYaHei_Font");
+	const FName BuildingCardTypefaceName(TEXT("Default"));
+
+	/** 统一字体资源和已登记字重，同时保留控件原有样式及各自指定的字号。 */
+	void ApplyChineseFont(UTextBlock& TextBlock, const UFont& FontAsset, int32 Size)
+	{
+		FSlateFontInfo Font = TextBlock.GetFont();
+		Font.FontObject = &FontAsset;
+		Font.TypefaceFontName = BuildingCardTypefaceName;
+		Font.Size = Size;
+		TextBlock.SetFont(Font);
+	}
+}
 
 void UCastleBuildingCardWidget::NativeOnInitialized()
 {
@@ -27,6 +44,31 @@ void UCastleBuildingCardWidget::NativeOnInitialized()
 	if (WidgetTree == nullptr)
 	{
 		UE_LOG(LogTemp, Error, TEXT("建筑卡片 UI 初始化失败：WidgetTree 为空。"));
+		return;
+	}
+	// 在创建卡片根控件前加载项目字体，避免资源错误时显示引擎默认字体。
+	const UFont* FontAsset = LoadObject<UFont>(nullptr, BuildingCardFontAssetPath);
+	if (!IsValid(FontAsset))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑卡片 %s 无法初始化：字体资产 %s 加载失败或类型不是 UFont。"),
+			*GetPathName(), BuildingCardFontAssetPath);
+		return;
+	}
+	// 只接受该资产自己的运行时复合字体，防止 Slate 从离线字体改用引擎字体。
+	const FCompositeFont* CompositeFont = FontAsset->GetCompositeFont();
+	if (CompositeFont != &FontAsset->GetInternalCompositeFont())
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑卡片 %s 无法初始化：资产 %s 未使用自身的运行时复合字体。"),
+			*GetPathName(), BuildingCardFontAssetPath);
+		return;
+	}
+	// 确认指定字重有实际字体数据，再创建标题和详情控件。
+	const FTypefaceEntry* Typeface = CompositeFont->DefaultTypeface.Fonts.FindByPredicate(
+		[](const FTypefaceEntry& Entry) { return Entry.Name == BuildingCardTypefaceName; });
+	if (!Typeface || !Typeface->Font.HasFont())
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑卡片 %s 无法初始化：字体资产 %s 中的字重 %s 缺失或未配置字体数据。"),
+			*GetPathName(), BuildingCardFontAssetPath, *BuildingCardTypefaceName.ToString());
 		return;
 	}
 
@@ -48,9 +90,7 @@ void UCastleBuildingCardWidget::NativeOnInitialized()
 	TitleText->SetJustification(ETextJustify::Center);
 	// 标题和详情使用明确字号，使固定 212 高度的卡片能同时容纳模型和文字，
 	// 商店在卡片外增加价格按钮时也不会被溢出的默认大字号覆盖。
-	FSlateFontInfo TitleFont = TitleText->GetFont();
-	TitleFont.Size = 16;
-	TitleText->SetFont(TitleFont);
+	ApplyChineseFont(*TitleText, *FontAsset, 16);
 	TitleText->SetColorAndOpacity(FSlateColor(FLinearColor(0.92f, 0.96f, 1.0f, 1.0f)));
 	TitleText->SetText(FText::FromString(TEXT("空槽位")));
 	if (UVerticalBoxSlot* TitleSlot = CardColumn->AddChildToVerticalBox(TitleText))
@@ -72,9 +112,7 @@ void UCastleBuildingCardWidget::NativeOnInitialized()
 
 	DetailText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("DetailText"));
 	DetailText->SetJustification(ETextJustify::Center);
-	FSlateFontInfo DetailFont = DetailText->GetFont();
-	DetailFont.Size = 13;
-	DetailText->SetFont(DetailFont);
+	ApplyChineseFont(*DetailText, *FontAsset, 13);
 	DetailText->SetColorAndOpacity(FSlateColor(FLinearColor(0.64f, 0.72f, 0.82f, 1.0f)));
 	DetailText->SetText(FText::FromString(TEXT("未存入卡牌")));
 	if (UVerticalBoxSlot* DetailSlot = CardColumn->AddChildToVerticalBox(DetailText))

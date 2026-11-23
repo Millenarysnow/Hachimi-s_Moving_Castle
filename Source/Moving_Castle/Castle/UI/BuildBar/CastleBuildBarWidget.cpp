@@ -122,7 +122,7 @@ bool UCastleBuildBarWidget::ShouldDisplayInCurrentScreen() const
 	{
 		return false;
 	}
-	// 路径编辑界面底部居中留空，战斗界面底部居中显示骷髅条；建造栏只在建造页面展示。
+	// 路径编辑界面底部居中留空；建造栏只在主塔建造页和空岛游览期间展示。
 	if (BoundPatrolRoute.IsValid() && BoundPatrolRoute->IsEditing())
 	{
 		return false;
@@ -132,7 +132,8 @@ bool UCastleBuildBarWidget::ShouldDisplayInCurrentScreen() const
 		: (GetWorld() ? GetWorld()->GetSubsystem<UCastleDirectorSubsystem>() : nullptr);
 	if (IsValid(Director) && Director->IsRunning())
 	{
-		return Director->GetPhase() == ECastleDirectorPhase::Editing;
+		const ECastleDirectorPhase Phase = Director->GetPhase();
+		return Phase == ECastleDirectorPhase::Editing || Phase == ECastleDirectorPhase::SkyIsland;
 	}
 	const UCastleCombatSubsystem* Combat = GetWorld() ? GetWorld()->GetSubsystem<UCastleCombatSubsystem>() : nullptr;
 	return !(IsValid(Combat) && Combat->IsBattleActive());

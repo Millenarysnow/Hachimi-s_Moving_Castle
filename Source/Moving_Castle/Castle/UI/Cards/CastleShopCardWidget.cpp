@@ -11,6 +11,7 @@
 #include "Components/Image.h"
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
+#include "Engine/Font.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Application/SlateUser.h"
@@ -35,6 +36,8 @@ namespace
 	constexpr double CardClickDragThresholdPx = 6.0;
 	constexpr TCHAR FaceAssetPath[] = TEXT("/Game/MovingCastle/UI/Cards/M_CastleCardFace.M_CastleCardFace");
 	constexpr TCHAR CardPerspectiveAssetPath[] = TEXT("/Game/MovingCastle/UI/Cards/M_CastleCardPerspective.M_CastleCardPerspective");
+	constexpr TCHAR ShopCardFontAssetPath[] = TEXT("/Game/MovingCastle/Fonts/MicrosoftYaHei_Font.MicrosoftYaHei_Font");
+	const FName ShopCardTypefaceName(TEXT("Default"));
 	const FName PortraitParameter(TEXT("Portrait"));
 	const FName TintParameter(TEXT("CardTint"));
 	const FName StateParameter(TEXT("CardState"));
@@ -63,12 +66,14 @@ namespace
 
 	/** 文字作为独立的 Slate 层压在箔光上，始终按界面 DPI 升缩，而不是成为捕获的一部分。 */
 	UTextBlock* AddLabel(UWidgetTree& Tree, UCanvasPanel& Card, const FName Name, const FVector2D& Position,
-		int32 Size, bool bBold, const FLinearColor& Color)
+		int32 Size, const UFont& FontAsset, const FLinearColor& Color)
 	{
 		UTextBlock* Label = Tree.ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), Name);
 		FSlateFontInfo Font = Label->GetFont();
+		Font.FontObject = &FontAsset;
 		Font.Size = Size;
-		Font.TypefaceFontName = bBold ? FName(TEXT("Bold")) : FName(TEXT("Regular"));
+		// 使用微软雅黑资源实际登记的字重，字号和描边等样式继续沿用各文字控件的设置。
+		Font.TypefaceFontName = ShopCardTypefaceName;
 		Label->SetFont(Font);
 		Label->SetColorAndOpacity(FSlateColor(Color));
 		Label->SetShadowColorAndOpacity(FLinearColor(0.007f, 0.012f, 0.026f, 0.80f));
@@ -106,6 +111,31 @@ void UCastleShopCardWidget::NativeOnInitialized()
 	{
 		return;
 	}
+	// 字体是卡面构造的前置资源，加载失败时不创建会使用引擎默认字体的控件。
+	const UFont* FontAsset = LoadObject<UFont>(nullptr, ShopCardFontAssetPath);
+	if (!IsValid(FontAsset))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("商店卡牌 %s 无法初始化：字体资产 %s 加载失败或类型不是 UFont。"),
+			*GetPathName(), ShopCardFontAssetPath);
+		return;
+	}
+	// 只接受该资产自己的运行时复合字体。离线字体或指向引擎字体的来源都无法满足卡面配置。
+	const FCompositeFont* CompositeFont = FontAsset->GetCompositeFont();
+	if (CompositeFont != &FontAsset->GetInternalCompositeFont())
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("商店卡牌 %s 无法初始化：资产 %s 未使用自身的运行时复合字体。"),
+			*GetPathName(), ShopCardFontAssetPath);
+		return;
+	}
+	// 确认 Slate 能找到指定的字重和字体数据，避免它在字重缺失时改用首条字体。
+	const FTypefaceEntry* Typeface = CompositeFont->DefaultTypeface.Fonts.FindByPredicate(
+		[](const FTypefaceEntry& Entry) { return Entry.Name == ShopCardTypefaceName; });
+	if (!Typeface || !Typeface->Font.HasFont())
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("商店卡牌 %s 无法初始化：字体资产 %s 中的字重 %s 缺失或未配置字体数据。"),
+			*GetPathName(), ShopCardFontAssetPath, *ShopCardTypefaceName.ToString());
+		return;
+	}
 	SetVisibility(ESlateVisibility::Visible);
 	USizeBox* Size = WidgetTree->ConstructWidget<USizeBox>();
 	Size->SetWidthOverride(CardWidth);
@@ -126,15 +156,15 @@ void UCastleShopCardWidget::NativeOnInitialized()
 	FaceSlot->SetOffsets(FMargin(0.0f));
 
 	const FLinearColor Ivory(0.95f, 0.97f, 0.98f);
-	LeadingNumber = AddLabel(*WidgetTree, *Card, TEXT("LeadingNumber"), FVector2D(14.0, 5.0), 27, true, Ivory);
-	TrailingNumber = AddLabel(*WidgetTree, *Card, TEXT("TrailingNumber"), FVector2D(126.0, 180.0), 25, true, Ivory);
-	Title = AddLabel(*WidgetTree, *Card, TEXT("BuildingName"), FVector2D(15.0, 176.0), 16, true, Ivory);
-	LevelLabel = AddLabel(*WidgetTree, *Card, TEXT("BuildingLevel"), FVector2D(15.0, 197.0), 12, false,
+	LeadingNumber = AddLabel(*WidgetTree, *Card, TEXT("LeadingNumber"), FVector2D(14.0, 5.0), 27, *FontAsset, Ivory);
+	TrailingNumber = AddLabel(*WidgetTree, *Card, TEXT("TrailingNumber"), FVector2D(126.0, 180.0), 25, *FontAsset, Ivory);
+	Title = AddLabel(*WidgetTree, *Card, TEXT("BuildingName"), FVector2D(15.0, 176.0), 16, *FontAsset, Ivory);
+	LevelLabel = AddLabel(*WidgetTree, *Card, TEXT("BuildingLevel"), FVector2D(15.0, 197.0), 12, *FontAsset,
 		FLinearColor(0.72f, 0.82f, 0.88f));
-	AddLabel(*WidgetTree, *Card, TEXT("CardFamily"), FVector2D(89.0, 15.0), 10, false, Ivory)
+	AddLabel(*WidgetTree, *Card, TEXT("CardFamily"), FVector2D(89.0, 15.0), 10, *FontAsset, Ivory)
 		->SetText(NSLOCTEXT("CastleCard", "Family", "色号堡垒"));
 	PortraitStatus = AddLabel(*WidgetTree, *Card, TEXT("PortraitStatus"), FVector2D(CardWidth * 0.5, CardHeight * 0.45),
-		13, true, Ivory);
+		13, *FontAsset, Ivory);
 	CastChecked<UCanvasPanelSlot>(PortraitStatus->Slot)->SetAlignment(FVector2D(0.5, 0.5));
 	PortraitStatus->SetVisibility(ESlateVisibility::Collapsed);
 }
@@ -146,6 +176,12 @@ bool UCastleShopCardWidget::Configure(UCastleShopWidget& InShop, const FCastleBu
 	if (!Descriptor.Validate(Reason))
 	{
 		return ReportSetupError(Descriptor, Reason);
+	}
+	// NativeOnInitialized 未能构造文字时，拒绝把空卡面当作配置成功。
+	if (!IsValid(Title))
+	{
+		return ReportSetupError(Descriptor, FText::FromString(FString::Printf(TEXT("卡面文字未初始化，请检查 WidgetTree 和字体 %s。"),
+			ShopCardFontAssetPath)));
 	}
 	if (FaceImage == nullptr || !IsValid(FaceMaterial) || FaceMaterial->GetMaterial()->MaterialDomain != MD_UI)
 	{
