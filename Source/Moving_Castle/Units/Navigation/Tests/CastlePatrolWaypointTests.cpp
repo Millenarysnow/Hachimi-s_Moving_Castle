@@ -50,6 +50,23 @@ bool FCastlePatrolWaypointGridCenterTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("两次点击不同位置也落在同一个水平格心，Z 仍是真实顶面"), First.Equals(Expected, 0.1) && Second.Equals(Expected, 0.1));
 	TestTrue(TEXT("跨过半格边界就取相邻格心"), Neighbor.Equals(Layout.TransformPosition(FVector(2 * Size, Size, 250)), 0.1));
 	TestTrue(TEXT("棋盘范围外没有逻辑格，保留实际命中位置"), Outside.Equals(OutsideHit, 0.1));
+
+	// 同一条射线先经过只响应 Visibility 的非建筑装饰，再经过两个可行走平面。
+	// 改变上层平面的碰撞通道后，仍应命中原地面，并保留真实高度。
+	AActor* RaisedFloor = World->SpawnActor<AActor>();
+	UBoxComponent* RaisedCollision = NewObject<UBoxComponent>(RaisedFloor);
+	RaisedFloor->SetRootComponent(RaisedCollision);
+	RaisedCollision->SetBoxExtent(FVector(80, 80, 10));
+	RaisedCollision->SetCollisionProfileName(TEXT("BlockAll"));
+	RaisedCollision->RegisterComponent();
+	RaisedFloor->SetActorLocation(Expected + FVector(0, 0, 30));
+	FVector RaisedPoint;
+	Trace(Expected, RaisedPoint);
+	TestTrue(TEXT("两个合法支撑面中优先采用距离较近的顶面"), RaisedPoint.Equals(Expected + FVector(0, 0, 40), 0.1));
+	RaisedCollision->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+	Trace(Expected, RaisedPoint);
+	TestTrue(TEXT("仅可见的装饰顶面不截断地面命中"), RaisedPoint.Equals(Expected, 0.1));
+
 	FText Failure;
 	TestFalse(TEXT("未命中真实顶面不生成虚拟落点"), ACastlePatrolRoute::TryResolveWaypointFromRay(World, Expected + FVector(0, 0, 200),
 		Expected + FVector(0, 0, 100), Outside, Failure));

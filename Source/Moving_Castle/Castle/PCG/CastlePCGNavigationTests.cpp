@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 #include "CastleBuildingPCGSubsystem.h"
+#include "CastleBuildingPCGComponent.h"
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
@@ -23,6 +24,7 @@
 #include "MassProcessingContext.h"
 #include "Components/Building/Effects/CastleBuildingEffectComponent.h"
 #include "Components/Building/BuildingGameplayRootComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Units/BuildingInteraction/Mass/CastleMassBuildingTriggerProcessor.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -54,7 +56,7 @@ namespace CastlePCGNavigationTests
 			if(Stage==1){return Route();}
 			if(Stage==2){return Patrol();}
 			if(Stage==3){return Removed();}
-			if(Stage==4){return true;}
+			if(Stage==4){return VerifyLevelTwoStack();}
 			return false;
 		}
 	private:
@@ -220,7 +222,114 @@ namespace CastlePCGNavigationTests
 			const auto Entity=Spawner->SpawnedUnits[0].Entity;
 			Test->TestEqual(TEXT("梯子移除后NPC速度归零"),Manager->GetFragmentDataChecked<FCastleMassPatrolFragment>(Entity).Speed,0.0);
 			Test->TestTrue(TEXT("梯子移除后Velocity归零"),Manager->GetFragmentDataChecked<FMassVelocityFragment>(Entity).Value.IsZero());
-			Cleanup();Stage=4;return false;
+			Cleanup();
+			Lower = nullptr;
+			Spawner = nullptr;
+			Stage = 4;
+			return false;
+		}
+		bool VerifyLevelTwoStack()
+		{
+			const FIntVector LowerCell = Board->GridOrigin;
+			const FIntVector UpperCell = LowerCell + FIntVector(0, 0, 1);
+			FText Reason;
+			if (!Lower)
+			{
+				// 正式二级箭塔直接放置后沿 X 占两格；叠放测试不依赖一级用例的资产或旧导航快照。
+				const auto* Definition = LoadObject<UCastleBuildingDefinition>(nullptr,
+					TEXT("/Game/MovingCastle/Data/Buildings/DA_ArcherTower.DA_ArcherTower"));
+				FCastleGroundCell Ground;
+				FCastleBuildingDescriptor Card;
+				if (!Test->TestNotNull(TEXT("加载正式箭塔定义"), Definition)
+					|| !Test->TestTrue(TEXT("读取二级塔底格属性"), Board->TryGetGroundCell(LowerCell, Ground))
+					|| !Definition->CreateDescriptor(2, Ground.Color, Ground.Number, Card, Reason)
+					|| !Test->TestNotNull(TEXT("放置正式二级塔"), Lower = Board->PlaceBuilding(LowerCell, Card, false, Reason)))
+				{
+					Test->AddError(Reason.ToString());
+					Cleanup();
+					return true;
+				}
+				return false;
+			}
+			if (!Lower->bHasCompletedPlacement || Lower->BuildingMerge->bIsPlaying) { return false; }
+			if (!Upper)
+			{
+				// 同色保留梯井连接，改数字与等级以明确表达这是两个独立的建筑 Actor。
+				FCastleBuildingDescriptor Card = Lower->GetBuildingDescriptor();
+				Card.Level = 1;
+				Card.Number = Card.Number % 9 + 1;
+				if (!Test->TestNotNull(TEXT("二级塔上放置同色一级箭塔"), Upper = Board->PlaceBuilding(UpperCell, Card, false, Reason)))
+				{
+					Test->AddError(Reason.ToString());
+					Cleanup();
+					return true;
+				}
+				return false;
+			}
+			if (!Upper->bHasCompletedPlacement || Upper->BuildingMerge->bIsPlaying || Lower->BuildingMerge->bIsPlaying) { return false; }
+
+			TArray<FCastleActiveLadderConnection> Connections;
+			World->GetSubsystem<UCastleBuildingPCGSubsystem>()->GetActiveLadderConnections(Board, Connections);
+			if (Test->TestEqual(TEXT("二级塔确实占两格"), Lower->GetOccupiedCoordinates().Num(), 2)
+				&& Test->TestEqual(TEXT("二级塔叠房生成唯一真实梯井"), Connections.Num(), 1)
+				&& Test->TestNotNull(TEXT("下层有作者梯口套件"), Lower->HachimisLayout ? Lower->HachimisLayout->Ladder.Get() : nullptr)
+				&& Test->TestNotNull(TEXT("上层房有作者站立标高"), Upper->HachimisLayout.Get()))
+			{
+				VerifyObliqueLadderClick(UpperCell);
+			}
+			Cleanup();
+			return true;
+		}
+		void VerifyObliqueLadderClick(const FIntVector& UpperCell)
+		{
+			const auto& Layout = *Upper->HachimisLayout;
+			const FVector Expected = Board->GetGridWorldLocation(UpperCell)
+				+ FVector(0, 0, Layout.StandingHeight - Board->LayerHeight * 0.5);
+			const auto& Parts = Lower->HachimisLayout->Ladder->Parts;
+			const FCollisionQueryParams Query(SCENE_QUERY_STAT(StackedLevelTwoPatrolFloor), true);
+			for (UStaticMeshComponent* Trim : TInlineComponentArray<UStaticMeshComponent*>(Lower))
+			{
+				if (!Trim->ComponentHasTag(TEXT("CastlePCGDynamic")) || !Parts.ContainsByPredicate([Trim](const FCastleV4Part& Part)
+					{ return Part.Mesh == Trim->GetStaticMesh() && Part.Node.ToString().Contains(TEXT("Hatch_SideLip")); }))
+				{
+					continue;
+				}
+				// 从作者压条的实际位置构造有限组斜角。入选射线须确实先经过压条和导航墙盒，
+				// 且延伸到下层，才能检验最近合法楼板优先于更远的平面。
+				const FVector Lip = Trim->Bounds.Origin;
+				for (int32 Octant = 0; Octant < 8; ++Octant)
+				{
+					const double Angle = Octant * UE_PI / 4.0;
+					for (const double Slope : {0.10, 0.20, 0.35, 0.55})
+					{
+						const FVector Direction(FMath::Cos(Angle), FMath::Sin(Angle), -Slope);
+						const FVector Aim = Lip + Direction * ((Lip.Z - Expected.Z) / Slope);
+						if (FMath::Abs(Aim.X - Expected.X) >= Board->CellSize * 0.5
+							|| FMath::Abs(Aim.Y - Expected.Y) >= Board->CellSize * 0.5) { continue; }
+						const FVector Start = Lip - Direction * 600.0;
+						const FVector End = Lip + Direction * 7000.0;
+						FHitResult TrimHit, BarrierHit, FloorHit;
+						if (!Trim->LineTraceComponent(TrimHit, Start, End, Query) || TrimHit.ImpactPoint.Z <= Expected.Z
+							|| !World->LineTraceSingleByChannel(BarrierHit, Start, End, ECC_Pawn, Query)
+							|| !UCastleBuildingPCGComponent::IsNavigationBarrier(BarrierHit.GetComponent())
+							|| BarrierHit.ImpactPoint.Z <= Expected.Z) { continue; }
+						// 用短垂直探针确认斜线在上层标高处落在实体楼板，避免把梯井洞口当作夹具目标。
+						if (!World->LineTraceSingleByChannel(FloorHit, Aim + FVector(0, 0, 1), Aim - FVector(0, 0, 1), ECC_Pawn, Query)
+							|| FloorHit.GetActor() != Upper || UCastleBuildingPCGComponent::IsNavigationBarrier(FloorHit.GetComponent())) { continue; }
+						FVector Point;
+						FText Reason;
+						if (!Test->TestTrue(TEXT("斜穿二级塔梯口压条和隐藏墙盒后能放置路径点"),
+							ACastlePatrolRoute::TryResolveWaypointFromRay(World, Start, End, Point, Reason)))
+						{
+							Test->AddError(Reason.ToString());
+							return;
+						}
+						Test->TestTrue(TEXT("斜射线路径点吸附到上层格心并保留作者标高"), Point.Equals(Expected, 0.1));
+						return;
+					}
+				}
+			}
+			Test->AddError(TEXT("二级塔叠房夹具没有找到同时经过梯口压条、隐藏墙盒和上层楼板的斜射线。"));
 		}
 		template<typename T>void Run(float Delta)
 		{

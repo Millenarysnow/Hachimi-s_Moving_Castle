@@ -6,10 +6,10 @@
 #include "Interaction/CastlePatrolWaypointMarker.h"
 #include "CastlePlayerController.h"
 #include "CastleShopComponent.h"
-#include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Components/InputComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -18,6 +18,7 @@
 #include "UObject/ConstructorHelpers.h"
 #include "Castle/Actors/CastleBoard.h"
 #include "Castle/Actors/CastleBuildingBase.h"
+#include "Castle/Actors/CastleGroundTileActor.h"
 #include "Castle/PCG/CastleBuildingPCGComponent.h"
 #include "Castle/PCG/HachimisV4/CastleHachimisV4Layout.h"
 
@@ -25,11 +26,17 @@ namespace
 {
 	// 硬引用正式蓝图，打包时随巡逻入口和其资产依赖一起 Cook；不依赖手工关卡配置。
 	constexpr const TCHAR* WaypointMarkerAsset = TEXT("/Game/MovingCastle/BP/BP_CastlePatrolWaypointMarker");
-	// 两个通道独立查询同一顶面，允许世界空间 1 mm 的碰撞精度差；不能用导航投影范围穿透前景。
-	constexpr double CoincidentHitTolerance = 0.1;
 	// 功能面与所在格的作者站立面齐平；1 cm 容差不允许把家具或斜坡顶面当作楼板。
 	constexpr double FloorPlaneTolerance = 1.0;
 	constexpr double FloorTopMinDot = 0.99;
+
+	// 区分应继续穿过的非楼板表面，以及已经命中功能面但不能放点的非法棋盘位置。
+	enum class EBuildingFloorHit
+	{
+		OtherSurface,
+		Rejected,
+		Resolved
+	};
 
 	FVector2D GetHorizontalGridCell(const ACastleBoard& Board, const FVector& LocalHit)
 	{
@@ -38,14 +45,25 @@ namespace
 			FMath::FloorToDouble(LocalHit.Y / Board.CellSize + 0.5) + Board.GridOrigin.Y);
 	}
 
-	bool TryResolveBuildingFloor(const ACastleBuildingBase& Building, const FHitResult& Hit, FVector& OutPoint, FText& OutFailureReason)
+	EBuildingFloorHit ResolveBuildingFloor(const ACastleBuildingBase& Building, const FHitResult& Hit,
+		FVector& OutPoint, FText& OutFailureReason)
 	{
+		UPrimitiveComponent* Component = Hit.GetComponent();
+		// 导航相关性同时检查 GameplayRoot 层级及 CanEverAffectNavigation，排除外观与护盾。
+		// 梯井的隐藏墙盒参与导航，须显式排除，才能继续接收其后的楼板命中。
+		if (Component->GetCollisionResponseToChannel(ECC_Pawn) != ECR_Block
+			|| !Building.IsComponentRelevantForNavigation(Component)
+			|| UCastleBuildingPCGComponent::IsNavigationBarrier(Component))
+		{
+			return EBuildingFloorHit::OtherSurface;
+		}
+
 		const auto Reject = [&](const TCHAR* Reason)
 		{
 			OutFailureReason = FText::FromString(FString::Printf(TEXT("巡逻放点失败：建筑 %s 的功能碰撞 %s %s。"),
 				*Building.GetPathName(), *GetNameSafe(Hit.GetComponent()), Reason));
 			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
-			return false;
+			return EBuildingFloorHit::Rejected;
 		};
 		// 碰撞所属建筑只用来找到棋盘。叠放后，下层 PCG 管理的顶板属于上一层行走面。
 		const ACastleBoard* Board = ACastleBoard::FindBoardForBuilding(&Building);
@@ -61,13 +79,13 @@ namespace
 		const FVector LocalHit = Transform.InverseTransformPosition(Hit.ImpactPoint);
 		const double HeightFromFirstFloor = LocalHit.Z - (Board->WorldBaseHeight - Board->LayerHeight * 0.5);
 		const double Layer = FMath::RoundToDouble(HeightFromFirstFloor / Board->LayerHeight);
-		if (Hit.bStartPenetrating || !Building.IsComponentRelevantForNavigation(Hit.GetComponent())
-			|| UCastleBuildingPCGComponent::IsNavigationBarrier(Hit.GetComponent())
-			|| FVector::DotProduct(Hit.ImpactNormal, Board->GetActorUpVector()) < FloorTopMinDot
-			|| Layer < 0 || Layer >= Board->GetUnlockedLayerCount())
+		if (FVector::DotProduct(Hit.ImpactNormal, Board->GetActorUpVector()) < FloorTopMinDot)
 		{
-			// 功能分支也能存放护栏和障碍；首个功能碰撞不是本层楼板时拒绝放点，不继续查下方。
-			return Reject(TEXT("不是棋盘该层的功能楼板顶面"));
+			return EBuildingFloorHit::OtherSurface;
+		}
+		if (Layer < 0 || Layer >= Board->GetUnlockedLayerCount())
+		{
+			return Reject(TEXT("位于棋盘已解锁楼层之外"));
 		}
 
 		const FVector2D XY = GetHorizontalGridCell(*Board, LocalHit);
@@ -85,32 +103,62 @@ namespace
 		const double StandingHeight = FloorOwner->HachimisLayout ? FloorOwner->HachimisLayout->StandingHeight : 0.0;
 		if (!FMath::IsNearlyEqual(HeightFromFirstFloor, Layer * Board->LayerHeight + StandingHeight, FloorPlaneTolerance))
 		{
-			return Reject(TEXT("不是棋盘该层的作者站立面"));
+			return EBuildingFloorHit::OtherSurface;
 		}
 
 		// 只在刚命中的楼板平面内吸附，保留真实高度。格心是否可通行仍由提交时的 NavMesh 验证。
 		OutPoint = Transform.TransformPosition(FVector((XY.X - Board->GridOrigin.X) * Board->CellSize,
 			(XY.Y - Board->GridOrigin.Y) * Board->CellSize, LocalHit.Z));
-		return true;
+		return EBuildingFloorHit::Resolved;
 	}
 
-	bool TryResolveVisibleBuildingFloor(UWorld& World, const ACastleBuildingBase& Building, const FHitResult& VisibleHit,
-		const FCollisionQueryParams& Params, FVector& OutPoint, FText& OutFailureReason)
+	bool IsWorldGroundTop(const FHitResult& Hit)
 	{
-		// 隐藏墙盒约束角色通行。玩家已经看见同一栋楼的顶面时，只在该命中点上下验证功能碰撞，
-		// 以同一顶面的毫米级重合作为选中依据；不能沿原视线继续找楼板，也不能跨到别层。
-		const FVector ProbeOffset = Building.GetActorUpVector() * FloorPlaneTolerance;
-		FHitResult FloorHit;
-		if (!World.LineTraceSingleByChannel(FloorHit, VisibleHit.ImpactPoint + ProbeOffset, VisibleHit.ImpactPoint - ProbeOffset,
-			ECC_Pawn, Params) || FloorHit.GetActor() != &Building
-			|| FVector::DistSquared(FloorHit.ImpactPoint, VisibleHit.ImpactPoint) > FMath::Square(CoincidentHitTolerance))
+		const UPrimitiveComponent* Component = Hit.GetComponent();
+		if (Hit.ImpactNormal.Z < 0.5 || Component->GetCollisionResponseToChannel(ECC_Visibility) != ECR_Block)
 		{
-			OutFailureReason = FText::FromString(FString::Printf(TEXT("巡逻放点失败：建筑 %s 的可见顶面 %s 未与功能楼板重合。"),
-				*Building.GetPathName(), *GetNameSafe(VisibleHit.GetComponent())));
-			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
 			return false;
 		}
-		return TryResolveBuildingFloor(Building, FloorHit, OutPoint, OutFailureReason);
+		// 棋盘地块是专用可点击地面，只响应 Visibility；其余世界地面还应实际阻挡 Pawn。
+		if (const auto* Tile = Cast<ACastleGroundTileActor>(Hit.GetActor()))
+		{
+			return Component == Tile->GetTileMeshComponent();
+		}
+		return !Cast<APawn>(Hit.GetActor()) && Component->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Block;
+	}
+
+	bool ResolveWorldGround(UWorld& World, const FHitResult& Hit, FVector& OutPoint, FText& OutFailureReason)
+	{
+		// 主塔模式使用逻辑棋盘。地面命中只以实际 XY 查格，并保留真实顶面高度。
+		const ACastleBoard* MatchedBoard = nullptr;
+		FVector GridCenter = FVector::ZeroVector;
+		for (TActorIterator<ACastleBoard> It(&World); It; ++It)
+		{
+			const FTransform& Transform = It->GetActorTransform();
+			if (!FMath::IsFinite(It->CellSize) || It->CellSize <= 0.0f || It->GridSize.X <= 0 || It->GridSize.Y <= 0
+				|| !Transform.IsValid() || Transform.GetScale3D().GetAbsMin() <= UE_SMALL_NUMBER)
+			{
+				OutFailureReason = FText::FromString(FString::Printf(TEXT("棋盘 %s 的格距、尺寸或变换无效，无法解析巡逻格心。"), *It->GetPathName()));
+				UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
+				return false;
+			}
+			const FVector2D XY = GetHorizontalGridCell(**It, Transform.InverseTransformPosition(Hit.ImpactPoint));
+			FIntPoint Min, Max;
+			It->GetBoardExtent(Min, Max);
+			if (XY.X < Min.X || XY.X > Max.X || XY.Y < Min.Y || XY.Y > Max.Y) { continue; }
+			if (MatchedBoard)
+			{
+				OutFailureReason = FText::FromString(FString::Printf(TEXT("同一命中属于棋盘 %s 和 %s，无法唯一确定巡逻格心。"),
+					*MatchedBoard->GetPathName(), *It->GetPathName()));
+				UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
+				return false;
+			}
+			MatchedBoard = *It;
+			GridCenter = It->GetGridWorldLocation(FIntVector(static_cast<int32>(XY.X), static_cast<int32>(XY.Y), It->GridOrigin.Z));
+		}
+		// 棋盘外的平地面没有格心，保留实际碰撞点。
+		OutPoint = MatchedBoard ? FVector(GridCenter.X, GridCenter.Y, Hit.ImpactPoint.Z) : FVector(Hit.ImpactPoint);
+		return true;
 	}
 }
 
@@ -327,111 +375,41 @@ bool ACastlePatrolRoute::TryAppendDraftWaypoint(const FVector Point, FText& OutR
 bool ACastlePatrolRoute::TryResolveWaypointFromRay(UWorld* World, const FVector& RayStart, const FVector& RayEnd,
 	FVector& OutPoint, FText& OutFailureReason)
 {
-	FCollisionQueryParams Params(SCENE_QUERY_STAT(CastlePatrolPlacement), true);
+	OutFailureReason = FText::GetEmpty();
 	if (!World)
 	{
 		OutFailureReason = FText::FromString(TEXT("巡逻放点失败：World 无效。"));
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
 		return false;
 	}
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(CastlePatrolPlacement), true);
 	if (APlayerController* Controller = World->GetFirstPlayerController())
 	{
 		if (Controller->GetPawn()) { Params.AddIgnoredActor(Controller->GetPawn()); }
 	}
-	FHitResult Hit, PhysicalHit;
-	const bool bVisibleHit = World->LineTraceSingleByChannel(Hit, RayStart, RayEnd, ECC_Visibility, Params);
-	const bool bPhysicalHit = World->LineTraceSingleByChannel(PhysicalHit, RayStart, RayEnd, ECC_Pawn, Params);
-	const bool bPhysicalInFront = bPhysicalHit && (!bVisibleHit || PhysicalHit.Distance < Hit.Distance);
-	const auto* PhysicalBuilding = Cast<ACastleBuildingBase>(PhysicalHit.GetActor());
-	if (bPhysicalInFront && PhysicalBuilding && Hit.IsValidBlockingHit() && Hit.GetActor() == PhysicalBuilding
-		&& UCastleBuildingPCGComponent::IsNavigationBarrier(PhysicalHit.GetComponent())
-		&& FVector::DotProduct(Hit.ImpactNormal, PhysicalBuilding->GetActorUpVector()) >= FloorTopMinDot)
+	// UE 对象多命中查询在碰撞预筛时收集所有目标形状，不在第一件阻挡物处截断。
+	// 在唯一的距离序列中筛选楼板和地面，确保前方真实支撑面优先。
+	TArray<FHitResult> Hits;
+	World->LineTraceMultiByObjectType(Hits, RayStart, RayEnd,
+		FCollisionObjectQueryParams(FCollisionObjectQueryParams::AllObjects), Params);
+	Hits.Sort([](const FHitResult& A, const FHitResult& B) { return A.Distance < B.Distance; });
+	for (const FHitResult& Hit : Hits)
 	{
-		return TryResolveVisibleBuildingFloor(*World, *PhysicalBuilding, Hit, Params, OutPoint, OutFailureReason);
-	}
-	// 两个通道各只取首个阻挡。上下叠楼的美术平板与实际楼板重合时，优先取实际楼板；
-	// 更靠前的屋顶或墙仍遮挡后面的楼板，不按 XY 去搜索别层。
-	if (bPhysicalHit && PhysicalBuilding && UBuildingGameplayRootComponent::IsInGameplayHierarchy(PhysicalHit.GetComponent())
-		&& (bPhysicalInFront || (bVisibleHit && Hit.ImpactNormal.Z >= 0.5
-			&& FVector::DistSquared(PhysicalHit.ImpactPoint, Hit.ImpactPoint) <= FMath::Square(CoincidentHitTolerance))))
-	{
-		return TryResolveBuildingFloor(*PhysicalBuilding, PhysicalHit, OutPoint, OutFailureReason);
-	}
-	if (!bVisibleHit)
-	{
-		OutFailureReason = FText::FromString(TEXT("请瞄准建筑或可行走地面顶面后放置路径点。"));
-		return false;
-	}
-	if (bPhysicalInFront)
-	{
-		OutFailureReason = FText::FromString(FString::Printf(TEXT("路径点被碰撞 %s 遮挡，请直接瞄准楼板或建筑。"),
-			*GetNameSafe(PhysicalHit.GetComponent())));
-		return false;
-	}
-	if (ACastleBuildingBase* Building = Cast<ACastleBuildingBase>(Hit.GetActor()))
-	{
-		// 选中美术时保留“命中建筑最近占用格”语义，例如楼顶选该建筑的室内楼板，而不是在屋顶放点。
-		for (TActorIterator<ACastleBoard> It(World); It; ++It)
+		if (Hit.bStartPenetrating || !Hit.GetComponent()) { continue; }
+		if (const auto* Building = Cast<ACastleBuildingBase>(Hit.GetActor()))
 		{
-			FCastleGridCursorTarget Target;
-			if (It->GetPlacedBuildings().Contains(Building) && It->TryResolveGridCursorTarget(RayStart, RayEnd, Target) && Target.Surface == ECastleGridCursorSurface::Building)
-			{
-				// 选中屋檐等表现件也要吸附到该占格真实的站立面。旧建筑仍取逻辑格底，V4 取作者标高。
-				const ACastleBuildingBase* FloorOwner = It->GetBuildingAt(Target.Cell);
-				if (!IsValid(FloorOwner))
-				{
-					OutFailureReason = FText::FromString(FString::Printf(TEXT("建筑 %s 的巡逻命中格 %s 没有登记楼体。"),
-						*Building->GetPathName(), *Target.Cell.ToString()));
-					UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
-					return false;
-				}
-				const double StandingHeight = FloorOwner->HachimisLayout ? FloorOwner->HachimisLayout->StandingHeight : 0.0;
-				OutPoint = It->GetGridWorldLocation(Target.Cell)
-					+ It->GetActorTransform().TransformVector(FVector(0, 0, StandingHeight - It->LayerHeight * 0.5));
-				return true;
-			}
+			const EBuildingFloorHit Result = ResolveBuildingFloor(*Building, Hit, OutPoint, OutFailureReason);
+			if (Result == EBuildingFloorHit::Resolved) { return true; }
+			if (Result == EBuildingFloorHit::Rejected) { return false; }
 		}
-		OutFailureReason = FText::FromString(FString::Printf(TEXT("建筑 %s 无法通过棋盘解析命中占用格，拒绝巡逻放点。"), *Building->GetPathName()));
-		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
-		return false;
-	}
-	// 仍然需要实际顶面命中；逻辑网格不能为没有碰撞的空间凭空生成一个楼板。
-	if (Hit.ImpactNormal.Z < 0.5)
-	{
-		OutFailureReason = FText::FromString(TEXT("请瞄准可行走楼板或地面顶面后放置路径点。"));
-		return false;
-	}
-	// 主塔侧挂模式没有地块 Actor，但棋盘仍拥有逻辑格；用实际命中的 XY 查格，
-	// 不调用限定建造面的取格接口，也不把格心下方的障碍物当成另一个可点击面。
-	const ACastleBoard* MatchedBoard = nullptr;
-	FVector GridCenter = FVector::ZeroVector;
-	for (TActorIterator<ACastleBoard> It(World); It; ++It)
-	{
-		const FTransform& Transform = It->GetActorTransform();
-		if (!FMath::IsFinite(It->CellSize) || It->CellSize <= 0.0f || It->GridSize.X <= 0 || It->GridSize.Y <= 0
-			|| !Transform.IsValid() || Transform.GetScale3D().GetAbsMin() <= UE_SMALL_NUMBER)
+		else if (IsWorldGroundTop(Hit))
 		{
-			OutFailureReason = FText::FromString(FString::Printf(TEXT("棋盘 %s 的格距、尺寸或变换无效，无法解析巡逻格心。"), *It->GetPathName()));
-			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
-			return false;
+			return ResolveWorldGround(*World, Hit, OutPoint, OutFailureReason);
 		}
-		const FVector2D XY = GetHorizontalGridCell(**It, Transform.InverseTransformPosition(Hit.ImpactPoint));
-		FIntPoint Min, Max;
-		It->GetBoardExtent(Min, Max);
-		if (XY.X < Min.X || XY.X > Max.X || XY.Y < Min.Y || XY.Y > Max.Y) { continue; }
-		if (MatchedBoard)
-		{
-			OutFailureReason = FText::FromString(FString::Printf(TEXT("同一命中属于棋盘 %s 和 %s，无法唯一确定巡逻格心。"),
-				*MatchedBoard->GetPathName(), *It->GetPathName()));
-			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
-			return false;
-		}
-		MatchedBoard = *It;
-		GridCenter = It->GetGridWorldLocation(FIntVector(static_cast<int32>(XY.X), static_cast<int32>(XY.Y), It->GridOrigin.Z));
 	}
-	// 只改变棋盘内落点的水平位置，沿用原命中层的高度。棋盘外顶面没有格子，仍是原有的自由坐标。
-	OutPoint = MatchedBoard ? FVector(GridCenter.X, GridCenter.Y, Hit.ImpactPoint.Z) : Hit.ImpactPoint;
-	return true;
+	OutFailureReason = FText::FromString(TEXT("巡逻放点失败：射线未命中可行走的楼板或地面顶面。"));
+	UE_LOG(LogMoving_Castle, Log, TEXT("%s"), *OutFailureReason.ToString());
+	return false;
 }
 
 void ACastlePatrolRoute::UndoPoint()

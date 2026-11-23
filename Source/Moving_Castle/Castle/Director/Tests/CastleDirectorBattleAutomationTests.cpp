@@ -451,10 +451,22 @@ private:
 			World.LineTraceSingleByChannel(VisibleHit, ShallowStart, ShallowEnd, ECC_Visibility, Query)
 			&& VisibleHit.GetActor() == &FloorOwner && VisibleHit.ImpactPoint.Z > Expected.Z + 100.0
 			&& FVector::DotProduct(VisibleHit.ImpactNormal, Board.GetActorUpVector()) >= 0.99)) { return false; }
-		Test->AddExpectedError(FloorOwner.GetPathName() + TEXT(" 的可见顶面"), EAutomationExpectedErrorFlags::Contains, 1);
+		// 视觉射线虽先遇到护栏顶面，纯楼板解析仍应沿原射线找到室内功能楼板。
+		FVector ShallowPoint;
+		if (!Test->TestTrue(Label + TEXT(" 射线越过护栏顶面并解析室内楼板"),
+			ACastlePatrolRoute::TryResolveWaypointFromRay(&World, ShallowStart, ShallowEnd, ShallowPoint, Reason)))
+		{
+			Test->AddError(Reason.ToString());
+			return false;
+		}
+		Test->TestTrue(Label + TEXT(" 护栏前景下的路径点仍吸附到楼板格心及作者标高"),
+			ShallowPoint.Equals(Expected, 0.1));
+		// 从塔外立面上方继续朝天空发射，射线不经过任何支撑面，拒绝结果必须可见。
+		const FVector SkyStart = ShallowStart + FVector(0, 0, 100000.0);
 		FVector RejectedPoint;
-		return Test->TestFalse(Label + TEXT(" 护栏顶面不能放点"),
-			ACastlePatrolRoute::TryResolveWaypointFromRay(&World, ShallowStart, ShallowEnd, RejectedPoint, Reason));
+		return Test->TestFalse(Label + TEXT(" 无楼板或地面命中的射线拒绝放点"),
+			ACastlePatrolRoute::TryResolveWaypointFromRay(&World, SkyStart, SkyStart + FVector(0, 0, 10000.0), RejectedPoint, Reason))
+			&& Test->TestTrue(Label + TEXT(" 无命中时给出中文提示"), Reason.ToString().Contains(TEXT("未命中")));
 	}
 
 	FAutomationTestBase* Test;
