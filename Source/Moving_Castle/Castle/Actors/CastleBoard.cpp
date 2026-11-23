@@ -2045,10 +2045,17 @@ ACastleBuildingBase* ACastleBoard::MergeBuildings(ACastleBuildingBase* First, AC
 	// 先准备本次功能塔升级的整批赠牌。候选有任何错误时不替换原塔，也不写背包。
 	TArray<FCastleBuildingDescriptor> RewardCards;
 	const UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
-	const int32 RewardCount = Badges ? Badges->GetUpgradeBonusRoomCards() : 0;
+	const int64 RewardCount = Badges ? Badges->GetUpgradeBonusRoomCards() : 0;
 	if (RewardCount > 0 && First->GetBuildingType() != ECastleBuildingType::NormalRoom
 		&& First->GetBuildingType() != ECastleBuildingType::SpeedRoom)
 	{
+		if (RewardCount > MAX_int32)
+		{
+			OutFailureReason = INVTEXT("合成徽章赠牌张数超过库存数组的容量。");
+			UE_LOG(LogMoving_Castle, Error, TEXT("合成资产 %s 的奖励张数 %lld 无法入库。"),
+				*GetPathNameSafe(MergedDescriptor.Definition), RewardCount);
+			return nullptr;
+		}
 		const UCastleDirectorSubsystem* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
 		if (!Director || !Director->IsRunning() || !IsValid(PrototypeBackpack) || !ValidateBuildingDefinitions(OutFailureReason))
 		{

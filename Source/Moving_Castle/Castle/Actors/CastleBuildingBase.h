@@ -101,7 +101,7 @@ public:
 	}
 
 	/** 结算数值包含蓝房徽章，卡牌身份、放置匹配和合成描述仍读取原数值。 */
-	int32 GetEffectiveBuildingNumber() const;
+	int64 GetEffectiveBuildingNumber() const;
 
 	/** 返回当前建筑的等级。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")

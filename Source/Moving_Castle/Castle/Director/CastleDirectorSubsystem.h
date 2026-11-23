@@ -18,6 +18,8 @@ class UCastleCombatSubsystem;
 class UCastlePendingRoomReward;
 class UCastleTowerUpgradeRewardWidget;
 class UCastleWildcardRoomPickerWidget;
+class ACastleSkyIslandBase;
+struct FCastleBadgeDefinition;
 
 /** 原生阶段事件不承担流程决策，界面和输入只监听最终状态。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCastleDirectorPhaseChanged, ECastleDirectorPhase);
@@ -49,6 +51,13 @@ public:
 	bool AddRunNPCCount(int32 Delta, FText& OutReason);
 	void ClaimTowerUpgradeReward(int32 Index);
 	void DiscardTowerUpgradeRewards();
+	bool TryInteractWithSkyIsland(const FVector& Start, const FVector& End, FText& OutReason);
+	bool RequestIslandRoomShop(ACastleSkyIslandBase* Island, FText& OutReason);
+	bool RequestIslandRoomReward(ACastleSkyIslandBase* Island, UCastlePendingRoomReward* Reward, FText& OutReason);
+	bool RequestIslandBadgeReward(ACastleSkyIslandBase* Island, const FCastleBadgeDefinition& Badge, FText& OutReason);
+#if !UE_BUILD_SHIPPING
+	bool TryEnterSkyIslandFixture(FText& OutReason);
+#endif
 	int32 GetExperience() const { return Experience; }
 	int32 GetClearedSteps() const { return ClearedSteps; }
 	int32 GetNextStep() const { return ClearedSteps + 1; }
@@ -90,6 +99,7 @@ private:
 #if WITH_DEV_AUTOMATION_TESTS
 	friend class FCastleDirectorBattleIntegrationTest;
 	friend class FDirectorBattleScenario;
+	friend class FCastleDirectorWave2Scenario;
 #endif
 	/** 启动只尝试一次；配置、场景或资产错误通过日志和屏幕明确失败。 */
 	void TryAutoStart();
@@ -103,6 +113,10 @@ private:
 	void UpdatePresentation();
 	/** 节点重叠只入队；实际开战、NPC 回收都在 Mass 未处理的游戏线程边界执行。 */
 	bool TryStartSelectedBattle(ACastleDirectorNodeActor* Node, FText& OutReason);
+	/** 节点与验收命令共用同一工厂和传送事务。 */
+	bool TryEnterSkyIsland(ACastleDirectorNodeActor& Node, const UCastleDirectorConfigDataAsset& IslandConfig, FText& OutReason);
+	bool TryDepartSkyIsland(FText& OutReason);
+	bool ValidateIslandAction(const ACastleSkyIslandBase* Island, FText& OutReason) const;
 	bool RecallBattleNPCs(FText& OutReason);
 	bool TryCommitRewards(bool bExperience, bool bHealing, bool bShop, FText& OutReason);
 	bool OpenWildcardPicker(UCastlePendingRoomReward* Reward, FText& OutReason);
@@ -130,6 +144,11 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UCastleTowerUpgradeRewardWidget> TowerUpgradeWidget;
 	UPROPERTY(Transient) TObjectPtr<UCastleWildcardRoomPickerWidget> WildcardPicker;
 	UPROPERTY(Transient) TObjectPtr<ACastlePatrolRoute> PatrolRoute;
+	UPROPERTY(Transient) TObjectPtr<ACastleSkyIslandBase> ActiveSkyIsland;
+	FTransform IslandReturnTransform;
+	FRotator IslandReturnControlRotation;
+	bool bDepartureRequested = false;
+	bool bIslandShopGranted = false;
 	UPROPERTY(Transient) TArray<TObjectPtr<UCastlePendingRoomReward>> UpgradeRoomRewards;
 	TArray<FCastleTowerUpgradeRewardEntry> UpgradeRewards;
 	int32 ActiveUpgradeRewardIndex = INDEX_NONE;

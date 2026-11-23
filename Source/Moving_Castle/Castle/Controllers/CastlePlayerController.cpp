@@ -29,6 +29,7 @@
 #include "Castle/UI/Items/CastleBadgeBarWidget.h"
 #include "Castle/UI/Items/CastleBadgeReplaceModalWidget.h"
 #include "Castle/UI/Items/CastleTempBuildBarWidget.h"
+#include "Components/InputComponent.h"
 
 ACastlePlayerController::ACastlePlayerController()
 {
@@ -700,6 +701,41 @@ bool ACastlePlayerController::MountDirectorItemHUD(UCastleBackpackComponent* Bac
 void ACastlePlayerController::HandleItemBadgeChanged()
 {
 	RefreshModalInput(true);
+}
+
+bool ACastlePlayerController::BindSkyIslandInput(const FKey& Key, FText& OutReason)
+{
+	if (!InputComponent || !Key.IsValid())
+	{
+		OutReason = INVTEXT("无法绑定空岛交互键，输入组件或按键配置无效。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s：%s"), *GetPathName(), *OutReason.ToString());
+		return false;
+	}
+	InputComponent->BindKey(Key, IE_Pressed, this, &ACastlePlayerController::InteractWithSkyIsland);
+	return true;
+}
+
+void ACastlePlayerController::InteractWithSkyIsland()
+{
+	auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
+	if (!Director || Director->GetPhase() != ECastleDirectorPhase::SkyIsland || bModalInputActive) { return; }
+	FVector Start;
+	FRotator Rotation;
+	GetPlayerViewPoint(Start, Rotation);
+	FText Reason;
+	if (!Director->TryInteractWithSkyIsland(Start, Start + Rotation.Vector() * GridCursorTraceDistance, Reason))
+	{
+		ShowDirectorMessage(Reason);
+	}
+}
+
+void ACastlePlayerController::CastleTestSkyIsland()
+{
+#if !UE_BUILD_SHIPPING
+	auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
+	FText Reason;
+	if (!Director || !Director->TryEnterSkyIslandFixture(Reason)) { ShowDirectorMessage(Reason); }
+#endif
 }
 
 void ACastlePlayerController::RefreshModalInput(const bool bForceRefresh)

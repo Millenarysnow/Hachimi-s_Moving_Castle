@@ -44,7 +44,7 @@ bool UCastleSupportTowerSubsystem::BuildHiveSchedule(const ACastleBoard& Board, 
 		for (ACastleBuildingBase* Neighbor : Neighbors)
 		{
 			if (Neighbor == &Source) { continue; }
-			const int32 Difference = Neighbor->GetEffectiveBuildingNumber() - Visit.Building->GetEffectiveBuildingNumber();
+			const int64 Difference = Neighbor->GetEffectiveBuildingNumber() - Visit.Building->GetEffectiveBuildingNumber();
 			// 只有主巢接出口允许同号；进入备用链后不能再经过同号或改变递增/递减方向。
 			if (Visit.Building == &Source ? FMath::Abs(Difference) > 1
 				: (FMath::Abs(Difference) != 1 || (Visit.Step != 0 && Difference != Visit.Step))) { continue; }
@@ -57,7 +57,7 @@ bool UCastleSupportTowerSubsystem::BuildHiveSchedule(const ACastleBoard& Board, 
 				TSet<const ACastleBuildingBase*>& Seen = Difference > 0 ? Ascending : Descending;
 				if (Seen.Contains(Neighbor)) { continue; }
 				Seen.Add(Neighbor);
-				Queue.Add({Neighbor, Difference});
+				Queue.Add({Neighbor, static_cast<int32>(Difference)});
 			}
 			if (!Emitted.Contains(Neighbor))
 			{
@@ -152,11 +152,18 @@ void UCastleSupportTowerSubsystem::TickSwarms(const float DeltaTime, TArray<FCas
 						*GetPathNameSafe(Batch.Source.Get()), Batch.Schedule->Next + 1);
 					continue;
 				}
+				const int64 Count = Next->GetEffectiveBuildingNumber();
+				if (Count > MAX_int32)
+				{
+					UE_LOG(LogMoving_Castle, Error, TEXT("蜂巢备用房 %s 的结算蜂数 %lld 超出批次容量，终止本次备用链。"),
+						*Next->GetPathName(), Count);
+					continue;
+				}
 				FSwarm& Backup = NextBatches.AddDefaulted_GetRef();
 				Backup.Source = Batch.Source;
 				Backup.Home = Next;
 				Backup.Schedule = Batch.Schedule;
-				Backup.Count = Next->GetEffectiveBuildingNumber();
+				Backup.Count = static_cast<int32>(Count);
 				Backup.Level = Batch.Level;
 				Backup.Damage = Batch.Damage;
 				Backup.Speed = Batch.Speed;

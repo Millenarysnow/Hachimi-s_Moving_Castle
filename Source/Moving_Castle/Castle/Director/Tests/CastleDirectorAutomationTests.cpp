@@ -28,6 +28,23 @@ bool FCastleDirectorNodeRulesTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("同种子同关数确定性"), Count, UCastleDirectorSubsystem::GetNodeCountForStep(*Config, Step));
 		TestEqual(TEXT("精英只出现在每5步"), UCastleDirectorSubsystem::GetNodeKindForStep(*Config, Step),
 			Step % 5 == 0 ? ECastleDirectorNodeKind::Elite : ECastleDirectorNodeKind::Normal);
+		const auto Kinds = UCastleDirectorSubsystem::GetNodeKindsForStep(*Config, Step);
+		TestTrue(TEXT("节点批次完全可复现"), Kinds == UCastleDirectorSubsystem::GetNodeKindsForStep(*Config, Step));
+		TestEqual(TEXT("完整类型批次满足节点数量"), Kinds.Num(), Count);
+		const int32 Rest = Kinds.FilterByPredicate([](ECastleDirectorNodeKind Kind) { return Kind == ECastleDirectorNodeKind::RestIsland; }).Num();
+		TestTrue(TEXT("至多一个休息节点"), Rest <= 1);
+		if (Step == 1 || Step % 5 == 0)
+		{
+			for (const auto Kind : Kinds)
+			{
+				TestEqual(TEXT("首步全普通、五倍数步全精英"), Kind,
+					Step == 1 ? ECastleDirectorNodeKind::Normal : ECastleDirectorNodeKind::Elite);
+			}
+		}
+		else
+		{
+			TestTrue(TEXT("普通步始终有普通战斗节点"), Kinds.Contains(ECastleDirectorNodeKind::Normal));
+		}
 	}
 	return true;
 }
@@ -106,6 +123,8 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 	const auto BeforeOffers = Controller->GetShop()->GetOffers();
 	if (!TestTrue(TEXT("成功提交商店奖励后有商品可核对"), !BeforeOffers.IsEmpty())) { return false; }
 	const auto Definitions = Board->BuildingDefinitions;
+	// 独立测试直接切阶段，补齐生产清场前已隐藏建造面的前置条件。
+	TestTrue(TEXT("模拟清场前隐藏建造面"), Board->SetPlacementSurfacePresentationHidden(true, Reason));
 	Board->BuildingDefinitions.Reset();
 	AddExpectedError(TEXT("奖励换批失败"), EAutomationExpectedErrorFlags::Contains, 1);
 	AddExpectedError(TEXT("导演奖励失败"), EAutomationExpectedErrorFlags::Contains, 1);

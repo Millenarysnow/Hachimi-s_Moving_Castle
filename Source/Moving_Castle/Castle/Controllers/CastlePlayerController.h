@@ -65,6 +65,9 @@ public:
 	void SetDirectorModalState(bool bRewardOpen, bool bGameOverOpen, UUserWidget* FocusWidget);
 	/** 正式导演启动时挂接道具 HUD；三个 WBP 全部绑定成功才加入视口。 */
 	bool MountDirectorItemHUD(UCastleBackpackComponent* Backpack, FText& OutReason);
+	/** 资产配置的交互键在导演完成启动校验时绑定。 */
+	bool BindSkyIslandInput(const FKey& Key, FText& OutReason);
+	UFUNCTION(Exec) void CastleTestSkyIsland();
 
 	/** 开战事务准备时立即清除高亮，避免等下一帧控制器 Tick 才撤下旧建造目标。 */
 	void HideDirectorEditingPresentation();
@@ -177,6 +180,7 @@ protected:
 	/** 徽章弹窗监听者在 WBP 刷新可见性后更新控制器的唯一输入锁。 */
 	UFUNCTION()
 	void HandleItemBadgeChanged();
+	void InteractWithSkyIsland();
 
 	/** 统一把收支、选牌和商店失败原因写入日志及屏幕，保证无资源时也有反馈。 */
 	void ShowGameplayMessage(const FString& Message, bool bSuccess) const;

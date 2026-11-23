@@ -26,6 +26,9 @@ public:
 	/** 预备本等级的表现容量；失败时保留之前的所有实例。 */
 	bool SetCapacity(int32 Capacity, FText& OutReason);
 
+	/** 升级事务失败时销毁尚未发布的隐藏资源，保留旧等级全部气球。 */
+	void DiscardCapacityAbove(int32 Capacity);
+
 	/** 只切换受影响的气球和球绳，序号在一次游戏内保持稳定。 */
 	void SetLiveCount(int32 Count);
 

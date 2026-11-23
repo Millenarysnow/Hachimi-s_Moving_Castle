@@ -79,6 +79,12 @@ bool UCastleDirectorConfigDataAsset::ValidateConfig(FText& OutFailureReason) con
 	{
 		return Reject(TEXT("NodeWeights"), FString::Printf(TEXT("%d/%d/%d"), NormalNodeWeight, RewardNodeWeight, RestNodeWeight));
 	}
+	if (!FMath::IsFinite(SkyIslandSpawnDistance) || SkyIslandSpawnDistance < 3000.0f || !FMath::IsFinite(SkyIslandHeightOffset))
+	{
+		return Reject(TEXT("SkyIslandSpawnDistance/SkyIslandHeightOffset"),
+			FString::Printf(TEXT("%g/%g"), SkyIslandSpawnDistance, SkyIslandHeightOffset));
+	}
+	if (!SkyIslandInteractKey.IsValid()) { return Reject(TEXT("SkyIslandInteractKey"), SkyIslandInteractKey.ToString()); }
 	if (!FMath::IsFinite(NodeRingRadius) || NodeRingRadius <= 0.0f) { return Reject(TEXT("NodeRingRadius"), FString::SanitizeFloat(NodeRingRadius)); }
 	if (!FMath::IsFinite(NodeHeightOffset)) { return Reject(TEXT("NodeHeightOffset"), FString::SanitizeFloat(NodeHeightOffset)); }
 	if (!FMath::IsFinite(NodeArcDegrees) || NodeArcDegrees <= 0.0f || NodeArcDegrees > 180.0f)

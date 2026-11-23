@@ -12,7 +12,8 @@ enum class ECastleDirectorPhase : uint8
 	Editing,
 	Battle,
 	Reward,
-	GameOver
+	GameOver,
+	SkyIsland
 };
 
 /** 战斗与空岛共用节点表现，导演根据节点类型进入相应阶段。 */

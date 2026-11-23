@@ -77,6 +77,7 @@ public:
 			const FVector Center = Board->GetGridWorldLocation(Base);
 			const FIntVector Directions[] = { FIntVector(0, -1, 0), FIntVector(-1, 0, 0), FIntVector(1, 0, 0) };
 			const ECastleBuildingType Types[] = { ECastleBuildingType::CannonTower, ECastleBuildingType::ArcherTower, ECastleBuildingType::Farm };
+			FCastleBuildingDescriptor BridgeCard;
 			for (int32 Index = 0; Index < UE_ARRAY_COUNT(Directions); ++Index)
 			{
 				FCastleGridCursorTarget Target;
@@ -92,8 +93,26 @@ public:
 				Card.Number = Cell->Number;
 				ACastleBuildingBase* Placed = Board->PlaceBuildingAtCursor(Target, Card, false, Reason);
 				if (!Test->TestNotNull(TEXT("在塔侧放置正式导航建筑"), Placed)) { Test->AddError(Reason.ToString()); return true; }
-				if (Index == 0) { Building = Placed; }
+				if (Index == 0)
+				{
+					Building = Placed;
+					BridgeCard = Card;
+				}
 				CastleBuildingTests::CompletePlacement(Placed);
+			}
+			// 双门在相反两侧，补齐绕塔的两个直角连接格，确保开环不会穿过塔身。
+			BridgeCard.Definition = Board->FindBuildingDefinition(ECastleBuildingType::NormalRoom);
+			for (const int32 Side : {1, -1})
+			{
+				FCastleGridCursorTarget Corner;
+				Corner.bValid = true;
+				Corner.Surface = ECastleGridCursorSurface::Building;
+				Corner.Cell = Base + FIntVector(0, -1, 0);
+				Corner.AdjacentCell = Corner.Cell + FIntVector(Side, 0, 0);
+				Corner.Face = Side == 1 ? ECastleGridFace::PositiveX : ECastleGridFace::NegativeX;
+				ACastleBuildingBase* Room = Board->PlaceBuildingAtCursor(Corner, BridgeCard, false, Reason);
+				if (!Test->TestNotNull(TEXT("双门之间放置绕塔连接房"), Room)) { Test->AddError(Reason.ToString()); return true; }
+				CastleBuildingTests::CompletePlacement(Room);
 			}
 			Stage = 1;
 			return false;
@@ -236,6 +255,8 @@ public:
 		}
 		if (Stage == 4)
 		{
+			// 升级新增塔身碰撞会重建正式导航，玩家需等新快照就绪才可选择战斗。
+			if (!Navigation->IsNavigationReady()) { return false; }
 			// 第二关在 Mass 处理作用域中记录选择；边界内禁止创建 NPC，随后由导演 Tick 消费。
 			if (Director->ClearedSteps == 1)
 			{
@@ -248,7 +269,11 @@ public:
 				}
 				Director->Tick(0);
 			}
-			else if (!Test->TestTrue(TEXT("后续关卡开战"), Director->TryStartSelectedBattle(Director->Nodes[0], Reason))) { return true; }
+			else if (!Test->TestTrue(TEXT("后续关卡开战"), Director->TryStartSelectedBattle(Director->Nodes[0], Reason)))
+			{
+				Test->AddError(Reason.ToString());
+				return true;
+			}
 			if (!Test->TestEqual(TEXT("进入正式战斗阶段"), Director->GetPhase(), ECastleDirectorPhase::Battle)) { return true; }
 			if (Director->ClearedSteps == 4)
 			{

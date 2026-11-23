@@ -22,7 +22,7 @@
 #include "UObject/ConstructorHelpers.h"
 #include "Units/BuildingInteraction/CastleBuildingTriggerSubsystem.h"
 
-int32 ACastleBuildingBase::GetEffectiveBuildingNumber() const
+int64 ACastleBuildingBase::GetEffectiveBuildingNumber() const
 {
 	// 实时读取已持有的徽章，替换徽章时现有建筑立即按新数字结算。
 	const UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());

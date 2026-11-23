@@ -73,6 +73,10 @@ public:
 
 	/** 升级先验证数值并准备隐藏资源，棋盘扩层成功后才发布等级与生命。 */
 	bool PrepareTowerBalloonTier(int32 NewMaxBalloons, float NewBaseMaxHealth, bool bFullHeal, FText& OutReason);
+	/** 准备成功后提交同一组数值；气球组件此时已分配所需容量。 */
+	void CommitPreparedBalloonTier(int32 NewMaxBalloons, float NewBaseMaxHealth, bool bFullHeal);
+	/** 棋盘扩层失败时撤下预建资源，现有数值与可见气球保持原状。 */
+	void DiscardPreparedBalloonTier();
 
 	/** 更新气球等级和基础最大生命，可由升级调用方选择同时补满。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|主塔")

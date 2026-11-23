@@ -92,7 +92,13 @@ void UCastleSupportTowerSubsystem::Launch(ACastleBuildingBase& Source)
 	FSwarm Batch;
 	Batch.Source = Batch.Home = &Source;
 	Batch.Level = Source.GetBuildingLevel();
-	Batch.Count = Source.GetEffectiveBuildingNumber() * Source.GetOccupiedCoordinates().Num();
+	const int64 Count = Source.GetEffectiveBuildingNumber() * Source.GetOccupiedCoordinates().Num();
+	if (Count > MAX_int32)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("蜂巢塔 %s 的结算蜂数 %lld 超出批次容量。"), *Source.GetPathName(), Count);
+		return;
+	}
+	Batch.Count = static_cast<int32>(Count);
 	Batch.Damage = Data->BeeDamage;
 	Batch.Speed = Data->BeeFlightSpeed;
 	// 巢口在塔上方，以已放置格的最高层定位，避免高层塔从底层模型中心出蜂。

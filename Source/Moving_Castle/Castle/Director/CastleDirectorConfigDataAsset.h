@@ -4,6 +4,8 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+#include "InputCoreTypes.h"
+#include "Castle/SkyIslands/CastleSkyIslandTypes.h"
 #include "CastleDirectorConfigDataAsset.generated.h"
 
 class UMassEntityConfigAsset;
@@ -63,6 +65,12 @@ public:
 	UPROPERTY(EditAnywhere, Category = "导演|节点") int32 NormalNodeWeight = 40;
 	UPROPERTY(EditAnywhere, Category = "导演|节点") int32 RewardNodeWeight = 40;
 	UPROPERTY(EditAnywhere, Category = "导演|节点") int32 RestNodeWeight = 20;
+
+	/** 工厂只接受显式登记的玩法类，波次 2 正式资产保留空映射。 */
+	UPROPERTY(EditAnywhere, Category = "导演|空岛") TMap<ECastleSkyIslandType, TSubclassOf<ACastleSkyIslandBase>> SkyIslandClasses;
+	UPROPERTY(EditAnywhere, Category = "导演|空岛") float SkyIslandSpawnDistance = 9500.0f;
+	UPROPERTY(EditAnywhere, Category = "导演|空岛") float SkyIslandHeightOffset = 1200.0f;
+	UPROPERTY(EditAnywhere, Category = "导演|空岛") FKey SkyIslandInteractKey = EKeys::E;
 
 	/** 节点与主塔目标点的水平半径，单位厘米。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|节点", meta = (Units = "cm"))

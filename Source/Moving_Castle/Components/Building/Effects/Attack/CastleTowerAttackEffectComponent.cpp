@@ -187,6 +187,12 @@ void UCastleTowerAttackEffectComponent::TickComponent(const float DeltaTime, con
 		return;
 	}
 	const float Rate = Support->GetTowerFireRateMultiplier(*Building);
+	if (!FMath::IsFinite(Rate) || Rate <= 0.0f)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("塔 %s 的有效射速倍率 %g 无效。"), *Building->GetPathName(), Rate);
+		bWaitingForExternalRetry = true;
+		return;
+	}
 	if (Rate != CooldownRateMultiplier && NextShotWorldTime > CurrentWorldTime)
 	{
 		NextShotWorldTime = CurrentWorldTime + (NextShotWorldTime - CurrentWorldTime) * CooldownRateMultiplier / Rate;
