@@ -1,13 +1,19 @@
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
 #include "Castle/Actors/CastleBoard.h"
+#include "Castle/Actors/CastleBuildingBase.h"
+#include "Castle/Automation/CastleBuildingTestUtilities.h"
+#include "Castle/PCG/HachimisV4/CastleHachimisV4Layout.h"
+#include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "Interaction/CastlePatrolRoute.h"
 #include "Interaction/CastlePatrolWaypointMarker.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePatrolWaypointGridCenterTest, "MovingCastle.Navigation.PatrolWaypoint.GridCenter",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -50,11 +56,127 @@ bool FCastlePatrolWaypointGridCenterTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("两次点击不同位置也落在同一个水平格心，Z 仍是真实顶面"), First.Equals(Expected, 0.1) && Second.Equals(Expected, 0.1));
 	TestTrue(TEXT("跨过半格边界就取相邻格心"), Neighbor.Equals(Layout.TransformPosition(FVector(2 * Size, Size, 250)), 0.1));
 	TestTrue(TEXT("棋盘范围外没有逻辑格，保留实际命中位置"), Outside.Equals(OutsideHit, 0.1));
+
+	// 同一条射线先经过只响应 Visibility 的非建筑装饰，再经过两个可行走平面。
+	// 改变上层平面的碰撞通道后，仍应命中原地面，并保留真实高度。
+	AActor* RaisedFloor = World->SpawnActor<AActor>();
+	UBoxComponent* RaisedCollision = NewObject<UBoxComponent>(RaisedFloor);
+	RaisedFloor->SetRootComponent(RaisedCollision);
+	RaisedCollision->SetBoxExtent(FVector(80, 80, 10));
+	RaisedCollision->SetCollisionProfileName(TEXT("BlockAll"));
+	RaisedCollision->RegisterComponent();
+	RaisedFloor->SetActorLocation(Expected + FVector(0, 0, 30));
+	FVector RaisedPoint;
+	Trace(Expected, RaisedPoint);
+	TestTrue(TEXT("两个合法支撑面中优先采用距离较近的顶面"), RaisedPoint.Equals(Expected + FVector(0, 0, 40), 0.1));
+	RaisedCollision->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+	Trace(Expected, RaisedPoint);
+	TestTrue(TEXT("仅可见的装饰顶面不截断地面命中"), RaisedPoint.Equals(Expected, 0.1));
+
 	FText Failure;
 	TestFalse(TEXT("未命中真实顶面不生成虚拟落点"), ACastlePatrolRoute::TryResolveWaypointFromRay(World, Expected + FVector(0, 0, 200),
 		Expected + FVector(0, 0, 100), Outside, Failure));
 	World->DestroyWorld(false);
 	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePatrolWaypointSpeedRoomTest, "MovingCastle.Navigation.PatrolWaypoint.SpeedRoomFloor",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastlePatrolWaypointSpeedRoomTest::RunTest(const FString& Parameters)
+{
+	// 通过正式定义和棋盘放置实例化加速房，测试无需改写其蓝图或添加测试碰撞。
+	auto* Definition = LoadObject<UCastleBuildingDefinition>(nullptr,
+		TEXT("/Game/MovingCastle/Data/Buildings/DA_SpeedRoom.DA_SpeedRoom"));
+	if (!TestNotNull(TEXT("正式加速房定义可加载"), Definition)) { return false; }
+	const auto Settings = UWorld::InitializationValues().CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false);
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Settings);
+	if (!TestNotNull(TEXT("创建加速房测试世界"), World)) { return false; }
+	// 正式 PCG 会实例化并销毁变体，提供游戏 WorldContext 以走完整生命周期。
+	GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
+	auto* Board = World->SpawnActor<ACastleBoard>();
+	if (!TestNotNull(TEXT("创建加速房测试棋盘"), Board)) { return false; }
+	Board->GridSize = FIntVector(1, 1, 1);
+	Board->BuildingDefinitions = {Definition};
+	FCastleGroundGenerationResult Ground;
+	FCastleGroundCell& Cell = Ground.Cells.AddDefaulted_GetRef();
+	Cell.Coordinate = Board->GridOrigin;
+	Cell.Color = ECastleTileColor::Red;
+	Cell.Number = 3;
+	FCastleBuildingDescriptor Card;
+	FText Reason;
+	if (!Board->ApplyGroundGenerationResult(Ground, Reason) || !Definition->CreateDescriptor(1, Cell.Color, Cell.Number, Card, Reason))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	// 隐藏真实棋盘地块的点击面，只验证加速房自己的功能楼板。
+	Board->SetGroundPresentationHidden(true);
+	auto* Room = Board->PlaceBuilding(Cell.Coordinate, Card, false, Reason);
+	if (!TestNotNull(TEXT("正式一级加速房可放置"), Room)
+		|| !TestTrue(TEXT("正式加速房完成飞入"), CastleBuildingTests::CompletePlacement(Room)))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	// 旧加速房的准绳是格底 Z=0，直接由棋盘计算期望值。
+	TestNull(TEXT("加速房沿用旧模板站立标高"), Room->HachimisLayout.Get());
+	const FVector Expected = Board->GetGridWorldLocation(Cell.Coordinate) - FVector(0, 0, Board->LayerHeight * 0.5);
+	const FVector Start = Expected + FVector(40, -30, 150);
+	const FVector End = Expected + FVector(40, -30, -20);
+	FHitResult FloorHit;
+	if (!TestTrue(TEXT("加速房有真实功能楼板且阻挡 Pawn"), World->LineTraceSingleByChannel(FloorHit, Start, End, ECC_Pawn)))
+	{
+		return false;
+	}
+	UPrimitiveComponent* Floor = FloorHit.GetComponent();
+	TestTrue(TEXT("功能楼板顶面位于格底"), FMath::IsNearlyEqual(FloorHit.ImpactPoint.Z, Expected.Z, 0.01));
+	TestTrue(TEXT("加速房楼板位于功能层级并参与导航"), Floor && FloorHit.GetActor() == Room
+		&& Floor->GetFName() == TEXT("GameplayFloor_0_0_0") && Room->IsComponentRelevantForNavigation(Floor));
+	TestTrue(TEXT("加速房功能楼板保持 Visibility 透明"), Floor && Floor->GetCollisionResponseToChannel(ECC_Visibility) == ECR_Ignore);
+	FVector Point;
+	if (!TestTrue(TEXT("巡逻射线能解析加速房楼板"), ACastlePatrolRoute::TryResolveWaypointFromRay(World, Start, End, Point, Reason)))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	TestTrue(TEXT("加速房路径点吸附到格心并保留楼面标高"), Point.Equals(Expected, 0.1));
+
+	// 在单层棋盘中加入功能障碍。其顶面已高过半层，旧的取整顺序会先把它判为未解锁层。
+	UBoxComponent* Obstacle = NewObject<UBoxComponent>(Room, TEXT("PatrolFloorTestObstacle"));
+	Obstacle->SetupAttachment(Room->GameplayRoot);
+	Obstacle->SetBoxExtent(FVector(80, 80, 5));
+	Obstacle->SetRelativeLocation(FVector(0, 0, 295));
+	Obstacle->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	Obstacle->SetCollisionResponseToAllChannels(ECR_Ignore);
+	Obstacle->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+	Obstacle->SetCanEverAffectNavigation(true);
+	Room->AddInstanceComponent(Obstacle);
+	Obstacle->RegisterComponent();
+	const FVector AboveObstacle = Start + FVector(0, 0, 550);
+	FHitResult ObstacleHit;
+	if (!TestTrue(TEXT("功能障碍顶面先于真实楼板命中 Pawn 射线"),
+		Room->IsComponentRelevantForNavigation(Obstacle)
+		&& World->LineTraceSingleByChannel(ObstacleHit, AboveObstacle, End, ECC_Pawn)
+		&& ObstacleHit.GetComponent() == Obstacle && FMath::IsNearlyEqual(ObstacleHit.ImpactPoint.Z, Expected.Z + 300.0, 0.01)))
+	{
+		return false;
+	}
+	if (!TestTrue(TEXT("越过高于半层的障碍后仍解析当前层楼板"),
+		ACastlePatrolRoute::TryResolveWaypointFromRay(World, AboveObstacle, End, Point, Reason)))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	TestTrue(TEXT("障碍后方落点仍吸附到真实楼板"), Point.Equals(Expected, 0.1));
+
+	// 顶面移动到下一层的精确站立标高后，它是未解锁楼板，整次点击应明确拒绝。
+	Obstacle->SetRelativeLocation(FVector(0, 0, Board->LayerHeight - 5.0));
+	AddExpectedError(TEXT("位于棋盘已解锁楼层之外"), EAutomationExpectedErrorFlags::Contains, 1);
+	return TestFalse(TEXT("未解锁层的真实楼板拒绝点击"), ACastlePatrolRoute::TryResolveWaypointFromRay(
+		World, AboveObstacle, End, Point, Reason))
+		&& TestTrue(TEXT("未解锁楼板提供明确失败提示"), Reason.ToString().Contains(TEXT("已解锁楼层之外")));
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePatrolWaypointNumberTest, "MovingCastle.Navigation.PatrolWaypoint.NumberModel",
