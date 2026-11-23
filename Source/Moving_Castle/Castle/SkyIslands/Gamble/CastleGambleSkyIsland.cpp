@@ -3,6 +3,7 @@
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
 #include "CastleEconomyComponent.h"
+#include "CastleGambleRouletteWidget.h"
 #include "CastleMainTowerComponent.h"
 #include "CastlePlayerController.h"
 #include "Components/InstancedStaticMeshComponent.h"
@@ -93,6 +94,8 @@ ACastleGambleSkyIsland::ACastleGambleSkyIsland()
 	PrimaryActorTick.bStartWithTickEnabled = false;
 	ConfigAsset = TSoftObjectPtr<UCastleGambleSkyIslandDataAsset>(FSoftObjectPath(
 		TEXT("/Game/MovingCastle/Data/SkyIslands/DA_GambleSkyIsland.DA_GambleSkyIsland")));
+	RoulettePanelClass = TSoftClassPtr<UCastleGambleRouletteWidget>(FSoftObjectPath(
+		TEXT("/Game/MovingCastle/UI/SkyIslands/Gamble/WBP_GambleRoulettePanel.WBP_GambleRoulettePanel_C")));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cylinder(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
@@ -233,9 +236,44 @@ void ACastleGambleSkyIsland::ShowResult(const FText& Result) const
 
 bool ACastleGambleSkyIsland::OpenRoulettePanel(FText& OutReason)
 {
-	// 第二期提供界面，核心结算可独立调用，机台明确报告面板尚未安装。
-	return Reject(INVTEXT("轮盘面板尚未安装。"), OutReason);
+	if (RoulettePanel) { return Reject(INVTEXT("轮盘面板已经打开。"), OutReason); }
+	UClass* Class = RoulettePanelClass.LoadSynchronous();
+	ACastlePlayerController* Controller = GetIslandContext().Controller.Get();
+	if (!Class || !Controller)
+	{
+		return Reject(FText::Format(INVTEXT("缺少轮盘面板 {0} 或有效玩家控制器。"), FText::FromString(RoulettePanelClass.ToString())), OutReason);
+	}
+	auto* Panel = CreateWidget<UCastleGambleRouletteWidget>(Controller, Class);
+	if (!Panel) { return Reject(INVTEXT("无法实例化轮盘 WBP。"), OutReason); }
+	if (!Panel->BindIsland(this, OutReason)) { return Reject(OutReason, OutReason); }
+	RoulettePanel = Panel;
+	Panel->AddToViewport(53);
+	Panel->SetAnchorsInViewport(FAnchors(1.0f, 0.5f));
+	Panel->SetAlignmentInViewport(FVector2D(1.0, 0.5));
+	Panel->SetPositionInViewport(FVector2D(-32.0, 0.0), false);
+	// E 键、视角和鼠标使用控制器同一份输入锁，老虎机只能在面板关闭后通过实际交互开启奖励弹窗。
+	Controller->SetDirectorModalState(true, false, Panel);
+	return true;
 }
+
+bool ACastleGambleSkyIsland::TryCloseRoulettePanel(FText& OutReason)
+{
+	if (!TryReturnAllCards(OutReason)) { return false; }
+	RemoveRoulettePanel();
+	return true;
+}
+
+void ACastleGambleSkyIsland::RemoveRoulettePanel()
+{
+	if (!RoulettePanel) { return; }
+	RoulettePanel->RemoveFromParent();
+	RoulettePanel = nullptr;
+	if (ACastlePlayerController* Controller = GetIslandContext().Controller.Get())
+	{
+		Controller->SetDirectorModalState(false, false, nullptr);
+	}
+}
+
 bool ACastleGambleSkyIsland::TryPlaceCard(const int32 BackpackIndex, const FIntVector& Cell, FText& OutReason)
 {
 	if (bTransacting || IsRouletteSpinning() || !IsValid(Backpack))
@@ -331,6 +369,7 @@ void ACastleGambleSkyIsland::Tick(const float DeltaSeconds)
 	if (!IsRouletteSpinning())
 	{
 		SetActorTickEnabled(false);
+		if (RoulettePanel) { RoulettePanel->FinishSpin(RouletteResult); }
 		ShowResult(RouletteResult);
 	}
 }
@@ -339,6 +378,7 @@ void ACastleGambleSkyIsland::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	FText Reason;
 	ensureAlwaysMsgf(TryReturnAllCards(Reason), TEXT("赌博空岛 %s 离岛退牌失败：%s"), *GetPathName(), *Reason.ToString());
+	RemoveRoulettePanel();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -422,9 +462,9 @@ bool ACastleGambleSkyIsland::TrySettleSlot(const ECastleSlotPrize Prize, FRandom
 	{
 		UCastlePendingRoomReward* Pending = nullptr;
 		bGranted = UCastleItemGrantLibrary::TryGrantRoomGroup(Group, Backpack, Config->RoomDefinitions, Candidate, Pending, OutReason);
-		if (bGranted && Pending) { bGranted = GrantPendingRoomRewardUI(Pending, OutReason); }
+		if (bGranted && Pending) { bGranted = PresentRoomPrize(Pending, OutReason); }
 	}
-	else if (Badge) { bGranted = GrantBadgeWithReplaceUI(Badge->Badge, OutReason); }
+	else if (Badge) { bGranted = PresentBadgePrize(Badge->Badge, OutReason); }
 	else if (Payout > 0) { bGranted = Economy->TryAddGold(Payout, OutReason); }
 	if (!bGranted)
 	{
@@ -435,6 +475,16 @@ bool ACastleGambleSkyIsland::TrySettleSlot(const ECastleSlotPrize Prize, FRandom
 			FText::FromString(Group ? Group->GetPathName() : GetPathNameSafe(Badge)), OutReason), OutReason);
 	}
 	return true;
+}
+
+bool ACastleGambleSkyIsland::PresentRoomPrize(UCastlePendingRoomReward* Reward, FText& OutReason)
+{
+	return GrantPendingRoomRewardUI(Reward, OutReason);
+}
+
+bool ACastleGambleSkyIsland::PresentBadgePrize(const FCastleBadgeDefinition& Badge, FText& OutReason)
+{
+	return GrantBadgeWithReplaceUI(Badge, OutReason);
 }
 
 bool ACastleGambleSkyIsland::TryRecycleBalloon(FText& OutReason)

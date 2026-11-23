@@ -7,7 +7,9 @@
 
 class UCastleBadgeSubsystem;
 class UCastleEconomyComponent;
+class UCastleGambleRouletteWidget;
 class UCastleMainTowerComponent;
+class UCastlePendingRoomReward;
 class UInstancedStaticMeshComponent;
 class UMaterialInterface;
 
@@ -44,19 +46,25 @@ public:
 	bool TryPlaceCard(int32 BackpackIndex, const FIntVector& Cell, FText& OutReason);
 	bool TryReturnLastCard(FText& OutReason);
 	bool TrySpinRoulette(ECastleRouletteColor Bet, FText& OutReason);
+	bool TryCloseRoulettePanel(FText& OutReason);
 	bool IsRouletteSpinning() const { return SpinTimeRemaining > 0; }
 	const FText& GetRouletteResult() const { return RouletteResult; }
 
 protected:
 	virtual bool OnInitializeIsland(const FCastleSkyIslandContext& Context, FText& OutReason) override;
+	/** 正式奖励由导演管理，验收载体复用奖励控件但独立托管其生命周期。 */
+	virtual bool PresentRoomPrize(UCastlePendingRoomReward* Reward, FText& OutReason);
+	virtual bool PresentBadgePrize(const FCastleBadgeDefinition& Badge, FText& OutReason);
 
 private:
 	friend class UCastleGambleMachineComponent;
 	friend class FCastleGambleIslandAutomationTest;
+	friend class FCastleGambleAcceptanceScenario;
 
 	/** 同步交易内的库存通知不得重入另一项机台操作。 */
 	bool CanUseMachine(const FCastleSkyIslandInteractContext& Context, FText& OutReason) const;
 	bool OpenRoulettePanel(FText& OutReason);
+	void RemoveRoulettePanel();
 	bool TryReturnAllCards(FText& OutReason);
 	bool TryPlaySlot(FText& OutReason);
 	bool TrySettleSlot(ECastleSlotPrize Prize, FRandomStream& Candidate, FText& OutSummary, FText& OutReason);
@@ -73,6 +81,9 @@ private:
 
 	UPROPERTY(EditDefaultsOnly, Category = "赌博空岛")
 	TSoftObjectPtr<UCastleGambleSkyIslandDataAsset> ConfigAsset;
+	/** 持久化软引用让打包收集器能发现面板，进入轮盘交互时才实例化。 */
+	UPROPERTY(EditDefaultsOnly, Category = "赌博空岛")
+	TSoftClassPtr<UCastleGambleRouletteWidget> RoulettePanelClass;
 	UPROPERTY(Transient) TObjectPtr<UCastleGambleSkyIslandDataAsset> Config;
 	UPROPERTY(Transient) TObjectPtr<UCastleBackpackComponent> Backpack;
 	UPROPERTY(Transient) TObjectPtr<UCastleEconomyComponent> Economy;
@@ -93,6 +104,7 @@ private:
 	UPROPERTY() TArray<TObjectPtr<UTextRenderComponent>> MiniLabels;
 	UPROPERTY() TObjectPtr<UTextRenderComponent> SlotResultLabel;
 	UPROPERTY() TObjectPtr<UTextRenderComponent> RecyclerResultLabel;
+	UPROPERTY(Transient) TObjectPtr<UCastleGambleRouletteWidget> RoulettePanel;
 
 	FRandomStream RouletteRandom;
 	FRandomStream SlotRandom;
