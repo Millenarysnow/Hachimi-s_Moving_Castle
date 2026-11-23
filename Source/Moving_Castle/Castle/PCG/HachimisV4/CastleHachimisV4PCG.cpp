@@ -223,9 +223,9 @@ namespace CastleV4PCG
 	}
 
 	void AddBox(FCastlePCGApplyPlan& Plan, const FTransform& Frame, const FVector& Center, const FVector& Extent,
-		const FQuat& Rotation = FQuat::Identity)
+		bool bIsNavigationBarrier, const FQuat& Rotation = FQuat::Identity)
 	{
-		Plan.FunctionalBoxes.Add({FTransform(Rotation, Center) * Frame, Extent});
+		Plan.FunctionalBoxes.Add({FTransform(Rotation, Center) * Frame, Extent, bIsNavigationBarrier});
 	}
 
 	/** 生成墙另一侧的通行约束。柱间外缘始终封住，两侧门洞采用作者最窄净宽。 */
@@ -235,16 +235,16 @@ namespace CastleV4PCG
 		const double HalfWidth = FullWidth * 0.5;
 		if (DoorWidth == 0.0)
 		{
-			AddBox(Plan, WallFrame, FVector(SideOffset, 0, Stand + Height * 0.5), FVector(HalfWidth, WallHalfDepth, Height * 0.5));
+			AddBox(Plan, WallFrame, FVector(SideOffset, 0, Stand + Height * 0.5), FVector(HalfWidth, WallHalfDepth, Height * 0.5), true);
 			return;
 		}
 		const double DoorHalf = DoorWidth * 0.5;
 		const double Left = SideOffset - HalfWidth;
 		const double Right = SideOffset + HalfWidth;
 		AddBox(Plan, WallFrame, FVector((Left - DoorHalf) * 0.5, 0, Stand + Height * 0.5),
-			FVector((-DoorHalf - Left) * 0.5, WallHalfDepth, Height * 0.5));
+			FVector((-DoorHalf - Left) * 0.5, WallHalfDepth, Height * 0.5), true);
 		AddBox(Plan, WallFrame, FVector((Right + DoorHalf) * 0.5, 0, Stand + Height * 0.5),
-			FVector((Right - DoorHalf) * 0.5, WallHalfDepth, Height * 0.5));
+			FVector((Right - DoorHalf) * 0.5, WallHalfDepth, Height * 0.5), true);
 	}
 
 	void AddHeightTransition(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FIntVector& Cell,
@@ -260,7 +260,7 @@ namespace CastleV4PCG
 		const FVector SurfaceCenter = Edge + FVector(Side) * (Run * 0.5) + FVector(0, 0, Height * 0.5);
 		const FQuat Rotation = Yaw * FQuat(FVector::RightVector, -Tilt);
 		AddBox(Plan, Frame, SurfaceCenter - Rotation.GetUpVector() * (Rules.FloorThickness * 0.5),
-			FVector(FMath::Sqrt(Run * Run + Height * Height) * 0.5 + 2.0, Width * 0.5, Rules.FloorThickness * 0.5), Rotation);
+			FVector(FMath::Sqrt(Run * Run + Height * Height) * 0.5 + 2.0, Width * 0.5, Rules.FloorThickness * 0.5), false, Rotation);
 	}
 
 	const FCastleV4WallSlot* FindWall(const UCastleHachimisV4Layout& Layout, const FIntVector& Cell, const FIntVector& Direction)
@@ -341,7 +341,7 @@ namespace CastleV4PCG
 			FBox(FVector(Opening.Max.X, Low.Y, Low.Z), High),
 			FBox(FVector(Opening.Min.X, Low.Y, Low.Z), FVector(Opening.Max.X, Opening.Min.Y, High.Z)),
 			FBox(FVector(Opening.Min.X, Opening.Max.Y, Low.Z), FVector(Opening.Max.X, High.Y, High.Z))};
-		for (const FBox& Rect : Rects) { AddBox(Plan, FTransform::Identity, Rect.GetCenter(), Rect.GetExtent()); }
+		for (const FBox& Rect : Rects) { AddBox(Plan, FTransform::Identity, Rect.GetCenter(), Rect.GetExtent(), false); }
 		return true;
 	}
 
@@ -366,7 +366,11 @@ namespace CastleV4PCG
 		if (!Keys.IsEmpty()) { Plan.VisualKey = FMD5::HashAnsiString(*FString::Join(Keys, TEXT("|"))); }
 		Keys.Reset();
 		for (const UPrimitiveComponent* Floor : Plan.DisabledFloors) { Keys.Add(TEXT("Floor/") + Floor->GetName()); }
-		for (const auto& Box : Plan.FunctionalBoxes) { Keys.Add(Box.Key.ToString() + Box.Value.ToString()); }
+		for (const FCastlePCGFunctionalBox& Box : Plan.FunctionalBoxes)
+		{
+			// 用途也是功能配置的一部分；几何相同、用途改变时必须重新应用组件标签。
+			Keys.Add((Box.bIsNavigationBarrier ? TEXT("Barrier/") : TEXT("Surface/")) + Box.Relative.ToString() + Box.Extent.ToString());
+		}
 		for (const FCastlePCGLadderPlan& Link : Plan.LadderFrames)
 		{
 			Keys.Add(Link.LowerCell.ToString() + Link.Relative.ToString() + Link.BottomStand.ToString() + Link.TopStand.ToString()

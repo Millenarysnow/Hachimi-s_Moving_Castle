@@ -31,6 +31,15 @@ struct FCastlePCGLadderPlan
 	FVector LadderTop;
 };
 
+/** 功能盒使用建筑局部变换与未缩放厘米半径；墙盒和走板的用途由生成方明确声明。 */
+struct FCastlePCGFunctionalBox
+{
+	FTransform Relative;
+	FVector Extent;
+	/** 隐藏墙盒提供通行边界，其表面不能作为玩家瞄准的楼板。 */
+	bool bIsNavigationBarrier;
+};
+
 /** 完整验证后的单栋变化计划；提交前不隐藏原件或修改功能几何。 */
 struct FCastlePCGApplyPlan
 {
@@ -39,8 +48,7 @@ struct FCastlePCGApplyPlan
 	FString VisualKey;
 	TSet<UPrimitiveComponent*> Hidden;
 	TArray<FCastlePCGMeshTemplate> Visuals;
-	/** 功能盒使用建筑局部变换与未缩放厘米半径。 */
-	TArray<TPair<FTransform, FVector>> FunctionalBoxes;
+	TArray<FCastlePCGFunctionalBox> FunctionalBoxes;
 	TArray<FCastlePCGLadderPlan> LadderFrames;
 	/** 通梯交界切换上层原功能楼板，关闭的碰撞随邻接撤销而恢复。 */
 	TSet<UPrimitiveComponent*> DisabledFloors;
@@ -52,6 +60,8 @@ class MOVING_CASTLE_API UCastleBuildingPCGComponent : public UActorComponent
 {
 	GENERATED_BODY()
 public:
+	/** 识别由 PCG 生成的通行墙盒，避免用组件名或碰撞形状推测功能。 */
+	static bool IsNavigationBarrier(const UPrimitiveComponent* Component);
 	/** 首次缓存所有原件及作者显隐；后续只读该快照，避免把动画显隐当成作者配置。 */
 	bool CacheOriginalParts(const ACastleBoard* Board, FString& Error);
 	/** 将纯规则输出变成完整美术/碰撞计划，缺少单格参考护栏等情况在这里失败。 */

@@ -18,6 +18,7 @@
 #include "UObject/ConstructorHelpers.h"
 #include "Castle/Actors/CastleBoard.h"
 #include "Castle/Actors/CastleBuildingBase.h"
+#include "Castle/PCG/CastleBuildingPCGComponent.h"
 #include "Castle/PCG/HachimisV4/CastleHachimisV4Layout.h"
 
 namespace
@@ -28,6 +29,7 @@ namespace
 	constexpr double CoincidentHitTolerance = 0.1;
 	// 功能面与所在格的作者站立面齐平；1 cm 容差不允许把家具或斜坡顶面当作楼板。
 	constexpr double FloorPlaneTolerance = 1.0;
+	constexpr double FloorTopMinDot = 0.99;
 
 	FVector2D GetHorizontalGridCell(const ACastleBoard& Board, const FVector& LocalHit)
 	{
@@ -60,7 +62,8 @@ namespace
 		const double HeightFromFirstFloor = LocalHit.Z - (Board->WorldBaseHeight - Board->LayerHeight * 0.5);
 		const double Layer = FMath::RoundToDouble(HeightFromFirstFloor / Board->LayerHeight);
 		if (Hit.bStartPenetrating || !Building.IsComponentRelevantForNavigation(Hit.GetComponent())
-			|| FVector::DotProduct(Hit.ImpactNormal, Board->GetActorUpVector()) < 0.99
+			|| UCastleBuildingPCGComponent::IsNavigationBarrier(Hit.GetComponent())
+			|| FVector::DotProduct(Hit.ImpactNormal, Board->GetActorUpVector()) < FloorTopMinDot
 			|| Layer < 0 || Layer >= Board->GetUnlockedLayerCount())
 		{
 			// 功能分支也能存放护栏和障碍；首个功能碰撞不是本层楼板时拒绝放点，不继续查下方。
@@ -78,7 +81,7 @@ namespace
 		const FIntVector Cell(static_cast<int32>(XY.X), static_cast<int32>(XY.Y), Board->GridOrigin.Z + static_cast<int32>(Layer));
 		const ACastleBuildingBase* FloorOwner = Board->GetBuildingAt(Cell);
 		if (!IsValid(FloorOwner)) { return Reject(TEXT("命中楼层的对应格没有登记建筑")); }
-		// 下层可拥有楼板美术或碰撞。功能高度以命中层实际登记的楼体为准，盾塔仍使用旧标高。
+		// 下层可拥有楼板美术或碰撞。功能高度以命中层实际登记的楼体为准。
 		const double StandingHeight = FloorOwner->HachimisLayout ? FloorOwner->HachimisLayout->StandingHeight : 0.0;
 		if (!FMath::IsNearlyEqual(HeightFromFirstFloor, Layer * Board->LayerHeight + StandingHeight, FloorPlaneTolerance))
 		{
@@ -89,6 +92,25 @@ namespace
 		OutPoint = Transform.TransformPosition(FVector((XY.X - Board->GridOrigin.X) * Board->CellSize,
 			(XY.Y - Board->GridOrigin.Y) * Board->CellSize, LocalHit.Z));
 		return true;
+	}
+
+	bool TryResolveVisibleBuildingFloor(UWorld& World, const ACastleBuildingBase& Building, const FHitResult& VisibleHit,
+		const FCollisionQueryParams& Params, FVector& OutPoint, FText& OutFailureReason)
+	{
+		// 隐藏墙盒约束角色通行。玩家已经看见同一栋楼的顶面时，只在该命中点上下验证功能碰撞，
+		// 以同一顶面的毫米级重合作为选中依据；不能沿原视线继续找楼板，也不能跨到别层。
+		const FVector ProbeOffset = Building.GetActorUpVector() * FloorPlaneTolerance;
+		FHitResult FloorHit;
+		if (!World.LineTraceSingleByChannel(FloorHit, VisibleHit.ImpactPoint + ProbeOffset, VisibleHit.ImpactPoint - ProbeOffset,
+			ECC_Pawn, Params) || FloorHit.GetActor() != &Building
+			|| FVector::DistSquared(FloorHit.ImpactPoint, VisibleHit.ImpactPoint) > FMath::Square(CoincidentHitTolerance))
+		{
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("巡逻放点失败：建筑 %s 的可见顶面 %s 未与功能楼板重合。"),
+				*Building.GetPathName(), *GetNameSafe(VisibleHit.GetComponent())));
+			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
+			return false;
+		}
+		return TryResolveBuildingFloor(Building, FloorHit, OutPoint, OutFailureReason);
 	}
 }
 
@@ -321,6 +343,12 @@ bool ACastlePatrolRoute::TryResolveWaypointFromRay(UWorld* World, const FVector&
 	const bool bPhysicalHit = World->LineTraceSingleByChannel(PhysicalHit, RayStart, RayEnd, ECC_Pawn, Params);
 	const bool bPhysicalInFront = bPhysicalHit && (!bVisibleHit || PhysicalHit.Distance < Hit.Distance);
 	const auto* PhysicalBuilding = Cast<ACastleBuildingBase>(PhysicalHit.GetActor());
+	if (bPhysicalInFront && PhysicalBuilding && Hit.IsValidBlockingHit() && Hit.GetActor() == PhysicalBuilding
+		&& UCastleBuildingPCGComponent::IsNavigationBarrier(PhysicalHit.GetComponent())
+		&& FVector::DotProduct(Hit.ImpactNormal, PhysicalBuilding->GetActorUpVector()) >= FloorTopMinDot)
+	{
+		return TryResolveVisibleBuildingFloor(*World, *PhysicalBuilding, Hit, Params, OutPoint, OutFailureReason);
+	}
 	// 两个通道各只取首个阻挡。上下叠楼的美术平板与实际楼板重合时，优先取实际楼板；
 	// 更靠前的屋顶或墙仍遮挡后面的楼板，不按 XY 去搜索别层。
 	if (bPhysicalHit && PhysicalBuilding && UBuildingGameplayRootComponent::IsInGameplayHierarchy(PhysicalHit.GetComponent())

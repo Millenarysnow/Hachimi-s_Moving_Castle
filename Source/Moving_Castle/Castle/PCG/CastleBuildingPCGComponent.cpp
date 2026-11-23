@@ -15,6 +15,8 @@
 
 namespace CastlePCGComponents
 {
+	const FName NavigationBarrierTag(TEXT("CastlePCGNavigationBarrier"));
+
 	/** 格中心底面坐标始终经棋盘变换，支持旋转棋盘和沿 Y 合成的建筑。 */
 	FTransform CellFrame(const ACastleBoard* Board, FIntVector Cell)
 	{
@@ -29,6 +31,11 @@ namespace CastlePCGComponents
 		Result.Relative = (Template.Relative * Frame).GetRelativeTransform(Building->GetActorTransform());
 		return Result;
 	}
+}
+
+bool UCastleBuildingPCGComponent::IsNavigationBarrier(const UPrimitiveComponent* Component)
+{
+	return Component && Component->ComponentHasTag(CastlePCGComponents::NavigationBarrierTag);
 }
 
 bool UCastleBuildingPCGComponent::CacheOriginalParts(const ACastleBoard* Board, FString& Error)
@@ -50,10 +57,10 @@ bool UCastleBuildingPCGComponent::Prepare(const ACastleBoard* Board, const UCast
 	for (const auto& Cell : Building->GetOccupiedCoordinates()) { Minimum = Minimum.ComponentMin(Cell); }
 	const FTransform BoardInverse = Board->GetActorTransform().Inverse();
 	// 这里的功能盒明确表达桥、封闭楼板或阻隔，不是缺少资产时使用的替代美术。
-	auto AddBox = [&](FVector Center, FVector Extent, FQuat Rotation = FQuat::Identity)
+	auto AddBox = [&](FVector Center, FVector Extent, bool bIsNavigationBarrier, FQuat Rotation = FQuat::Identity)
 	{
 		const FTransform World = FTransform(Rotation, Center) * Board->GetActorTransform();
-		Plan.FunctionalBoxes.Add({World.GetRelativeTransform(Building->GetActorTransform()), Extent});
+		Plan.FunctionalBoxes.Add({World.GetRelativeTransform(Building->GetActorTransform()), Extent, bIsNavigationBarrier});
 	};
 	for (const auto& Ceiling : Target.Ceilings)
 	{
@@ -100,7 +107,7 @@ bool UCastleBuildingPCGComponent::Prepare(const ACastleBoard* Board, const UCast
 		// 上层正式建筑本身带功能地板；封闭顶面补齐与变体同高的下层所属功能面。
 		FVector Top = BoardInverse.TransformPosition(Frame.GetLocation());
 		Top.Z += Board->LayerHeight - Rules->FloorThickness * 0.5;
-		AddBox(Top, FVector(205.0, 205.0, Rules->FloorThickness * 0.5));
+		AddBox(Top, FVector(205.0, 205.0, Rules->FloorThickness * 0.5), false);
 	}
 	for (const FIntVector& Cell : Building->GetOccupiedCoordinates())
 	{
@@ -175,12 +182,12 @@ bool UCastleBuildingPCGComponent::Prepare(const ACastleBoard* Board, const UCast
 		if (Face.bConnected)
 		{
 			Center.Z -= Rules->FloorThickness * 0.5;
-			AddBox(Center, FVector(HalfLength, Rules->BridgeWidth * 0.5, Rules->FloorThickness * 0.5), Rotation);
+			AddBox(Center, FVector(HalfLength, Rules->BridgeWidth * 0.5, Rules->FloorThickness * 0.5), false, Rotation);
 		}
 		else
 		{
 			Center.Z += Rules->BarrierHeight * 0.5;
-			AddBox(Center, FVector(10.0, Board->GroundTileSize * 0.5, Rules->BarrierHeight * 0.5), Rotation);
+			AddBox(Center, FVector(10.0, Board->GroundTileSize * 0.5, Rules->BarrierHeight * 0.5), true, Rotation);
 		}
 	}
 	if (!Plan.LadderFrames.IsEmpty())
@@ -284,13 +291,15 @@ bool UCastleBuildingPCGComponent::Apply(const ACastleBoard* Board, const FCastle
 			DynamicVisuals.Add(Mesh);
 		}
 	}
-	for (const auto& Box : Plan.FunctionalBoxes)
+	for (const FCastlePCGFunctionalBox& Box : Plan.FunctionalBoxes)
 	{
 		auto* Collision = NewObject<UBoxComponent>(Building, NAME_None, RF_Transient);
 		Collision->SetupAttachment(Building->GameplayRoot);
 		Collision->SetMobility(EComponentMobility::Movable);
-		Collision->SetBoxExtent(Box.Value);
-		Collision->SetRelativeTransform(Box.Key);
+		Collision->SetBoxExtent(Box.Extent);
+		Collision->SetRelativeTransform(Box.Relative);
+		// 标记用途供巡逻放点区分墙与楼板；所有功能盒继续参与 Pawn 碰撞和导航。
+		if (Box.bIsNavigationBarrier) { Collision->ComponentTags.Add(CastlePCGComponents::NavigationBarrierTag); }
 		Collision->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 		Collision->SetCollisionResponseToAllChannels(ECR_Ignore);
 		Collision->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);

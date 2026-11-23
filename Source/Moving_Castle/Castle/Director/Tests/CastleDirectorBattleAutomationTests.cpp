@@ -30,6 +30,7 @@
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Components/WidgetComponent.h"
 #include "Components/WidgetSwitcher.h"
+#include "Components/BoxComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "MassEntitySubsystem.h"
 #include "CastleTowerDispatchSubsystem.h"
@@ -100,13 +101,15 @@ public:
 				}
 				CastleBuildingTests::CompletePlacement(Placed);
 			}
-			// 双门在相反两侧。每个拐角用炮塔的颜色与门侧房间的数字，保证两道接缝都同色或同号。
-			BridgeCard.Definition = Board->FindBuildingDefinition(ECastleBuildingType::NormalRoom);
+			// 双门在相反两侧。拐角使用炮塔的颜色并匹配门侧房间，保证两道接缝都可通行。
 			for (const int32 Side : {-1, 1})
 			{
 				const ACastleBuildingBase* DoorRoom = Board->GetBuildingAt(Base + FIntVector(Side, 0, 0));
 				if (!Test->TestNotNull(TEXT("双门外各有站立房间"), DoorRoom)) { return true; }
+				// 西南角是第二个可点击的弓箭塔，与门外箭塔分格且不同卡，避免合并或与隐式门点重合。
+				BridgeCard.Definition = Board->FindBuildingDefinition(Side == -1 ? ECastleBuildingType::ArcherTower : ECastleBuildingType::NormalRoom);
 				BridgeCard.Number = DoorRoom->GetBuildingNumber();
+				if (Side == -1 && BridgeCard.Color == DoorRoom->GetBuildingColor()) { BridgeCard.Number = BridgeCard.Number % 9 + 1; }
 				FCastleGridCursorTarget Corner;
 				Corner.bValid = true;
 				Corner.Surface = ECastleGridCursorSurface::Building;
@@ -125,7 +128,10 @@ public:
 			if (!Navigation->IsNavigationReady()) { return false; }
 			// 固定选择炮塔、箭塔与农田第二层的三个占格；V4 站立面高于楼层底面锚点。
 			const FIntVector Base = Board->GetBoardCenterCoordinate();
-			for (const FIntVector Cell : {Base + FIntVector(0, -1, 0), Base + FIntVector(-1, 0, 0), Base + FIntVector(1, 0, 1)})
+			TArray<FVector> ClickedPoints;
+			const FIntVector CannonCell = Base + FIntVector(0, -1, 0);
+			const FIntVector ArcherCell = Base + FIntVector(-1, -1, 0);
+			for (const FIntVector Cell : {CannonCell, ArcherCell, Base + FIntVector(1, 0, 1)})
 			{
 				const FVector GridCenter = Board->GetGridWorldLocation(Cell);
 				FVector FloorPoint;
@@ -138,17 +144,21 @@ public:
 				const FVector Expected = GridCenter + Board->GetActorTransform().TransformVector(
 					FVector(0, 0, FloorOwner->HachimisLayout->StandingHeight - Board->LayerHeight * 0.5));
 				Test->TestTrue(TEXT("楼顶点精确吸附到指定格的作者站立面"), FloorPoint.Equals(Expected, 0.1));
+				if (Cell.Z == Base.Z)
+				{
+					// 两次瞄准都从未与其他格相接的立面外侧开始，直接对准同一栋楼内的楼板。
+					const FIntVector Outward = Cell == CannonCell ? FIntVector(0, -1, 0) : FIntVector(-1, 0, 0);
+					if (!VerifyObliqueFloor(*World, *Board, *FloorOwner, Outward, Expected, ClickedPoints.AddDefaulted_GetRef())) { return true; }
+				}
 				if (!Test->TestTrue(TEXT("对应楼内地板可投影为有效路线"), Navigation->RequestSharedPatrolRoute({FloorPoint}, Reason))) { Test->AddError(Reason.ToString()); return true; }
 				const auto FloorPath = Navigation->AcquireSharedPath();
 				if (!Test->TestTrue(TEXT("本层NavMesh投影通过"), FloorPath && FloorPath->bValid && FloorPath->bClosedLoop)) { Test->AddError(Navigation->LastFailure.ToString()); return true; }
 				Test->TestTrue(TEXT("投影没有落到错误楼层"), FMath::Abs(FloorPath->Waypoints[0].Z - FloorPoint.Z) <= Navigation->ProjectionExtent.Z);
 			}
-			FVector Point;
-			const FVector Center = Board->GetGridWorldLocation(Base + FIntVector(0, -1, 0));
-			if (!Test->TestTrue(TEXT("楼顶射线解析到楼内地板"), ACastlePatrolRoute::TryResolveWaypointFromRay(
-				World, Center + FVector(0, 0, 2000), Center - FVector(0, 0, 1000), Point, Reason))) { Test->AddError(Reason.ToString()); return true; }
-			if (!Test->TestTrue(TEXT("由玩家路径入口提交正式门到门路线"), Director->PatrolRoute->SetWorldWaypoints({Point}, Reason)))
+			// 用两次斜瞄得到的落点提交正式路线，第二点来自此前被墙盒遮挡的弓箭塔。
+			if (!Test->TestTrue(TEXT("由玩家路径入口提交两个点击点"), Director->PatrolRoute->SetWorldWaypoints(ClickedPoints, Reason)))
 			{ Test->AddError(Reason.ToString()); return true; }
+			Test->TestTrue(TEXT("原样保存两次点击的位置和顺序"), Navigation->GetRequestedWaypoints() == ClickedPoints);
 			const auto Path = Navigation->AcquireSharedPath();
 			if (!Test->TestTrue(TEXT("生成前实际开环已就绪"), Path && Path->bValid && !Path->bClosedLoop && Path->bTowerDispatch)) { Test->AddError(Navigation->LastFailure.ToString()); return true; }
 			// NPC 已生成后令战斗配置非法，证明最后一步失败仍能收回整批 NPC 并恢复塔侧格。
@@ -168,17 +178,20 @@ public:
 		}
 		if (Stage == 2)
 		{
-			// 真正 MainMap 的巡逻入口应自动为已发布落点生成模型，而非依赖手工新增关卡 Actor。
-			TActorIterator<ACastlePatrolWaypointMarker> Markers(World);
-			if (Test->TestTrue(TEXT("正式 MainMap 已生成巡逻标记"), static_cast<bool>(Markers)))
+			// 巡逻入口在正式地图生成两个编号，并把每个枢轴留在对应点击的楼板格心。
+			const auto& RequestedPoints = Navigation->GetRequestedWaypoints();
+			TSet<int32> Numbers;
+			for (TActorIterator<ACastlePatrolWaypointMarker> Marker(World); Marker; ++Marker)
 			{
-				Test->TestTrue(TEXT("标记属于正式巡逻入口，单点显示 1"),
-					Cast<ACastlePatrolRoute>(Markers->GetOwner()) && Markers->GetDisplayedNumber() == 1);
-				Test->TestTrue(TEXT("MainMap 的标记枢轴仍在 NPC 请求的楼内格心"),
-					Markers->GetActorLocation().Equals(Navigation->GetRequestedWaypoints()[0]));
-				++Markers;
-				Test->TestFalse(TEXT("MainMap 不叠放多套标记"), static_cast<bool>(Markers));
+				const int32 Index = Marker->GetDisplayedNumber() - 1;
+				if (Test->TestTrue(TEXT("正式巡逻标记编号有效且唯一"), Marker->GetOwner() == Director->PatrolRoute.Get()
+					&& RequestedPoints.IsValidIndex(Index) && !Numbers.Contains(Index)))
+				{
+					Numbers.Add(Index);
+					Test->TestTrue(TEXT("标记枢轴位于对应点击的楼内格心"), Marker->GetActorLocation().Equals(RequestedPoints[Index]));
+				}
 			}
+			Test->TestEqual(TEXT("MainMap 同时显示 1、2 两个编号"), Numbers.Num(), 2);
 			if (!Test->TestTrue(TEXT("真实开战成功"), Director->TryStartSelectedBattle(Director->Nodes[0], Reason))) { Test->AddError(Reason.ToString()); return true; }
 			int32 Reserve = 0, Active = 0;
 			Dispatch->GetDispatchCounts(Reserve, Active);
@@ -387,6 +400,47 @@ public:
 		return true;
 	}
 private:
+	bool VerifyObliqueFloor(UWorld& World, const ACastleBoard& Board, const ACastleBuildingBase& FloorOwner,
+		const FIntVector& Outward, const FVector& Expected, FVector& OutPoint)
+	{
+		// 同一立面用两个俯角复现玩家从塔外看入：较陡时看见室内地板，较浅时看见前侧护栏顶面。
+		const FTransform& BoardTransform = Board.GetActorTransform();
+		const FVector Side(Outward);
+		const FVector Tangent(-Side.Y, Side.X, 0);
+		const FVector Aim = Expected - BoardTransform.TransformVector(Tangent * 60.0);
+		const FVector Start = Aim + BoardTransform.TransformVector(Side * 600.0 + FVector(0, 0, 360));
+		const FVector End = Start + (Aim - Start).GetSafeNormal() * 100000.0;
+		const FCollisionQueryParams Query(SCENE_QUERY_STAT(PatrolObliqueFloor), true);
+		const FString Label = FloorOwner.GetClass()->GetName();
+		FHitResult VisibleHit, PawnHit;
+		if (!Test->TestTrue(Label + TEXT(" 斜射线实际看见同一座塔的作者楼板"),
+			World.LineTraceSingleByChannel(VisibleHit, Start, End, ECC_Visibility, Query)
+			&& VisibleHit.GetActor() == &FloorOwner && VisibleHit.ImpactPoint.Equals(Aim, 0.1))
+			|| !Test->TestTrue(Label + TEXT(" 隐藏墙盒仍阻挡 Pawn，且位置在可见楼板之前"),
+				World.LineTraceSingleByChannel(PawnHit, Start, End, ECC_Pawn, Query) && PawnHit.GetActor() == &FloorOwner
+				&& Cast<UBoxComponent>(PawnHit.GetComponent()) && PawnHit.Distance < VisibleHit.Distance)) { return false; }
+
+		FText Reason;
+		if (!Test->TestTrue(Label + TEXT(" 斜瞄可见楼板可放置路径点"),
+			ACastlePatrolRoute::TryResolveWaypointFromRay(&World, Start, End, OutPoint, Reason)))
+		{
+			Test->AddError(Reason.ToString());
+			return false;
+		}
+		Test->TestTrue(Label + TEXT(" 路点对齐所见楼板的本层格心及作者标高"), OutPoint.Equals(Expected, 0.1));
+
+		const FVector ShallowStart = Aim + BoardTransform.TransformVector(Side * 600.0 + FVector(0, 0, 300));
+		const FVector ShallowEnd = ShallowStart + (Aim - ShallowStart).GetSafeNormal() * 100000.0;
+		if (!Test->TestTrue(Label + TEXT(" 较浅的射线命中的是护栏顶面"),
+			World.LineTraceSingleByChannel(VisibleHit, ShallowStart, ShallowEnd, ECC_Visibility, Query)
+			&& VisibleHit.GetActor() == &FloorOwner && VisibleHit.ImpactPoint.Z > Expected.Z + 100.0
+			&& FVector::DotProduct(VisibleHit.ImpactNormal, Board.GetActorUpVector()) >= 0.99)) { return false; }
+		Test->AddExpectedError(FloorOwner.GetPathName() + TEXT(" 的可见顶面"), EAutomationExpectedErrorFlags::Contains, 1);
+		FVector RejectedPoint;
+		return Test->TestFalse(Label + TEXT(" 护栏顶面不能放点"),
+			ACastlePatrolRoute::TryResolveWaypointFromRay(&World, ShallowStart, ShallowEnd, RejectedPoint, Reason));
+	}
+
 	FAutomationTestBase* Test;
 	int32 Stage = 0;
 	double Started = FPlatformTime::Seconds();
