@@ -4,9 +4,8 @@
 
 namespace
 {
-	// 每次发射的初速固定，转向只改变速度分量。两类碰撞共用不超过 1 的恢复系数。
+	// 每次发射的初速固定，转向只改变速度分量。
 	constexpr double LaunchSpeed = 375.0;
-	constexpr double Restitution = 0.78;
 	constexpr double SideLimit = CastlePinball::HalfWidth - CastlePinball::CoinRadius;
 	constexpr double TopLimit = -CastlePinball::HalfLength + CastlePinball::CoinRadius;
 	constexpr double ContactSkin = 0.01;
@@ -173,6 +172,9 @@ UCastlePinballNPCSimulationComponent::ECoinStepResult UCastlePinballNPCSimulatio
 {
 	using namespace CastlePinball;
 	Coin.Velocity.X += DownslopeGravity * FixedStep;
+	// 重力和弹射都在定步长内部限速，确保每一段扫掠使用有界速度。
+	const double MaxSpeed = Config->MaxCoinSpeed;
+	Coin.Velocity = Coin.Velocity.GetClampedToMaxSize(MaxSpeed);
 	double Remaining = FixedStep;
 	for (int32 ContactCount = 0; Remaining > UE_DOUBLE_SMALL_NUMBER; ++ContactCount)
 	{
@@ -240,7 +242,12 @@ UCastlePinballNPCSimulationComponent::ECoinStepResult UCastlePinballNPCSimulatio
 
 		// 将接触点沿法线分开极小距离，避免相同接触在零时间重复结算。
 		Coin.Position += Normal * ContactSkin;
-		Coin.Velocity -= (1.0 + Restitution) * FVector2D::DotProduct(Coin.Velocity, Normal) * Normal;
+		const bool bHitPeg = Contact == EContact::Peg;
+		const double Restitution = bHitPeg ? Config->PegRestitution : Config->WallRestitution;
+		const double NormalSpeed = FVector2D::DotProduct(Coin.Velocity, Normal);
+		Coin.Velocity -= (1.0 + Restitution) * NormalSpeed * Normal;
+		if (bHitPeg) { Coin.Velocity += Config->PegBumperImpulse * Normal; }
+		Coin.Velocity = Coin.Velocity.GetClampedToMaxSize(MaxSpeed);
 		Remaining *= 1.0 - Fraction;
 	}
 	return ECoinStepResult::Active;

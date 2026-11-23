@@ -54,6 +54,13 @@ public:
 	bool Validate(FText& OutReason) const;
 
 	UPROPERTY(EditAnywhere, Category = "Pinball") float TiltAngleDegrees = 22.0f;
+	/** 护栏只改变接触法线方向上的速度，切向速度保留。 */
+	UPROPERTY(EditAnywhere, Category = "Pinball|Physics") float WallRestitution = 0.92f;
+	/** 碰撞柱先按此系数反射，再沿法线主动弹射。 */
+	UPROPERTY(EditAnywhere, Category = "Pinball|Physics") float PegRestitution = 1.12f;
+	UPROPERTY(EditAnywhere, Category = "Pinball|Physics", meta = (Units = "cm/s")) float PegBumperImpulse = 160.0f;
+	/** 限制斜面加速和连续弹射后的速度，单位为厘米每秒。 */
+	UPROPERTY(EditAnywhere, Category = "Pinball|Physics", meta = (Units = "cm/s")) float MaxCoinSpeed = 1400.0f;
 	UPROPERTY(EditAnywhere, Category = "Pinball") int32 CoinLaunchCost = 5;
 	UPROPERTY(EditAnywhere, Category = "Pinball") int32 InitialNPCCount = 6;
 	UPROPERTY(EditAnywhere, Category = "Pinball") int32 CoinsRequiredPerNPC = 5;

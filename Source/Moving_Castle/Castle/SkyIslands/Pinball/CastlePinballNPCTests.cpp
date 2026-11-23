@@ -40,6 +40,18 @@ namespace
 		Controller.InputKey(FInputKeyEventArgs::CreateSimulated(Key, IE_Released, 0.0f));
 	}
 
+	bool PinballHasInteractionAim(ACastlePlayerController& Controller, const USceneComponent& Target)
+	{
+		// 离屏 PIE 的射线依赖相机缓存；等真实交互射线命中后才发送下一次按键。
+		FVector Start;
+		FRotator View;
+		Controller.GetPlayerViewPoint(Start, View);
+		FHitResult Hit;
+		const FCollisionQueryParams Query(SCENE_QUERY_STAT(PinballTestAim), false, Controller.GetPawn());
+		Controller.GetWorld()->LineTraceSingleByChannel(Hit, Start, Start + View.Vector() * 100000.0, ECC_Visibility, Query);
+		return Hit.GetComponent() == &Target;
+	}
+
 	/** 在初始编辑阶段准备一枚真正由导演持有的 NPC 节点。只替换测试世界导演的配置引用。 */
 	bool PreparePinballNPCNode(UCastleDirectorSubsystem& Director, FAutomationTestBase& Test)
 	{
@@ -165,6 +177,20 @@ bool FCastlePinballSimulationTest::RunTest(const FString&)
 	HighRate->Coins[0].Position.X = HalfLength - 1.0;
 	TestTrue(TEXT("推进到底端边界"), HighRate->Advance(FixedStep, Reason));
 	TestTrue(TEXT("越过底端回收线立即销毁"), HighRate->GetCoins().IsEmpty());
+
+	// 正撞单柱使期望速度可以直接由法向反射计算，分别验证主动弹射与高速上限。
+	Config->Pegs = {{{-350.0, 0.0}, 19.0}};
+	for (const double IncomingSpeed : {375.0, 1380.0})
+	{
+		if (!TestTrue(TEXT("初始化单柱碰撞测试"), HighRate->Initialize(*Config, 81, Reason))) { return false; }
+		HighRate->CommitLaunch(0.0, 0.0);
+		FCastlePinballCoin& Coin = HighRate->Coins[0];
+		Coin.Position = FVector2D(-350.0 - 19.0 - CoinRadius - 1.0, 0.0);
+		Coin.Velocity = FVector2D(IncomingSpeed, 0.0);
+		if (!TestTrue(TEXT("推进金币正撞弹射柱"), HighRate->Advance(FixedStep, Reason))) { return false; }
+		TestTrue(TEXT("碰撞柱沿法线弹回且远强于旧系数"), Coin.Velocity.X < -0.95 * IncomingSpeed);
+		TestTrue(TEXT("弹射后按配置限速"), Coin.Velocity.Size() <= Config->MaxCoinSpeed + UE_DOUBLE_SMALL_NUMBER);
+	}
 	return true;
 }
 
@@ -186,7 +212,8 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 	GEditor->RequestPlaySession(PlayRequest);
 	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([this, Started = FPlatformTime::Seconds(), Stage = 0,
 		ReturnLocation = FVector::ZeroVector, BeforeStep = 0, BeforeNPCCount = 0,
-		VisitedIsland = TWeakObjectPtr<ACastlePinballNPCSkyIsland>(), CoinBody = TWeakObjectPtr<UStaticMeshComponent>()]() mutable
+		VisitedIsland = TWeakObjectPtr<ACastlePinballNPCSkyIsland>(), CoinBody = TWeakObjectPtr<UStaticMeshComponent>(),
+		bAimedAtAcceptancePortal = false]() mutable
 	{
 		UWorld* World = GEditor->PlayWorld;
 		auto* Director = World ? World->GetSubsystem<UCastleDirectorSubsystem>() : nullptr;
@@ -213,6 +240,13 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 		if (Stage == 1)
 		{
 			if (!TestNotNull(TEXT("命令生成验收岛"), Island)) { return true; }
+			// 只看水平投影，避免到达点本身位于高处而掩盖盘面朝反方向的回归。
+			FVector ToArrival = Island->GetPlayerArrivalTransform().GetLocation() - Island->Playfield->GetComponentLocation();
+			ToArrival.Z = 0.0;
+			TestTrue(TEXT("盘面法线的水平分量朝向到达点"),
+				FVector::DotProduct(Island->Playfield->GetUpVector(), ToArrival.GetSafeNormal()) > 0.0);
+			TestTrue(TEXT("盘面下坡方向朝向到达点"),
+				FVector::DotProduct(Island->Playfield->GetForwardVector(), ToArrival.GetSafeNormal()) > 0.0);
 			TestTrue(TEXT("入口命令真实传送玩家"), Controller->GetPawn()->GetActorLocation().Equals(
 				Island->GetPlayerArrivalTransform().GetLocation(), 5.0));
 			PinballAimAt(*Controller, *Island->Console);
@@ -221,6 +255,22 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 		}
 		if (Stage == 2 || Stage == 4 || Stage == 7 || Stage == 10)
 		{
+			if (!TestNotNull(TEXT("当前步骤的弹珠机空岛"), Island)) { return true; }
+			const USceneComponent* Interactable = Island->Console.Get();
+			if (Stage == 4 || Stage == 10) { Interactable = Island->FindComponentByClass<UCastleSkyIslandDepartureComponent>(); }
+			if (!TestNotNull(TEXT("当前步骤的交互组件"), Interactable)) { return true; }
+			if (Stage == 4 && !bAimedAtAcceptancePortal)
+			{
+				// 退出瞄准后再设置传送门视角，给输入层和相机缓存各自完成更新的机会。
+				if (Island->StatusWidget && FPlatformTime::Seconds() - Started < 30.0) { return false; }
+				if (!TestFalse(TEXT("验收岛退出瞄准后移除状态面板"), Island->StatusWidget != nullptr)) { return true; }
+				PinballAimAt(*Controller, *Interactable);
+				bAimedAtAcceptancePortal = true;
+				return false;
+			}
+			const bool bHasAim = PinballHasInteractionAim(*Controller, *Interactable);
+			if (!bHasAim && FPlatformTime::Seconds() - Started < 30.0) { return false; }
+			if (!TestTrue(TEXT("真实交互射线命中当前步骤的目标"), bHasAim)) { return true; }
 			PinballPressKey(*Controller, InteractKey);
 			++Stage;
 			return false;
@@ -231,18 +281,15 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 			{
 				return true;
 			}
-			// 先退出瞄准，再飞到传送门视线。命令自己的输入层继续处理下一次 E。
-			PinballPressKey(*Controller, InteractKey);
-			auto* Portal = Island->FindComponentByClass<UCastleSkyIslandDepartureComponent>();
-			if (!TestNotNull(TEXT("验收岛的真实传送门"), Portal)) { return true; }
-			PinballAimAt(*Controller, *Portal);
+			// 用专用退出键移除瞄准层，传送门仍通过真实交互键验收。
+			PinballPressKey(*Controller, EKeys::Tab);
 			++Stage;
 			return false;
 		}
 		if (Stage == 5)
 		{
 			if (Island && FPlatformTime::Seconds() - Started < 30.0) { return false; }
-			TestFalse(TEXT("命令离岛销毁验收岛"), IsValid(Island));
+			if (!TestFalse(TEXT("命令离岛销毁验收岛"), IsValid(Island))) { return true; }
 			TestTrue(TEXT("命令离岛返回原位置"), Controller->GetPawn()->GetActorLocation().Equals(ReturnLocation, 5.0));
 			TestEqual(TEXT("命令离岛不消耗导演关数"), Director->GetClearedSteps(), BeforeStep);
 			TestFalse(TEXT("命令离岛恢复飞行观察"), Controller->IsMoveInputIgnored() || Controller->IsLookInputIgnored());

@@ -87,15 +87,15 @@ bool ACastlePinballNPCSkyIsland::OnInitializeIsland(const FCastleSkyIslandContex
 	}
 	Simulation->OnCommitRecruit.BindUObject(this, &ACastlePinballNPCSkyIsland::CommitRecruit);
 
-	// 负 Pitch 让局部 +X 向下。地板表面是局部 Z=0，NPC 与球体离地高度都沿局部 +Z 测量。
-	Playfield->SetRelativeRotation(FRotator(-Config->TiltAngleDegrees, 0.0, 0.0));
+	// 局部 +X 仍向下；翻转偏航把低端和盘面法线转向岛内 -X 的玩家到达点。
+	Playfield->SetRelativeRotation(FRotator(-Config->TiltAngleDegrees, 180.0, 0.0));
 	AddShape(CubeMesh, {0.0, 0.0, -10.0}, {2.0 * HalfLength, 2.0 * HalfWidth, 20.0}, BoardColor);
 	for (double Side : {-1.0, 1.0})
 	{
 		AddShape(CubeMesh, {0.0, Side * (HalfWidth + 6.0), 25.0}, {2.0 * HalfLength, 12.0, 50.0}, RailColor);
 	}
 	AddShape(CubeMesh, {-HalfLength - 6.0, 0.0, 25.0}, {12.0, 2.0 * HalfWidth, 50.0}, RailColor);
-	SetShape(*Console, CubeMesh, ShapeMaterial, {-HalfLength - 65.0, 0.0, 39.0}, {90.0, 140.0, 78.0}, GoldColor);
+	SetShape(*Console, CubeMesh, ShapeMaterial, {HalfLength + 65.0, 0.0, 39.0}, {90.0, 140.0, 78.0}, GoldColor);
 	Console->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	Console->SetCollisionResponseToAllChannels(ECR_Ignore);
 	Console->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
@@ -108,7 +108,7 @@ bool ACastlePinballNPCSkyIsland::OnInitializeIsland(const FCastleSkyIslandContex
 	// 飞行 Pawn 的相机臂把眼睛沿视角 Up 抬高 64 cm，预扣这段偏移让入岛准星对准控制台。
 	ArrivalView.Pitch -= FMath::RadiansToDegrees(FMath::Asin(64.0 / ToConsole.Size()));
 	Arrival->SetRelativeLocationAndRotation(ArrivalLocation, ArrivalView);
-	AddLabel({-HalfLength - 105.0, 0.0, 88.0}, INVTEXT("PINBALL  |  E"), 28.0f);
+	AddLabel({HalfLength + 65.0, 0.0, 88.0}, INVTEXT("PINBALL  |  E"), 28.0f);
 	AddShape(CubeMesh, {LaunchX, 0.0, 52.0}, {12.0, 2.0 * HalfWidth, 10.0}, RailColor);
 	LauncherCarriage = AddShape(CubeMesh, {LaunchX, 0.0, 52.0}, {35.0, 35.0, 20.0}, GoldColor);
 	LauncherBarrel = AddShape(CylinderMesh, {LaunchX, 0.0, 30.0}, {16.0, 16.0, 53.0}, GoldColor);
@@ -236,8 +236,9 @@ void ACastlePinballNPCSkyIsland::UpdateLauncher(float DeltaSeconds)
 	using namespace CastlePinball;
 	if (const ACastlePlayerController* Controller = AimController.Get())
 	{
-		const int32 Move = static_cast<int32>(Controller->IsInputKeyDown(EKeys::D)) - Controller->IsInputKeyDown(EKeys::A);
-		const int32 Turn = static_cast<int32>(Controller->IsInputKeyDown(EKeys::Right)) - Controller->IsInputKeyDown(EKeys::Left);
+		// 旋转后的局部 -Y 是屏幕右侧，向右移轨和向右发射都应减小局部 Y 分量。
+		const int32 Move = static_cast<int32>(Controller->IsInputKeyDown(EKeys::A)) - Controller->IsInputKeyDown(EKeys::D);
+		const int32 Turn = static_cast<int32>(Controller->IsInputKeyDown(EKeys::Left)) - Controller->IsInputKeyDown(EKeys::Right);
 		// 滑轨和转轴的止挡属于玩法操作范围，配置本身在入岛前严格校验。
 		LauncherPosition = FMath::Clamp(LauncherPosition + Move * DeltaSeconds * 310.0, -HalfWidth + CoinRadius, HalfWidth - CoinRadius);
 		LauncherAngle = FMath::Clamp(LauncherAngle + Turn * DeltaSeconds * 42.0,
@@ -358,7 +359,8 @@ UTextRenderComponent* ACastlePinballNPCSkyIsland::AddLabel(const FVector& Positi
 	UTextRenderComponent* Label = NewObject<UTextRenderComponent>(this);
 	Label->SetupAttachment(Playfield);
 	Label->SetRelativeLocation(Position);
-	Label->SetRelativeRotation(FRotator(0.0, 180.0, 0.0));
+	// 文本正面沿局部 +X，随盘面一起朝向近端的玩家。
+	Label->SetRelativeRotation(FRotator::ZeroRotator);
 	Label->SetHorizontalAlignment(EHTA_Center);
 	Label->SetVerticalAlignment(EVRTA_TextBottom);
 	Label->SetWorldSize(Size);
