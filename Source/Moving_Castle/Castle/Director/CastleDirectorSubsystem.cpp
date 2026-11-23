@@ -166,6 +166,7 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 	Experience = 0;
 	ClearedSteps = 0;
 	bShopPermission = false;
+	bShopPermissionBeforeIsland = false;
 	bRunning = true;
 	BattleClearedHandle = Combat->OnBattleCleared.AddUObject(this, &UCastleDirectorSubsystem::HandleBattleCleared);
 	BattleFailedHandle = Combat->OnBattleFailed.AddUObject(this, &UCastleDirectorSubsystem::HandleBattleFailed);
@@ -519,6 +520,8 @@ bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirector
 	IslandReturnControlRotation = ReturnControlRotation;
 	Pawn->GetMovementComponent()->StopMovementImmediately();
 	Controller->SetControlRotation(Arrival.Rotator());
+	// 只在入岛传送成功后保存主塔权限；初始化或传送失败不改变进岛前的值。
+	bShopPermissionBeforeIsland = bShopPermission;
 	Controller->GetShop()->CloseShop();
 	bShopPermission = false;
 	PatrolRoute->CancelEditingDraft();
@@ -571,6 +574,9 @@ bool UCastleDirectorSubsystem::TryDepartSkyIsland(FText& OutReason)
 	bIslandShopGranted = false;
 	++ClearedSteps;
 	Nodes = MoveTemp(Candidates);
+	// 所有离岛校验已完成。先恢复权限再广播编辑阶段，让界面读取同一份已提交状态。
+	bShopPermission = bShopPermissionBeforeIsland;
+	bShopPermissionBeforeIsland = false;
 	SetPhase(ECastleDirectorPhase::Editing);
 	for (ACastleDirectorNodeActor* Candidate : Nodes) { Candidate->ActivateNode(); }
 	ShowMessage(INVTEXT("已离开空岛，飞向节点进入下一步。"), false);
@@ -1019,6 +1025,7 @@ void UCastleDirectorSubsystem::EnterGameOver(const FText& Failure)
 	bDepartureRequested = false;
 	Controller->GetShop()->CloseShop();
 	bShopPermission = false;
+	bShopPermissionBeforeIsland = false;
 	DestroyNodes();
 	SetPhase(ECastleDirectorPhase::GameOver);
 	if (!bAutomation && !Controller->SetPause(true))
@@ -1039,6 +1046,7 @@ void UCastleDirectorSubsystem::RestartCurrentMap()
 		return;
 	}
 	ResetBattleControls(true);
+	bShopPermissionBeforeIsland = false;
 	UGameplayStatics::OpenLevel(GetWorld(), FName(*UGameplayStatics::GetCurrentLevelName(GetWorld(), true)));
 }
 
@@ -1244,6 +1252,7 @@ void UCastleDirectorSubsystem::OnWorldEndPlay(UWorld& InWorld)
 	ResetBattleControls(false);
 	UnbindCombatEvents();
 	PendingNode.Reset();
+	bShopPermissionBeforeIsland = false;
 	bRunning = false;
 	Super::OnWorldEndPlay(InWorld);
 }
@@ -1259,6 +1268,7 @@ void UCastleDirectorSubsystem::Deinitialize()
 	}
 	UnbindCombatEvents();
 	if (ActiveSkyIsland) { ActiveSkyIsland->Destroy(); ActiveSkyIsland = nullptr; }
+	bShopPermissionBeforeIsland = false;
 	DestroyNodes();
 	for (UUserWidget* Widget : {HUDWidget.Get(), RewardWidget.Get(), GameOverWidget.Get(),
 		static_cast<UUserWidget*>(TowerUpgradeWidget.Get()), static_cast<UUserWidget*>(WildcardPicker.Get())})

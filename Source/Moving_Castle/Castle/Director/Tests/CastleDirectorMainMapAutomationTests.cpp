@@ -4,6 +4,7 @@
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
+#include "Castle/SkyIslands/Rest/CastleRestSkyIsland.h"
 #include "Castle/UI/BuildBar/CastleBuildBarWidget.h"
 #include "Castle/UI/Common/CastleHUDControls.h"
 #include "Castle/UI/Director/CastleDirectorWidgets.h"
@@ -219,6 +220,119 @@ namespace
   FAutomationTestBase* Test;
   int32 Stage = 0;
  };
+#if !UE_BUILD_SHIPPING
+ /** 在正式 MainMap 领取商店奖励，通过休息岛交互验证权限及建造栏。 */
+ class FCheckIslandShopAndBuildBar final : public IAutomationLatentCommand
+ {
+ public:
+  explicit FCheckIslandShopAndBuildBar(FAutomationTestBase& InTest) : Test(InTest) {}
+
+  bool Update() override
+  {
+	UWorld* World = AutomationCommon::GetAnyGameWorld();
+	auto* Director = World ? World->GetSubsystem<UCastleDirectorSubsystem>() : nullptr;
+	if (!Director || !Director->IsRunning()) { return WaitForDirector(TEXT("MainMap 导演未就绪")); }
+	auto* Controller = Cast<ACastlePlayerController>(World->GetFirstPlayerController());
+	if (!Test.TestNotNull(TEXT("MainMap 本地控制器"), Controller)) { return true; }
+	FText Reason;
+	FOutputDeviceNull Output;
+
+	switch (Stage)
+	{
+	case EStage::EarnShop:
+	{
+		// 本用例从奖励选择开始。使用现有阶段测试入口，略过由战斗测试覆盖的路线布置与清场。
+		TActorIterator<ACastleBoard> Board(World);
+		auto* Tower = World->GetSubsystem<UCastleMainTowerSubsystem>()->GetRegisteredMainTower();
+		if (!Test.TestTrue(TEXT("仍使用正式 MainMap 的棋盘、主塔与导演配置"), Board && Tower && Director->GetConfig()))
+		{
+			return true;
+		}
+		Director->ConfigureForAutomation(Director->GetConfig(), *Board, Controller, Tower);
+		if (!Test.TestTrue(TEXT("建立清场后的奖励阶段"), Director->SetPhaseForAutomation(ECastleDirectorPhase::Battle)
+			&& Director->SetPhaseForAutomation(ECastleDirectorPhase::Reward)))
+		{
+			return true;
+		}
+		if (!Test.TestTrue(TEXT("领取商店奖励"), Director->TryChooseReward(ECastleDirectorReward::Shop, Reason)))
+		{
+			Test.AddError(Reason.ToString());
+			return true;
+		}
+		Test.TestTrue(TEXT("进岛前已拥有主塔商店权限"), Director->IsShopAccessAllowed(Reason));
+		if (!Test.TestTrue(TEXT("休息岛调试命令已执行"),
+			IConsoleManager::Get().ProcessUserConsoleInput(TEXT("CastleEnterSkyIsland Rest"), Output, World))
+			|| !Test.TestEqual(TEXT("当前为空岛阶段"), Director->GetPhase(), ECastleDirectorPhase::SkyIsland))
+		{
+			return true;
+		}
+		Stage = EStage::InteractOnIsland;
+		return false;
+	}
+	case EStage::InteractOnIsland:
+	{
+		// 读取视口中实际挂载的 WBP，将射线对准休息岛商店台及离开传送门。
+		auto* BuildBar = FindMainMapWidget<UCastleBuildBarWidget>(Test, World);
+		TActorIterator<ACastleRestSkyIsland> Island(World);
+		if (!BuildBar || !Test.TestTrue(TEXT("正式休息岛已生成"), static_cast<bool>(Island))) { return true; }
+		ACastleRestSkyIsland* RestIsland = *Island;
+		Test.TestEqual(TEXT("入岛后建造栏可见"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		Test.TestFalse(TEXT("岛内主塔商店权限不可用"), Director->IsShopAccessAllowed(Reason));
+		Controller->ToggleShop();
+		Test.TestFalse(TEXT("岛内 B 键入口无法打开主塔商店"), Controller->GetShop()->IsShopOpen());
+		auto* Shop = FindObjectFast<UCastleRestSkyIslandStation>(RestIsland, TEXT("ShopStation"));
+		if (!Interact(*Director, Shop, TEXT("休息岛免费商店台"))) { return true; }
+		Test.TestTrue(TEXT("空岛商店已打开"), Controller->GetShop()->IsShopOpen());
+		Test.TestEqual(TEXT("空岛商店打开时折叠建造栏"), BuildBar->GetVisibility(), ESlateVisibility::Collapsed);
+		Controller->GetShop()->CloseShop();
+		Test.TestEqual(TEXT("空岛商店关闭后恢复建造栏"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		if (!Interact(*Director, RestIsland->FindComponentByClass<UCastleSkyIslandDepartureComponent>(), TEXT("离开传送门")))
+		{
+			return true;
+		}
+		Stage = EStage::Returned;
+		return false;
+	}
+	case EStage::Returned:
+		if (Director->GetPhase() == ECastleDirectorPhase::SkyIsland) { return WaitForDirector(TEXT("未完成离岛")); }
+		Test.TestEqual(TEXT("返塔进入编辑阶段"), Director->GetPhase(), ECastleDirectorPhase::Editing);
+		Test.TestTrue(TEXT("返塔恢复进岛前的商店权限"), Director->IsShopAccessAllowed(Reason));
+		Controller->ToggleShop();
+		Test.TestTrue(TEXT("返塔后 B 键入口可打开主塔商店"), Controller->GetShop()->IsShopOpen());
+		Controller->GetShop()->CloseShop();
+		return true;
+	}
+	return true;
+  }
+
+ private:
+  enum class EStage { EarnShop, InteractOnIsland, Returned };
+  FAutomationTestBase& Test;
+  EStage Stage = EStage::EarnShop;
+  double Deadline = 0.0;
+
+  /** PIE 事件由世界 Tick 提交，按真实时间设置上限并报告超时阶段。 */
+  bool WaitForDirector(const TCHAR* Failure)
+  {
+	const double Now = FPlatformTime::Seconds();
+	if (Deadline == 0.0) { Deadline = Now + 30.0; }
+	if (Now < Deadline) { return false; }
+	Test.AddError(Failure);
+	return true;
+  }
+
+  /** 保留正式的交互射线检查，从可重复的位置瞄准目标。 */
+  bool Interact(UCastleDirectorSubsystem& Director, const USceneComponent* Target, const TCHAR* Name)
+  {
+	if (!Test.TestNotNull(Name, Target)) { return false; }
+	FText Reason;
+	const FVector Location = Target->GetComponentLocation();
+	const bool bInteracted = Director.TryInteractWithSkyIsland(Location + FVector::UpVector * 450.0, Location, Reason);
+	return Test.TestTrue(FString::Printf(TEXT("交互 %s：%s"), Name, *Reason.ToString()), bInteracted);
+  }
+ };
+#endif
+
  /** 在实际塔模型和正式地图上验证四侧每一格；不是通过构造光标结构绕过射线。 */
  class FCheckMainTowerSidePlacement final : public IAutomationLatentCommand
  {
@@ -374,6 +488,18 @@ bool FCastleDirectorMainMapTest::RunTest(const FString& Parameters)
  ADD_LATENT_AUTOMATION_COMMAND(FStopDirectorMainMap(this));
  return true;
 }
+#if !UE_BUILD_SHIPPING
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDirectorIslandShopAndBuildBarTest, "MovingCastle.Director.IslandShopAndBuildBar",
+ EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FCastleDirectorIslandShopAndBuildBarTest::RunTest(const FString& Parameters)
+{
+ if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/MainMap"), true)) { return false; }
+ ADD_LATENT_AUTOMATION_COMMAND(FEngineWaitLatentCommand(0.1f));
+ ADD_LATENT_AUTOMATION_COMMAND(FCheckIslandShopAndBuildBar(*this));
+ ADD_LATENT_AUTOMATION_COMMAND(FStopDirectorMainMap(this));
+ return true;
+}
+#endif
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleTowerSideMainMapTest, "MovingCastle.Placement.MainTowerSides",
  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FCastleTowerSideMainMapTest::RunTest(const FString& Parameters)
