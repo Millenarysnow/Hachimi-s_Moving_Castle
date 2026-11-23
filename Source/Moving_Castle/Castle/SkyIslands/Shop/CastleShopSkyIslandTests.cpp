@@ -1,0 +1,421 @@
+#if WITH_EDITOR && WITH_DEV_AUTOMATION_TESTS
+
+#include "CastleShopSkyIsland.h"
+#include "CastleShopSkyIslandDataAsset.h"
+#include "Blueprint/WidgetBlueprintLibrary.h"
+#include "Castle/Components/CastleEconomyComponent.h"
+#include "Castle/Director/CastleDirectorConfigDataAsset.h"
+#include "Castle/Director/CastleDirectorNodeActor.h"
+#include "Castle/Director/CastleDirectorSettings.h"
+#include "Castle/Director/CastleDirectorSubsystem.h"
+#include "Castle/Items/CastleBadgeDataAsset.h"
+#include "Castle/Items/CastleBadgeSubsystem.h"
+#include "Castle/Items/CastleRoomGroupDataAsset.h"
+#include "Castle/UI/Items/CastleBadgeReplaceModalWidget.h"
+#include "Castle/UI/Items/CastleWildcardRoomPickerWidget.h"
+#include "CastleBackpackComponent.h"
+#include "CastleBoard.h"
+#include "CastlePlayerController.h"
+#include "Components/PanelWidget.h"
+#include "Editor.h"
+#include "Engine/Engine.h"
+#include "EngineUtils.h"
+#include "HAL/IConsoleManager.h"
+#include "Misc/AutomationTest.h"
+#include "Tests/AutomationCommon.h"
+#include "Tests/AutomationEditorCommon.h"
+#include "UObject/StrongObjectPtr.h"
+
+namespace
+{
+	constexpr TCHAR ShopAssetPath[] = TEXT("/Game/MovingCastle/Data/SkyIslands/DA_ShopSkyIsland.DA_ShopSkyIsland");
+
+	template <typename WidgetType>
+	WidgetType* FindShopWidget(UWorld& World)
+	{
+		TArray<UUserWidget*> Widgets;
+		UWidgetBlueprintLibrary::GetAllWidgetsOfClass(&World, Widgets, WidgetType::StaticClass(), true);
+		return Widgets.Num() == 1 ? Cast<WidgetType>(Widgets[0]) : nullptr;
+	}
+}
+
+/** MainMap 中让真实导演生成、传送、射线交互和离岛，使用现有库存及两种正式 WBP。 */
+class FCastleShopSkyIslandScenario final : public IAutomationLatentCommand
+{
+public:
+	FCastleShopSkyIslandScenario(FAutomationTestBase& InTest, TStrongObjectPtr<UCastleDirectorConfigDataAsset>&& InConfig)
+		: Test(InTest), Config(MoveTemp(InConfig)) {}
+
+	virtual ~FCastleShopSkyIslandScenario() override { StopConfiguringTestIslands(); }
+
+	virtual bool Update() override
+	{
+		UWorld* World = nullptr;
+		for (const FWorldContext& Context : GEngine->GetWorldContexts())
+		{
+			if (Context.WorldType == EWorldType::PIE) { World = Context.World(); break; }
+		}
+		auto* Director = World ? World->GetSubsystem<UCastleDirectorSubsystem>() : nullptr;
+		if (!Director || !Director->IsRunning())
+		{
+			if (FPlatformTime::Seconds() < WaitUntil) { return false; }
+			Test.AddError(TEXT("商店空岛测试需要 MainMap 的导演完成开局。"));
+			return true;
+		}
+		if (Stage == 0)
+		{
+			if (!PrepareAndEnter(*World, *Director)) { return true; }
+			WaitUntil = FPlatformTime::Seconds() + 5.0;
+			++Stage;
+			return false;
+		}
+		if (Stage == 1)
+		{
+			if (Director->GetPhase() == ECastleDirectorPhase::Editing && FPlatformTime::Seconds() < WaitUntil) { return false; }
+			StopConfiguringTestIslands();
+			if (!Test.TestEqual(TEXT("真实导演进入商店岛"), Director->GetPhase(), ECastleDirectorPhase::SkyIsland)
+				|| !VerifyPurchases(*World, *Director))
+			{
+				return true;
+			}
+			WaitUntil = FPlatformTime::Seconds() + 5.0;
+			++Stage;
+			return false;
+		}
+		if (Director->GetPhase() == ECastleDirectorPhase::SkyIsland && FPlatformTime::Seconds() < WaitUntil) { return false; }
+		Test.TestEqual(TEXT("商店离岛恢复编辑"), Director->GetPhase(), ECastleDirectorPhase::Editing);
+		Test.TestEqual(TEXT("商店离岛推进一步"), Director->GetClearedSteps(), 1);
+		Test.TestFalse(TEXT("空岛与商品随访问销毁"), static_cast<bool>(TActorIterator<ACastleShopSkyIsland>(World)));
+		return true;
+	}
+
+private:
+	bool PrepareAndEnter(UWorld& World, UCastleDirectorSubsystem& Director)
+	{
+		auto* Controller = Cast<ACastlePlayerController>(World.GetFirstPlayerController());
+		auto* Authored = LoadObject<UCastleShopSkyIslandDataAsset>(nullptr, ShopAssetPath);
+		if (!Test.TestTrue(TEXT("导演使用独立内存配置"), Director.GetConfig() == Config.Get())
+			|| !Test.TestNotNull(TEXT("本局控制器"), Controller)
+			|| !Test.TestNotNull(TEXT("商店专属 DA"), Authored))
+		{
+			return false;
+		}
+
+		// 用实际配置生成同种子的两套货架，再单独整理确定的四个商品，逐条覆盖不同交易入口。
+		if (!VerifyDeterminism(World, Director, *Controller)) { return false; }
+		TradeConfig.Reset(DuplicateObject(Authored, GetTransientPackage()));
+		TradeConfig->RoomGroupPool.Reset();
+		for (UCastleRoomGroupDataAsset* Group : Authored->RoomGroupPool)
+		{
+			if (Group->GroupType == ECastleRoomGroupType::ThreeNumberFourArchers
+				|| Group->GroupType == ECastleRoomGroupType::FullyCustomRoom)
+			{
+				TradeConfig->RoomGroupPool.Add(Group);
+			}
+		}
+		TradeConfig->BadgePool.Reset();
+		for (UCastleBadgeDataAsset* Badge : Authored->BadgePool)
+		{
+			if (Badge->Badge.Type == ECastleBadgeType::GambleLuck || Badge->Badge.Type == ECastleBadgeType::BlueRoomNumber)
+			{
+				TradeConfig->BadgePool.Add(Badge);
+			}
+		}
+		if (!Test.TestEqual(TEXT("交易夹具含两种房间组"), TradeConfig->RoomGroupPool.Num(), 2)
+			|| !Test.TestEqual(TEXT("交易夹具含两种徽章"), TradeConfig->BadgePool.Num(), 2))
+		{
+			return false;
+		}
+		// SpawnActor 返回后导演才初始化空岛。给本世界新生成的测试岛指定配置，避免更改类默认对象。
+		ConfiguredWorld = &World;
+		SpawnHandle = World.AddOnActorSpawnedHandler(FOnActorSpawned::FDelegate::CreateLambda([this](AActor* Actor)
+		{
+			if (auto* Island = Cast<ACastleShopSkyIsland>(Actor)) { Island->ConfigAsset = TradeConfig.Get(); }
+		}));
+
+		// 第一步的正式节点全是战斗。只在测试中将一个已登记节点明确改成奖励节点。
+		const TActorIterator<ACastleDirectorNodeActor> Node(&World);
+		if (!Node || !Node->Configure(*Config, Director.GetNextStep(), ECastleDirectorNodeKind::RewardIsland))
+		{
+			Test.AddError(TEXT("无法指定测试期间的真实奖励节点。"));
+			return false;
+		}
+		return Test.TestTrue(TEXT("控制台找到商店岛验收命令"),
+			IConsoleManager::Get().ProcessUserConsoleInput(TEXT("CastleTestShopSkyIsland"), *GLog, &World));
+	}
+
+	bool VerifyDeterminism(UWorld& World, UCastleDirectorSubsystem& Director, ACastlePlayerController& Controller)
+	{
+		const FCastleSkyIslandContext Context{&Director, &Controller, ECastleSkyIslandType::Shop, 1, 25496};
+		TArray<FText> Previous;
+		for (int32 Copy = 0; Copy < 2; ++Copy)
+		{
+			auto* Island = World.SpawnActor<ACastleShopSkyIsland>(FVector(50000, 5000 * Copy, 20000), FRotator::ZeroRotator);
+			if (!Test.TestNotNull(TEXT("确定性生成测试空岛"), Island)) { return false; }
+			FText Reason;
+			if (!Test.TestTrue(TEXT("正式商品 DA 能初始化"), Island->InitializeIsland(Context, Reason)))
+			{
+				Test.AddError(Reason.ToString());
+				Island->Destroy();
+				return false;
+			}
+			Test.TestEqual(TEXT("四个实体商品"), Island->Offers.Num(), 4);
+			TSet<FString> Names;
+			bool bHasRoom = false;
+			bool bHasBadge = false;
+			for (int32 Index = 0; Index < Island->Offers.Num(); ++Index)
+			{
+				const auto* Offer = Island->Offers[Index].Get();
+				bHasRoom |= Offer->RoomGroup != nullptr;
+				bHasBadge |= Offer->Badge != nullptr;
+				Names.Add(Offer->ProductName.ToString());
+				const FText Prompt = Offer->GetInteractPrompt();
+				if (Copy == 0) { Previous.Add(Prompt); }
+				else if (Previous.IsValidIndex(Index))
+				{
+					Test.TestEqual(TEXT("相同种子生成相同货位与价格"), Prompt.ToString(), Previous[Index].ToString());
+				}
+			}
+			Test.TestTrue(TEXT("正式池兼有房间组和徽章"), bHasRoom && bHasBadge);
+			Test.TestEqual(TEXT("正式池货位优先不重复"), Names.Num(), 4);
+			Island->Destroy();
+		}
+		return true;
+	}
+
+	bool VerifyPurchases(UWorld& World, UCastleDirectorSubsystem& Director)
+	{
+		const TActorIterator<ACastleShopSkyIsland> Island(&World);
+		const TActorIterator<ACastleBoard> Board(&World);
+		auto* Controller = Cast<ACastlePlayerController>(World.GetFirstPlayerController());
+		if (!Island || !Board || !Controller || !Controller->GetEconomy() || !Board->PrototypeBackpack)
+		{
+			Test.AddError(TEXT("入岛后缺少货架或本局背包账户。"));
+			return false;
+		}
+		if (!Test.TestTrue(TEXT("真实空岛使用四项交易夹具"), Island->Config == TradeConfig.Get())) { return false; }
+		UCastleShopSkyIslandOffer* Fixed = nullptr;
+		UCastleShopSkyIslandOffer* Wildcard = nullptr;
+		TArray<UCastleShopSkyIslandOffer*> BadgeOffers;
+		for (UCastleShopSkyIslandOffer* Offer : Island->Offers)
+		{
+			if (Offer->Badge) { BadgeOffers.Add(Offer); }
+			else if (Offer->RoomGroup->GroupType == ECastleRoomGroupType::FullyCustomRoom) { Wildcard = Offer; }
+			else { Fixed = Offer; }
+		}
+		if (!Test.TestNotNull(TEXT("确定房间组台座"), Fixed) || !Test.TestNotNull(TEXT("万能卡台座"), Wildcard)
+			|| !Test.TestEqual(TEXT("两个不同的徽章商品"), BadgeOffers.Num(), 2))
+		{
+			return false;
+		}
+		auto& Wallet = *Controller->GetEconomy();
+		auto& Backpack = *Board->PrototypeBackpack;
+		FText Reason;
+		const auto Interact = [&Director, &Reason](const UPrimitiveComponent& Target)
+		{
+			const FVector Center = Target.GetComponentLocation();
+			return Director.TryInteractWithSkyIsland(Center - FVector(0, 160, 0), Center, Reason);
+		};
+		const auto CardCount = [&Backpack]() { return Backpack.GetItemCount() + Backpack.GetTempItemCount(); };
+		const int32 InitialCards = CardCount();
+		Test.TestTrue(TEXT("耗尽余额以验证交易拒绝"), Wallet.TrySpendGold(Wallet.GetGold(), Reason));
+		Test.TestFalse(TEXT("余额不足拒绝购买"), Interact(*Fixed));
+		Test.TestEqual(TEXT("拒绝后余额未变"), Wallet.GetGold(), 0);
+		Test.TestEqual(TEXT("拒绝后没有发牌"), CardCount(), InitialCards);
+		Test.TestFalse(TEXT("被拒绝商品仍在售"), Fixed->bSold);
+		Test.TestTrue(TEXT("测试账户入账"), Wallet.TryAddGold(200, Reason));
+		Test.TestTrue(TEXT("购买确定房间组"), Interact(*Fixed));
+		Test.TestEqual(TEXT("房间组扣费"), Wallet.GetGold(), 200 - Fixed->Price);
+		Test.TestEqual(TEXT("三张确定卡牌入建筑栏或临时栏"), CardCount(), InitialCards + 3);
+		Test.TestTrue(TEXT("房间组台座售罄"), Fixed->bSold);
+		Test.TestFalse(TEXT("售罄房间组拒绝重复购买"), Interact(*Fixed));
+
+		const int32 BeforeWildcard = Wallet.GetGold();
+		if (!Test.TestTrue(TEXT("首次购买打开万能卡弹窗"), Interact(*Wildcard))
+			|| !PressPickerButton(World, TEXT("CancelButton")))
+		{
+			return false;
+		}
+		Test.TestEqual(TEXT("取消后金币不变"), Wallet.GetGold(), BeforeWildcard);
+		Test.TestEqual(TEXT("取消后没有写入建筑卡"), CardCount(), InitialCards + 3);
+		Test.TestFalse(TEXT("取消后商品仍在售"), Wildcard->bSold);
+		if (!Test.TestTrue(TEXT("取消后可重新打开同一商品"), Interact(*Wildcard))
+			|| !Test.TestTrue(TEXT("模拟弹窗期间余额减少"), Wallet.TrySpendGold(BeforeWildcard, Reason))
+			|| !PressPickerButton(World, TEXT("ConfirmButton")))
+		{
+			return false;
+		}
+		Test.TestEqual(TEXT("确认检查最新余额"), Wallet.GetGold(), 0);
+		Test.TestEqual(TEXT("确认时余额不足不发牌"), CardCount(), InitialCards + 3);
+		Test.TestFalse(TEXT("确认被拒绝后仍有货"), Wildcard->bSold);
+
+		FCastleBuildingDescriptor Example;
+		if (!Test.TestTrue(TEXT("读取可用于填满背包的确定卡"), Backpack.TryGetItemAt(0, Example))) { return false; }
+		TArray<FCastleBuildingDescriptor> Fill;
+		Fill.Init(Example, Backpack.Capacity - Backpack.GetItemCount());
+		if (!Fill.IsEmpty() && !Test.TestTrue(TEXT("将正常建筑栏填满"), Backpack.TryAddItemsAllowOverflow(Fill, Reason))) { return false; }
+		const int32 BeforeTemp = Backpack.GetTempItemCount();
+		Test.TestTrue(TEXT("补足确认时的余额"), Wallet.TryAddGold(BeforeWildcard, Reason));
+		// 模拟选择期间背包配置失效。已经授权的扣款应退回，原弹窗仍可在修复后确认。
+		Test.AddExpectedError(TEXT("背包容量有效、卡牌批次非空"), EAutomationExpectedErrorFlags::Contains, 1);
+		Test.AddExpectedError(TEXT("发放失败，已退还"), EAutomationExpectedErrorFlags::Contains, 1);
+		{
+			TGuardValue<int32> InvalidCapacity(Backpack.Capacity, 0);
+			if (!PressPickerButton(World, TEXT("ConfirmButton"))) { return false; }
+		}
+		Test.TestEqual(TEXT("发牌失败后退还扣款"), Wallet.GetGold(), BeforeWildcard);
+		Test.TestEqual(TEXT("发牌失败不追加临时栏"), Backpack.GetTempItemCount(), BeforeTemp);
+		Test.TestFalse(TEXT("发牌失败商品仍在售"), Wildcard->bSold);
+		if (!PressPickerButton(World, TEXT("ConfirmButton"))) { return false; }
+		Test.TestEqual(TEXT("确认后只扣一次房间组售价"), Wallet.GetGold(), BeforeWildcard - Wildcard->Price);
+		Test.TestEqual(TEXT("满栏时确认的万能卡进入临时栏"), Backpack.GetTempItemCount(), BeforeTemp + 1);
+		Test.TestTrue(TEXT("确认后万能卡台座售罄"), Wildcard->bSold);
+
+		auto* Badges = UCastleBadgeSubsystem::GetForWorld(&World);
+		if (!Test.TestNotNull(TEXT("本局徽章子系统"), Badges)) { return false; }
+		Badges->ClearAllBadgesForTesting();
+		Test.TestTrue(TEXT("未满六枚时可购买徽章"), Interact(*BadgeOffers[0]));
+		Test.TestEqual(TEXT("未满徽章栏直接入槽"), Badges->GetBadges().Num(), 1);
+		Test.TestTrue(TEXT("已入槽徽章商品售罄"), BadgeOffers[0]->bSold);
+		const auto FirstBadge = BadgeOffers[0]->Badge->Badge;
+		bool bNeedsReplacement = false;
+		for (int32 Index = 1; Index < UCastleBadgeSubsystem::MaxBadges; ++Index)
+		{
+			if (!Test.TestTrue(TEXT("为满栏场景填充已有徽章"), Badges->TryAcquireBadge(FirstBadge, bNeedsReplacement, Reason))) { return false; }
+		}
+		const int32 BeforeBadge = Wallet.GetGold();
+		Test.TestTrue(TEXT("满六枚时购买进入正式替换流程"), Interact(*BadgeOffers[1]));
+		Test.TestEqual(TEXT("替换弹窗打开时徽章已扣款"), Wallet.GetGold(), BeforeBadge - BadgeOffers[1]->Price);
+		Test.TestTrue(TEXT("待替换徽章对应商品已售罄"), BadgeOffers[1]->bSold);
+		auto* Modal = FindShopWidget<UCastleBadgeReplaceModalWidget>(World);
+		if (!Test.TestNotNull(TEXT("正式徽章替换 WBP"), Modal)) { return false; }
+		Test.TestTrue(TEXT("满额替换 WBP 可见"), Modal->IsVisible());
+		auto* Slots = Cast<UPanelWidget>(Modal->GetWidgetFromName(TEXT("ReplaceSlots")));
+		auto* Replace = Slots ? Cast<UButton>(Slots->GetChildAt(0)) : nullptr;
+		if (!Test.TestNotNull(TEXT("第一槽替换按钮"), Replace)) { return false; }
+		Replace->OnClicked.Broadcast();
+		const auto Owned = Badges->GetBadges();
+		Test.TestEqual(TEXT("替换完成仍为六枚"), Owned.Num(), UCastleBadgeSubsystem::MaxBadges);
+		Test.TestTrue(TEXT("新徽章写入所选槽"), !Owned.IsEmpty() && Owned[0].Type == BadgeOffers[1]->Badge->Badge.Type);
+		Test.TestEqual(TEXT("替换提交不重复扣款"), Wallet.GetGold(), BeforeBadge - BadgeOffers[1]->Price);
+
+		auto* Departure = FindObjectFast<UCastleSkyIslandDepartureComponent>(*Island, TEXT("DeparturePortal"));
+		return Test.TestNotNull(TEXT("商店离开门"), Departure) && Test.TestTrue(TEXT("登记离开商店岛"), Interact(*Departure));
+	}
+
+	bool PressPickerButton(UWorld& World, const FName ButtonName)
+	{
+		auto* Picker = FindShopWidget<UCastleWildcardRoomPickerWidget>(World);
+		if (!Test.TestNotNull(TEXT("正式万能卡 WBP 位于主视口"), Picker)) { return false; }
+		if (ButtonName == TEXT("ConfirmButton"))
+		{
+			// 通过现有控件的按钮委托选择属性，确保校验和结算顺序与玩家点击一致。
+			for (const FName Panel : {FName(TEXT("DefinitionChoices")), FName(TEXT("ColorChoices")), FName(TEXT("NumberChoices"))})
+			{
+				const auto* Choices = Cast<UPanelWidget>(Picker->GetWidgetFromName(Panel));
+				auto* Choice = Choices ? Cast<UButton>(Choices->GetChildAt(0)) : nullptr;
+				if (!Test.TestNotNull(Panel.ToString(), Choice)) { return false; }
+				Choice->OnClicked.Broadcast();
+			}
+		}
+		auto* Button = Cast<UButton>(Picker->GetWidgetFromName(ButtonName));
+		if (!Test.TestNotNull(ButtonName.ToString(), Button)) { return false; }
+		Button->OnClicked.Broadcast();
+		return true;
+	}
+
+	void StopConfiguringTestIslands()
+	{
+		if (auto* World = ConfiguredWorld.Get()) { World->RemoveOnActorSpawnedHandler(SpawnHandle); }
+		ConfiguredWorld.Reset();
+		SpawnHandle.Reset();
+	}
+
+	FAutomationTestBase& Test;
+	TStrongObjectPtr<UCastleDirectorConfigDataAsset> Config;
+	TStrongObjectPtr<UCastleShopSkyIslandDataAsset> TradeConfig;
+	TWeakObjectPtr<UWorld> ConfiguredWorld;
+	FDelegateHandle SpawnHandle;
+	int32 Stage = 0;
+	double WaitUntil = FPlatformTime::Seconds() + 30.0;
+};
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleShopSkyIslandIntegrationTest, "MovingCastle.SkyIslands.Shop.Transactions",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleShopSkyIslandIntegrationTest::RunTest(const FString& Parameters)
+{
+	auto* Settings = GetMutableDefault<UCastleDirectorSettings>();
+	const auto Previous = Settings->DirectorConfig;
+	auto* Source = Previous.LoadSynchronous();
+	if (!TestNotNull(TEXT("正式导演配置"), Source)) { return false; }
+	TStrongObjectPtr<UCastleDirectorConfigDataAsset> Config(DuplicateObject(Source, GetTransientPackage()));
+	Config->SkyIslandClasses.Add(ECastleSkyIslandType::Shop, ACastleShopSkyIsland::StaticClass());
+	// 找到开局各有效节点序号都抽到商店的测试种子，避免测试依赖迭代器枚举顺序。
+	bool bFoundSeed = false;
+	for (int32 Seed = 0; Seed < 100000 && !bFoundSeed; ++Seed)
+	{
+		bFoundSeed = true;
+		for (int32 Index = 0; Index < Config->NodeCountMax; ++Index)
+		{
+			FRandomStream Random(static_cast<int32>(static_cast<uint32>(Seed) ^ 0x9e3779b9u
+				^ (static_cast<uint32>(Index) * 0x85ebca6bu)));
+			bFoundSeed &= Random.RandRange(0, 2) == static_cast<int32>(ECastleSkyIslandType::Shop);
+		}
+		if (bFoundSeed) { Config->RunSeed = Seed; }
+	}
+	if (!TestTrue(TEXT("指定商店节点的测试种子"), bFoundSeed)) { return false; }
+	Settings->DirectorConfig = Config.Get();
+	// 只等待本用例显式启动的 PIE 导演，避免全量队列中引擎等待到另一个测试的游戏世界。
+	ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/MovingCastle/Maps/MainMap")));
+	ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
+	ADD_LATENT_AUTOMATION_COMMAND(FCastleShopSkyIslandScenario(*this, MoveTemp(Config)));
+	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([Settings, Previous, bRequested = false]() mutable
+	{
+		// 场景结束时等待已挂载的界面及世界真正销毁，再恢复全局 PIE 启动配置。
+		if (!GEditor->PlayWorld)
+		{
+			Settings->DirectorConfig = Previous;
+			return true;
+		}
+		if (!bRequested) { GEditor->RequestEndPlayMap(); bRequested = true; }
+		return false;
+	}));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleShopSkyIslandAssetTest, "MovingCastle.SkyIslands.Shop.ConfigValidation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleShopSkyIslandAssetTest::RunTest(const FString& Parameters)
+{
+	auto* Asset = LoadObject<UCastleShopSkyIslandDataAsset>(nullptr, ShopAssetPath);
+	if (!TestNotNull(TEXT("商店配置资产"), Asset)) { return false; }
+	FText Reason;
+	TestTrue(TEXT("正式配置通过校验"), Asset->Validate(Reason));
+	TestEqual(TEXT("引用 8 个房间组"), Asset->RoomGroupPool.Num(), 8);
+	TestEqual(TEXT("引用 7 个徽章"), Asset->BadgePool.Num(), 7);
+	TestEqual(TEXT("默认货位数"), Asset->OfferCount, 4);
+	TestEqual(TEXT("房间组售价"), Asset->DefaultRoomGroupPrice, 30);
+	TestEqual(TEXT("徽章售价"), Asset->DefaultBadgePrice, 50);
+
+	// 非法变体只改临时副本，编码预期错误并断言原配置不会被修正。
+	auto* Invalid = DuplicateObject(Asset, GetTransientPackage());
+	Invalid->OfferCount = 3;
+	TestTrue(TEXT("允许 3 个货位"), Invalid->Validate(Reason));
+	AddExpectedError(TEXT("商店空岛配置"), EAutomationExpectedErrorFlags::Contains, 4);
+	Invalid->OfferCount = 2;
+	TestFalse(TEXT("拒绝不足 3 个货位"), Invalid->Validate(Reason));
+	Invalid->OfferCount = 4;
+	Invalid->DefaultBadgePrice = -1;
+	TestFalse(TEXT("拒绝负售价"), Invalid->Validate(Reason));
+	Invalid->DefaultBadgePrice = 50;
+	Invalid->RoomGroupPool[0] = nullptr;
+	TestFalse(TEXT("拒绝无效商品指针"), Invalid->Validate(Reason));
+	Invalid->RoomGroupPool = Asset->RoomGroupPool;
+	Invalid->BadgePool.Reset();
+	TestFalse(TEXT("拒绝空商品池"), Invalid->Validate(Reason));
+	return true;
+}
+
+#endif

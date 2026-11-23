@@ -136,6 +136,27 @@ bool UCastleItemGrantLibrary::TryGrantRoomGroup(const UCastleRoomGroupDataAsset*
 	const TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> DefinitionPool, FRandomStream& Random,
 	UCastlePendingRoomReward*& OutPendingReward, FText& OutFailureReason)
 {
+	TArray<FCastleBuildingDescriptor> Cards;
+	FRandomStream CandidateRandom = Random;
+	if (!TryPrepareRoomGroup(Group, Backpack, DefinitionPool, CandidateRandom, Cards, OutPendingReward, OutFailureReason))
+	{
+		return false;
+	}
+	if (!OutPendingReward)
+	{
+		FText Reason;
+		if (!Backpack->TryAddItemsAllowOverflow(Cards, Reason)) { return RejectGrant(Group, Reason, OutFailureReason); }
+		UE_LOG(LogMoving_Castle, Display, TEXT("房间组 %s 已发放 %d 张确定卡牌。"), *Group->GetPathName(), Cards.Num());
+	}
+	Random = CandidateRandom;
+	return true;
+}
+
+bool UCastleItemGrantLibrary::TryPrepareRoomGroup(const UCastleRoomGroupDataAsset* Group, UCastleBackpackComponent* Backpack,
+	const TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> DefinitionPool, FRandomStream& Random,
+	TArray<FCastleBuildingDescriptor>& OutCards, UCastlePendingRoomReward*& OutPendingReward, FText& OutFailureReason)
+{
+	OutCards.Reset();
 	OutPendingReward = nullptr;
 	OutFailureReason = FText::GetEmpty();
 	if (!IsInGameThread() || !IsValid(Group) || !IsValid(Backpack) || Group->DisplayName.IsEmpty()
@@ -215,12 +236,8 @@ bool UCastleItemGrantLibrary::TryGrantRoomGroup(const UCastleRoomGroupDataAsset*
 		}
 		Cards.Add(Card);
 	}
-	if (!Backpack->TryAddItemsAllowOverflow(Cards, Reason))
-	{
-		return RejectGrant(Group, Reason, OutFailureReason);
-	}
+	OutCards = MoveTemp(Cards);
 	Random = CandidateRandom;
-	UE_LOG(LogMoving_Castle, Display, TEXT("房间组 %s 已发放 %d 张确定卡牌。"), *Group->GetPathName(), Cards.Num());
 	return true;
 }
 
