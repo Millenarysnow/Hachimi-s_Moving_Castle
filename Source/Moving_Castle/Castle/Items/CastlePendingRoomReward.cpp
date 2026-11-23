@@ -15,6 +15,19 @@ namespace
 	}
 }
 
+bool UCastlePendingRoomReward::SetClaimTransaction(FAuthorizeClaim InAuthorize, FOnClaimCompleted InCompleted,
+	FText& OutFailureReason)
+{
+	OutFailureReason = FText::GetEmpty();
+	if (!IsInGameThread() || State != EClaimState::Available || AuthorizeClaim || !InAuthorize || !InCompleted)
+	{
+		return RejectClaim(*this, INVTEXT("领取事务只能在打开选择前绑定一次，且需要授权和结果处理。"), OutFailureReason);
+	}
+	AuthorizeClaim = MoveTemp(InAuthorize);
+	OnClaimCompleted = MoveTemp(InCompleted);
+	return true;
+}
+
 bool UCastlePendingRoomReward::TryBeginClaim(FCastleWildcardRoomOptions& OutOptions, FText& OutFailureReason)
 {
 	OutOptions = {};
@@ -47,6 +60,12 @@ bool UCastlePendingRoomReward::TryCancelClaim(FText& OutFailureReason)
 	{
 		return RejectClaim(*this, INVTEXT("当前奖励没有打开的属性选择。"), OutFailureReason);
 	}
+	if (OnClaimCompleted)
+	{
+		// 调用方先撤销自己的弹窗状态，回调返回后同一奖励才允许再次开始。
+		State = EClaimState::Committing;
+		OnClaimCompleted(EClaimResult::Cancelled);
+	}
 	State = EClaimState::Available;
 	UE_LOG(LogMoving_Castle, Display, TEXT("已取消选择，房间奖励 %s 仍可领取。"), *DisplayName.ToString());
 	return true;
@@ -73,12 +92,20 @@ bool UCastlePendingRoomReward::TryConfirmClaim(UCastleBuildingDefinition* Defini
 
 	// 追加会同步通知界面。通知期间拒绝重复确认或取消同一笔奖励。
 	State = EClaimState::Committing;
-	if (!Target->TryAddItemAllowOverflow(Descriptor, bOutWentToTempBar, OutIndex, OutFailureReason))
+	if (AuthorizeClaim && !AuthorizeClaim(OutFailureReason))
 	{
 		State = EClaimState::Choosing;
 		return false;
 	}
+	if (!Target->TryAddItemAllowOverflow(Descriptor, bOutWentToTempBar, OutIndex, OutFailureReason))
+	{
+		// 先回滚调用方的扣款，再重新开放按钮。回滚回调也不得重入本次领取。
+		if (OnClaimCompleted) { OnClaimCompleted(EClaimResult::WriteFailed); }
+		State = EClaimState::Choosing;
+		return false;
+	}
 	State = EClaimState::Claimed;
+	if (OnClaimCompleted) { OnClaimCompleted(EClaimResult::Granted); }
 	UE_LOG(LogMoving_Castle, Display, TEXT("已领取房间奖励 %s，建筑 %s，色值 %d，数字 %d。"),
 		*DisplayName.ToString(), *Definition->GetPathName(), static_cast<int32>(Color), Number);
 	return true;

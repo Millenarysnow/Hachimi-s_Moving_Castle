@@ -16,6 +16,7 @@
 #include "GameFramework/Pawn.h"
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
+#include "Tests/AutomationEditorCommon.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UObjectGlobals.h"
 
@@ -171,12 +172,9 @@ bool FCastleRestSkyIslandSupplyTest::RunTest(const FString& Parameters)
 	TStrongObjectPtr<UCastleDirectorConfigDataAsset> Config(DuplicateObject(SourceConfig, GetTransientPackage()));
 	Config->SkyIslandClasses.Add(ECastleSkyIslandType::Rest, ACastleRestSkyIsland::StaticClass());
 	Settings->DirectorConfig = Config.Get();
-	if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/MainMap"), true))
-	{
-		Settings->DirectorConfig = Previous;
-		return false;
-	}
-	ADD_LATENT_AUTOMATION_COMMAND(FEngineWaitLatentCommand(0.2f));
+	// 全量队列可能保留其他测试的游戏世界。由本用例等待明确的 PIE 导演就绪。
+	ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/MovingCastle/Maps/MainMap")));
+	ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
 	ADD_LATENT_AUTOMATION_COMMAND(FCastleRestSkyIslandSupplyScenario(*this, MoveTemp(Config)));
 	// 后续地图用例需要等待本次 PIE 世界销毁，避免误读上一局导演和背包。
 	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([Settings, Previous, bRequested = false]() mutable

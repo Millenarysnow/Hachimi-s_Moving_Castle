@@ -13,6 +13,14 @@ class MOVING_CASTLE_API UCastlePendingRoomReward : public UObject
 	GENERATED_BODY()
 
 public:
+	/** 商店在牌面校验通过后、入包前授权扣款。取消属性选择不调用授权。 */
+	using FAuthorizeClaim = TFunction<bool(FText&)>;
+	enum class EClaimResult : uint8 { Cancelled, WriteFailed, Granted };
+	using FOnClaimCompleted = TFunction<void(EClaimResult)>;
+
+	/** 为一张尚未打开的奖励绑定事务。结果区分取消、写入失败与成功。 */
+	bool SetClaimTransaction(FAuthorizeClaim InAuthorize, FOnClaimCompleted InCompleted, FText& OutFailureReason);
+
 	UFUNCTION(BlueprintPure, Category = "移动城堡|道具")
 	FText GetDisplayName() const { return DisplayName; }
 
@@ -53,4 +61,6 @@ private:
 	TOptional<FRandomStream> DefinitionDraw;
 	TWeakObjectPtr<UCastleBackpackComponent> Backpack;
 	EClaimState State = EClaimState::Available;
+	FAuthorizeClaim AuthorizeClaim;
+	FOnClaimCompleted OnClaimCompleted;
 };

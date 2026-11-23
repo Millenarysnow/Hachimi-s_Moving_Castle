@@ -22,6 +22,11 @@ public:
 		TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> DefinitionPool, FRandomStream& Random,
 		UCastlePendingRoomReward*& OutPendingReward, FText& OutFailureReason);
 
+	/** 展开完整的牌组或创建待领句柄。准备阶段只推进传入的随机流，不写入背包。 */
+	static bool TryPrepareRoomGroup(const UCastleRoomGroupDataAsset* Group, UCastleBackpackComponent* Backpack,
+		TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> DefinitionPool, FRandomStream& Random,
+		TArray<FCastleBuildingDescriptor>& OutCards, UCastlePendingRoomReward*& OutPendingReward, FText& OutFailureReason);
+
 	/** 普通奖励也可直接用万能卡规格创建独立待领取项。 */
 	static bool TryCreateWildcardReward(FText DisplayName, const FCastleWildcardRoomSpec& Spec,
 		UCastleBackpackComponent* Backpack, TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> DefinitionPool,
