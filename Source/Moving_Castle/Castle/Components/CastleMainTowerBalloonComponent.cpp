@@ -105,6 +105,16 @@ bool UCastleMainTowerBalloonComponent::SetCapacity(const int32 Capacity, FText& 
 	return true;
 }
 
+void UCastleMainTowerBalloonComponent::DiscardCapacityAbove(const int32 Capacity)
+{
+	check(Capacity >= LiveCount && Balloons.Num() == Strings.Num());
+	while (Balloons.Num() > Capacity)
+	{
+		Balloons.Pop()->DestroyComponent();
+		Strings.Pop()->DestroyComponent();
+	}
+}
+
 void UCastleMainTowerBalloonComponent::SetLiveCount(const int32 Count)
 {
 	check(Count >= 0 && Count <= Balloons.Num());

@@ -1,4 +1,5 @@
 #include "Interaction/CastlePatrolRoute.h"
+#include "Castle/Director/CastleDirectorSubsystem.h"
 
 #include "CastleNavigationSubsystem.h"
 #include "CastleTowerDispatchSubsystem.h"
@@ -147,8 +148,9 @@ bool ACastlePatrolRoute::SetWorldWaypoints(const TArray<FVector>& Waypoints, FTe
 	if (!bOwnsRoute) { OutFailureReason = FText::FromString(TEXT("此 Actor 没有全局巡逻路线的编辑权。")); return false; }
 	UCastleNavigationSubsystem* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
 	const auto* Dispatch = GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>();
-	// 出兵会话的门由导航求解时插入；会话之外保留玩家闭环供旧导演与调试入口消费。
-	const bool bAccepted = Dispatch && Dispatch->IsSessionActive()
+	const auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
+	// 正式单局在编辑时就求解双门开环，其他地图仍可运行既有闭环巡逻演示。
+	const bool bAccepted = (Director && Director->IsRunning()) || (Dispatch && Dispatch->IsSessionActive())
 		? Navigation->RequestTowerDispatchRoute(Waypoints, OutFailureReason)
 		: Navigation->RequestSharedPatrolRoute(Waypoints, OutFailureReason);
 	if (!bAccepted) { return false; }

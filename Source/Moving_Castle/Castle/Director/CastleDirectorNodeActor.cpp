@@ -83,9 +83,17 @@ bool ACastleDirectorNodeActor::InitializeLabelWidget()
 		bLabelReady = false;
 		return false;
 	}
-	const FText Text = FText::FromString(FString::Printf(TEXT("%s · 第 %d 关"),
-		NodeKind == ECastleDirectorNodeKind::Elite ? TEXT("精英战斗") : TEXT("普通战斗"), StepNumber));
-	const FLinearColor Color = NodeKind == ECastleDirectorNodeKind::Elite ? FLinearColor::Red : FLinearColor::White;
+	// 同一步内不同节点均按自身类型上色，文字也提供独立于颜色的识别信息。
+	const TCHAR* Caption = TEXT("战斗");
+	FLinearColor Color = FLinearColor::White;
+	switch (NodeKind)
+	{
+	case ECastleDirectorNodeKind::Normal: break;
+	case ECastleDirectorNodeKind::Elite: Caption = TEXT("精英"); Color = FLinearColor::Red; break;
+	case ECastleDirectorNodeKind::RewardIsland: Caption = TEXT("空岛"); Color = FLinearColor(1.0f, 0.72f, 0.12f); break;
+	case ECastleDirectorNodeKind::RestIsland: Caption = TEXT("休息"); Color = FLinearColor::Green; break;
+	}
+	const FText Text = FText::FromString(FString::Printf(TEXT("%s · 第 %d 关"), Caption, StepNumber));
 	bLabelReady = LabelWidget->SetNodeLabel(Text, Color);
 	return bLabelReady;
 }

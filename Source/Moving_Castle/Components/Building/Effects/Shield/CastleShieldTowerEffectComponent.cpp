@@ -12,13 +12,13 @@ bool UCastleShieldTowerEffectComponent::CalculateShieldBlocks(int64& OutBlocks) 
 {
 	OutBlocks = 0;
 	const ACastleBuildingBase* Tower = Cast<ACastleBuildingBase>(GetOwner());
-	if (!IsValid(Tower) || Tower->GetBuildingLevel() < 1 || Tower->GetBuildingLevel() > 5 || Tower->GetBuildingNumber() <= 0)
+	if (!IsValid(Tower) || Tower->GetBuildingLevel() < 1 || Tower->GetBuildingLevel() > 5 || Tower->GetEffectiveBuildingNumber() <= 0)
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("盾塔 %s 次数计算失败：拥有者、等级或数字无效。"), *GetPathNameSafe(Tower));
 		return false;
 	}
 	const int32 Level = Tower->GetBuildingLevel();
-	int64 Total = Tower->GetBuildingNumber();
+	int64 Total = Tower->GetEffectiveBuildingNumber();
 	int32 AttackTowerCount = 0;
 	if (Level > 1)
 	{
@@ -39,12 +39,12 @@ bool UCastleShieldTowerEffectComponent::CalculateShieldBlocks(int64& OutBlocks) 
 		Total = 0;
 		for (const ACastleBuildingBase* Other : Connected)
 		{
-			if (Total > MAX_int64 - Other->GetBuildingNumber())
+			if (Total > MAX_int64 - Other->GetEffectiveBuildingNumber())
 			{
 				UE_LOG(LogMoving_Castle, Error, TEXT("盾塔 %s 连通数字和溢出。"), *Tower->GetPathName());
 				return false;
 			}
-			Total += Other->GetBuildingNumber();
+			Total += Other->GetEffectiveBuildingNumber();
 			if (Other != Tower && (Other->GetBuildingType() == ECastleBuildingType::ArcherTower || Other->GetBuildingType() == ECastleBuildingType::CannonTower)) { ++AttackTowerCount; }
 		}
 	}
@@ -118,7 +118,7 @@ bool UCastleShieldTowerEffectComponent::ExecuteEffect(const FCastleBuildingTrigg
 	int64 Current = 0;
 	Shields->GetShieldRemainingBlocks(Tower, Current);
 	const int64 Refreshed = FMath::Max(Current, Computed);
-	const float Reflection = Tower->GetBuildingLevel() >= 3 ? static_cast<float>(Tower->GetBuildingNumber()) : 0.0f;
+	const float Reflection = Tower->GetBuildingLevel() >= 3 ? static_cast<float>(Tower->GetEffectiveBuildingNumber()) : 0.0f;
 	if (Shields->UpsertActiveShield(Tower, Tower->GetActorLocation(), AttractionRadius, Refreshed, Reflection) == 0) { return false; }
 	UE_LOG(LogMoving_Castle, Display, TEXT("盾塔 %s Lv%d 展开/刷新护盾：当前 %lld，本次 %lld，结果 %lld，反伤 %.1f。"),
 		*Tower->GetName(), Tower->GetBuildingLevel(), Current, Computed, Refreshed, Reflection);

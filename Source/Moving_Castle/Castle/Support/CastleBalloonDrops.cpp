@@ -38,7 +38,14 @@ bool UCastleSupportTowerSubsystem::LaunchBalloon(ACastleBuildingBase& Source, AC
 	Flight.Source = &Source;
 	Flight.Board = &Board;
 	Flight.Level = Source.GetBuildingLevel();
-	Flight.Number = Source.GetBuildingNumber();
+	const int64 Number = Source.GetEffectiveBuildingNumber();
+	// 落地减速直接使用有效数字百分比，先拒绝会产生零或负速度的配置。
+	if (Number < 1 || Number >= 100)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("空投塔 %s 的有效数字 %lld 会产生无效减速倍率。"), *Source.GetPathName(), Number);
+		return false;
+	}
+	Flight.Number = static_cast<int32>(Number);
 	Flight.Color = Source.GetBuildingColor();
 	Flight.Health = Data.BalloonHealth;
 	const TArray<FIntVector> Cells = Source.GetOccupiedCoordinates();
@@ -322,7 +329,7 @@ bool UCastleSupportTowerSubsystem::FireAdjacentAttacks(const FBalloon& Flight, c
 		Shot.Target = Target->Handle;
 		Shot.Origin = Muzzle;
 		// 不走原建筑触发或弹药库联动，避免连锁及总伤害串入；伤害精确取本邻居卡面的一半。
-		Shot.Damage = Neighbor->GetBuildingNumber() / 2;
+		Shot.Damage = Neighbor->GetEffectiveBuildingNumber() / 2;
 		TArray<FCastleMassUnitHandle> Projectiles;
 		FText Reason;
 		if (!Units->SpawnHomingProjectiles(Data->ProjectileConfiguration, {Shot}, Projectiles, Reason))

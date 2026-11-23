@@ -1,6 +1,8 @@
 #include "Items/CastleBadgeSubsystem.h"
 
 #include "Moving_Castle.h"
+#include "Engine/GameInstance.h"
+#include "Engine/World.h"
 
 namespace
 {
@@ -13,6 +15,13 @@ namespace
 			Badge.Magnitude, *Reason.ToString());
 		return false;
 	}
+}
+
+UCastleBadgeSubsystem* UCastleBadgeSubsystem::GetForWorld(const UWorld* World)
+{
+	// 徽章归本局所属 GameInstance；编辑器预览与无 GameInstance 的测试世界没有玩家徽章。
+	const UGameInstance* Instance = World ? World->GetGameInstance() : nullptr;
+	return Instance ? Instance->GetSubsystem<UCastleBadgeSubsystem>() : nullptr;
 }
 
 bool UCastleBadgeSubsystem::TryAcquireBadge(const FCastleBadgeDefinition& Badge, bool& bOutNeedsReplacement,

@@ -37,6 +37,8 @@ class MOVING_CASTLE_API UCastleWildcardRoomPickerWidget : public UUserWidget
 public:
 	/** 挂载前绑定待领取项。初始只显示领取按钮，属性弹窗由玩家点击后打开。 */
 	bool BindReward(UCastlePendingRoomReward* InReward, FText& OutFailureReason);
+	/** 外层领奖按钮已经取得用户意图，直接进入属性选择。 */
+	bool BeginBoundReward(FText& OutFailureReason);
 
 	UPROPERTY(BlueprintAssignable, Category = "移动城堡|道具")
 	FCastleWildcardPickerClosed OnPickerClosed;

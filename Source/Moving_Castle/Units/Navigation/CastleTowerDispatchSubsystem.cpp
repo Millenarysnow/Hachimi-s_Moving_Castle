@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleTowerDispatchSubsystem.h"
+#include "Castle/Director/CastleDirectorSubsystem.h"
 
 #include "CastleMainTowerComponent.h"
 #include "CastleMassTraits.h"
@@ -69,7 +70,9 @@ bool UCastleTowerDispatchSubsystem::EndBattleDispatchSession(FText& OutReason)
 {
 	OutReason = FText::GetEmpty();
 	if (!bSessionActive) { return Reject(OutReason, TEXT("当前没有主塔出兵会话。"), false); }
-	if (!bEndingSession)
+	const auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
+	// 正式导演可在后续关卡复用已提交开环，单独的出兵演示结束后恢复闭环。
+	if (!bEndingSession && !(Director && Director->IsRunning()))
 	{
 		auto* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
 		if (!Navigation) { return Reject(OutReason, TEXT("当前世界缺少巡逻导航子系统，无法恢复普通巡逻。"), true); }

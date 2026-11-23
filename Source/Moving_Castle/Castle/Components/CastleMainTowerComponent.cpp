@@ -131,13 +131,24 @@ bool UCastleMainTowerComponent::SetTowerBalloonTier(const int32 NewMaxBalloons, 
 	const bool bFullHeal, FText& OutReason)
 {
 	if (!PrepareTowerBalloonTier(NewMaxBalloons, NewBaseMaxHealth, bFullHeal, OutReason)) { return false; }
+	CommitPreparedBalloonTier(NewMaxBalloons, NewBaseMaxHealth, bFullHeal);
+	return true;
+}
+
+void UCastleMainTowerComponent::CommitPreparedBalloonTier(
+	const int32 NewMaxBalloons, const float NewBaseMaxHealth, const bool bFullHeal)
+{
 	const float PreviousHealth = CurrentHealth;
 	BaseMaxHealth = NewBaseMaxHealth;
 	MaxHealth = BaseMaxHealth * HealthMultiplier;
 	MaxBalloons = NewMaxBalloons;
 	if (bFullHeal) { CurrentHealth = MaxHealth; }
 	NotifyHealthChanged(PreviousHealth, PreviousHealth - CurrentHealth);
-	return true;
+}
+
+void UCastleMainTowerComponent::DiscardPreparedBalloonTier()
+{
+	if (BalloonPresentation) { BalloonPresentation->DiscardCapacityAbove(MaxBalloons); }
 }
 
 bool UCastleMainTowerComponent::SetMaxHealthMultiplier(const float Multiplier, const bool bScaleCurrentHealth)
@@ -156,7 +167,8 @@ bool UCastleMainTowerComponent::SetMaxHealthMultiplier(const float Multiplier, c
 	HealthMultiplier = Multiplier;
 	MaxHealth = NewMaxHealth;
 	CurrentHealth = NewCurrentHealth;
-	NotifyHealthChanged(PreviousHealth, PreviousHealth - CurrentHealth);
+	// 这次只同步已持有徽章的生命倍率，区别于战斗受伤或主动回血。
+	NotifyHealthChanged(PreviousHealth, 0.0f);
 	return true;
 }
 

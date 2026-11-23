@@ -12,15 +12,18 @@ enum class ECastleDirectorPhase : uint8
 	Editing,
 	Battle,
 	Reward,
-	GameOver
+	GameOver,
+	SkyIsland
 };
 
-/** 本期节点只有两种战斗；同一步中的节点类型完全相同。 */
+/** 战斗与空岛共用节点表现，导演根据节点类型进入相应阶段。 */
 UENUM(BlueprintType)
 enum class ECastleDirectorNodeKind : uint8
 {
 	Normal,
-	Elite
+	Elite,
+	RewardIsland,
+	RestIsland
 };
 
 /** 奖励意图由按钮提交，实际效果统一在导演执行。 */
@@ -30,4 +33,19 @@ enum class ECastleDirectorReward : uint8
 	Experience,
 	Healing,
 	Shop
+};
+
+/** 升级面板的一行奖励，数字、NPC 和万能卡各自独立领取。 */
+enum class ECastleTowerUpgradeReward : uint8
+{
+	PathPoint,
+	NPC,
+	CustomRoom
+};
+
+/** 前两种奖励保存数量，自定义房每张占一个项目。 */
+struct FCastleTowerUpgradeRewardEntry
+{
+	ECastleTowerUpgradeReward Kind;
+	int32 Count;
 };

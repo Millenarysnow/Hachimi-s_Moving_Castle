@@ -44,15 +44,21 @@ bool UCastleWildcardRoomPickerWidget::BindReward(UCastlePendingRoomReward* InRew
 
 void UCastleWildcardRoomPickerWidget::OpenReward()
 {
+	FText Failure;
+	BeginBoundReward(Failure);
+}
+
+bool UCastleWildcardRoomPickerWidget::BeginBoundReward(FText& OutFailureReason)
+{
 	if (!Reward || bChoosing)
 	{
+		OutFailureReason = INVTEXT("万能卡界面没有可打开的待领取项。");
 		UE_LOG(LogMoving_Castle, Error, TEXT("万能卡界面 %s 没有可打开的待领取项。"), *GetPathName());
-		return;
+		return false;
 	}
-	FText Failure;
-	if (!Reward->TryBeginClaim(Options, Failure))
+	if (!Reward->TryBeginClaim(Options, OutFailureReason))
 	{
-		return;
+		return false;
 	}
 
 	bChoosing = true;
@@ -103,6 +109,7 @@ void UCastleWildcardRoomPickerWidget::OpenReward()
 	UpdateSelection();
 	ClaimButton->SetVisibility(ESlateVisibility::Collapsed);
 	PickerPanel->SetVisibility(ESlateVisibility::Visible);
+	return true;
 }
 
 void UCastleWildcardRoomPickerWidget::AppendChoice(UWrapBox& Panel, const FText& Label, FSimpleDelegate Action)

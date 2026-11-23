@@ -18,6 +18,23 @@ bool FCastleDirectorAssetsTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("设置引用的正式导演DA可加载"), Config)) { return false; }
 	FText Reason;
 	if (!TestTrue(TEXT("正式导演DA配置通过校验"), Config->ValidateConfig(Reason))) { AddError(Reason.ToString()); return false; }
+	// 复用正式资产上的依赖，只在临时副本上覆盖节点权重和数量。
+	UCastleDirectorConfigDataAsset* WeightConfig = DuplicateObject(Config, GetTransientPackage());
+	WeightConfig->NodeCountMin = 2;
+	WeightConfig->NodeCountMax = 3;
+	WeightConfig->NormalNodeWeight = 0;
+	WeightConfig->RewardNodeWeight = 0;
+	WeightConfig->RestNodeWeight = 1;
+	AddExpectedError(TEXT("普通与奖励权重之和须大于零"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestFalse(TEXT("最多三个节点时拒绝只抽休息岛"), WeightConfig->ValidateConfig(Reason));
+	WeightConfig->NodeCountMax = 2;
+	TestTrue(TEXT("固定两个节点时允许只抽休息岛"), WeightConfig->ValidateConfig(Reason));
+	WeightConfig->NodeCountMax = 3;
+	WeightConfig->NormalNodeWeight = 1;
+	TestTrue(TEXT("最多三个节点时允许普通权重为正且奖励为零"), WeightConfig->ValidateConfig(Reason));
+	WeightConfig->NormalNodeWeight = 0;
+	WeightConfig->RewardNodeWeight = 1;
+	TestTrue(TEXT("最多三个节点时允许奖励权重为正且普通为零"), WeightConfig->ValidateConfig(Reason));
 	TestEqual(TEXT("自动启动地图只有一张"), Settings->AutoStartMaps.Num(), 1);
 	TestEqual(TEXT("自动启动白名单是MainMap"), Settings->AutoStartMaps[0].GetLongPackageName(), FString(TEXT("/Game/MovingCastle/Maps/MainMap")));
 	const UWorld::InitializationValues Init = UWorld::InitializationValues().AllowAudioPlayback(false)

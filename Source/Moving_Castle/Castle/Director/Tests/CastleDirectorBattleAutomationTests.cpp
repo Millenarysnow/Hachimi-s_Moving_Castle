@@ -32,6 +32,7 @@
 #include "Components/WidgetSwitcher.h"
 #include "Kismet/GameplayStatics.h"
 #include "MassEntitySubsystem.h"
+#include "CastleTowerDispatchSubsystem.h"
 
 
 
@@ -54,6 +55,7 @@ public:
 		if (!Test->TestTrue(TEXT("正式地图导演已运行"), Director && Director->IsRunning())) { return true; }
 		auto* Board = Director->Board.Get();
 		auto* Navigation = World->GetSubsystem<UCastleNavigationSubsystem>();
+		auto* Dispatch = World->GetSubsystem<UCastleTowerDispatchSubsystem>();
 		FText Reason;
 		if (Stage == 0)
 		{
@@ -64,7 +66,7 @@ public:
 			Navigation->ClearSharedRoute();
 			ACastleDirectorNodeActor* First = Director->Nodes[0];
 			Director->HandleNodeTouched(First);
-			Test->TestTrue(TEXT("重叠回调只记录，不立即派兵"), Director->PendingNode.Get() == First && !Director->BattleNPCSpawner);
+			Test->TestTrue(TEXT("重叠回调只记录，不立即派兵"), Director->PendingNode.Get() == First && !Dispatch->IsSessionActive());
 			Director->HandleNodeTouched(Director->Nodes.Last());
 			Test->TestTrue(TEXT("同帧多个节点保留首次选择"), Director->PendingNode.Get() == First);
 			Director->Tick(0);
@@ -75,6 +77,7 @@ public:
 			const FVector Center = Board->GetGridWorldLocation(Base);
 			const FIntVector Directions[] = { FIntVector(0, -1, 0), FIntVector(-1, 0, 0), FIntVector(1, 0, 0) };
 			const ECastleBuildingType Types[] = { ECastleBuildingType::CannonTower, ECastleBuildingType::ArcherTower, ECastleBuildingType::Farm };
+			FCastleBuildingDescriptor BridgeCard;
 			for (int32 Index = 0; Index < UE_ARRAY_COUNT(Directions); ++Index)
 			{
 				FCastleGridCursorTarget Target;
@@ -90,8 +93,29 @@ public:
 				Card.Number = Cell->Number;
 				ACastleBuildingBase* Placed = Board->PlaceBuildingAtCursor(Target, Card, false, Reason);
 				if (!Test->TestNotNull(TEXT("在塔侧放置正式导航建筑"), Placed)) { Test->AddError(Reason.ToString()); return true; }
-				if (Index == 0) { Building = Placed; }
+				if (Index == 0)
+				{
+					Building = Placed;
+					BridgeCard = Card;
+				}
 				CastleBuildingTests::CompletePlacement(Placed);
+			}
+			// 双门在相反两侧。每个拐角用炮塔的颜色与门侧房间的数字，保证两道接缝都同色或同号。
+			BridgeCard.Definition = Board->FindBuildingDefinition(ECastleBuildingType::NormalRoom);
+			for (const int32 Side : {-1, 1})
+			{
+				const ACastleBuildingBase* DoorRoom = Board->GetBuildingAt(Base + FIntVector(Side, 0, 0));
+				if (!Test->TestNotNull(TEXT("双门外各有站立房间"), DoorRoom)) { return true; }
+				BridgeCard.Number = DoorRoom->GetBuildingNumber();
+				FCastleGridCursorTarget Corner;
+				Corner.bValid = true;
+				Corner.Surface = ECastleGridCursorSurface::Building;
+				Corner.Cell = Base + FIntVector(0, -1, 0);
+				Corner.AdjacentCell = Corner.Cell + FIntVector(Side, 0, 0);
+				Corner.Face = Side == 1 ? ECastleGridFace::PositiveX : ECastleGridFace::NegativeX;
+				ACastleBuildingBase* Room = Board->PlaceBuildingAtCursor(Corner, BridgeCard, false, Reason);
+				if (!Test->TestNotNull(TEXT("双门之间放置绕塔连接房"), Room)) { Test->AddError(Reason.ToString()); return true; }
+				CastleBuildingTests::CompletePlacement(Room);
 			}
 			Stage = 1;
 			return false;
@@ -123,9 +147,10 @@ public:
 			const FVector Center = Board->GetGridWorldLocation(Base + FIntVector(0, -1, 0));
 			if (!Test->TestTrue(TEXT("楼顶射线解析到楼内地板"), ACastlePatrolRoute::TryResolveWaypointFromRay(
 				World, Center + FVector(0, 0, 2000), Center - FVector(0, 0, 1000), Point, Reason))) { Test->AddError(Reason.ToString()); return true; }
-			if (!Test->TestTrue(TEXT("提交正式单点闭环待命路线"), Navigation->RequestSharedPatrolRoute({Point}, Reason))) { Test->AddError(Reason.ToString()); return true; }
+			if (!Test->TestTrue(TEXT("由玩家路径入口提交正式门到门路线"), Director->PatrolRoute->SetWorldWaypoints({Point}, Reason)))
+			{ Test->AddError(Reason.ToString()); return true; }
 			const auto Path = Navigation->AcquireSharedPath();
-			if (!Test->TestTrue(TEXT("生成前实际闭环已就绪"), Path && Path->bValid && Path->bClosedLoop)) { Test->AddError(Navigation->LastFailure.ToString()); return true; }
+			if (!Test->TestTrue(TEXT("生成前实际开环已就绪"), Path && Path->bValid && !Path->bClosedLoop && Path->bTowerDispatch)) { Test->AddError(Navigation->LastFailure.ToString()); return true; }
 			// NPC 已生成后令战斗配置非法，证明最后一步失败仍能收回整批 NPC 并恢复塔侧格。
 			const float Radius = Director->Config->CombatConfig->SpawnInnerRadius;
 			Director->Config->CombatConfig->SpawnInnerRadius = -1;
@@ -134,7 +159,7 @@ public:
 			Test->TestFalse(TEXT("战斗系统拒绝导致整次开战失败"), Director->TryStartSelectedBattle(Director->Nodes[0], Reason));
 			Test->TestTrue(TEXT("失败不销毁节点"), Director->Nodes.Num() >= 2 && IsValid(Director->Nodes[0]));
 			Test->TestFalse(TEXT("失败恢复塔侧格"), Board->IsPlacementSurfacePresentationHidden());
-			Test->TestFalse(TEXT("失败销毁NPC生成器"), IsValid(Director->BattleNPCSpawner));
+			Test->TestFalse(TEXT("失败关闭出兵会话"), Dispatch->IsSessionActive());
 			Test->TestEqual(TEXT("失败不推进普通场次"), Director->NormalBattles, 0);
 			Test->TestEqual(TEXT("失败保持编辑阶段"), Director->GetPhase(), ECastleDirectorPhase::Editing);
 			Director->Config->CombatConfig->SpawnInnerRadius = Radius;
@@ -155,7 +180,10 @@ public:
 				Test->TestFalse(TEXT("MainMap 不叠放多套标记"), static_cast<bool>(Markers));
 			}
 			if (!Test->TestTrue(TEXT("真实开战成功"), Director->TryStartSelectedBattle(Director->Nodes[0], Reason))) { Test->AddError(Reason.ToString()); return true; }
-			Test->TestEqual(TEXT("同步派出恰好8个NPC"), Director->BattleNPCSpawner->SpawnedUnits.Num(), 8);
+			int32 Reserve = 0, Active = 0;
+			Dispatch->GetDispatchCounts(Reserve, Active);
+			Test->TestEqual(TEXT("开战登记 8 名待命 NPC"), Reserve, 8);
+			Test->TestEqual(TEXT("手动模式开战没有自动派兵"), Active, 0);
 			Test->TestTrue(TEXT("战斗隐藏塔侧格"), Board->IsPlacementSurfacePresentationHidden());
 			Test->TestEqual(TEXT("成功才清除节点"), Director->Nodes.Num(), 0);
 			Test->TestEqual(TEXT("普通计数提交为1"), Director->NormalBattles, 1);
@@ -215,7 +243,7 @@ public:
 			Test->TestEqual(TEXT("清场后自动恢复 1x 倍速"), UGameplayStatics::GetGlobalTimeDilation(World), 1.0f);
 			Test->TestFalse(TEXT("清场后倍速标志归零"), Director->IsBattleDoubleSpeed());
 			Test->TestEqual(TEXT("只通过一关"), Director->ClearedSteps, 1);
-			Test->TestFalse(TEXT("清场后NPC生成器已回收"), IsValid(Director->BattleNPCSpawner));
+			Test->TestFalse(TEXT("清场后出兵会话已回收"), Dispatch->IsSessionActive());
 			Test->TestTrue(TEXT("奖励期间塔侧格保持隐藏"), Board->IsPlacementSurfacePresentationHidden());
 			Test->AddExpectedError(TEXT("导演拒绝非法或重复清场通知"), EAutomationExpectedErrorFlags::Contains, 1);
 			Director->Combat->OnBattleCleared.Broadcast(ECastleBattleKind::Normal, 1);
@@ -231,6 +259,8 @@ public:
 		}
 		if (Stage == 4)
 		{
+			// 升级新增塔身碰撞会重建正式导航，玩家需等新快照就绪才可选择战斗。
+			if (!Navigation->IsNavigationReady()) { return false; }
 			// 第二关在 Mass 处理作用域中记录选择；边界内禁止创建 NPC，随后由导演 Tick 消费。
 			if (Director->ClearedSteps == 1)
 			{
@@ -239,11 +269,15 @@ public:
 					auto Processing = Manager.NewProcessingScope();
 					Test->TestTrue(TEXT("实际Mass处理边界已进入"), Manager.IsProcessing());
 					Director->HandleNodeTouched(Director->Nodes[0]);
-					Test->TestFalse(TEXT("Mass处理期间只记录，不派出NPC"), IsValid(Director->BattleNPCSpawner));
+					Test->TestFalse(TEXT("Mass处理期间只记录，不派出NPC"), Dispatch->IsSessionActive());
 				}
 				Director->Tick(0);
 			}
-			else if (!Test->TestTrue(TEXT("后续关卡开战"), Director->TryStartSelectedBattle(Director->Nodes[0], Reason))) { return true; }
+			else if (!Test->TestTrue(TEXT("后续关卡开战"), Director->TryStartSelectedBattle(Director->Nodes[0], Reason)))
+			{
+				Test->AddError(Reason.ToString());
+				return true;
+			}
 			if (!Test->TestEqual(TEXT("进入正式战斗阶段"), Director->GetPhase(), ECastleDirectorPhase::Battle)) { return true; }
 			if (Director->ClearedSteps == 4)
 			{
@@ -265,7 +299,17 @@ public:
 				IConsoleManager::Get().ProcessUserConsoleInput(TEXT("CastleKillAllEnemies"), *GLog, World);
 				return false;
 			}
-			if (!Test->TestEqual(TEXT("后续战斗清场进入奖励"), Director->GetPhase(), ECastleDirectorPhase::Reward)) { return true; }
+			if (Director->ClearedSteps == 5)
+			{
+				Test->TestEqual(TEXT("精英胜利自动进入下一步编辑"), Director->GetPhase(), ECastleDirectorPhase::Editing);
+				Test->TestTrue(TEXT("精英胜利自动打开免费商店"), Director->Controller->GetShop()->IsShopOpen());
+				Test->TestTrue(TEXT("首次精英胜利解锁雾瘴幼龙"), Director->Combat->HasUnlockedEnemyTag(TEXT("Unlock.MiasmaWelp")));
+				Director->DiscardTowerUpgradeRewards();
+				Director->Controller->GetShop()->CloseShop();
+				Stage = 6;
+				return false;
+			}
+			if (!Test->TestEqual(TEXT("普通战斗清场进入奖励"), Director->GetPhase(), ECastleDirectorPhase::Reward)) { return true; }
 			ECastleDirectorReward Reward = ECastleDirectorReward::Experience;
 			if (Director->ClearedSteps == 3)
 			{
@@ -280,11 +324,16 @@ public:
 			if (Director->ClearedSteps == 2)
 			{
 				Test->TestEqual(TEXT("第二次经验升到2级"), Director->Level, 2);
-				Test->TestEqual(TEXT("2级房间上限20"), Director->Controller->GetShop()->RoomLimit, 20);
+				Test->TestEqual(TEXT("2级房间上限250"), Director->Controller->GetShop()->RoomLimit, 250);
+				Test->TestEqual(TEXT("Lv2 有三项待领取"), Director->UpgradeRewards.Num(), 3);
+				Director->ClaimTowerUpgradeReward(0);
+				Test->TestEqual(TEXT("点击只消耗一项"), Director->UpgradeRewards.Num(), 2);
+				Director->DiscardTowerUpgradeRewards();
+				Test->TestTrue(TEXT("关闭清空未领取项"), Director->UpgradeRewards.IsEmpty());
 			}
 			if (Director->ClearedSteps == 3)
 			{
-				Test->TestEqual(TEXT("实际回血恢复300"), Director->Tower->CurrentHealth, FMath::Min(Director->Tower->MaxHealth, HealthBeforeReward + 300.0f));
+				Test->TestEqual(TEXT("实际回血恢复300"), Director->Tower->CurrentHealth, FMath::Min(Director->Tower->MaxHealth, HealthBeforeReward + Director->Tower->MaxHealth * 0.3f));
 				Test->TestEqual(TEXT("实际回血不改攻击次数"), Director->Tower->AttackCount, AttacksBeforeReward);
 			}
 			if (Director->ClearedSteps == 4)
@@ -303,7 +352,7 @@ public:
 					FText Text; FLinearColor Color;
 					if (!Test->TestTrue(TEXT("精英节点屏幕标签实例有效"), Label && Label->TryGetNodeLabel(Text, Color))) { return true; }
 					Test->TestTrue(TEXT("实际精英节点标签为红色"), Color.Equals(FLinearColor::Red));
-					Test->TestEqual(TEXT("精英标签关卡文本"), Text.ToString(), FString(TEXT("精英战斗 · 第 5 关")));
+					Test->TestEqual(TEXT("精英标签关卡文本"), Text.ToString(), FString(TEXT("精英 · 第 5 关")));
 				}
 			}
 			Stage = Director->ClearedSteps < 5 ? 4 : 6;

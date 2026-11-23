@@ -41,7 +41,7 @@ bool UCastleTowerAttackEffectComponent::ExecuteEffect(const FCastleBuildingTrigg
 	const FCastleTowerAttackLevelData* LevelData = nullptr;
 	if (!ResolveAttackConfiguration(Data, LevelData)) { return false; }
 	const int32 Level = Building->GetBuildingLevel();
-	int64 NumberSum = Building->GetBuildingNumber();
+	int64 NumberSum = Building->GetEffectiveBuildingNumber();
 	if (Level < 1 || Level > 5 || NumberSum <= 0)
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("箭塔 %s 装填失败：等级或自身数字无效，定义=%s。"), *Building->GetPathName(), *GetPathNameSafe(Building->GetBuildingDefinition()));
@@ -57,7 +57,7 @@ bool UCastleTowerAttackEffectComponent::ExecuteEffect(const FCastleBuildingTrigg
 		}
 		TArray<ACastleBuildingBase*> Below;
 		if (!Board->GetBuildingsBelow(Building, Level == 5 ? -1 : Level - 1, Below)) { return false; }
-		for (const ACastleBuildingBase* Other : Below) { NumberSum += Other->GetBuildingNumber(); }
+		for (const ACastleBuildingBase* Other : Below) { NumberSum += Other->GetEffectiveBuildingNumber(); }
 	}
 	float Bonus = 0.0f;
 	if (!GetTriggerFarmBonus(Context, Bonus)) { return false; }
@@ -186,7 +186,13 @@ void UCastleTowerAttackEffectComponent::TickComponent(const float DeltaTime, con
 		bWaitingForExternalRetry = true;
 		return;
 	}
-	const float Rate = Building->GetBuildingType() == ECastleBuildingType::ArcherTower ? Support->GetArcherRateMultiplier(*Building) : 1.0f;
+	const float Rate = Support->GetTowerFireRateMultiplier(*Building);
+	if (!FMath::IsFinite(Rate) || Rate <= 0.0f)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("塔 %s 的有效射速倍率 %g 无效。"), *Building->GetPathName(), Rate);
+		bWaitingForExternalRetry = true;
+		return;
+	}
 	if (Rate != CooldownRateMultiplier && NextShotWorldTime > CurrentWorldTime)
 	{
 		NextShotWorldTime = CurrentWorldTime + (NextShotWorldTime - CurrentWorldTime) * CooldownRateMultiplier / Rate;

@@ -25,6 +25,11 @@
 #include "Castle/Support/CastleSupportFlightActors.h"
 #include "Castle/Support/CastleSupportTowerSubsystem.h"
 #include "Blueprint/UserWidget.h"
+#include "Castle/Items/CastleBadgeSubsystem.h"
+#include "Castle/UI/Items/CastleBadgeBarWidget.h"
+#include "Castle/UI/Items/CastleBadgeReplaceModalWidget.h"
+#include "Castle/UI/Items/CastleTempBuildBarWidget.h"
+#include "Components/InputComponent.h"
 
 ACastlePlayerController::ACastlePlayerController()
 {
@@ -138,6 +143,13 @@ void ACastlePlayerController::SetupInputComponent()
 
 void ACastlePlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld()))
+	{
+		Badges->OnBadgesChanged.RemoveDynamic(this, &ACastlePlayerController::HandleItemBadgeChanged);
+	}
+	for (UUserWidget* Widget : DirectorItemWidgets) { Widget->RemoveFromParent(); }
+	DirectorItemWidgets.Reset();
+	BadgeReplaceWidget = nullptr;
 	for (ACastleMassEnemySpawner* Spawner : EnemyPreviewSpawners)
 	{
 		if (IsValid(Spawner)) { Spawner->Destroy(); }
@@ -524,6 +536,13 @@ bool ACastlePlayerController::IsDirectorEditingAllowed(FText& OutReason) const
 
 bool ACastlePlayerController::IsCastleEditingAllowed(FText& OutReason) const
 {
+	FCastleBadgeDefinition PendingBadge;
+	const auto* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
+	if (BadgeReplaceWidget && Badges && Badges->TryGetPendingBadge(PendingBadge))
+	{
+		OutReason = INVTEXT("选择徽章替换槽位时无法编辑。");
+		return false;
+	}
 	const auto* Dispatch = GetWorld() ? GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>() : nullptr;
 	if (Dispatch && Dispatch->IsSessionActive())
 	{
@@ -638,9 +657,94 @@ void ACastlePlayerController::HideDirectorEditingPresentation()
 	if (IsValid(GridCursor)) { GridCursor->HideCursor(); }
 }
 
+bool ACastlePlayerController::MountDirectorItemHUD(UCastleBackpackComponent* Backpack, FText& OutReason)
+{
+	UClass* TempClass = LoadClass<UCastleTempBuildBarWidget>(nullptr,
+		TEXT("/Game/MovingCastle/UI/Items/WBP_TempBuildBar.WBP_TempBuildBar_C"));
+	UClass* BadgeClass = LoadClass<UCastleBadgeBarWidget>(nullptr,
+		TEXT("/Game/MovingCastle/UI/Items/WBP_BadgeBar.WBP_BadgeBar_C"));
+	UClass* ReplaceClass = LoadClass<UCastleBadgeReplaceModalWidget>(nullptr,
+		TEXT("/Game/MovingCastle/UI/Items/WBP_BadgeReplaceModal.WBP_BadgeReplaceModal_C"));
+	UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
+	if (!TempClass || !BadgeClass || !ReplaceClass || !Badges || !IsValid(Backpack))
+	{
+		OutReason = INVTEXT("临时建筑栏、徽章栏或替换弹窗的 WBP、背包或徽章源缺失。");
+		return false;
+	}
+	auto* Temp = CreateWidget<UCastleTempBuildBarWidget>(this, TempClass);
+	auto* Bar = CreateWidget<UCastleBadgeBarWidget>(this, BadgeClass);
+	auto* Modal = CreateWidget<UCastleBadgeReplaceModalWidget>(this, ReplaceClass);
+	if (!Temp || !Bar || !Modal || !Temp->BindBackpack(Backpack) || !Bar->BindBadges(Badges) || !Modal->BindBadges(Badges))
+	{
+		OutReason = INVTEXT("临时建筑栏、徽章栏或替换弹窗的必需控件无法绑定。");
+		return false;
+	}
+	// 三个资产的内部布局保留在 WBP，控制器只负责为正式视口分配锚点和层级。
+	Temp->AddToViewport(20);
+	Temp->SetAnchorsInViewport(FAnchors(0.0f, 0.58f));
+	Temp->SetPositionInViewport(FVector2D(24.0, 0.0), false);
+	Bar->AddToViewport(20);
+	Bar->SetAnchorsInViewport(FAnchors(0.0f, 0.12f));
+	Bar->SetPositionInViewport(FVector2D(24.0, 0.0), false);
+	Modal->AddToViewport(55);
+	Modal->SetAnchorsInViewport(FAnchors(0.5f, 0.5f));
+	Modal->SetAlignmentInViewport(FVector2D(0.5, 0.5));
+	Modal->SetPositionInViewport(FVector2D::ZeroVector, false);
+	DirectorItemWidgets = {Temp, Bar, Modal};
+	BadgeReplaceWidget = Modal;
+	Badges->OnBadgesChanged.AddUniqueDynamic(this, &ACastlePlayerController::HandleItemBadgeChanged);
+	// 无待替换项时沿用 BeginPlay 已设置的游戏输入，避免再次捕获鼠标打断当前输入帧。
+	RefreshModalInput();
+	return true;
+}
+
+void ACastlePlayerController::HandleItemBadgeChanged()
+{
+	RefreshModalInput(true);
+}
+
+bool ACastlePlayerController::BindSkyIslandInput(const FKey& Key, FText& OutReason)
+{
+	if (!InputComponent || !Key.IsValid())
+	{
+		OutReason = INVTEXT("无法绑定空岛交互键，输入组件或按键配置无效。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s：%s"), *GetPathName(), *OutReason.ToString());
+		return false;
+	}
+	InputComponent->BindKey(Key, IE_Pressed, this, &ACastlePlayerController::InteractWithSkyIsland);
+	return true;
+}
+
+void ACastlePlayerController::InteractWithSkyIsland()
+{
+	auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
+	if (!Director || Director->GetPhase() != ECastleDirectorPhase::SkyIsland || bModalInputActive) { return; }
+	FVector Start;
+	FRotator Rotation;
+	GetPlayerViewPoint(Start, Rotation);
+	FText Reason;
+	if (!Director->TryInteractWithSkyIsland(Start, Start + Rotation.Vector() * GridCursorTraceDistance, Reason))
+	{
+		ShowDirectorMessage(Reason);
+	}
+}
+
+void ACastlePlayerController::CastleTestSkyIsland()
+{
+#if !UE_BUILD_SHIPPING
+	auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
+	FText Reason;
+	if (!Director || !Director->TryEnterSkyIslandFixture(Reason)) { ShowDirectorMessage(Reason); }
+#endif
+}
+
 void ACastlePlayerController::RefreshModalInput(const bool bForceRefresh)
 {
-	const bool bNewOpen = Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive;
+	FCastleBadgeDefinition PendingBadge;
+	const auto* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
+	// 使用库存真相源，避免依赖多个动态委托监听者的刷新顺序。
+	const bool bBadgeReplaceOpen = BadgeReplaceWidget && Badges && Badges->TryGetPendingBadge(PendingBadge);
+	const bool bNewOpen = Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive || bBadgeReplaceOpen;
 	// 普通商店的购买/刷新通知不改变开关，沿用旧行为，不重设模式或抢回焦点。
 	if (bNewOpen == bModalInputActive && !bForceRefresh) { return; }
 	if (bNewOpen != bModalInputActive)
@@ -669,7 +773,8 @@ void ACastlePlayerController::RefreshModalInput(const bool bForceRefresh)
 		FInputModeGameAndUI Mode;
 		Mode.SetHideCursorDuringCapture(false);
 		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-		if (bRewardInputActive && DirectorFocusWidget) { Mode.SetWidgetToFocus(DirectorFocusWidget->TakeWidget()); }
+		if (bBadgeReplaceOpen) { Mode.SetWidgetToFocus(BadgeReplaceWidget->TakeWidget()); }
+		else if (bRewardInputActive && DirectorFocusWidget) { Mode.SetWidgetToFocus(DirectorFocusWidget->TakeWidget()); }
 		SetInputMode(Mode);
 		CurrentGridCursorTarget = FCastleGridCursorTarget();
 		if (GridCursor != nullptr)
