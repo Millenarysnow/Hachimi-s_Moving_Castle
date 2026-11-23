@@ -10,11 +10,14 @@
 class ACastleBoard;
 class ACastleDirectorNodeActor;
 class ACastlePlayerController;
+class ACastlePatrolRoute;
 class UCastleDirectorConfigDataAsset;
 class UCastleMainTowerComponent;
 class UUserWidget;
 class UCastleCombatSubsystem;
-class ACastleMassSpawner;
+class UCastlePendingRoomReward;
+class UCastleTowerUpgradeRewardWidget;
+class UCastleWildcardRoomPickerWidget;
 
 /** 原生阶段事件不承担流程决策，界面和输入只监听最终状态。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCastleDirectorPhaseChanged, ECastleDirectorPhase);
@@ -42,6 +45,10 @@ public:
 	bool IsFirstTowerDamageTriggeredInBattle() const { return Phase == ECastleDirectorPhase::Battle && bFirstTowerDamageInBattle; }
 	/** 本局已解锁的出牌数字上限，供功能塔领奖及万能卡共用。 */
 	int32 GetCurrentMaxShopNumber() const;
+	int32 GetRunNPCCount() const { return RunNPCCount; }
+	bool AddRunNPCCount(int32 Delta, FText& OutReason);
+	void ClaimTowerUpgradeReward(int32 Index);
+	void DiscardTowerUpgradeRewards();
 	int32 GetExperience() const { return Experience; }
 	int32 GetClearedSteps() const { return ClearedSteps; }
 	int32 GetNextStep() const { return ClearedSteps + 1; }
@@ -67,6 +74,7 @@ public:
 	/** 无副作用的节点规则；自动化和实际生成共同使用。 */
 	static int32 GetNodeCountForStep(const UCastleDirectorConfigDataAsset& InConfig, int32 Step);
 	static ECastleDirectorNodeKind GetNodeKindForStep(const UCastleDirectorConfigDataAsset& InConfig, int32 Step);
+	static TArray<ECastleDirectorNodeKind> GetNodeKindsForStep(const UCastleDirectorConfigDataAsset& InConfig, int32 Step);
 	FCastleDirectorPhaseChanged OnDirectorPhaseChanged;
 	/** 战斗暂停或倍速状态变化通知，HUD 据此即时切换图标。 */
 	FSimpleMulticastDelegate OnBattleControlStateChanged;
@@ -96,6 +104,9 @@ private:
 	/** 节点重叠只入队；实际开战、NPC 回收都在 Mass 未处理的游戏线程边界执行。 */
 	bool TryStartSelectedBattle(ACastleDirectorNodeActor* Node, FText& OutReason);
 	bool RecallBattleNPCs(FText& OutReason);
+	bool TryCommitRewards(bool bExperience, bool bHealing, bool bShop, FText& OutReason);
+	bool OpenWildcardPicker(UCastlePendingRoomReward* Reward, FText& OutReason);
+	UFUNCTION() void HandleWildcardClosed(bool bClaimed);
 	void HandleBattleCleared(ECastleBattleKind Kind, int32 Ordinal);
 	void HandleBattleFailed(ECastleBattleKind Kind, int32 Ordinal, const FText& Reason);
 	void UnbindCombatEvents();
@@ -116,10 +127,15 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UUserWidget> HUDWidget;
 	UPROPERTY(Transient) TObjectPtr<UUserWidget> RewardWidget;
 	UPROPERTY(Transient) TObjectPtr<UUserWidget> GameOverWidget;
+	UPROPERTY(Transient) TObjectPtr<UCastleTowerUpgradeRewardWidget> TowerUpgradeWidget;
+	UPROPERTY(Transient) TObjectPtr<UCastleWildcardRoomPickerWidget> WildcardPicker;
+	UPROPERTY(Transient) TObjectPtr<ACastlePatrolRoute> PatrolRoute;
+	UPROPERTY(Transient) TArray<TObjectPtr<UCastlePendingRoomReward>> UpgradeRoomRewards;
+	TArray<FCastleTowerUpgradeRewardEntry> UpgradeRewards;
+	int32 ActiveUpgradeRewardIndex = INDEX_NONE;
 	/** 一次选择只保存弱引用，原节点销毁或游戏结束后不能重新触发开战。 */
 	TWeakObjectPtr<ACastleDirectorNodeActor> PendingNode;
 	UPROPERTY(Transient) TObjectPtr<UCastleCombatSubsystem> Combat;
-	UPROPERTY(Transient) TObjectPtr<ACastleMassSpawner> BattleNPCSpawner;
 	FDelegateHandle BattleClearedHandle;
 	FDelegateHandle BattleFailedHandle;
 	/** 普通、精英分别累计；只有整场开战提交成功后增加。 */
@@ -133,6 +149,7 @@ private:
 	int32 Level = 1;
 	int32 Experience = 0;
 	int32 ClearedSteps = 0;
+	int32 RunNPCCount = 0;
 	bool bRunning = false;
 	bool bStartAttempted = false;
 	bool bShopPermission = false;

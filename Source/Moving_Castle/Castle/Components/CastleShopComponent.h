@@ -85,6 +85,12 @@ public:
 	/** 奖励事务：在临时状态中初始化（如需）、免费换批并打开，全部成功后才提交。 */
 	bool TryOpenForReward(UCastleEconomyComponent* InEconomy, ACastleBoard* InBoard, FText& OutFailureReason);
 
+	/** 导演在提交升级之前预生成免费商品，候选组件独立保存随机流和新商品。 */
+	bool PrepareRewardShop(UCastleEconomyComponent* InEconomy, ACastleBoard* InBoard, int32 CandidateMaxNumber,
+		UCastleShopComponent& Candidate, FText& OutFailureReason);
+	/** 只发布已成功准备的候选，供包含成长、回血与商店的联合奖励提交。 */
+	void CommitRewardShop(UCastleShopComponent& Candidate);
+
 	/** 修改房间总上限；非正数配置拒绝并保留原值。 */
 	bool TrySetRoomLimit(int32 NewRoomLimit, FText& OutFailureReason);
 

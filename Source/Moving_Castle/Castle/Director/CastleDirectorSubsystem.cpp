@@ -2,6 +2,10 @@
 #include "CastleDirectorSubsystem.h"
 #include "Castle/Support/CastleSupportTowerSubsystem.h"
 #include "Castle/Items/CastleBadgeSubsystem.h"
+#include "Castle/Items/CastleItemGrantLibrary.h"
+#include "Castle/Items/CastlePendingRoomReward.h"
+#include "Castle/UI/Director/CastleTowerUpgradeRewardWidget.h"
+#include "Castle/UI/Items/CastleWildcardRoomPickerWidget.h"
 
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
@@ -21,11 +25,12 @@
 #include "Kismet/GameplayStatics.h"
 #include "Moving_Castle.h"
 #include "Castle/Combat/CastleCombatSubsystem.h"
-#include "Units/Mass/CastleMassSpawner.h"
 #include "Units/Mass/CastleMassUnitSubsystem.h"
+#include "Units/Navigation/CastleTowerDispatchSubsystem.h"
 #include "Units/Navigation/Interaction/CastlePatrolRoute.h"
 #include "MassEntitySubsystem.h"
 #include "MassEntityConfigAsset.h"
+#include "UObject/StrongObjectPtr.h"
 
 bool UCastleDirectorSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) const
 {
@@ -74,10 +79,11 @@ void UCastleDirectorSubsystem::TryAutoStart()
 	if (!StartDirector(Reason))
 	{
 		// 启动后半段失败时撤下已准备的界面，不留下 HUD 或模态输入的半启动状态。
-		for (UUserWidget* Widget : {HUDWidget.Get(), RewardWidget.Get(), GameOverWidget.Get()}) { if (Widget) { Widget->RemoveFromParent(); } }
+		for (UUserWidget* Widget : {HUDWidget.Get(), RewardWidget.Get(), GameOverWidget.Get(), static_cast<UUserWidget*>(TowerUpgradeWidget.Get())}) { if (Widget) { Widget->RemoveFromParent(); } }
 		HUDWidget = nullptr;
 		RewardWidget = nullptr;
 		GameOverWidget = nullptr;
+		TowerUpgradeWidget = nullptr;
 		ShowMessage(FText::FromString(TEXT("导演系统未启动：") + Reason.ToString()), true);
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *StatusMessage.ToString());
 	}
@@ -114,21 +120,33 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 		return false;
 	}
 	if (!EnsurePresentation(OutReason)) { return false; }
+	PatrolRoute = Cast<ACastlePatrolRoute>(UGameplayStatics::GetActorOfClass(GetWorld(), ACastlePatrolRoute::StaticClass()));
+	auto* Dispatch = GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>();
+	const FCastleTowerLevelConfig& Initial = Config->TowerLevels[0];
+	if (!IsValid(PatrolRoute) || !Dispatch || Board->GetUnlockedLayerCount() != Initial.UnlockedLayers)
+	{
+		OutReason = INVTEXT("正式关卡缺少路线、出兵子系统或初始主塔层数与 Lv1 成长表不符。");
+		return false;
+	}
+	if (!Dispatch->Configure(Config->DispatchConfig, OutReason)
+		|| !PatrolRoute->SetMaxPlayerWaypoints(Config->InitialPathPointLimit)) { return false; }
+	if (const TArray<FVector> Points = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>()->GetRequestedWaypoints(); !Points.IsEmpty())
+	{
+		if (!GetWorld()->GetSubsystem<UCastleNavigationSubsystem>()->RequestTowerDispatchRoute(Points, OutReason)) { return false; }
+	}
 	// 候选节点保持隐藏且无碰撞，只有所有启动依赖准备成功后才一起激活。
 	TArray<TObjectPtr<ACastleDirectorNodeActor>> Candidates;
 	if (!PrepareNodes(1, Candidates, OutReason)) { return false; }
-	if (!Controller->GetShop()->TrySetRoomLimit(Config->BaseRoomLimit, OutReason))
-	{
-		for (ACastleDirectorNodeActor* Node : Candidates) { Node->Destroy(); }
-		return false;
-	}
-	if (!Controller->GetShop()->TrySetOfferNumberRange(1, 3, OutReason)
+	if (!Controller->GetShop()->TrySetRoomLimit(Initial.RoomLimit, OutReason)
+		|| !Controller->GetShop()->TrySetOfferNumberRange(1, Initial.MaxShopNumber, OutReason)
+		|| !Tower->SetTowerBalloonTier(Initial.BalloonCount, Initial.BaseMaxHealth, true, OutReason)
 		|| !Controller->MountDirectorItemHUD(Board->PrototypeBackpack, OutReason))
 	{
 		for (ACastleDirectorNodeActor* Node : Candidates) { Node->Destroy(); }
 		return false;
 	}
 	Level = 1;
+	RunNPCCount = Config->InitialNPCCount;
 	Experience = 0;
 	ClearedSteps = 0;
 	bShopPermission = false;
@@ -147,7 +165,7 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 	for (ACastleDirectorNodeActor* Node : Nodes) { Node->ActivateNode(); }
 	// 下一关指引由 WBP HUD 读取，避免同一句话叠加到屏幕调试层。
 	StatusMessage = FText::FromString(TEXT("飞向节点进入下一关"));
-	UE_LOG(LogMoving_Castle, Display, TEXT("导演启动：编辑阶段，第 1 关，主塔 Lv1，房间上限 %d。"), Config->BaseRoomLimit);
+	UE_LOG(LogMoving_Castle, Display, TEXT("导演启动：编辑阶段，第 1 关，主塔 Lv1，房间上限 %d。"), Initial.RoomLimit);
 	if (Tower->CurrentHealth <= 0.0f) { EnterGameOver(FText::GetEmpty()); }
 	return true;
 }
@@ -165,6 +183,43 @@ ECastleDirectorNodeKind UCastleDirectorSubsystem::GetNodeKindForStep(const UCast
 	return Step % InConfig.EliteEveryNSteps == 0 ? ECastleDirectorNodeKind::Elite : ECastleDirectorNodeKind::Normal;
 }
 
+TArray<ECastleDirectorNodeKind> UCastleDirectorSubsystem::GetNodeKindsForStep(
+	const UCastleDirectorConfigDataAsset& InConfig, const int32 Step)
+{
+	// 节点数与抽样共用同一个确定性流，所有平台按同一顺序消费。
+	const uint32 Seed = static_cast<uint32>(InConfig.RunSeed) ^ (static_cast<uint32>(Step) * 0x9e3779b9u);
+	FRandomStream Stream(static_cast<int32>(Seed));
+	const int32 Count = Stream.RandRange(InConfig.NodeCountMin, InConfig.NodeCountMax);
+	const ECastleDirectorNodeKind First = GetNodeKindForStep(InConfig, Step);
+	TArray<ECastleDirectorNodeKind> Kinds;
+	if (Step == 1 || First == ECastleDirectorNodeKind::Elite)
+	{
+		Kinds.Init(First, Count);
+		return Kinds;
+	}
+	Kinds.Add(First);
+	int32 RestWeight = InConfig.RestNodeWeight;
+	const int64 FightOrRewardWeight = static_cast<int64>(InConfig.NormalNodeWeight) + InConfig.RewardNodeWeight;
+	while (Kinds.Num() < Count)
+	{
+		const int64 TotalWeight = FightOrRewardWeight + RestWeight;
+		if (TotalWeight <= 0)
+		{
+			// 配置无法填满全部节点时，交由生成事务拒绝发布节点批次。
+			return {};
+		}
+		const double Draw = static_cast<double>(Stream.GetFraction()) * TotalWeight;
+		if (Draw < InConfig.NormalNodeWeight) { Kinds.Add(ECastleDirectorNodeKind::Normal); }
+		else if (Draw < FightOrRewardWeight) { Kinds.Add(ECastleDirectorNodeKind::RewardIsland); }
+		else
+		{
+			Kinds.Add(ECastleDirectorNodeKind::RestIsland);
+			RestWeight = 0;
+		}
+	}
+	return Kinds;
+}
+
 bool UCastleDirectorSubsystem::PrepareNodes(const int32 Step, TArray<TObjectPtr<ACastleDirectorNodeActor>>& OutNodes, FText& OutReason)
 {
 	OutNodes.Reset();
@@ -174,7 +229,14 @@ bool UCastleDirectorSubsystem::PrepareNodes(const int32 Step, TArray<TObjectPtr<
 		OutReason = FText::FromString(TEXT("节点生成失败：棋盘或主塔已失效。"));
 		return false;
 	}
-	const int32 Count = GetNodeCountForStep(*Config, Step);
+	const TArray<ECastleDirectorNodeKind> Kinds = GetNodeKindsForStep(*Config, Step);
+	const int32 Count = Kinds.Num();
+	if (Count < 2)
+	{
+		OutReason = FText::Format(INVTEXT("配置 {0} 无法为第 {1} 步抽满节点。"), FText::FromString(Config->GetPathName()), Step);
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+		return false;
+	}
 	const FVector Center = Tower->GetTargetLocation();
 	const float CenterYaw = Board->GetActorForwardVector().Rotation().Yaw;
 	for (int32 Index = 0; Index < Count; ++Index)
@@ -193,7 +255,7 @@ bool UCastleDirectorSubsystem::PrepareNodes(const int32 Step, TArray<TObjectPtr<
 			OutReason = FText::FromString(FString::Printf(TEXT("节点生成失败：第 %d 个 Actor 无法创建。"), Index + 1));
 			return false;
 		}
-		if (!Node->Configure(*Config, Step, GetNodeKindForStep(*Config, Step)))
+		if (!Node->Configure(*Config, Step, Kinds[Index]))
 		{
 			Node->Destroy();
 			for (ACastleDirectorNodeActor* Candidate : OutNodes) { Candidate->Destroy(); }
@@ -227,7 +289,12 @@ void UCastleDirectorSubsystem::DestroyNodes()
 bool UCastleDirectorSubsystem::IsEditingAllowed(FText& OutReason) const
 {
 	OutReason = FText::GetEmpty();
-	if (!bRunning || Phase == ECastleDirectorPhase::Editing) { return true; }
+	if (!bRunning || (Phase == ECastleDirectorPhase::Editing && UpgradeRewards.IsEmpty() && !WildcardPicker)) { return true; }
+	if (Phase == ECastleDirectorPhase::Editing)
+	{
+		OutReason = INVTEXT("请先结束本次主塔升级领奖。");
+		return false;
+	}
 	OutReason = FText::FromString(Phase == ECastleDirectorPhase::Battle ? TEXT("战斗中无法编辑")
 		: Phase == ECastleDirectorPhase::Reward ? TEXT("选择奖励时无法编辑") : TEXT("游戏结束后无法编辑"));
 	return false;
@@ -251,7 +318,8 @@ bool UCastleDirectorSubsystem::IsShopAccessAllowed(FText& OutReason) const
 
 void UCastleDirectorSubsystem::HandleNodeTouched(ACastleDirectorNodeActor* Node)
 {
-	if (!bRunning || Phase != ECastleDirectorPhase::Editing || !Nodes.Contains(Node) || PendingNode.IsValid() || LastNodeSelectionFrame == GFrameCounter) { return; }
+	if (!bRunning || Phase != ECastleDirectorPhase::Editing || !UpgradeRewards.IsEmpty() || WildcardPicker
+		|| !Nodes.Contains(Node) || PendingNode.IsValid() || LastNodeSelectionFrame == GFrameCounter) { return; }
 	LastNodeSelectionFrame = GFrameCounter;
 	PendingNode = Node;
 }
@@ -266,10 +334,10 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 	}
 	UE_LOG(LogMoving_Castle, Display, TEXT("选择导演节点 %s：第 %d 关，类型 %d。"), *GetPathNameSafe(Node), GetNextStep(), static_cast<int32>(Node->GetKind()));
 	UCastleNavigationSubsystem* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
-	const auto Path = Navigation->AcquireSharedPath();
-	if (!Path || !Path->bValid || !Path->bClosedLoop)
+	const auto Path = Navigation ? Navigation->AcquireSharedPath() : nullptr;
+	if (!Path || !Path->bValid || Path->bClosedLoop || !Path->bTowerDispatch || Path->Length <= UE_DOUBLE_SMALL_NUMBER)
 	{
-		const FString Reason = Navigation->LastFailure.IsEmpty() ? TEXT("路线未就绪") : Navigation->LastFailure.ToString();
+		const FString Reason = !Navigation || Navigation->LastFailure.IsEmpty() ? TEXT("正式门到门开环路线未就绪") : Navigation->LastFailure.ToString();
 		OutReason = FText::FromString(TEXT("无法开战：") + Reason);
 		ShowMessage(OutReason, false);
 		UE_LOG(LogMoving_Castle, Warning, TEXT("%s"), *StatusMessage.ToString());
@@ -284,7 +352,8 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 	};
 	auto* Mass = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
 	if (!Mass || Mass->GetEntityManager().IsProcessing()) { return Reject(TEXT("Mass 不可用或正在处理，拒绝本次选择。")); }
-	if (!IsValid(Board) || !IsValid(Controller) || !IsValid(Combat) || !IsValid(Config) || IsValid(BattleNPCSpawner))
+	auto* Dispatch = GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>();
+	if (!IsValid(Board) || !IsValid(Controller) || !IsValid(Combat) || !IsValid(Config) || !Dispatch || Dispatch->IsSessionActive())
 	{
 		return Reject(TEXT("棋盘、控制器、战斗系统、配置无效，或上场 NPC 尚未回收。"));
 	}
@@ -300,26 +369,10 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 	bShopPermission = false;
 	for (TActorIterator<ACastlePatrolRoute> It(GetWorld()); It; ++It) { It->CancelEditingDraft(); }
 	Controller->HideDirectorEditingPresentation();
-	// 生成器禁用 BeginPlay 自动生成，显式调用以便同步核对完整批次数量。
-	BattleNPCSpawner = GetWorld()->SpawnActorDeferred<ACastleMassSpawner>(ACastleMassSpawner::StaticClass(), FTransform::Identity,
-		nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
-	bool bNPCsReady = false;
-	if (IsValid(BattleNPCSpawner))
-	{
-		BattleNPCSpawner->Configuration = Config->NPCConfiguration;
-		BattleNPCSpawner->Count = Config->NPCCount;
-		BattleNPCSpawner->bSpawnOnBeginPlay = false;
-		BattleNPCSpawner->bFollowSharedPatrolRoute = true;
-		BattleNPCSpawner->FinishSpawning(FTransform::Identity);
-		bNPCsReady = BattleNPCSpawner->SpawnUnits() && BattleNPCSpawner->SpawnedUnits.Num() == Config->NPCCount;
-	}
+	// 会话只登记待命池。玩家点击主塔或开启自动出兵后，NPC 才沿门到门快照派出。
+	const bool bNPCsReady = Dispatch->StartBattleDispatchSession(Config->NPCConfiguration, RunNPCCount, Failure);
 	if (!bNPCsReady || !Combat->StartBattle(Kind, PreviousCount + 1, Failure))
 	{
-		if (!bNPCsReady)
-		{
-			Failure = FText::FromString(FString::Printf(TEXT("NPC 配置 %s：期望 %d 个单位，实际 %d；生成未完整成功。"),
-				*GetPathNameSafe(Config->NPCConfiguration), Config->NPCCount, IsValid(BattleNPCSpawner) ? BattleNPCSpawner->SpawnedUnits.Num() : 0));
-		}
 		FText CleanupFailure;
 		const bool bRecalled = RecallBattleNPCs(CleanupFailure);
 		FText SurfaceFailure;
@@ -337,39 +390,26 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 	bFirstTowerDamageInBattle = false;
 	SetPhase(ECastleDirectorPhase::Battle);
 	ShowMessage(FText::FromString(TEXT("战斗进行中")), false);
-	UE_LOG(LogMoving_Castle, Display, TEXT("导演开战提交：第 %d 关，本类第 %d 场，沿闭环派出 %d 个 NPC。"), GetNextStep(), ActiveBattleOrdinal, Config->NPCCount);
+	UE_LOG(LogMoving_Castle, Display, TEXT("导演开战提交：第 %d 关，本类第 %d 场，门到门待命池 %d 个 NPC。"), GetNextStep(), ActiveBattleOrdinal, RunNPCCount);
 	return true;
 }
 
 bool UCastleDirectorSubsystem::RecallBattleNPCs(FText& OutReason)
 {
-	if (!BattleNPCSpawner) { return true; }
-	auto* Mass = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
-	if (!IsValid(BattleNPCSpawner) || !Mass || Mass->GetEntityManager().IsProcessing())
+	auto* Dispatch = GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>();
+	auto* Support = GetWorld()->GetSubsystem<UCastleSupportTowerSubsystem>();
+	if (!Dispatch || !Support)
 	{
-		OutReason = FText::FromString(FString::Printf(TEXT("生成器 %s 无效或 Mass 正在处理，不能回收 NPC。"), *GetPathNameSafe(BattleNPCSpawner)));
+		OutReason = INVTEXT("缺少出兵或支援塔子系统，无法回收本场 NPC。");
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
 	}
-	const int32 Count = BattleNPCSpawner->SpawnedUnits.Num();
-	if (!GetWorld()->GetSubsystem<UCastleSupportTowerSubsystem>()->EndBattleSupport())
+	if (!Support->EndBattleSupport())
 	{
-		OutReason = FText::FromString(TEXT("支援塔的本场增援或飞行对象未能回收。"));
+		OutReason = INVTEXT("支援塔的本场增援或飞行对象未能回收。");
 		return false;
 	}
-	// Spawner 的 void 回收接口不能报告失败；在同一批句柄上调用原生 bool 接口并确认提交。
-	// 零句柄表示生成尚未开始；有句柄时必须成功提交死亡回收，不能丢掉失败批次。
-	if (Count > 0 && !GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>()->DespawnUnits(BattleNPCSpawner->SpawnedUnits))
-	{
-		OutReason = FText::FromString(FString::Printf(TEXT("NPC生成器 %s 的批量回收请求被拒绝。"), *BattleNPCSpawner->GetPathName()));
-		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
-		return false;
-	}
-	BattleNPCSpawner->SpawnedUnits.Reset();
-	BattleNPCSpawner->Destroy();
-	BattleNPCSpawner = nullptr;
-	UE_LOG(LogMoving_Castle, Display, TEXT("导演已回收 %d 个 NPC 并销毁本场生成器。"), Count);
-	return true;
+	return !Dispatch->IsSessionActive() || Dispatch->EndBattleDispatchSession(OutReason);
 }
 
 void UCastleDirectorSubsystem::HandleBattleCleared(const ECastleBattleKind Kind, const int32 Ordinal)
@@ -385,6 +425,21 @@ void UCastleDirectorSubsystem::HandleBattleCleared(const ECastleBattleKind Kind,
 	// 战斗结束时立即恢复 1x 倍速与未暂停状态，避免奖励和编辑阶段沿用战斗倍速。
 	ResetBattleControls(true);
 	++ClearedSteps;
+	if (Kind == ECastleBattleKind::Elite)
+	{
+		// 解锁只随精英胜利次数推进，战斗开始和失败均不改变普通池。
+		const FName UnlockTag = Ordinal == 1 ? FName(TEXT("Unlock.MiasmaWelp")) :
+			Ordinal == 2 ? FName(TEXT("Unlock.LavaGoliath")) : NAME_None;
+		if ((!UnlockTag.IsNone() && !Combat->UnlockEnemyTag(UnlockTag)) || !TryCommitRewards(true, true, true, Failure))
+		{
+			EnterGameOver(FText::Format(INVTEXT("精英胜利奖励提交失败。{0}"), Failure));
+			return;
+		}
+		const FText AllGranted = INVTEXT("精英通关奖励已全部获得：经验、主塔回血、免费换批并开放商店");
+		ShowMessage(AllGranted, false);
+		UE_LOG(LogMoving_Castle, Display, TEXT("%s"), *AllGranted.ToString());
+		return;
+	}
 	SetPhase(ECastleDirectorPhase::Reward);
 	ShowMessage(FText::FromString(TEXT("通关奖励：请选择一项")), false);
 	UE_LOG(LogMoving_Castle, Display, TEXT("导演清场：已通过 %d 关，进入三选一，建造面保持隐藏。"), ClearedSteps);
@@ -399,75 +454,231 @@ void UCastleDirectorSubsystem::HandleBattleFailed(const ECastleBattleKind Kind, 
 
 bool UCastleDirectorSubsystem::TryChooseReward(const ECastleDirectorReward Reward, FText& OutReason)
 {
-	OutReason = FText::GetEmpty();
-	const auto Reject = [this, &OutReason](const FString& Reason)
+	if (Phase != ECastleDirectorPhase::Reward
+		|| (Reward != ECastleDirectorReward::Experience && Reward != ECastleDirectorReward::Healing && Reward != ECastleDirectorReward::Shop))
 	{
-		OutReason = FText::FromString(Reason);
-		ShowMessage(OutReason, true);
-		UE_LOG(LogMoving_Castle, Error, TEXT("导演奖励失败：%s"), *Reason);
+		OutReason = INVTEXT("当前阶段或奖励类型无效。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演 %s 无法领取奖励：%s"), *GetPathName(), *OutReason.ToString());
+		return false;
+	}
+	return TryCommitRewards(Reward == ECastleDirectorReward::Experience, Reward == ECastleDirectorReward::Healing,
+		Reward == ECastleDirectorReward::Shop, OutReason);
+}
+
+bool UCastleDirectorSubsystem::TryCommitRewards(const bool bExperience, const bool bHealing, const bool bShop, FText& OutReason)
+{
+	OutReason = FText::GetEmpty();
+	const auto Reject = [this, &OutReason](const FText& Reason)
+	{
+		OutReason = Reason;
+		ShowMessage(Reason, true);
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演奖励失败，配置 %s：%s"), *GetPathNameSafe(Config), *Reason.ToString());
 		return false;
 	};
-	if (!bRunning || Phase != ECastleDirectorPhase::Reward || bApplyingReward || !IsValid(Config)
-		|| !IsValid(Controller) || !IsValid(Tower) || !Tower->IsAlive())
+	if (!bRunning || bApplyingReward || !IsValid(Config) || !IsValid(Board) || !IsValid(Controller)
+		|| !IsValid(Tower) || !Tower->IsAlive() || !UpgradeRewards.IsEmpty() || !Config->TowerLevels.IsValidIndex(Level - 1))
 	{
-		return Reject(TEXT("阶段不允许领取奖励，或配置、控制器、主塔已失效。"));
+		return Reject(INVTEXT("奖励提交缺少有效配置、棋盘、控制器或存活主塔，或上一次升级领奖尚未结束。"));
 	}
 	TGuardValue<bool> Guard(bApplyingReward, true);
-	// 先校验奖励种类和全部候选数值，不提前改经验、等级、生命或商店商品。
-	if (Reward != ECastleDirectorReward::Experience && Reward != ECastleDirectorReward::Healing && Reward != ECastleDirectorReward::Shop)
+	if (!Config->ValidateTowerLevels(OutReason) || Config->ExpPerLevel < 1 || Config->RewardExp < 1)
 	{
-		return Reject(TEXT("未知奖励类型。"));
+		return Reject(OutReason.IsEmpty() ? INVTEXT("经验配置必须为正数。") : OutReason);
 	}
-	int32 NewLevel = Level;
-	int32 NewExp = Experience;
-	int32 NewLimit = Controller->GetShop()->RoomLimit;
-	if (Reward == ECastleDirectorReward::Experience)
+	const int64 TotalExp = static_cast<int64>(Experience) + (bExperience ? Config->RewardExp : 0);
+	const int32 NewLevel = static_cast<int32>(FMath::Min<int64>(Config->TowerLevels.Num(), Level + TotalExp / Config->ExpPerLevel));
+	const int32 NewExp = NewLevel == Config->TowerLevels.Num() ? 0 : TotalExp % Config->ExpPerLevel;
+	const auto& Target = Config->TowerLevels[NewLevel - 1];
+	const bool bLevelUp = NewLevel > Level;
+	if (bHealing && (!FMath::IsFinite(Tower->MaxHealth) || Tower->MaxHealth <= 0.0f
+		|| !FMath::IsFinite(Tower->CurrentHealth) || !FMath::IsFinite(Config->HealFraction)
+		|| Config->HealFraction <= 0.0f || Config->HealFraction > 1.0f))
 	{
-		const int64 Total = static_cast<int64>(Experience) + Config->RewardExp;
-		const int64 CandidateLevel = static_cast<int64>(Level) + Total / Config->ExpPerLevel;
-		if (CandidateLevel > MAX_int32) { return Reject(TEXT("等级超过 int32 范围。")); }
-		const int64 CandidateLimit = static_cast<int64>(Config->BaseRoomLimit) + (CandidateLevel - 1) * Config->RoomLimitPerLevel;
-		if (CandidateLimit > MAX_int32) { return Reject(TEXT("经验或房间上限超过 int32 范围。")); }
-		NewLevel = static_cast<int32>(CandidateLevel);
-		NewExp = static_cast<int32>(Total % Config->ExpPerLevel);
-		NewLimit = static_cast<int32>(CandidateLimit);
+		return Reject(INVTEXT("主塔生命或回血比例无效。"));
 	}
-	if (Reward == ECastleDirectorReward::Healing && (!FMath::IsFinite(Tower->MaxHealth) || Tower->MaxHealth <= 0.0f
-		|| !FMath::IsFinite(Tower->CurrentHealth))) { return Reject(TEXT("主塔生命配置无效，无法回血。")); }
+	TArray<FCastleTowerUpgradeRewardEntry> PendingRows;
+	TArray<TStrongObjectPtr<UCastlePendingRoomReward>> PendingRooms;
+	// 跨级时逐级累积赠送，万能卡的数字使用最终已解锁范围。
+	for (int32 Tier = Level + 1; Tier <= NewLevel; ++Tier)
+	{
+		const auto& Row = Config->TowerLevels[Tier - 1];
+		if (Row.PathPointReward > 0)
+		{
+			PendingRows.Add({ECastleTowerUpgradeReward::PathPoint, Row.PathPointReward});
+			PendingRooms.Emplace(nullptr);
+		}
+		if (Row.NPCReward > 0)
+		{
+			PendingRows.Add({ECastleTowerUpgradeReward::NPC, Row.NPCReward});
+			PendingRooms.Emplace(nullptr);
+		}
+		for (int32 Card = 0; Card < Row.CustomRoomReward; ++Card)
+		{
+			FCastleWildcardRoomSpec Spec;
+			Spec.DefaultMaxNumber = Target.MaxShopNumber;
+			UCastlePendingRoomReward* Pending = nullptr;
+			if (!UCastleItemGrantLibrary::TryCreateWildcardReward(INVTEXT("完全自定义房间"), Spec,
+				Board->PrototypeBackpack, Board->BuildingDefinitions, Pending, OutReason))
+			{
+				return Reject(OutReason);
+			}
+			PendingRows.Add({ECastleTowerUpgradeReward::CustomRoom, 1});
+			PendingRooms.Emplace(Pending);
+		}
+	}
+	UCastleShopComponent* Shop = Controller->GetShop();
+	TStrongObjectPtr<UCastleShopComponent> PreparedShop;
+	if (bShop)
+	{
+		PreparedShop.Reset(NewObject<UCastleShopComponent>());
+		if (!Shop->PrepareRewardShop(Controller->GetEconomy(), Board, Target.MaxShopNumber, *PreparedShop, OutReason))
+		{
+			return Reject(OutReason);
+		}
+	}
 	TArray<TObjectPtr<ACastleDirectorNodeActor>> Candidates;
-	if (!PrepareNodes(GetNextStep(), Candidates, OutReason)) { return Reject(OutReason.ToString()); }
-	// 先同步恢复建造面；奖励失败时重新隐藏，避免奖励已提交后才发现建造面有问题。
-	if (!Board->SetPlacementSurfacePresentationHidden(false, OutReason))
+	if (!PrepareNodes(GetNextStep(), Candidates, OutReason)) { return Reject(OutReason); }
+	const auto RejectWithNodes = [&](const FText& Reason)
 	{
 		for (ACastleDirectorNodeActor* Candidate : Candidates) { Candidate->Destroy(); }
-		return Reject(OutReason.ToString());
-	}
-	bool bCommitted = false;
-	if (Reward == ECastleDirectorReward::Experience)
+		return Reject(Reason);
+	};
+	if (!Board->SetPlacementSurfacePresentationHidden(false, OutReason)) { return RejectWithNodes(OutReason); }
+	// 气球表现预留完成后扩层，所有可能拒绝的资源操作必须发生在数值提交之前。
+	if (bLevelUp && (!Tower->PrepareTowerBalloonTier(Target.BalloonCount, Target.BaseMaxHealth, true, OutReason)
+		|| !Board->ExpandMainTowerLayers(Target.UnlockedLayers, OutReason)))
 	{
-		bCommitted = Controller->GetShop()->TrySetRoomLimit(NewLimit, OutReason);
-		if (bCommitted) { Level = NewLevel; Experience = NewExp; }
+		const FText Failure = OutReason;
+		FText RestoreReason;
+		if (!Board->SetPlacementSurfacePresentationHidden(true, RestoreReason))
+		{
+			return RejectWithNodes(FText::Format(INVTEXT("{0} 建造面恢复失败。{1}"), Failure, RestoreReason));
+		}
+		return RejectWithNodes(Failure);
 	}
-	else if (Reward == ECastleDirectorReward::Healing) { bCommitted = Tower->ApplyHealing(Tower->MaxHealth * Config->HealFraction); }
-	else { bCommitted = Controller->GetShop()->TryOpenForReward(Controller->GetEconomy(), Board, OutReason); }
-	if (!bCommitted)
+	Level = NewLevel;
+	Experience = NewExp;
+	if (bLevelUp)
 	{
-		for (ACastleDirectorNodeActor* Candidate : Candidates) { Candidate->Destroy(); }
-		FText SurfaceFailure;
-		const bool bSurfaceHidden = Board->SetPlacementSurfacePresentationHidden(true, SurfaceFailure);
-		const FString RewardFailure = OutReason.IsEmpty() ? TEXT("奖励提交失败，详见日志。") : OutReason.ToString();
-		return Reject(RewardFailure + (bSurfaceHidden ? FString() : TEXT("；建造面回滚失败：") + SurfaceFailure.ToString()));
+		// 成长配置和气球表现已经准备；提交时的同步通知读取新等级及新商品上限。
+		Shop->TrySetRoomLimit(Target.RoomLimit, OutReason);
+		Shop->TrySetOfferNumberRange(1, Target.MaxShopNumber, OutReason);
+		Tower->SetTowerBalloonTier(Target.BalloonCount, Target.BaseMaxHealth, true, OutReason);
 	}
-	bShopPermission = Reward == ECastleDirectorReward::Shop;
-	// 到此奖励已经完整提交，才发布编辑阶段并让候选节点进入世界交互。
+	if (bHealing) { Tower->ApplyHealing(Tower->MaxHealth * Config->HealFraction); }
+	if (bExperience && Level == Config->TowerLevels.Num())
+	{
+		UE_LOG(LogMoving_Castle, Display, TEXT("主塔 Lv%d 已满级。"), Level);
+	}
+	UpgradeRewards = MoveTemp(PendingRows);
+	for (const auto& Pending : PendingRooms) { UpgradeRoomRewards.Add(Pending.Get()); }
+	if (TowerUpgradeWidget) { TowerUpgradeWidget->RefreshRewards(UpgradeRewards); }
+	bShopPermission = bShop;
+	if (PreparedShop.IsValid()) { Shop->CommitRewardShop(*PreparedShop); }
 	Nodes = MoveTemp(Candidates);
 	SetPhase(ECastleDirectorPhase::Editing);
 	for (ACastleDirectorNodeActor* Candidate : Nodes) { Candidate->ActivateNode(); }
-	// 下一关指引由 WBP HUD 读取，避免同一句话叠加到屏幕调试层。
-	StatusMessage = FText::FromString(TEXT("飞向节点进入下一关"));
-	UE_LOG(LogMoving_Castle, Display, TEXT("奖励 %d 已提交：Lv%d，经验 %d/%d，房间上限 %d，主塔 %.2f/%.2f。"),
-		static_cast<int32>(Reward), Level, Experience, Config->ExpPerLevel, Controller->GetShop()->RoomLimit, Tower->CurrentHealth, Tower->MaxHealth);
+	StatusMessage = INVTEXT("飞向节点进入下一关");
+	UE_LOG(LogMoving_Castle, Display, TEXT("奖励已提交：Lv%d，经验 %d/%d，房间上限 %d，主塔 %.2f/%.2f。"),
+		Level, Experience, Config->ExpPerLevel, Shop->RoomLimit, Tower->CurrentHealth, Tower->MaxHealth);
 	return true;
+}
+
+bool UCastleDirectorSubsystem::AddRunNPCCount(const int32 Delta, FText& OutReason)
+{
+	OutReason = FText::GetEmpty();
+	if (!bRunning || Delta <= 0 || Delta > MAX_int32 - RunNPCCount)
+	{
+		OutReason = INVTEXT("NPC 待命池需要有效单局与正数增量，且不能溢出。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演 %s 拒绝增加 %d 名 NPC：%s"), *GetPathName(), Delta, *OutReason.ToString());
+		return false;
+	}
+	if (Phase == ECastleDirectorPhase::Battle && !GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>()->AddReserveNPCs(Delta))
+	{
+		OutReason = INVTEXT("当前出兵会话拒绝增加 NPC。");
+		return false;
+	}
+	RunNPCCount += Delta;
+	UE_LOG(LogMoving_Castle, Display, TEXT("单局待命池增加 %d 名普通 NPC，共 %d 名。"), Delta, RunNPCCount);
+	return true;
+}
+
+void UCastleDirectorSubsystem::ClaimTowerUpgradeReward(const int32 Index)
+{
+	if (!UpgradeRewards.IsValidIndex(Index) || WildcardPicker || Phase != ECastleDirectorPhase::Editing) { return; }
+	const FCastleTowerUpgradeRewardEntry Entry = UpgradeRewards[Index];
+	FText Reason;
+	switch (Entry.Kind)
+	{
+	case ECastleTowerUpgradeReward::PathPoint:
+		if (!PatrolRoute || !PatrolRoute->AddMaxPlayerWaypoints(Entry.Count))
+		{
+			ShowMessage(INVTEXT("路径点奖励无法提交，请检查路线入口及路径点上限。"), true);
+			return;
+		}
+		break;
+	case ECastleTowerUpgradeReward::NPC:
+		if (!AddRunNPCCount(Entry.Count, Reason)) { ShowMessage(Reason, true); return; }
+		break;
+	case ECastleTowerUpgradeReward::CustomRoom:
+		ActiveUpgradeRewardIndex = Index;
+		if (!OpenWildcardPicker(UpgradeRoomRewards[Index], Reason))
+		{
+			ActiveUpgradeRewardIndex = INDEX_NONE;
+			ShowMessage(Reason, true);
+		}
+		return;
+	}
+	UpgradeRewards.RemoveAt(Index);
+	UpgradeRoomRewards.RemoveAt(Index);
+	if (TowerUpgradeWidget) { TowerUpgradeWidget->RefreshRewards(UpgradeRewards); }
+	UpdatePresentation();
+}
+
+bool UCastleDirectorSubsystem::OpenWildcardPicker(UCastlePendingRoomReward* Reward, FText& OutReason)
+{
+	if (WildcardPicker || !IsValid(Reward) || !Config->WildcardRoomPickerClass)
+	{
+		OutReason = INVTEXT("已有万能卡弹窗，或万能卡奖励及其 WBP 无效。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演 %s 无法显示万能卡：%s"), *GetPathName(), *OutReason.ToString());
+		return false;
+	}
+	auto* Picker = CreateWidget<UCastleWildcardRoomPickerWidget>(Controller, Config->WildcardRoomPickerClass);
+	if (!Picker || !Picker->BindReward(Reward, OutReason) || !Picker->BeginBoundReward(OutReason)) { return false; }
+	Picker->OnPickerClosed.AddUniqueDynamic(this, &UCastleDirectorSubsystem::HandleWildcardClosed);
+	WildcardPicker = Picker;
+	Picker->AddToViewport(57);
+	UpdatePresentation();
+	return true;
+}
+
+void UCastleDirectorSubsystem::HandleWildcardClosed(const bool bClaimed)
+{
+	// 用户取消只关属性弹窗。确认后才删掉升级列表里的实际条目。
+	if (WildcardPicker)
+	{
+		WildcardPicker->OnPickerClosed.RemoveDynamic(this, &UCastleDirectorSubsystem::HandleWildcardClosed);
+		WildcardPicker->RemoveFromParent();
+		WildcardPicker = nullptr;
+	}
+	if (bClaimed && UpgradeRewards.IsValidIndex(ActiveUpgradeRewardIndex))
+	{
+		UpgradeRewards.RemoveAt(ActiveUpgradeRewardIndex);
+		UpgradeRoomRewards.RemoveAt(ActiveUpgradeRewardIndex);
+		if (TowerUpgradeWidget) { TowerUpgradeWidget->RefreshRewards(UpgradeRewards); }
+	}
+	ActiveUpgradeRewardIndex = INDEX_NONE;
+	UpdatePresentation();
+}
+
+void UCastleDirectorSubsystem::DiscardTowerUpgradeRewards()
+{
+	if (WildcardPicker || UpgradeRewards.IsEmpty()) { return; }
+	UE_LOG(LogMoving_Castle, Display, TEXT("主塔升级面板关闭，丢弃 %d 个未领取项。"), UpgradeRewards.Num());
+	UpgradeRewards.Reset();
+	UpgradeRoomRewards.Reset();
+	if (TowerUpgradeWidget) { TowerUpgradeWidget->RefreshRewards(UpgradeRewards); }
+	UpdatePresentation();
 }
 
 void UCastleDirectorSubsystem::SetPhase(const ECastleDirectorPhase NewPhase)
@@ -518,6 +729,14 @@ void UCastleDirectorSubsystem::EnterGameOver(const FText& Failure)
 	// 恢复 1x 全局时间缩放并清掉战斗暂停标志；游戏结束界面自身随后负责保持世界暂停。
 	ResetBattleControls(false);
 	GameOverFailure = Failure;
+	if (Phase == ECastleDirectorPhase::Battle)
+	{
+		FText RecallReason;
+		if (!RecallBattleNPCs(RecallReason))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("游戏结束时无法回收 NPC：%s"), *RecallReason.ToString());
+		}
+	}
 	PendingNode.Reset();
 	Controller->GetShop()->CloseShop();
 	bShopPermission = false;
@@ -534,6 +753,12 @@ void UCastleDirectorSubsystem::RestartCurrentMap()
 {
 	// 游戏结束和战斗界面右下角重试按钮共用同一重开入口。
 	if (!bRunning || (Phase != ECastleDirectorPhase::GameOver && Phase != ECastleDirectorPhase::Battle)) { return; }
+	FText RecallReason;
+	if (Phase == ECastleDirectorPhase::Battle && !RecallBattleNPCs(RecallReason))
+	{
+		ShowMessage(RecallReason, true);
+		return;
+	}
 	ResetBattleControls(true);
 	UGameplayStatics::OpenLevel(GetWorld(), FName(*UGameplayStatics::GetCurrentLevelName(GetWorld(), true)));
 }
@@ -617,8 +842,10 @@ bool UCastleDirectorSubsystem::EnsurePresentation(FText& OutReason)
 	HUDWidget = CreateWidget<UUserWidget>(Controller, Config->HUDWidgetClass);
 	RewardWidget = CreateWidget<UUserWidget>(Controller, Config->RewardWidgetClass);
 	GameOverWidget = CreateWidget<UUserWidget>(Controller, Config->GameOverWidgetClass);
+	TowerUpgradeWidget = CreateWidget<UCastleTowerUpgradeRewardWidget>(Controller, Config->TowerUpgradeRewardWidgetClass);
 	UCastleDirectorHUDWidget* DirectorHUD = Cast<UCastleDirectorHUDWidget>(HUDWidget);
 	if (!DirectorHUD || !Cast<UCastleRewardChoiceWidget>(RewardWidget) || !Cast<UCastleGameOverWidget>(GameOverWidget)
+		|| !TowerUpgradeWidget || !TowerUpgradeWidget->BindDirector(*this)
 		|| !DirectorHUD->HasRequiredBindings()
 		|| !Cast<UCastleRewardChoiceWidget>(RewardWidget)->HasRequiredBindings()
 		|| !Cast<UCastleGameOverWidget>(GameOverWidget)->HasRequiredBindings())
@@ -637,21 +864,29 @@ bool UCastleDirectorSubsystem::EnsurePresentation(FText& OutReason)
 	HUDWidget->AddToViewport(10);
 	RewardWidget->AddToViewport(50);
 	GameOverWidget->AddToViewport(60);
+	TowerUpgradeWidget->AddToViewport(54);
 	RewardWidget->SetVisibility(ESlateVisibility::Collapsed);
 	GameOverWidget->SetVisibility(ESlateVisibility::Collapsed);
+	TowerUpgradeWidget->SetVisibility(ESlateVisibility::Collapsed);
 	return true;
 }
 
 void UCastleDirectorSubsystem::UpdatePresentation()
 {
 	if (bAutomation) { return; }
-	const bool bModalPhase = Phase == ECastleDirectorPhase::Reward || Phase == ECastleDirectorPhase::GameOver;
+	const bool bUpgradeOpen = Phase == ECastleDirectorPhase::Editing && !UpgradeRewards.IsEmpty() && !WildcardPicker;
+	const bool bRewardOpen = Phase == ECastleDirectorPhase::Reward || bUpgradeOpen || WildcardPicker;
+	const bool bModalPhase = bRewardOpen || Phase == ECastleDirectorPhase::GameOver;
 	// 正常游玩阶段根容器采用 SelfHitTestInvisible，空白区域不阻挡准星，鼠标可见时仍可点击 HUD 按钮；模态阶段禁止穿透到底层按钮。
 	if (HUDWidget) { HUDWidget->SetVisibility(bModalPhase ? ESlateVisibility::HitTestInvisible : ESlateVisibility::SelfHitTestInvisible); }
 	if (RewardWidget) { RewardWidget->SetVisibility(Phase == ECastleDirectorPhase::Reward ? ESlateVisibility::Visible : ESlateVisibility::Collapsed); }
 	if (GameOverWidget) { GameOverWidget->SetVisibility(Phase == ECastleDirectorPhase::GameOver ? ESlateVisibility::Visible : ESlateVisibility::Collapsed); }
-	Controller->SetDirectorModalState(Phase == ECastleDirectorPhase::Reward, Phase == ECastleDirectorPhase::GameOver,
-		Phase == ECastleDirectorPhase::GameOver ? GameOverWidget.Get() : RewardWidget.Get());
+	if (TowerUpgradeWidget) { TowerUpgradeWidget->SetVisibility(bUpgradeOpen ? ESlateVisibility::Visible : ESlateVisibility::Collapsed); }
+	UUserWidget* Focus = RewardWidget;
+	if (bUpgradeOpen) { Focus = TowerUpgradeWidget; }
+	if (WildcardPicker) { Focus = WildcardPicker; }
+	if (Phase == ECastleDirectorPhase::GameOver) { Focus = GameOverWidget; }
+	Controller->SetDirectorModalState(bRewardOpen, Phase == ECastleDirectorPhase::GameOver, Focus);
 }
 
 FText UCastleDirectorSubsystem::GetRewardLabel(const ECastleDirectorReward Reward) const
@@ -729,7 +964,6 @@ void UCastleDirectorSubsystem::OnWorldEndPlay(UWorld& InWorld)
 	ResetBattleControls(false);
 	UnbindCombatEvents();
 	PendingNode.Reset();
-	BattleNPCSpawner = nullptr;
 	bRunning = false;
 	Super::OnWorldEndPlay(InWorld);
 }
@@ -745,7 +979,11 @@ void UCastleDirectorSubsystem::Deinitialize()
 	}
 	UnbindCombatEvents();
 	DestroyNodes();
-	for (UUserWidget* Widget : {HUDWidget.Get(), RewardWidget.Get(), GameOverWidget.Get()}) { if (Widget) { Widget->RemoveFromParent(); } }
+	for (UUserWidget* Widget : {HUDWidget.Get(), RewardWidget.Get(), GameOverWidget.Get(),
+		static_cast<UUserWidget*>(TowerUpgradeWidget.Get()), static_cast<UUserWidget*>(WildcardPicker.Get())})
+	{
+		if (Widget) { Widget->RemoveFromParent(); }
+	}
 	if (IsValid(Controller)) { Controller->SetDirectorModalState(false, false, nullptr); }
 	bRunning = false;
 	Super::Deinitialize();
@@ -760,7 +998,10 @@ void UCastleDirectorSubsystem::ConfigureForAutomation(UCastleDirectorConfigDataA
 	Config = InConfig; Board = InBoard; Controller = InController; Tower = InTower;
 	bRunning = true;
 	Tower->OnHealthChanged.AddUniqueDynamic(this, &UCastleDirectorSubsystem::HandleTowerHealthChanged);
-	Controller->GetShop()->TrySetRoomLimit(Config->BaseRoomLimit, StatusMessage);
+	RunNPCCount = Config->InitialNPCCount;
+	PatrolRoute = Cast<ACastlePatrolRoute>(UGameplayStatics::GetActorOfClass(GetWorld(), ACastlePatrolRoute::StaticClass()));
+	Controller->GetShop()->TrySetRoomLimit(Config->TowerLevels[0].RoomLimit, StatusMessage);
+	Controller->GetShop()->TrySetOfferNumberRange(1, Config->TowerLevels[0].MaxShopNumber, StatusMessage);
 	SetPhase(ECastleDirectorPhase::Editing);
 }
 

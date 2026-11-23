@@ -3,6 +3,9 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "CastleTowerDispatchConfigDataAsset.h"
+#include "Castle/UI/Director/CastleTowerUpgradeRewardWidget.h"
+#include "Castle/UI/Items/CastleWildcardRoomPickerWidget.h"
 
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
@@ -323,6 +326,9 @@ bool FCastleDirectorFoundationTest::RunTest(const FString& Parameters)
 	Config->HUDWidgetClass = UCastleDirectorHUDWidget::StaticClass();
 	Config->RewardWidgetClass = UCastleRewardChoiceWidget::StaticClass();
 	Config->GameOverWidgetClass = UCastleGameOverWidget::StaticClass();
+	Config->DispatchConfig = LoadObject<UCastleTowerDispatchConfigDataAsset>(nullptr, TEXT("/Game/MovingCastle/Data/DA_CastleTowerDispatch"));
+	Config->TowerUpgradeRewardWidgetClass = UCastleTowerUpgradeRewardWidget::StaticClass();
+	Config->WildcardRoomPickerClass = UCastleWildcardRoomPickerWidget::StaticClass();
 	Config->NodeLabelWidgetClass = nullptr;
 	TestFalse(TEXT("缺少NodeLabelWidgetClass拒绝启动"), Config->ValidateConfig(Reason));
 	Config->NodeLabelWidgetClass = UCastleDirectorNodeLabelWidget::StaticClass();
@@ -335,16 +341,17 @@ bool FCastleDirectorFoundationTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("配置错误明确写出字段名"), Reason.ToString().Contains(TEXT("NodeCountMin/NodeCountMax")));
 	Config->NodeCountMin = 2;
 	// 逐个改变单一字段，错误数固定，证明校验不是只覆盖节点数量一个分支。
-	AddExpectedError(TEXT("配置资产"), EAutomationExpectedErrorFlags::Contains, 8);
+	AddExpectedError(TEXT("配置资产"), EAutomationExpectedErrorFlags::Contains, 6);
 	Config->NodeHeightOffset = std::numeric_limits<float>::infinity();
 	TestFalse(TEXT("无限高度拒绝"), Config->ValidateConfig(Reason));
 	Config->NodeHeightOffset = 1200.0f;
 	Config->NodeMeshScale = 0.0f;
 	TestFalse(TEXT("零网格缩放拒绝"), Config->ValidateConfig(Reason));
 	Config->NodeMeshScale = 4.0f;
-	Config->NPCCount = 129;
-	TestFalse(TEXT("超出NPC数量上限拒绝"), Config->ValidateConfig(Reason));
-	Config->NPCCount = 8;
+	Config->InitialNPCCount = 0;
+	AddExpectedError(TEXT("成长表必须含连续四级"), EAutomationExpectedErrorFlags::Contains, 2);
+	TestFalse(TEXT("非正初始NPC数量拒绝"), Config->ValidateConfig(Reason));
+	Config->InitialNPCCount = 8;
 	Config->EliteEveryNSteps = 1;
 	TestFalse(TEXT("非法精英间隔拒绝"), Config->ValidateConfig(Reason));
 	Config->EliteEveryNSteps = 5;
@@ -357,9 +364,9 @@ bool FCastleDirectorFoundationTest::RunTest(const FString& Parameters)
 	Config->ExpPerLevel = 0;
 	TestFalse(TEXT("零升级经验拒绝"), Config->ValidateConfig(Reason));
 	Config->ExpPerLevel = 100;
-	Config->RoomLimitPerLevel = -1;
-	TestFalse(TEXT("负房间上限增量拒绝"), Config->ValidateConfig(Reason));
-	Config->RoomLimitPerLevel = 5;
+	Config->TowerLevels[1].RoomLimit = -1;
+	TestFalse(TEXT("负房间上限拒绝"), Config->ValidateConfig(Reason));
+	Config->TowerLevels[1].RoomLimit = 250;
 	UCastleShopComponent* RewardShop = NewObject<UCastleShopComponent>();
 	Board->BuildingDefinitions.Reset();
 	TestFalse(TEXT("首个商店奖励初始化失败明确拒绝"), RewardShop->TryOpenForReward(Economy, Board, Reason));

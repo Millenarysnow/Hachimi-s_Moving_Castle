@@ -73,19 +73,19 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("为HUD计数显式配置两格卡"), Board->PrototypeBackpack->TryAddBuilding(
 		Board->FindBuildingDefinition(ECastleBuildingType::ArcherTower), 2, ECastleTileColor::Red, 3, AddedIndex, Reason));
 	TestFalse(TEXT("HUD读取不提前初始化商店"), Controller->GetShop()->IsInitialized());
-	TestTrue(TEXT("商店未初始化时HUD已有正确占用格数"), Director->GetHUDSummary().Contains(TEXT("房间 2/15")));
+	TestTrue(TEXT("商店未初始化时HUD已有正确占用格数"), Director->GetHUDSummary().Contains(TEXT("房间 2/150")));
 	TestTrue(TEXT("开局编辑可用"), Director->IsEditingAllowed(Reason));
 	TestFalse(TEXT("开局没有商店权限"), Director->IsShopAccessAllowed(Reason));
-	TestEqual(TEXT("开局上限15"), Controller->GetShop()->RoomLimit, 15);
+	TestEqual(TEXT("开局上限150"), Controller->GetShop()->RoomLimit, 150);
 	Director->SetPhaseForAutomation(ECastleDirectorPhase::Battle);
 	TestFalse(TEXT("战斗禁止编辑"), Director->IsEditingAllowed(Reason));
 	Director->SetPhaseForAutomation(ECastleDirectorPhase::Reward);
 	TestFalse(TEXT("奖励禁止编辑"), Director->IsEditingAllowed(Reason));
-	Config->RewardExp = 360;
-	if (!TestTrue(TEXT("经验奖励可一次连升多级"), Director->TryChooseReward(ECastleDirectorReward::Experience, Reason))) { AddError(Reason.ToString()); return false; }
-	TestEqual(TEXT("主塔4级"), Director->GetLevel(), 4);
+	// 独立地面关卡保留原有奖励与失败验证，正式塔身成长由 MainMap 集成测试覆盖。
+	if (!TestTrue(TEXT("经验奖励成功"), Director->TryChooseReward(ECastleDirectorReward::Experience, Reason))) { AddError(Reason.ToString()); return false; }
+	TestEqual(TEXT("本次经验未达到升级阈值"), Director->GetLevel(), 1);
 	TestEqual(TEXT("剩余60经验"), Director->GetExperience(), 60);
-	TestEqual(TEXT("房间上限30写入商店"), Controller->GetShop()->RoomLimit, 30);
+	TestEqual(TEXT("房间上限仍为150"), Controller->GetShop()->RoomLimit, 150);
 	Director->SetPhaseForAutomation(ECastleDirectorPhase::Reward);
 	Tower->ApplyDamage(500.0f);
 	const int32 AttackCount = Tower->AttackCount;
@@ -108,7 +108,7 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 	const auto Definitions = Board->BuildingDefinitions;
 	Board->BuildingDefinitions.Reset();
 	AddExpectedError(TEXT("奖励换批失败"), EAutomationExpectedErrorFlags::Contains, 1);
-	AddExpectedError(TEXT("导演奖励失败"), EAutomationExpectedErrorFlags::Contains, 2);
+	AddExpectedError(TEXT("导演奖励失败"), EAutomationExpectedErrorFlags::Contains, 1);
 	TestFalse(TEXT("商品池失效拒绝奖励"), Director->TryChooseReward(ECastleDirectorReward::Shop, Reason));
 	TestEqual(TEXT("失败保留奖励阶段"), Director->GetPhase(), ECastleDirectorPhase::Reward);
 	TestEqual(TEXT("失败保留等级"), Director->GetLevel(), BeforeLevel);
@@ -119,11 +119,6 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("失败保留商品"), AfterOffers.Num() == BeforeOffers.Num() && AfterOffers[0].Descriptor.Number == BeforeOffers[0].Descriptor.Number);
 	TestTrue(TEXT("失败重新隐藏地面建造面"), Board->IsPlacementSurfacePresentationHidden());
 	Board->BuildingDefinitions = Definitions;
-	Config->RewardExp = MAX_int32;
-	Config->RoomLimitPerLevel = MAX_int32;
-	TestFalse(TEXT("升级溢出拒绝经验奖励"), Director->TryChooseReward(ECastleDirectorReward::Experience, Reason));
-	TestEqual(TEXT("溢出保留经验"), Director->GetExperience(), BeforeExp);
-	Config->RoomLimitPerLevel = 5;
 	Tower->MaxHealth = -1.0f;
 	AddExpectedError(TEXT("导演奖励失败"), EAutomationExpectedErrorFlags::Contains, 1);
 	TestFalse(TEXT("无效主塔配置拒绝回血奖励"), Director->TryChooseReward(ECastleDirectorReward::Healing, Reason));

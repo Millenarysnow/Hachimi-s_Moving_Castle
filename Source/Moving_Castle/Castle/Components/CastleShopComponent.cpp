@@ -178,6 +178,15 @@ bool UCastleShopComponent::TryRefreshOffersForReward(FText& OutFailureReason)
 
 bool UCastleShopComponent::TryOpenForReward(UCastleEconomyComponent* InEconomy, ACastleBoard* InBoard, FText& OutFailureReason)
 {
+	TStrongObjectPtr<UCastleShopComponent> Candidate(NewObject<UCastleShopComponent>());
+	if (!PrepareRewardShop(InEconomy, InBoard, MaxOfferNumber, *Candidate, OutFailureReason)) { return false; }
+	CommitRewardShop(*Candidate);
+	return true;
+}
+
+bool UCastleShopComponent::PrepareRewardShop(UCastleEconomyComponent* InEconomy, ACastleBoard* InBoard,
+	const int32 CandidateMaxNumber, UCastleShopComponent& Candidate, FText& OutFailureReason)
+{
 	OutFailureReason = FText::GetEmpty();
 	if (bTrading || bOpen)
 	{
@@ -193,39 +202,40 @@ bool UCastleShopComponent::TryOpenForReward(UCastleEconomyComponent* InEconomy, 
 	}
 	// 候选组件没有表现层监听者；初始化或出牌失败不会污染正式商店的任何状态。
 	TGuardValue<bool> Guard(bTrading, true);
-	TStrongObjectPtr<UCastleShopComponent> Candidate(NewObject<UCastleShopComponent>());
-	Candidate->PricingStrategyClass = PricingStrategyClass;
-	Candidate->RandomSeed = RandomSeed;
-	Candidate->RefreshCost = RefreshCost;
-	Candidate->RoomLimit = RoomLimit;
-	// 免费换批与普通刷新使用同一解锁区间；候选组件不隐式改回原型的 1～9。
-	Candidate->MinOfferNumber = MinOfferNumber;
-	Candidate->MaxOfferNumber = MaxOfferNumber;
+	if (!Candidate.TrySetOfferNumberRange(MinOfferNumber, CandidateMaxNumber, OutFailureReason)) { return false; }
+	Candidate.PricingStrategyClass = PricingStrategyClass;
+	Candidate.RandomSeed = RandomSeed;
+	Candidate.RefreshCost = RefreshCost;
+	Candidate.RoomLimit = RoomLimit;
 	if (bInitialized)
 	{
-		Candidate->Economy = Economy;
-		Candidate->Board = Board;
-		Candidate->Backpack = Backpack;
-		Candidate->PricingStrategy = PricingStrategy;
-		Candidate->RandomStream = RandomStream;
-		Candidate->bInitialized = true;
+		Candidate.Economy = Economy;
+		Candidate.Board = Board;
+		Candidate.Backpack = Backpack;
+		Candidate.PricingStrategy = PricingStrategy;
+		Candidate.RandomStream = RandomStream;
+		Candidate.bInitialized = true;
 	}
-	else if (!Candidate->InitializeShop(InEconomy, InBoard, OutFailureReason))
+	else if (!Candidate.InitializeShop(InEconomy, InBoard, OutFailureReason))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s 商店奖励初始化失败：%s"), *GetPathName(), *OutFailureReason.ToString());
 		return false;
 	}
-	if (!Candidate->TryRefreshOffersForReward(OutFailureReason)) { return false; }
-	Economy = Candidate->Economy;
-	Board = Candidate->Board;
-	Backpack = Candidate->Backpack;
-	PricingStrategy = Candidate->PricingStrategy;
-	Offers = MoveTemp(Candidate->Offers);
-	RandomStream = Candidate->RandomStream;
+	return Candidate.TryRefreshOffersForReward(OutFailureReason);
+}
+
+void UCastleShopComponent::CommitRewardShop(UCastleShopComponent& Candidate)
+{
+	// 广播前写完所有在免费换批中共同提交的商店字段。
+	Economy = Candidate.Economy;
+	Board = Candidate.Board;
+	Backpack = Candidate.Backpack;
+	PricingStrategy = Candidate.PricingStrategy;
+	Offers = MoveTemp(Candidate.Offers);
+	RandomStream = Candidate.RandomStream;
 	bInitialized = true;
 	bOpen = true;
 	OnShopChanged.Broadcast();
-	return true;
 }
 
 bool UCastleShopComponent::TrySetRoomLimit(const int32 NewRoomLimit, FText& OutFailureReason)

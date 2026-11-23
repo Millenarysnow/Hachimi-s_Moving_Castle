@@ -535,7 +535,9 @@ bool ACastlePlayerController::IsDirectorEditingAllowed(FText& OutReason) const
 
 bool ACastlePlayerController::IsCastleEditingAllowed(FText& OutReason) const
 {
-	if (BadgeReplaceWidget && BadgeReplaceWidget->IsVisible())
+	FCastleBadgeDefinition PendingBadge;
+	const auto* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
+	if (BadgeReplaceWidget && Badges && Badges->TryGetPendingBadge(PendingBadge))
 	{
 		OutReason = INVTEXT("选择徽章替换槽位时无法编辑。");
 		return false;
@@ -656,11 +658,11 @@ void ACastlePlayerController::HideDirectorEditingPresentation()
 
 bool ACastlePlayerController::MountDirectorItemHUD(UCastleBackpackComponent* Backpack, FText& OutReason)
 {
-	const UClass* TempClass = LoadClass<UCastleTempBuildBarWidget>(nullptr,
+	UClass* TempClass = LoadClass<UCastleTempBuildBarWidget>(nullptr,
 		TEXT("/Game/MovingCastle/UI/Items/WBP_TempBuildBar.WBP_TempBuildBar_C"));
-	const UClass* BadgeClass = LoadClass<UCastleBadgeBarWidget>(nullptr,
+	UClass* BadgeClass = LoadClass<UCastleBadgeBarWidget>(nullptr,
 		TEXT("/Game/MovingCastle/UI/Items/WBP_BadgeBar.WBP_BadgeBar_C"));
-	const UClass* ReplaceClass = LoadClass<UCastleBadgeReplaceModalWidget>(nullptr,
+	UClass* ReplaceClass = LoadClass<UCastleBadgeReplaceModalWidget>(nullptr,
 		TEXT("/Game/MovingCastle/UI/Items/WBP_BadgeReplaceModal.WBP_BadgeReplaceModal_C"));
 	UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
 	if (!TempClass || !BadgeClass || !ReplaceClass || !Badges || !IsValid(Backpack))
@@ -668,9 +670,9 @@ bool ACastlePlayerController::MountDirectorItemHUD(UCastleBackpackComponent* Bac
 		OutReason = INVTEXT("临时建筑栏、徽章栏或替换弹窗的 WBP、背包或徽章源缺失。");
 		return false;
 	}
-	auto* Temp = CreateWidget<UCastleTempBuildBarWidget>(this, const_cast<UClass*>(TempClass));
-	auto* Bar = CreateWidget<UCastleBadgeBarWidget>(this, const_cast<UClass*>(BadgeClass));
-	auto* Modal = CreateWidget<UCastleBadgeReplaceModalWidget>(this, const_cast<UClass*>(ReplaceClass));
+	auto* Temp = CreateWidget<UCastleTempBuildBarWidget>(this, TempClass);
+	auto* Bar = CreateWidget<UCastleBadgeBarWidget>(this, BadgeClass);
+	auto* Modal = CreateWidget<UCastleBadgeReplaceModalWidget>(this, ReplaceClass);
 	if (!Temp || !Bar || !Modal || !Temp->BindBackpack(Backpack) || !Bar->BindBadges(Badges) || !Modal->BindBadges(Badges))
 	{
 		OutReason = INVTEXT("临时建筑栏、徽章栏或替换弹窗的必需控件无法绑定。");
@@ -690,7 +692,8 @@ bool ACastlePlayerController::MountDirectorItemHUD(UCastleBackpackComponent* Bac
 	DirectorItemWidgets = {Temp, Bar, Modal};
 	BadgeReplaceWidget = Modal;
 	Badges->OnBadgesChanged.AddUniqueDynamic(this, &ACastlePlayerController::HandleItemBadgeChanged);
-	RefreshModalInput(true);
+	// 无待替换项时沿用 BeginPlay 已设置的游戏输入，避免再次捕获鼠标打断当前输入帧。
+	RefreshModalInput();
 	return true;
 }
 
@@ -701,7 +704,10 @@ void ACastlePlayerController::HandleItemBadgeChanged()
 
 void ACastlePlayerController::RefreshModalInput(const bool bForceRefresh)
 {
-	const bool bBadgeReplaceOpen = BadgeReplaceWidget && BadgeReplaceWidget->IsVisible();
+	FCastleBadgeDefinition PendingBadge;
+	const auto* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
+	// 使用库存真相源，避免依赖多个动态委托监听者的刷新顺序。
+	const bool bBadgeReplaceOpen = BadgeReplaceWidget && Badges && Badges->TryGetPendingBadge(PendingBadge);
 	const bool bNewOpen = Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive || bBadgeReplaceOpen;
 	// 普通商店的购买/刷新通知不改变开关，沿用旧行为，不重设模式或抢回焦点。
 	if (bNewOpen == bModalInputActive && !bForceRefresh) { return; }
