@@ -1,6 +1,9 @@
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
 #include "Castle/Actors/CastleBoard.h"
+#include "Castle/Actors/CastleBuildingBase.h"
+#include "Castle/Automation/CastleBuildingTestUtilities.h"
+#include "Castle/PCG/HachimisV4/CastleHachimisV4Layout.h"
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -8,6 +11,7 @@
 #include "Interaction/CastlePatrolRoute.h"
 #include "Interaction/CastlePatrolWaypointMarker.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePatrolWaypointGridCenterTest, "MovingCastle.Navigation.PatrolWaypoint.GridCenter",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -72,6 +76,68 @@ bool FCastlePatrolWaypointGridCenterTest::RunTest(const FString& Parameters)
 		Expected + FVector(0, 0, 100), Outside, Failure));
 	World->DestroyWorld(false);
 	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePatrolWaypointSpeedRoomTest, "MovingCastle.Navigation.PatrolWaypoint.SpeedRoomFloor",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastlePatrolWaypointSpeedRoomTest::RunTest(const FString& Parameters)
+{
+	// 通过正式定义和棋盘放置实例化加速房，测试无需改写其蓝图或添加测试碰撞。
+	auto* Definition = LoadObject<UCastleBuildingDefinition>(nullptr,
+		TEXT("/Game/MovingCastle/Data/Buildings/DA_SpeedRoom.DA_SpeedRoom"));
+	if (!TestNotNull(TEXT("正式加速房定义可加载"), Definition)) { return false; }
+	const auto Settings = UWorld::InitializationValues().CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false);
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Settings);
+	if (!TestNotNull(TEXT("创建加速房测试世界"), World)) { return false; }
+	ON_SCOPE_EXIT { World->DestroyWorld(false); };
+	auto* Board = World->SpawnActor<ACastleBoard>();
+	if (!TestNotNull(TEXT("创建加速房测试棋盘"), Board)) { return false; }
+	Board->GridSize = FIntVector(1, 1, 1);
+	Board->BuildingDefinitions = {Definition};
+	FCastleGroundGenerationResult Ground;
+	FCastleGroundCell& Cell = Ground.Cells.AddDefaulted_GetRef();
+	Cell.Coordinate = Board->GridOrigin;
+	Cell.Color = ECastleTileColor::Red;
+	Cell.Number = 3;
+	FCastleBuildingDescriptor Card;
+	FText Reason;
+	if (!Board->ApplyGroundGenerationResult(Ground, Reason) || !Definition->CreateDescriptor(1, Cell.Color, Cell.Number, Card, Reason))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	// 隐藏真实棋盘地块的点击面，只验证加速房自己的功能楼板。
+	Board->SetGroundPresentationHidden(true);
+	auto* Room = Board->PlaceBuilding(Cell.Coordinate, Card, false, Reason);
+	if (!TestNotNull(TEXT("正式一级加速房可放置"), Room)
+		|| !TestTrue(TEXT("正式加速房完成飞入"), CastleBuildingTests::CompletePlacement(Room)))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	// 旧加速房的准绳是格底 Z=0，直接由棋盘计算期望值。
+	TestNull(TEXT("加速房沿用旧模板站立标高"), Room->HachimisLayout.Get());
+	const FVector Expected = Board->GetGridWorldLocation(Cell.Coordinate) - FVector(0, 0, Board->LayerHeight * 0.5);
+	const FVector Start = Expected + FVector(40, -30, 150);
+	const FVector End = Expected + FVector(40, -30, -20);
+	FHitResult FloorHit;
+	if (!TestTrue(TEXT("加速房有真实功能楼板且阻挡 Pawn"), World->LineTraceSingleByChannel(FloorHit, Start, End, ECC_Pawn)))
+	{
+		return false;
+	}
+	UPrimitiveComponent* Floor = FloorHit.GetComponent();
+	TestTrue(TEXT("功能楼板顶面位于格底"), FMath::IsNearlyEqual(FloorHit.ImpactPoint.Z, Expected.Z, 0.01));
+	TestTrue(TEXT("加速房楼板位于功能层级并参与导航"), Floor && FloorHit.GetActor() == Room
+		&& Floor->GetFName() == TEXT("GameplayFloor_0_0_0") && Room->IsComponentRelevantForNavigation(Floor));
+	TestTrue(TEXT("加速房功能楼板保持 Visibility 透明"), Floor && Floor->GetCollisionResponseToChannel(ECC_Visibility) == ECR_Ignore);
+	FVector Point;
+	if (!TestTrue(TEXT("巡逻射线能解析加速房楼板"), ACastlePatrolRoute::TryResolveWaypointFromRay(World, Start, End, Point, Reason)))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	return TestTrue(TEXT("加速房路径点吸附到格心并保留楼面标高"), Point.Equals(Expected, 0.1));
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePatrolWaypointNumberTest, "MovingCastle.Navigation.PatrolWaypoint.NumberModel",
