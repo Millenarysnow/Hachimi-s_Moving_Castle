@@ -707,8 +707,11 @@ void ACastlePlayerController::UnregisterActiveSkyIsland(const ACastleSkyIslandBa
 ACastleSkyIslandBase* ACastlePlayerController::GetInteractiveSkyIsland() const
 {
 	const auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
-	return Director && Director->GetPhase() == ECastleDirectorPhase::SkyIsland
-		&& !bModalInputActive && !Shop->IsShopOpen() ? ActiveSkyIsland.Get() : nullptr;
+	// 验收命令在编辑阶段登记空岛。正式访问及独立验收世界使用同一套输入路由，
+	// 初始化成功才登记，离岛时注销，普通编辑期间没有空岛引用可供转发。
+	const bool bPhaseAllowsIsland = !Director || Director->GetPhase() == ECastleDirectorPhase::SkyIsland
+		|| Director->GetPhase() == ECastleDirectorPhase::Editing;
+	return bPhaseAllowsIsland && !bModalInputActive && !Shop->IsShopOpen() ? ActiveSkyIsland.Get() : nullptr;
 }
 
 void ACastlePlayerController::RetractIslandPlacement()

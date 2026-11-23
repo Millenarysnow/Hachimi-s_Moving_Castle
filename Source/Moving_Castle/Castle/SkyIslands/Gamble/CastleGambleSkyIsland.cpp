@@ -797,7 +797,7 @@ UBoxComponent* ACastleGambleSkyIsland::CreateMiniCard(const FCastleBuildingDescr
 	FBox Bounds(ForceInit);
 	for (const UStaticMeshComponent* Template : Templates)
 	{
-		if (!Template->IsVisible() || !Template->GetStaticMesh()) { continue; }
+		if (!Template->IsVisible()) { continue; }
 		FTransform Local = FTransform::Identity;
 		bool bGameplayPart = false;
 		for (const USceneComponent* Part = Template; Part;)
@@ -812,8 +812,17 @@ UBoxComponent* ACastleGambleSkyIsland::CreateMiniCard(const FCastleBuildingDescr
 			Part = ScriptParent ? *ScriptParent : Part->GetAttachParent();
 		}
 		if (bGameplayPart) { continue; }
+
+		// 可见的表现组件必须完整配置，缺件时在创建模型和扣牌之前拒绝本次放置。
+		const UStaticMesh* Mesh = Template->GetStaticMesh();
+		if (!Mesh)
+		{
+			Reject(FText::Format(INVTEXT("建筑类 {0} 的可见模型组件 {1} 未配置静态网格。"),
+				FText::FromString(BuildingClass->GetPathName()), FText::FromName(Template->GetFName())), OutReason);
+			return nullptr;
+		}
 		Parts.Emplace(Template, Local);
-		Bounds += Template->GetStaticMesh()->GetBoundingBox().TransformBy(Local);
+		Bounds += Mesh->GetBoundingBox().TransformBy(Local);
 	}
 	const FVector ModelSize = Bounds.GetSize();
 	if (Parts.IsEmpty() || ModelSize.ContainsNaN() || ModelSize.GetMin() <= UE_SMALL_NUMBER)
