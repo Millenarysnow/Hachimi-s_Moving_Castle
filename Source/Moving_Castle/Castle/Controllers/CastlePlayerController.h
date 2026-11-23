@@ -9,6 +9,7 @@
 
 class ACastleBoard;
 class ACastleGridCursor;
+class ACastleSkyIslandBase;
 class UCastleEconomyComponent;
 class UCastleShopComponent;
 class ACastleMassSpawner;
@@ -67,6 +68,9 @@ public:
 	bool MountDirectorItemHUD(UCastleBackpackComponent* Backpack, FText& OutReason);
 	/** 资产配置的交互键在导演完成启动校验时绑定。 */
 	bool BindSkyIslandInput(const FKey& Key, FText& OutReason);
+	/** 空岛完成初始化才接管当前岛引用，销毁时按实例注销。 */
+	void RegisterActiveSkyIsland(ACastleSkyIslandBase* Island);
+	void UnregisterActiveSkyIsland(const ACastleSkyIslandBase* Island);
 	UFUNCTION(Exec) void CastleTestSkyIsland();
 
 	/** 开战事务准备时立即清除高亮，避免等下一帧控制器 Tick 才撤下旧建造目标。 */
@@ -135,7 +139,10 @@ protected:
 	void SpawnGridCursor();
 
 	/** 执行屏幕中心反投影和棋盘吸附。 */
-	void UpdateGridCursor();
+	void UpdateGridCursor(ACastleSkyIslandBase* Island = nullptr);
+	/** 只有空岛阶段且界面未占用输入时才向空岛转发建造。 */
+	ACastleSkyIslandBase* GetInteractiveSkyIsland() const;
+	void RetractIslandPlacement();
 
 	/** 数字键按当前背包顺序选牌，1 至 9、0 对应十个实际槽位。 */
 	void SelectPrototypeSlot1();
@@ -209,6 +216,8 @@ protected:
 	/** 当前关卡的棋盘实例。 */
 	UPROPERTY(Transient)
 	TObjectPtr<ACastleBoard> ActiveBoard;
+	/** 由导演或验收入口持有空岛，控制器仅路由本地输入。 */
+	TWeakObjectPtr<ACastleSkyIslandBase> ActiveSkyIsland;
 
 	/** 当前玩家对应的可视化指示器。 */
 	UPROPERTY(Transient)

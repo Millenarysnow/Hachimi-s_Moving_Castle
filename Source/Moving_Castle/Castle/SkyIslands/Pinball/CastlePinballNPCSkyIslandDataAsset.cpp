@@ -30,6 +30,16 @@ bool UCastlePinballNPCSkyIslandDataAsset::Validate(FText& OutReason) const
 	};
 	const auto InRange = [](double Value, double Min, double Max) { return Value >= Min && Value <= Max; };
 	if (!InRange(TiltAngleDegrees, 5.0, 60.0)) { return Reject(INVTEXT("倾角必须在 5° 到 60° 之间。")); }
+	if (!(WallRestitution > 0.0f && WallRestitution <= 1.2f))
+	{
+		return Reject(INVTEXT("WallRestitution 必须大于 0 且不超过 1.2。"));
+	}
+	if (!(PegRestitution > 0.0f && PegRestitution <= 1.5f))
+	{
+		return Reject(INVTEXT("PegRestitution 必须大于 0 且不超过 1.5。"));
+	}
+	if (!InRange(PegBumperImpulse, 0.0, 800.0)) { return Reject(INVTEXT("PegBumperImpulse 必须在 0 到 800 cm/s 之间。")); }
+	if (!InRange(MaxCoinSpeed, 400.0, 5000.0)) { return Reject(INVTEXT("MaxCoinSpeed 必须在 400 到 5000 cm/s 之间。")); }
 	if (CoinLaunchCost < 1) { return Reject(INVTEXT("投币费用必须至少为 1。")); }
 	if (!InRange(InitialNPCCount, 1, 20)) { return Reject(INVTEXT("初始 NPC 数量必须在 1 到 20 之间。")); }
 	if (!InRange(CoinsRequiredPerNPC, 1, 50)) { return Reject(INVTEXT("招募金币数必须在 1 到 50 之间。")); }

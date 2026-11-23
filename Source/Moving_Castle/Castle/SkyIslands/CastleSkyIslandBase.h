@@ -8,6 +8,7 @@
 class UCastlePendingRoomReward;
 class UTextRenderComponent;
 struct FCastleBadgeDefinition;
+struct FCastleGridCursorTarget;
 
 /** 基座的离开按钮只负责报告玩家意图，离岛、传送与关数提交由导演拥有。 */
 UCLASS()
@@ -30,11 +31,21 @@ class MOVING_CASTLE_API ACastleSkyIslandBase : public AActor
 public:
 	ACastleSkyIslandBase();
 	bool InitializeIsland(const FCastleSkyIslandContext& Context, FText& OutFailureReason);
+	virtual void EndPlay(EEndPlayReason::Type EndPlayReason) override;
 	FTransform GetPlayerArrivalTransform() const;
 	FSimpleMulticastDelegate OnDepartureRequested;
 	bool RequestOpenTemporaryRoomShop(FText& OutFailureReason);
 	bool GrantPendingRoomRewardUI(UCastlePendingRoomReward* Reward, FText& OutFailureReason);
 	bool GrantBadgeWithReplaceUI(const FCastleBadgeDefinition& Badge, FText& OutFailureReason);
+
+	/** 只有提供建造区的空岛解析射线和摆放；其余空岛不处理这些输入。 */
+	virtual bool TryResolveIslandGridCursorTarget(const FVector& Start, const FVector& End,
+		FCastleGridCursorTarget& OutTarget) const { return false; }
+	virtual bool CanPlaceCardAtIslandCursor(const FCastleGridCursorTarget& Target, int32 BackpackIndex) const { return false; }
+	/** 下列接口返回是否提交成功，失败原因供控制器显示；不支持的空岛保持原因为空。 */
+	virtual bool TryPlaceBackpackAtIslandCursor(const FCastleGridCursorTarget& Target, int32 BackpackIndex,
+		FText& OutReason) { return false; }
+	virtual bool TryRetractLastIslandPlacement(FText& OutReason) { return false; }
 
 protected:
 	/** 具体玩法在传送玩家前准备所需资产和交互物件，失败时由导演撤销生成。 */

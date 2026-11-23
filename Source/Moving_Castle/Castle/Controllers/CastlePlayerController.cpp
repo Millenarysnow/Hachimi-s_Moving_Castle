@@ -24,6 +24,8 @@
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/Support/CastleSupportFlightActors.h"
 #include "Castle/Support/CastleSupportTowerSubsystem.h"
+#include "Castle/SkyIslands/CastleSkyIslandBase.h"
+#include "Blueprint/GameViewportSubsystem.h"
 #include "Blueprint/UserWidget.h"
 #include "Castle/Items/CastleBadgeSubsystem.h"
 #include "Castle/UI/Items/CastleBadgeBarWidget.h"
@@ -89,7 +91,11 @@ void ACastlePlayerController::Tick(float DeltaSeconds)
 	{
 		UpdateTowerDispatchInput();
 		FText EditReason;
-		if (!Shop->IsShopOpen() && IsCastleEditingAllowed(EditReason))
+		if (ACastleSkyIslandBase* Island = GetInteractiveSkyIsland())
+		{
+			UpdateGridCursor(Island);
+		}
+		else if (!Shop->IsShopOpen() && IsCastleEditingAllowed(EditReason))
 		{
 			UpdateGridCursor();
 		}
@@ -135,6 +141,8 @@ void ACastlePlayerController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::B, IE_Pressed, this, &ACastlePlayerController::ToggleShop);
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ACastlePlayerController::PlacePrototypeBuildingAtCursor);
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &ACastlePlayerController::ReleaseTowerDispatchInput).bConsumeInput = false;
+	// 右键在其他系统仍可使用；只有支持微缩建造的空岛会撤回房间。
+	InputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &ACastlePlayerController::RetractIslandPlacement).bConsumeInput = false;
 	// 战斗控制快捷键允许在暂停期间继续响应，确保按 T 暂停后可再次按 T 恢复或按 F/R 操作。
 	InputComponent->BindKey(EKeys::T, IE_Pressed, this, &ACastlePlayerController::ToggleBattlePauseShortcut).bExecuteWhenPaused = true;
 	InputComponent->BindKey(EKeys::F, IE_Pressed, this, &ACastlePlayerController::ToggleBattleSpeedShortcut).bExecuteWhenPaused = true;
@@ -197,9 +205,9 @@ void ACastlePlayerController::SpawnGridCursor()
 	}
 }
 
-void ACastlePlayerController::UpdateGridCursor()
+void ACastlePlayerController::UpdateGridCursor(ACastleSkyIslandBase* Island)
 {
-	if (ActiveBoard == nullptr)
+	if (!Island && ActiveBoard == nullptr)
 	{
 		FindActiveBoard();
 	}
@@ -207,7 +215,7 @@ void ACastlePlayerController::UpdateGridCursor()
 	{
 		SpawnGridCursor();
 	}
-	if (ActiveBoard == nullptr || GridCursor == nullptr)
+	if ((!Island && ActiveBoard == nullptr) || GridCursor == nullptr)
 	{
 		CurrentGridCursorTarget = FCastleGridCursorTarget();
 		return;
@@ -234,6 +242,16 @@ void ACastlePlayerController::UpdateGridCursor()
 
 	FCastleGridCursorTarget NewTarget;
 	const FVector RayEnd = RayOrigin + RayDirection * GridCursorTraceDistance;
+	if (Island)
+	{
+		if (Island->TryResolveIslandGridCursorTarget(RayOrigin, RayEnd, NewTarget))
+		{
+			CurrentGridCursorTarget = NewTarget;
+			GridCursor->ApplyTarget(NewTarget, Island->CanPlaceCardAtIslandCursor(NewTarget, SelectedBackpackIndex));
+		}
+		else { HideDirectorEditingPresentation(); }
+		return;
+	}
 	if (ActiveBoard->TryResolveGridCursorTarget(RayOrigin, RayEnd, NewTarget))
 	{
 		CurrentGridCursorTarget = NewTarget;
@@ -328,7 +346,7 @@ void ACastlePlayerController::StepBackpackSelection(bool bNext)
 
 void ACastlePlayerController::SelectBackpackSlot(int32 SlotIndex)
 {
-	if (Shop->IsShopOpen())
+	if (bModalInputActive || Shop->IsShopOpen())
 	{
 		return;
 	}
@@ -367,6 +385,20 @@ void ACastlePlayerController::PlacePrototypeBuildingAtCursor()
 	// 气球点击属于战斗操作，在构筑门控前消费；同一次左键不会同时放置房间。
 	FVector Origin, End;
 	const bool bHasRay = TryGetDispatchAim(Origin, End);
+	if (ACastleSkyIslandBase* Island = GetInteractiveSkyIsland(); Island && bHasRay)
+	{
+		// 点击重新解析射线，避免放置或撤回后还使用上一帧的命中面。
+		FCastleGridCursorTarget Target;
+		if (Island->TryResolveIslandGridCursorTarget(Origin, End, Target))
+		{
+			FText Reason;
+			if (!Island->TryPlaceBackpackAtIslandCursor(Target, SelectedBackpackIndex, Reason))
+			{
+				ShowDirectorMessage(Reason);
+			}
+			return;
+		}
+	}
 	if (bHasRay)
 	{
 		bool bConsumed;
@@ -657,8 +689,46 @@ void ACastlePlayerController::HideDirectorEditingPresentation()
 	if (IsValid(GridCursor)) { GridCursor->HideCursor(); }
 }
 
+void ACastlePlayerController::RegisterActiveSkyIsland(ACastleSkyIslandBase* Island)
+{
+	ActiveSkyIsland = Island;
+	HideDirectorEditingPresentation();
+}
+
+void ACastlePlayerController::UnregisterActiveSkyIsland(const ACastleSkyIslandBase* Island)
+{
+	if (ActiveSkyIsland.GetEvenIfUnreachable() == Island)
+	{
+		ActiveSkyIsland.Reset();
+		HideDirectorEditingPresentation();
+	}
+}
+
+ACastleSkyIslandBase* ACastlePlayerController::GetInteractiveSkyIsland() const
+{
+	const auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
+	return Director && Director->GetPhase() == ECastleDirectorPhase::SkyIsland
+		&& !bModalInputActive && !Shop->IsShopOpen() ? ActiveSkyIsland.Get() : nullptr;
+}
+
+void ACastlePlayerController::RetractIslandPlacement()
+{
+	if (ACastleSkyIslandBase* Island = GetInteractiveSkyIsland())
+	{
+		FText Reason;
+		if (!Island->TryRetractLastIslandPlacement(Reason) && !Reason.IsEmpty()) { ShowDirectorMessage(Reason); }
+	}
+}
+
 bool ACastlePlayerController::MountDirectorItemHUD(UCastleBackpackComponent* Backpack, FText& OutReason)
 {
+	auto* Viewport = UGameViewportSubsystem::Get();
+	if (!Viewport)
+	{
+		OutReason = INVTEXT("无法挂载临时建筑栏、徽章栏或替换弹窗，视口子系统不可用。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s：%s"), *GetPathName(), *OutReason.ToString());
+		return false;
+	}
 	UClass* TempClass = LoadClass<UCastleTempBuildBarWidget>(nullptr,
 		TEXT("/Game/MovingCastle/UI/Items/WBP_TempBuildBar.WBP_TempBuildBar_C"));
 	UClass* BadgeClass = LoadClass<UCastleBadgeBarWidget>(nullptr,
@@ -679,17 +749,29 @@ bool ACastlePlayerController::MountDirectorItemHUD(UCastleBackpackComponent* Bac
 		OutReason = INVTEXT("临时建筑栏、徽章栏或替换弹窗的必需控件无法绑定。");
 		return false;
 	}
-	// 三个资产的内部布局保留在 WBP，控制器只负责为正式视口分配锚点和层级。
-	Temp->AddToViewport(20);
-	Temp->SetAnchorsInViewport(FAnchors(0.0f, 0.58f));
-	Temp->SetPositionInViewport(FVector2D(24.0, 0.0), false);
-	Bar->AddToViewport(20);
-	Bar->SetAnchorsInViewport(FAnchors(0.0f, 0.12f));
-	Bar->SetPositionInViewport(FVector2D(24.0, 0.0), false);
-	Modal->AddToViewport(55);
-	Modal->SetAnchorsInViewport(FAnchors(0.5f, 0.5f));
-	Modal->SetAlignmentInViewport(FVector2D(0.5, 0.5));
-	Modal->SetPositionInViewport(FVector2D::ZeroVector, false);
+	// 一次写入每个控件的槽位，保留 WBP 自身尺寸与 DPI 缩放。
+	const auto Mount = [Viewport](UUserWidget* Widget, FAnchors Anchors, FVector2D Alignment, FMargin Offsets, int32 ZOrder)
+	{
+		FGameViewportWidgetSlot Slot;
+		Slot.Anchors = Anchors;
+		Slot.Alignment = Alignment;
+		Slot.Offsets = Offsets;
+		Slot.ZOrder = ZOrder;
+		Viewport->SetWidgetSlot(Widget, Slot);
+		return Viewport->AddWidget(Widget, Slot);
+	};
+	if (!Mount(Temp, FAnchors(0.0f, 0.58f), FVector2D::ZeroVector, FMargin(24.0f, 0.0f, 0.0f, 0.0f), 20)
+		|| !Mount(Bar, FAnchors(0.0f, 0.12f), FVector2D::ZeroVector, FMargin(24.0f, 0.0f, 0.0f, 0.0f), 20)
+		|| !Mount(Modal, FAnchors(0.5f, 0.5f), FVector2D(0.5, 0.5), FMargin(0.0f), 55))
+	{
+		for (UUserWidget* Widget : {static_cast<UUserWidget*>(Temp), static_cast<UUserWidget*>(Bar), static_cast<UUserWidget*>(Modal)})
+		{
+			Widget->RemoveFromParent();
+		}
+		OutReason = INVTEXT("临时建筑栏、徽章栏或替换弹窗无法加入玩家视口。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s：%s"), *GetPathName(), *OutReason.ToString());
+		return false;
+	}
 	DirectorItemWidgets = {Temp, Bar, Modal};
 	BadgeReplaceWidget = Modal;
 	Badges->OnBadgesChanged.AddUniqueDynamic(this, &ACastlePlayerController::HandleItemBadgeChanged);

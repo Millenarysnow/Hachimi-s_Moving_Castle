@@ -15,15 +15,16 @@ struct FCastleMiniPlacement
 	UPROPERTY() FCastleBuildingDescriptor Card;
 };
 
-/** 无固定格数的三维放置区。顺序数组用于撤回和发奖，坐标索引用于快速查邻居。 */
+/** 固定地面格和可向外拼接的三维放置区。顺序数组用于撤回和发奖。 */
 USTRUCT()
 struct FCastleMiniPlacementBoard
 {
 	GENERATED_BODY()
 
 	TConstArrayView<FCastleMiniPlacement> GetPlacements() const { return Placements; }
+	const TMap<FIntVector, FCastleGroundCell>& GetGroundCells() const { return GroundCells; }
+	bool InitializeGround(TConstArrayView<FCastleGroundCell> Cells, FIntPoint GridSize, FText& OutReason);
 	bool CanPlace(const FCastleBuildingDescriptor& Card, const FIntVector& Cell, FText& OutReason) const;
-	TArray<FIntVector> GetLegalCells(const FCastleBuildingDescriptor& Card) const;
 
 	/** 检查格位后消费实际背包卡，消费提交会触发现有的临时栏补位。 */
 	bool TryPlace(UCastleBackpackComponent& Backpack, int32 BackpackIndex, const FIntVector& Cell, FText& OutReason);
@@ -35,6 +36,7 @@ struct FCastleMiniPlacementBoard
 private:
 	// 由岛用 UPROPERTY 持有，保证卡在局部暂存期间建筑定义仍被 GC 跟踪。
 	UPROPERTY() TArray<FCastleMiniPlacement> Placements;
+	UPROPERTY() TMap<FIntVector, FCastleGroundCell> GroundCells;
 	TMap<FIntVector, int32> Occupied;
 	bool bMutating = false;
 };
