@@ -55,6 +55,8 @@ struct FCastlePCGCellSpec
 	ECastlePCGRoof Roof = ECastlePCGRoof::Keep;
 	ECastlePCGDeck Deck = ECastlePCGDeck::Solid;
 	FCastlePCGAttachmentSpec RoofOverride;
+	/** 整体屋面替换时，原装接缝和无单格覆盖标记的屋面件也随屋面隐藏。 */
+	bool bOverrideWholeRoof = false;
 	/** 底盘视觉与物理梯洞分别表达，替换网格不会改变 Deck 或层界。 */
 	TOptional<FCastlePCGAttachmentSpec> DeckOverride;
 	FCastlePCGRoomSample RoomDeck;

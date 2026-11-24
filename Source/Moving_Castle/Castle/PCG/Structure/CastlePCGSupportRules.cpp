@@ -217,6 +217,7 @@ bool UCastlePCGHorizontalLevel2StepRule::Evaluate(const FCastlePCGBoardQuery& Qu
 			}
 			FCastlePCGCellSpec& Roof = Field.Cells.FindChecked(Exposed);
 			Roof.Roof = ECastlePCGRoof::Override;
+			Roof.bOverrideWholeRoof = true;
 			Roof.RoofOverride.Kit = Kits->Slope;
 			Roof.RoofOverride.AnchorTransform = FTransform(CastlePCGSupport::OutwardRotation(Direction), FVector(0, 0, Query.GetLayerHeight()));
 			Roof.RoofOverride.bSelectable = true;

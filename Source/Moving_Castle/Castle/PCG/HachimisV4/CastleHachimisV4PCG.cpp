@@ -427,13 +427,18 @@ namespace CastleV4PCG
 				const FCastlePCGSideFaceSpec& Side = Field.SideFaces.FindChecked({Cells.FindChecked(Slot.Cell), Face});
 				if (!PrepareWall(Building, Board, Rules, Side, Slot, Original, Plan, Error)) { return false; }
 			}
+			// 整体替换要求摘掉原屋面系统的所有作者件，包括没有单格覆盖的接缝下搭片。
+			const bool bReplaceWholeRoof = Building.GetOccupiedCoordinates().ContainsByPredicate([&](const FIntVector& Cell)
+			{
+				return Field.Cells.FindChecked(Cell).bOverrideWholeRoof;
+			});
 			for (int32 Index = 0; Index < Layout.Parts.Num(); ++Index)
 			{
 				const FCastleV4Part& Part = Layout.Parts[Index];
-				if ((Part.Group == TEXT("Roof") || Part.Group == TEXT("RoofKeys")) && Part.Cells.ContainsByPredicate([&](const FIntVector& Cell)
+				if ((Part.Group == TEXT("Roof") || Part.Group == TEXT("RoofKeys")) && (bReplaceWholeRoof || Part.Cells.ContainsByPredicate([&](const FIntVector& Cell)
 				{
 					return Field.Cells.FindChecked(Cells.FindChecked(Cell)).Roof != ECastlePCGRoof::Keep;
-				})) { Plan.Visual.Hidden.Add(Original[Index].Component); }
+				}))) { Plan.Visual.Hidden.Add(Original[Index].Component); }
 				if (Part.Group != TEXT("Foundation")) { continue; }
 				const auto IsDeckVisualReplaced = [&](const FIntVector& Cell)
 				{

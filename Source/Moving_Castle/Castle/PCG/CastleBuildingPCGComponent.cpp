@@ -236,7 +236,8 @@ void UCastleBuildingPCGComponent::ApplyVisual(const ACastleBoard& Board, const F
 		Mesh->SetMobility(EComponentMobility::Movable);
 		Mesh->SetCollisionEnabled(Visual.bSelectable ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
 		Mesh->SetCollisionResponseToAllChannels(ECR_Ignore);
-		Mesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+		// 斜撑等不可选挂件既禁用碰撞，也不声明对建造准星的可见性阻挡。
+		if (Visual.bSelectable) { Mesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block); }
 		Mesh->SetCanEverAffectNavigation(false);
 		Mesh->SetGenerateOverlapEvents(false);
 		Mesh->ComponentTags.Add(TEXT("CastlePCGDynamic"));
