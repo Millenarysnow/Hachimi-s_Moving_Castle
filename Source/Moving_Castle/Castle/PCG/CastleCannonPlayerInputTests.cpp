@@ -51,7 +51,7 @@ namespace CastleCannonPlayerInputTests
 			{
 				const int32 Count=Stage==3?1:2;
 				const auto Buildings=Board->GetPlacedBuildings();
-				if (!Test->TestEqual(TEXT("左键通过正式光标入口放置建筑"),Buildings.Num(),Count)) { Cleanup(); return true; }
+				if (!Test->TestEqual(TEXT("主交互键通过正式光标入口放置建筑"),Buildings.Num(),Count)) { Cleanup(); return true; }
 				for (auto* B:Buildings) { if (!B->bHasCompletedPlacement||B->BuildingMerge->bIsPlaying) { return false; } }
 				if (Stage==3) { AimGround(Center+FIntVector(1,0,0)); Stage=4; return false; }
 				for (auto* B:Buildings) { if (B->GetOccupiedCoordinates().Contains(Center)) { Cannon=B; } else { Neighbor=B; } }
@@ -80,6 +80,8 @@ namespace CastleCannonPlayerInputTests
 			}
 			if (Stage==15)
 			{
+				// 模拟 Enter 由下一次 PlayerInput 派发。先等待路线退出编辑态，再核对真实提交结果。
+				if (Route->IsEditing()) { return false; }
 				const auto& Points=Nav->GetRequestedWaypoints();
 				if (!Test->TestEqual(TEXT("Enter经真实路径编辑提交两个点"),Points.Num(),2)) { Cleanup(); return true; }
 				// 期望值由同一次原生射线与棋盘格坐标独立计算，不调用被测取点函数伪造预期。
