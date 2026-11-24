@@ -191,8 +191,9 @@ protected:
 	void EndTemporaryHUDPointer();
 	bool CanUseBuildingDemolishMenu(FText& OutReason) const;
 	bool IsDemolishableBuilding(const ACastleBuildingBase* Building) const;
-	ACastleBuildingBase* FindDemolishTargetAt(FVector2D ScreenPosition) const;
-	bool OpenBuildingDemolishMenu(ACastleBuildingBase& Building, FVector2D ScreenPosition);
+	/** 从实际射线命中解析建筑与占格，菜单和确认操作共用这一明确的目标。 */
+	ACastleBuildingBase* FindDemolishTargetAt(FVector2D ScreenPosition, FIntVector& OutCell) const;
+	bool OpenBuildingDemolishMenu(ACastleBuildingBase& Building, const FIntVector& TargetCell, FVector2D ScreenPosition);
 	void HandleDemolishOutsideClick(FKey Key, FVector2D ScreenPosition);
 	void InitializePopupClasses();
 	void RemoveBuildingDemolishWidget();

@@ -95,23 +95,6 @@ UTextureRenderTarget2D* UCastleBuildingPreviewSubsystem::GetPreview(const FCastl
 		return nullptr;
 	}
 	Model->PrepareForPreview();
-	// UE 的按需着色器编译不会仅因 IsComplete 查询而提交所有首次绘制任务。
-	// 使用引擎为首次绘制提供的接口明确完成材质准备；相同模型的重复卡片走纹理缓存。
-	TArray<UStaticMeshComponent*> ModelMeshes;
-	Model->GetComponents<UStaticMeshComponent>(ModelMeshes);
-	TSet<UMaterialInterface*> PreparedMaterials;
-	for (UStaticMeshComponent* Component : ModelMeshes)
-	{
-		for (int32 Index = 0; Index < Component->GetNumMaterials(); ++Index)
-		{
-			UMaterialInterface* Material = Component->GetMaterial(Index);
-			if (Material != nullptr && !PreparedMaterials.Contains(Material))
-			{
-				Material->EnsureIsComplete();
-				PreparedMaterials.Add(Material);
-			}
-		}
-	}
 	const FBox Bounds = Model->GetVisualBounds();
 	if (!Bounds.IsValid || Bounds.GetExtent().IsNearlyZero())
 	{
@@ -161,7 +144,7 @@ UTextureRenderTarget2D* UCastleBuildingPreviewSubsystem::GetPreview(const FCastl
 	Texture->RenderTargetFormat = ETextureRenderTargetFormat::RTF_RGBA16f;
 	Texture->TargetGamma = 1.0f;
 	Texture->InitAutoFormat(256, 256);
-	Texture->UpdateResourceImmediate(true);
+	// 初始化与延迟摄影按渲染命令顺序执行，避免首次取得纹理时同步刷新渲染线程。
 	Capture->TextureTarget = Texture;
 	FPreviewEntry Entry;
 	Entry.Model = Model;
@@ -225,24 +208,14 @@ void UCastleBuildingPreviewSubsystem::Tick(float DeltaTime)
 		}
 		if (!Entry.bReady)
 		{
-			TArray<UStaticMeshComponent*> Meshes;
-			Entry.Model->GetComponents<UStaticMeshComponent>(Meshes);
-			bool bReady = true;
-			for (const UStaticMeshComponent* Component : Meshes)
-			{
-				const UStaticMesh* Mesh = Component->GetStaticMesh();
-				if (Mesh != nullptr && (Mesh->IsCompiling() || Mesh->HasPendingRenderResourceInitialization() || !Component->IsRenderStateCreated()))
-				{
-					bReady = false;
-					break;
-				}
-			}
-			if (!bReady)
+			FText Reason;
+			if (!Entry.Model->ArePreviewRenderResourcesReady(Reason))
 			{
 				Entry.ResourceWaitSeconds += Elapsed;
-				if (Entry.ResourceWaitSeconds > 30.0f)
+				if (!Reason.IsEmpty() || Entry.ResourceWaitSeconds >= 30.0f)
 				{
-					UE_LOG(LogMoving_Castle, Error, TEXT("建筑预览捕获失败：%s 的渲染资源在 30 秒内未就绪。"), *Entry.Model->GetName());
+					if (Reason.IsEmpty()) { Reason = INVTEXT("网格或材质在 30 秒内未就绪。"); }
+					UE_LOG(LogMoving_Castle, Error, TEXT("建筑预览捕获失败：%s，%s"), *Pair.Key, *Reason.ToString());
 					Entry.bFailed = true;
 				}
 				continue;

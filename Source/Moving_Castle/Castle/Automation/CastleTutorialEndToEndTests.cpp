@@ -220,7 +220,7 @@ public:
 			{
 				auto* Room = Board->GetBuildingAt(Archer);
 				const int32 Before = Backpack->GetItemCount();
-				if (!Room || !Controller->OpenBuildingDemolishMenu(*Room, FVector2D(200, 200)))
+				if (!Room || !Controller->OpenBuildingDemolishMenu(*Room, Archer, FVector2D(200, 200)))
 				{
 					return Fail(TEXT("正式拆除菜单打开失败"));
 				}
@@ -311,7 +311,7 @@ public:
 				Test.TestEqual(TEXT("战后仍是原玩家路点"), Navigation->GetRequestedWaypoints(), OriginalWaypoints);
 				// 将回路中段的普通房换成农田，保持两个已保存的路点不动。
 				auto* Room = Board->GetBuildingAt(Farm);
-				if (!Room || !Controller->OpenBuildingDemolishMenu(*Room, FVector2D(200, 200))) { return Fail(TEXT("无法回收中段普通房")); }
+				if (!Room || !Controller->OpenBuildingDemolishMenu(*Room, Farm, FVector2D(200, 200))) { return Fail(TEXT("无法回收中段普通房")); }
 				Controller->ConfirmBuildingDemolish(*Controller->GetBuildingDemolishMenu());
 				++Action;
 			}

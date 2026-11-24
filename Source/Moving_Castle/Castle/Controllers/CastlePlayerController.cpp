@@ -469,10 +469,11 @@ void ACastlePlayerController::HandleWorldPointerPressed(FKey Key)
 		if (TryGetAimScreenPosition(X, Y))
 		{
 			const FVector2D ScreenPosition(X, Y);
-			if (auto* Building = FindDemolishTargetAt(ScreenPosition))
+			FIntVector TargetCell;
+			if (auto* Building = FindDemolishTargetAt(ScreenPosition, TargetCell))
 			{
 				// 已命中场上建筑时，仅尝试打开它的菜单。挂载失败不改为撤回微缩建筑。
-				OpenBuildingDemolishMenu(*Building, ScreenPosition);
+				OpenBuildingDemolishMenu(*Building, TargetCell, ScreenPosition);
 				return;
 			}
 		}

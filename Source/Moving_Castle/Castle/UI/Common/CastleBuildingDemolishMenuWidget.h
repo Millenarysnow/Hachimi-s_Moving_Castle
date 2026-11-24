@@ -19,8 +19,10 @@ class MOVING_CASTLE_API UCastleBuildingDemolishMenuWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
-	bool ConfigureTarget(ACastleBuildingBase& Building, const ACastleBoard& Board, FVector2D ScreenPosition, FVector2D LogicalOffset);
+	bool ConfigureTarget(ACastleBuildingBase& Building, const FIntVector& InTargetCell, const ACastleBoard& Board,
+		FVector2D ScreenPosition, FVector2D LogicalOffset);
 	ACastleBuildingBase* GetTargetBuilding() const { return TargetBuilding.Get(); }
+	const FIntVector& GetTargetCell() const { return TargetCell; }
 	const UCastleShopCardWidget* GetBuildingCard() const { return BuildingCard; }
 	static FVector2D ClampPopupPosition(FVector2D Point, FVector2D PanelSize, FVector2D ViewportSize);
 
@@ -38,6 +40,8 @@ private:
 	UPROPERTY(meta=(BindWidget)) TObjectPtr<UButton> DemolishButton;
 	UPROPERTY(Transient) TObjectPtr<UCastleShopCardWidget> BuildingCard;
 	TWeakObjectPtr<ACastleBuildingBase> TargetBuilding;
+	/** 同一 Actor 可能横跨多格，提交必须保留点按时选择的那个占格。 */
+	FIntVector TargetCell = FIntVector::ZeroValue;
 	/** 原始点击保留为像素坐标，视口改变尺寸或 DPI 后重新计算面板位置。 */
 	FVector2D ClickPixel = FVector2D::ZeroVector;
 	/** 经典模式为准星留出空隙，设计模式直接使用点击点。 */

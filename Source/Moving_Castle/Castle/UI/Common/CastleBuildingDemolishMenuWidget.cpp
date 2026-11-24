@@ -3,6 +3,7 @@
 #include "CastleBuildingDemolishMenuWidget.h"
 
 #include "Blueprint/WidgetLayoutLibrary.h"
+#include "CastleBoard.h"
 #include "CastleBuildingBase.h"
 #include "CastlePlayerController.h"
 #include "Castle/UI/Cards/CastleShopCardWidget.h"
@@ -12,8 +13,8 @@
 #include "Components/SizeBox.h"
 #include "Moving_Castle.h"
 
-bool UCastleBuildingDemolishMenuWidget::ConfigureTarget(ACastleBuildingBase& Building, const ACastleBoard& Board,
-	FVector2D ScreenPosition, FVector2D LogicalOffset)
+bool UCastleBuildingDemolishMenuWidget::ConfigureTarget(ACastleBuildingBase& Building, const FIntVector& InTargetCell,
+	const ACastleBoard& Board, FVector2D ScreenPosition, FVector2D LogicalOffset)
 {
 	// 槽位由 WBP 定义，检查完整之后才创建并订阅可提交拆除的控件。
 	const TPair<const TCHAR*, UWidget*> Required[] = {{TEXT("PopupPanel"), PopupPanel.Get()},
@@ -32,14 +33,24 @@ bool UCastleBuildingDemolishMenuWidget::ConfigureTarget(ACastleBuildingBase& Bui
 			*GetClass()->GetPathName());
 		return false;
 	}
+	if (Board.GetBuildingAt(InTargetCell) != &Building)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s 收到建筑 %s 不占据的拆除格 %s。"),
+			*GetClass()->GetPathName(), *Building.GetPathName(), *InTargetCell.ToString());
+		return false;
+	}
+	// 卡片展示实际退回背包的一级建筑，保留落定建筑的定义与色号。
+	FCastleBuildingDescriptor Recovered = Building.GetBuildingDescriptor();
+	Recovered.Level = 1;
 	BuildingCard = CreateWidget<UCastleShopCardWidget>(GetOwningPlayer());
-	if (!BuildingCard || !BuildingCard->ConfigureStandalone(Building.GetBuildingDescriptor(), &Board))
+	if (!BuildingCard || !BuildingCard->ConfigureStandalone(Recovered, &Board))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s 无法为建筑 %s 配置独立卡牌。"), *GetClass()->GetPathName(), *Building.GetPathName());
 		return false;
 	}
 	BuildingCardSlot->SetContent(BuildingCard);
 	TargetBuilding = &Building;
+	TargetCell = InTargetCell;
 	ClickPixel = ScreenPosition;
 	AnchorOffset = LogicalOffset;
 	DemolishButton->OnClicked.AddUniqueDynamic(this, &UCastleBuildingDemolishMenuWidget::HandleDemolishClicked);

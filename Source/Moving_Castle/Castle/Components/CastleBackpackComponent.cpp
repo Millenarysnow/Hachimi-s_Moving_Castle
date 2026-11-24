@@ -47,6 +47,11 @@ bool UCastleBackpackComponent::TryAddItem(const FCastleBuildingDescriptor& Descr
 	OutIndex = INDEX_NONE;
 	OutFailureReason = FText::GetEmpty();
 
+	if (!ValidateDescriptorForStorage(Descriptor, OutFailureReason))
+	{
+		return false;
+	}
+
 	if (Capacity < 1)
 	{
 		OutFailureReason = FText::FromString(TEXT("背包容量必须大于 0。"));
@@ -58,11 +63,6 @@ bool UCastleBackpackComponent::TryAddItem(const FCastleBuildingDescriptor& Descr
 		OutFailureReason = FText::FromString(TEXT("背包已满，无法加入建筑卡牌。"));
 		UE_LOG(LogMoving_Castle, Warning, TEXT("背包 %s 建筑栏已满，拒绝通过普通入口加入资产 %s。"),
 			*GetPathName(), *GetPathNameSafe(Descriptor.Definition.Get()));
-		return false;
-	}
-
-	if (!ValidateDescriptorForStorage(Descriptor, OutFailureReason))
-	{
 		return false;
 	}
 
@@ -100,8 +100,11 @@ bool UCastleBackpackComponent::TryAddItemsAllowOverflow(const TConstArrayView<FC
 	{
 		if (!ValidateDescriptorForStorage(Descriptor, OutFailureReason))
 		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("背包 %s 拒绝整批建筑卡牌：资产 %s，%s"),
-				*GetPathName(), *GetPathNameSafe(Descriptor.Definition.Get()), *OutFailureReason.ToString());
+			if (Descriptor.Level == 1)
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("背包 %s 拒绝整批建筑卡牌：资产 %s，%s"),
+					*GetPathName(), *GetPathNameSafe(Descriptor.Definition.Get()), *OutFailureReason.ToString());
+			}
 			return false;
 		}
 	}
@@ -130,6 +133,11 @@ bool UCastleBackpackComponent::TryInsertItemAt(int32 Index, const FCastleBuildin
 {
 	OutFailureReason = FText::GetEmpty();
 
+	if (!ValidateDescriptorForStorage(Descriptor, OutFailureReason))
+	{
+		return false;
+	}
+
 	if (Capacity < 1)
 	{
 		OutFailureReason = FText::FromString(TEXT("背包容量必须大于 0。"));
@@ -148,11 +156,6 @@ bool UCastleBackpackComponent::TryInsertItemAt(int32 Index, const FCastleBuildin
 		return false;
 	}
 
-	if (!ValidateDescriptorForStorage(Descriptor, OutFailureReason))
-	{
-		return false;
-	}
-
 	Items.Insert(Descriptor, Index);
 	return true;
 }
@@ -160,6 +163,14 @@ bool UCastleBackpackComponent::TryInsertItemAt(int32 Index, const FCastleBuildin
 bool UCastleBackpackComponent::TryAddBuilding(UCastleBuildingDefinition* Definition, int32 Level, ECastleTileColor Color, int32 Number, int32& OutIndex, FText& OutFailureReason)
 {
 	OutIndex = INDEX_NONE;
+	if (Level != 1)
+	{
+		// 在定义资产创建描述前拒绝等级，连超出资产等级表的值也留下同一错误。
+		FCastleBuildingDescriptor Rejected;
+		Rejected.Definition = Definition;
+		Rejected.Level = Level;
+		return ValidateDescriptorForStorage(Rejected, OutFailureReason);
+	}
 	if (!IsValid(Definition))
 	{
 		OutFailureReason = FText::FromString(TEXT("没有指定要加入背包的建筑 Data Asset。"));
@@ -251,6 +262,13 @@ bool UCastleBackpackComponent::TrySetCapacity(int32 NewCapacity, FText& OutFailu
 
 bool UCastleBackpackComponent::ValidateDescriptorForStorage(const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason) const
 {
-	// 与放置、预览和定价共用描述校验，不按类名重新推断建筑身份。
+	// 主栏、临时栏和指定索引写入共用等级约束，防止固定朝向的多格卡进入建造栏。
+	if (Descriptor.Level != 1)
+	{
+		OutFailureReason = INVTEXT("建筑栏仅允许一级单格建筑卡。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("背包 %s 拒绝存入资产 %s（Lv%d）：%s"),
+			*GetPathName(), *GetPathNameSafe(Descriptor.Definition.Get()), Descriptor.Level, *OutFailureReason.ToString());
+		return false;
+	}
 	return Descriptor.Validate(OutFailureReason);
 }

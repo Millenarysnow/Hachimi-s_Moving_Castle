@@ -1010,6 +1010,13 @@ ACastleBuildingBase* ACastleBoard::PlaceBuildingFromBackpackInternal(const FIntV
 		OutFailureReason = FText::FromString(TEXT("指定的背包槽位不存在。"));
 		return nullptr;
 	}
+	if (Descriptor.Level != 1)
+	{
+		OutFailureReason = INVTEXT("只能从建筑栏放置一级单格建筑卡。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 拒绝从背包放置资产 %s（Lv%d）：%s"),
+			*GetPathName(), *GetPathNameSafe(Descriptor.Definition.Get()), Descriptor.Level, *OutFailureReason.ToString());
+		return nullptr;
+	}
 
 	// 先做完整校验，再取出卡牌；这样失败时背包不会发生任何变化。
 	if (!CanPlaceBuildingInternal(Coordinate, Descriptor, CursorTarget, OutFailureReason))
@@ -1067,43 +1074,6 @@ bool ACastleBoard::RemoveBuilding(ACastleBuildingBase* Building, FText& OutFailu
 	}
 	OnLayoutCommitted.Broadcast(this, RemovalOrigin);
 	return true;
-}
-
-bool ACastleBoard::RemoveBuildingToBackpack(ACastleBuildingBase* Building, UCastleBackpackComponent* Backpack, FText& OutFailureReason)
-{
-	OutFailureReason = FText::GetEmpty();
-
-	if (Building == nullptr || Backpack == nullptr)
-	{
-		OutFailureReason = FText::FromString(TEXT("移除建筑并放回背包时缺少建筑或背包。"));
-		return false;
-	}
-
-	const FCastleBuildingDescriptor Descriptor = Building->GetBuildingDescriptor();
-	int32 AddedIndex = INDEX_NONE;
-	FText AddReason;
-	if (!Backpack->TryAddItem(Descriptor, AddedIndex, AddReason))
-	{
-		OutFailureReason = AddReason;
-		return false;
-	}
-
-	FText RemoveReason;
-	if (RemoveBuilding(Building, RemoveReason))
-	{
-		return true;
-	}
-
-	// 棋盘移除失败时回滚刚加入的卡牌，避免出现 Actor 和背包状态不一致。
-	FCastleBuildingDescriptor RolledBackDescriptor;
-	FText RollbackReason;
-	if (!Backpack->TryRemoveItemAt(AddedIndex, RolledBackDescriptor, RollbackReason))
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("移除建筑回滚背包失败：%s"), *RollbackReason.ToString());
-	}
-
-	OutFailureReason = RemoveReason;
-	return false;
 }
 
 int32 ACastleBoard::GetPlacedBuildingCount() const
@@ -1813,6 +1783,21 @@ ACastleBuildingBase* ACastleBoard::FindMergePartner(ACastleBuildingBase* Buildin
 	return nullptr;
 }
 
+TConstArrayView<FIntVector> ACastleBoard::GetMergedShapeDimensions(const int32 ResultLevel)
+{
+	// 数组顺序也是拆除重组的优先级。正常合成只检查形状是否属于对应等级。
+	static const FIntVector Level2[] = {{2, 1, 1}, {1, 2, 1}, {1, 1, 2}};
+	static const FIntVector Level3[] = {{2, 2, 1}, {2, 1, 2}, {1, 2, 2}};
+	static const FIntVector Level4[] = {{2, 2, 2}};
+	switch (ResultLevel)
+	{
+	case 2: return MakeArrayView(Level2);
+	case 3: return MakeArrayView(Level3);
+	case 4: return MakeArrayView(Level4);
+	default: return {};
+	}
+}
+
 bool ACastleBoard::BuildMergedFootprint(const ACastleBuildingBase* First, const ACastleBuildingBase* Second, TArray<FIntVector>& OutFootprint) const
 {
 	OutFootprint.Reset();
@@ -1869,31 +1854,7 @@ bool ACastleBoard::BuildMergedFootprint(const ACastleBuildingBase* First, const 
 	}
 
 	const FIntVector Dimensions = Maximum - Minimum + FIntVector(1, 1, 1);
-	bool bValidShape = false;
-	switch (CurrentLevel)
-	{
-	case 1:
-		// 二级允许沿 X、Y 或 Z 紧贴的两格；三个轴只允许其中一个跨度为 2，斜接不能升级。
-		bValidShape = Dimensions == FIntVector(2, 1, 1)
-			|| Dimensions == FIntVector(1, 2, 1)
-			|| Dimensions == FIntVector(1, 1, 2);
-		break;
-	case 2:
-		// 三级必须填满一个 2x2 方形，既支持水平 XY，也支持垂直 XZ/YZ；四格直线仍非法。
-		// 只校验联合形状，不限制两座二级自身的方向，水平对和垂直对都能拼成同一个方形。
-		bValidShape = Dimensions == FIntVector(2, 2, 1)
-			|| Dimensions == FIntVector(2, 1, 2)
-			|| Dimensions == FIntVector(1, 2, 2);
-		break;
-	case 3:
-		// 三级合成四级固定为 2x2x2 立方体。
-		bValidShape = Dimensions == FIntVector(2, 2, 2);
-		break;
-	default:
-		break;
-	}
-
-	if (!bValidShape)
+	if (!GetMergedShapeDimensions(CurrentLevel + 1).Contains(Dimensions))
 	{
 		return false;
 	}

@@ -80,7 +80,7 @@ bool ACastlePlayerController::IsDemolishableBuilding(const ACastleBuildingBase* 
 		&& ACastleBoard::FindBoardForBuilding(Building) == ActiveBoard;
 }
 
-ACastleBuildingBase* ACastlePlayerController::FindDemolishTargetAt(FVector2D ScreenPosition) const
+ACastleBuildingBase* ACastlePlayerController::FindDemolishTargetAt(FVector2D ScreenPosition, FIntVector& OutCell) const
 {
 	FText Reason;
 	if (!CanUseBuildingDemolishMenu(Reason)) { return nullptr; }
@@ -91,14 +91,22 @@ ACastleBuildingBase* ACastlePlayerController::FindDemolishTargetAt(FVector2D Scr
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(CastleBuildingDemolishClick), true, GetPawn());
 	GetWorld()->LineTraceSingleByChannel(Hit, Origin, Origin + Direction * GridCursorTraceDistance, ECC_Visibility, Params);
 	auto* Building = Cast<ACastleBuildingBase>(Hit.GetActor());
-	return IsDemolishableBuilding(Building) ? Building : nullptr;
+	return IsDemolishableBuilding(Building) && ActiveBoard->TryResolveBuildingCell(*Building, Hit.ImpactPoint, OutCell)
+		? Building : nullptr;
 }
 
-bool ACastlePlayerController::OpenBuildingDemolishMenu(ACastleBuildingBase& Building, FVector2D ScreenPosition)
+bool ACastlePlayerController::OpenBuildingDemolishMenu(ACastleBuildingBase& Building, const FIntVector& TargetCell,
+	FVector2D ScreenPosition)
 {
+	if (!IsDemolishableBuilding(&Building) || ActiveBoard->GetBuildingAt(TargetCell) != &Building)
+	{
+		UE_LOG(LogMoving_Castle, Warning, TEXT("控制器 %s 不能打开建筑 %s 的格 %s 的拆除菜单：目标已失效。"),
+			*GetPathName(), *Building.GetPathName(), *TargetCell.ToString());
+		return false;
+	}
 	auto* Menu = BuildingDemolishMenuClass ? CreateWidget<UCastleBuildingDemolishMenuWidget>(this, BuildingDemolishMenuClass) : nullptr;
 	const FVector2D LogicalOffset = ControlMode == ECastleControlMode::Classic ? FVector2D(12.0, 12.0) : FVector2D::ZeroVector;
-	if (!Menu || !Menu->ConfigureTarget(Building, *ActiveBoard, ScreenPosition, LogicalOffset) || !Menu->AddToPlayerScreen(35))
+	if (!Menu || !Menu->ConfigureTarget(Building, TargetCell, *ActiveBoard, ScreenPosition, LogicalOffset) || !Menu->AddToPlayerScreen(35))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s 无法加载、绑定或挂载拆除资产 %s。"), *GetPathName(), DemolishMenuPath);
 		return false;
@@ -120,9 +128,10 @@ void ACastlePlayerController::HandleDemolishOutsideClick(FKey Key, FVector2D Scr
 	// 菜单期间两种模式都显示真实指针。经典准星仍保持为正常世界交互的瞄准源。
 	if (Key == GetDemolishKey())
 	{
-		if (auto* Building = FindDemolishTargetAt(ScreenPosition))
+		FIntVector TargetCell;
+		if (auto* Building = FindDemolishTargetAt(ScreenPosition, TargetCell))
 		{
-			OpenBuildingDemolishMenu(*Building, ScreenPosition);
+			OpenBuildingDemolishMenu(*Building, TargetCell, ScreenPosition);
 			return;
 		}
 	}
@@ -134,21 +143,25 @@ void ACastlePlayerController::ConfirmBuildingDemolish(const UCastleBuildingDemol
 	// 与当前面板核对，防止已替换面板的回调对另一个建筑提交事务。
 	if (BuildingDemolishMenu.Get() != &Menu) { return; }
 	auto* Building = Menu.GetTargetBuilding();
+	const FIntVector TargetCell = Menu.GetTargetCell();
 	FText Reason;
-	if (CanUseBuildingDemolishMenu(Reason))
+	if (!IsDemolishableBuilding(Building) || ActiveBoard->GetBuildingAt(TargetCell) != Building)
 	{
-		if (IsDemolishableBuilding(Building))
+		// 建筑可能已被合并替换。旧菜单不再允许提交它先前绑定的格子。
+		Reason = INVTEXT("此建筑已失效或不再占据待拆除的格子。");
+		CloseBuildingDemolishMenu();
+	}
+	else if (CanUseBuildingDemolishMenu(Reason))
+	{
+		FCastleBuildingDescriptor Descriptor = Building->GetBuildingDescriptor();
+		Descriptor.Level = 1;
+		// 棋盘原子提交目标格与实际返还的一张卡，满栏等失败时保留可重试的菜单。
+		if (ActiveBoard->DemolishBuildingCellToBackpack(Building, TargetCell, ActiveBoard->PrototypeBackpack, Reason))
 		{
-			const FCastleBuildingDescriptor Descriptor = Building->GetBuildingDescriptor();
-			// 原子接口负责背包容量、对应等级的单张卡与棋盘移除。一旦失败，面板保持原目标。
-			if (ActiveBoard->RemoveBuildingToBackpack(Building, ActiveBoard->PrototypeBackpack, Reason))
-			{
-				CloseBuildingDemolishMenu();
-				OnBuildingDemolishedToBackpack.Broadcast(Descriptor);
-				return;
-			}
+			CloseBuildingDemolishMenu();
+			OnBuildingDemolishedToBackpack.Broadcast(Descriptor);
+			return;
 		}
-		else { Reason = INVTEXT("此建筑已失效或未完成放置，无法拆回建筑栏。"); }
 	}
 	UE_LOG(LogMoving_Castle, Warning, TEXT("建筑 %s 拆除回收被拒绝：%s"), *GetPathNameSafe(Building), *Reason.ToString());
 	ShowDirectorMessage(Reason);
