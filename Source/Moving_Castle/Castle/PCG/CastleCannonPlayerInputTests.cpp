@@ -44,7 +44,8 @@ namespace CastleCannonPlayerInputTests
 			if (Stage==2 || Stage==5)
 			{
 				if (!Test->TestEqual(TEXT("数字键选中真实背包首槽"),Controller->GetSelectedBackpackIndex(),0)) { Cleanup(); return true; }
-				Press(EKeys::LeftMouseButton); ++Stage; return false;
+				// 炮塔放置和后续合成均走玩家当前预设的世界主交互键。
+				Press(Controller->GetPrimaryPlaceInteractKey()); ++Stage; return false;
 			}
 			if (Stage==3 || Stage==6)
 			{
@@ -65,13 +66,13 @@ namespace CastleCannonPlayerInputTests
 			if (Stage==11)
 			{
 				if (!Test->TestTrue(TEXT("P键实际进入巡逻草稿"),Route->IsEditing())) { Cleanup(); return true; }
-				Press(EKeys::LeftMouseButton); Stage=12; return false;
+				Press(Controller->GetPrimaryPlaceInteractKey()); Stage=12; return false;
 			}
 			if (Stage==12) { AimBuilding(Neighbor,Scenario==2); Stage=13; return false; }
 			if (Stage==13)
 			{
 				if (!Capture(Neighbor,SecondHit,SecondExpected,SecondProjected)) { Cleanup(); return true; }
-				Press(EKeys::LeftMouseButton); Stage=14; return false;
+				Press(Controller->GetPrimaryPlaceInteractKey()); Stage=14; return false;
 			}
 			if (Stage==14)
 			{

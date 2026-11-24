@@ -17,6 +17,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "InputKeyEventArgs.h"
+#include "Castle/Controllers/CastlePlayerController.h"
 #include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
 #include "Materials/Material.h"
@@ -51,7 +52,7 @@ namespace CastlePatrolDemoTests
 				Drawing = World->GetSubsystem<UCastlePatrolPathVisualizationSubsystem>();
 				if (!Test->TestNotNull(TEXT("游戏世界有巡逻线可视化子系统"), Drawing)) { return true; }
 				Units = World->GetSubsystem<UCastleMassUnitSubsystem>();
-				Controller = World->GetFirstPlayerController();
+				Controller = Cast<ACastlePlayerController>(World->GetFirstPlayerController());
 			}
 			FCastleMassUnitSnapshot Snapshot;
 			switch (Stage)
@@ -156,7 +157,8 @@ namespace CastlePatrolDemoTests
 				Stage = 7;
 				return false;
 			case 7:
-				Press(EKeys::LeftMouseButton);
+				// 路径编辑和棋盘放置共享当前预设的主交互键。
+				Press(Controller->GetPrimaryPlaceInteractKey());
 				Stage = 8;
 				return false;
 			case 8:
@@ -422,7 +424,7 @@ namespace CastlePatrolDemoTests
 		ACastlePatrolRoute* Route = nullptr;
 		ACastleMassSpawner* Spawner = nullptr;
 		ACastleNavigationDemo* Demo = nullptr;
-		APlayerController* Controller = nullptr;
+		ACastlePlayerController* Controller = nullptr;
 		UCastleNavigationSubsystem* Navigation = nullptr;
 		UCastleMassUnitSubsystem* Units = nullptr;
 		UCastlePatrolPathVisualizationSubsystem* Drawing = nullptr;
