@@ -18,6 +18,9 @@
 #include "HAL/IConsoleManager.h"
 #include "InputKeyEventArgs.h"
 #include "Misc/AutomationTest.h"
+#include "Castle/Dialogue/CastleDialogueSubsystem.h"
+#include "Castle/Dialogue/CastleDialogueScriptDataAsset.h"
+#include "Engine/GameInstance.h"
 #include "Misc/PackageName.h"
 #include "PlayInEditorDataTypes.h"
 #include "Settings/LevelEditorPlaySettings.h"
@@ -304,6 +307,12 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 			TestEqual(TEXT("导演进入正式空岛阶段"), Director->GetPhase(), ECastleDirectorPhase::SkyIsland);
 			TestTrue(TEXT("正式导演传送玩家"), Controller->GetPawn()->GetActorLocation().Equals(
 				Island->GetPlayerArrivalTransform().GetLocation(), 5.0));
+			// 通过正式节点入岛会接到首访台词，读完后才尝试原有 E 键交互。
+			auto* Dialogue = World->GetGameInstance()->GetSubsystem<UCastleDialogueSubsystem>();
+			const auto* Script = Dialogue->GetCurrentScript();
+			if (!TestNotNull(TEXT("节点首次进入 NPC 岛播放剧本"), Script)) { return true; }
+			for (int32 Index = 0; Index < Script->Lines.Num(); ++Index) { Dialogue->AdvanceDialogueForAutomation(); }
+			if (!TestFalse(TEXT("首访剧本结束后恢复交互"), Dialogue->IsDialoguePlaying())) { return true; }
 			VisitedIsland = Island;
 			PinballAimAt(*Controller, *Island->Console);
 			++Stage;
