@@ -34,6 +34,9 @@
 
 namespace
 {
+	// L05 随套件加载校验，正式棋盘只开放到 L04 的九层。
+	constexpr int32 MaxPlayableTowerLayers = 9;
+
 	/** 将局部空间法线转换成六面枚举，优先使用绝对值最大的轴。 */
 	ECastleGridFace GetGridFaceFromNormal(const FVector& LocalNormal)
 	{
@@ -138,12 +141,12 @@ void ACastleBoard::BeginPlay()
 		}
 		if (UsesProgressiveTowerLayers())
 		{
-			// 只接受交付套件覆盖的层数，正式 MainMap 仍由关卡配置限制在 9 层。
+			// 棋盘层数须对应正式可玩套件，最大层数同时受玩法上限和棋盘容量约束。
 			if (UCastleMainTowerBalloonComponent::FindTierIndex(InitialUnlockedLayers) == INDEX_NONE
 				|| UCastleMainTowerBalloonComponent::FindTierIndex(MaxTowerLayers) == INDEX_NONE
-				|| MaxTowerLayers < InitialUnlockedLayers || GridSize.Z < MaxTowerLayers)
+				|| MaxTowerLayers < InitialUnlockedLayers || MaxTowerLayers > MaxPlayableTowerLayers || GridSize.Z < MaxTowerLayers)
 			{
-				UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 的主塔层数配置无效：初始 %d，最大 %d，棋盘容量 %d；套件支持 3、5、7、9、11 层。"),
+				UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 的主塔层数配置无效：初始 %d，最大 %d，棋盘容量 %d；棋盘只开放 3、5、7、9 层。"),
 					*GetPathName(), InitialUnlockedLayers, MaxTowerLayers, GridSize.Z);
 				return;
 			}
@@ -402,9 +405,9 @@ bool ACastleBoard::ExpandMainTowerLayers(const int32 TargetLayerCount, FText& Ou
 	{
 		return Reject(TEXT("当前地图未启用扩层，或整塔表现、侧格未就绪"));
 	}
-	if (UCastleMainTowerBalloonComponent::FindTierIndex(TargetLayerCount) == INDEX_NONE)
+	if (TargetLayerCount > MaxPlayableTowerLayers || UCastleMainTowerBalloonComponent::FindTierIndex(TargetLayerCount) == INDEX_NONE)
 	{
-		return Reject(TEXT("主塔套件只支持 3、5、7、9 或 11 层"));
+		return Reject(TEXT("主塔棋盘只开放 3、5、7、9 层"));
 	}
 	if (TargetLayerCount <= CurrentUnlockedLayers || TargetLayerCount > MaxTowerLayers)
 	{

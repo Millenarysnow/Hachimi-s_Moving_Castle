@@ -101,7 +101,11 @@ bool UCastleMainTowerComponent::AttachBalloonPresentation(UCastleMainTowerBalloo
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
 	}
-	Presentation->UpdateHealth(CurrentHealth, MaxHealth);
+	if (!Presentation->UpdateHealth(CurrentHealth, MaxHealth))
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 的吊挂生命无效。"), *GetPathName()));
+		return false;
+	}
 	BalloonPresentation = Presentation;
 	return true;
 }

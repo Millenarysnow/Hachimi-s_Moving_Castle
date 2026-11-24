@@ -43,7 +43,8 @@ public:
 
 	/** 侧格成功追加后一次换上整塔网格和吊挂，用同一时刻的主塔生命刷新显隐。 */
 	void CommitPreparedTier(float CurrentHealth, float MaxHealth);
-	void UpdateHealth(float CurrentHealth, float MaxHealth);
+	/** 校验生命状态后刷新显隐，非法输入时保留上一帧的吊挂状态。 */
+	bool UpdateHealth(float CurrentHealth, float MaxHealth);
 
 private:
 	/** 类默认对象持有硬引用，使运行时未使用的预留等级及其材质也进入 Cook。 */

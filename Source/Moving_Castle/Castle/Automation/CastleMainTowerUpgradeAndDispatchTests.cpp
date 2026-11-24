@@ -3,6 +3,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Castle/PCG/CastlePCGSemanticTestRules.h"
+#include "Castle/Components/CastleMainTowerBalloonComponent.h"
 #include "Castle/Components/CastleMainTowerComponent.h"
 #include "Castle/Actors/CastleBoard.h"
 #include "Castle/Actors/CastleBuildingBase.h"
@@ -232,6 +233,8 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 	const FIntVector Center = Board->GetBoardCenterCoordinate();
 	auto* Health = Board->MainTowerActor->FindComponentByClass<UCastleMainTowerComponent>();
 	if (!TestNotNull(TEXT("主塔生命组件已登记"), Health)) { return false; }
+	auto* LiftPresentation = Board->MainTowerActor->FindComponentByClass<UCastleMainTowerBalloonComponent>();
+	if (!TestNotNull(TEXT("主塔吊挂组件已登记"), LiftPresentation)) { return false; }
 	USceneComponent* Crown = nullptr;
 	USceneComponent* Balloons = nullptr;
 	for (UActorComponent* Part : Board->MainTowerActor->GetComponents())
@@ -267,6 +270,24 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 	PlacedRooms.Add(OldRoomCell, OldRoom);
 	for (const int32 Layers : {3, 5, 7, 9})
 	{
+		if (Layers == 5)
+		{
+			// 用合法扩层请求触发侧格失败，验证待发布的 L02 吊挂撤回且开局塔身保留。
+			const auto* ExistingSide = Board->FindTowerSideCell(Center, ECastleGridFace::NegativeY);
+			if (!TestNotNull(TEXT("用于模拟追加失败的原侧格"), ExistingSide)) { return false; }
+			const auto* Body = Cast<UStaticMeshComponent>(FindObjectFast<UObject>(Board->MainTowerActor, TEXT("TowerBodyMesh")));
+			if (!TestNotNull(TEXT("扩层失败前的整塔组件"), Body)) { return false; }
+			const UStaticMesh* MeshBeforeFailure = Body->GetStaticMesh();
+			const int32 PartCountBeforeFailure = TInlineComponentArray<UStaticMeshComponent*>(Board->MainTowerActor.Get()).Num();
+			ExistingSide->Panel->UnregisterComponent();
+			AddExpectedError(TEXT("的面板或数字未注册"), EAutomationExpectedErrorFlags::Contains, 1);
+			TestFalse(TEXT("侧格失效时拒绝合法的五层扩层"), Board->ExpandMainTowerLayers(5, Reason));
+			ExistingSide->Panel->RegisterComponent();
+			TestEqual(TEXT("扩层失败保留三层"), Board->GetUnlockedLayerCount(), 3);
+			TestTrue(TEXT("扩层失败保留 L01 塔身"), Body->GetStaticMesh() == MeshBeforeFailure);
+			TestEqual(TEXT("扩层失败清理待发布吊挂"),
+				TInlineComponentArray<UStaticMeshComponent*>(Board->MainTowerActor.Get()).Num(), PartCountBeforeFailure);
+		}
 		if (Layers != 3 && !TestTrue(TEXT("扩层提交成功"), Board->ExpandMainTowerLayers(Layers, Reason))) { return false; }
 		TestEqual(TEXT("棋盘发布实际层数"), Board->GetUnlockedLayerCount(), Layers);
 		for (const auto& Room : PlacedRooms)
@@ -380,6 +401,13 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 		CheckVisualAndHealth(TEXT("残血"), 1, 1);
 		TestTrue(TEXT("扣至归零"), Health->ApplyDamage(1.0f));
 		CheckVisualAndHealth(TEXT("归零"), 0, 0);
+		if (Layers == 9)
+		{
+			// 已归零的吊挂保持隐藏，验证越界生命报错且拒绝刷新。
+			AddExpectedError(TEXT("的吊挂生命无效"), EAutomationExpectedErrorFlags::Contains, 1);
+			TestFalse(TEXT("吊挂拒绝超出上限的生命"), LiftPresentation->UpdateHealth(Health->MaxHealth + 1.0f, Health->MaxHealth));
+			CheckVisualAndHealth(TEXT("拒绝越界生命后"), 0, 0);
+		}
 		for (const FCastleGridCursorTarget& Target : HighestTargets)
 		{
 			const auto* Cell = Board->FindTowerSideCell(Target.Cell, Target.Face);
@@ -400,9 +428,16 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 		}
 	}
 	AddExpectedError(TEXT("目标层数必须严格大于"), EAutomationExpectedErrorFlags::Contains, 1);
-	AddExpectedError(TEXT("主塔套件只支持"), EAutomationExpectedErrorFlags::Contains, 1);
+	AddExpectedError(TEXT("主塔棋盘只开放 3、5、7、9 层"), EAutomationExpectedErrorFlags::Contains, 2);
 	TestFalse(TEXT("棋盘拒绝缩层"), Board->ExpandMainTowerLayers(7, Reason));
 	TestFalse(TEXT("棋盘拒绝第十层"), Board->ExpandMainTowerLayers(10, Reason));
+	// 即使关卡配置被改为 11，也不能把预留资产开放为可玩层数。
+	Board->MaxTowerLayers = 11;
+	Board->GridSize.Z = 11;
+	TestFalse(TEXT("棋盘拒绝预留的第十一层"), Board->ExpandMainTowerLayers(11, Reason));
+	TestEqual(TEXT("拒绝十一层后保留九层"), Board->GetUnlockedLayerCount(), 9);
+	Board->MaxTowerLayers = 9;
+	Board->GridSize.Z = 9;
 	// 使用正式建造入口配置门外房间，验证正负 X 语义与真实棋盘格心一致。
 	UCastleTowerDispatchDoors* Doors = NewObject<UCastleTowerDispatchDoors>(Board->MainTowerActor);
 	Board->MainTowerActor->AddInstanceComponent(Doors);
@@ -451,23 +486,6 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 		World->LineTraceSingleByChannel(FloorHit, FVector(TowerCenter.X, TowerCenter.Y, FloorZ + 10.0),
 			FVector(TowerCenter.X, TowerCenter.Y, FloorZ - 10.0), ECC_Pawn));
 
-	// 夹具显式允许预留的 11 层。让原侧格暂时失去注册，验证准备 L05 后失败能够撤回整套新组件。
-	Board->MaxTowerLayers = 11;
-	Board->GridSize.Z = 11;
-	const auto* ExistingSide = Board->FindTowerSideCell(Center, ECastleGridFace::NegativeY);
-	if (!TestNotNull(TEXT("用于模拟追加失败的原侧格"), ExistingSide)) { return false; }
-	auto* BodyBeforeFailure = Cast<UStaticMeshComponent>(FindObjectFast<UObject>(Board->MainTowerActor, TEXT("TowerBodyMesh")));
-	if (!TestNotNull(TEXT("扩层失败前保留整塔组件"), BodyBeforeFailure)) { return false; }
-	UStaticMesh* MeshBeforeFailure = BodyBeforeFailure->GetStaticMesh();
-	const int32 PartCountBeforeFailure = TInlineComponentArray<UStaticMeshComponent*>(Board->MainTowerActor.Get()).Num();
-	ExistingSide->Panel->UnregisterComponent();
-	AddExpectedError(TEXT("的面板或数字未注册"), EAutomationExpectedErrorFlags::Contains, 1);
-	TestFalse(TEXT("预留的 11 层在侧格无效时拒绝提交"), Board->ExpandMainTowerLayers(11, Reason));
-	ExistingSide->Panel->RegisterComponent();
-	TestEqual(TEXT("扩层失败保留九层"), Board->GetUnlockedLayerCount(), 9);
-	TestTrue(TEXT("扩层失败保留 L04 塔身模型"), BodyBeforeFailure->GetStaticMesh() == MeshBeforeFailure);
-	TestEqual(TEXT("扩层失败移除待提交的吊挂组件"),
-		TInlineComponentArray<UStaticMeshComponent*>(Board->MainTowerActor.Get()).Num(), PartCountBeforeFailure);
 	return true;
 }
 

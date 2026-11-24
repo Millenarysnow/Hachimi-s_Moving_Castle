@@ -284,13 +284,20 @@ void UCastleMainTowerBalloonComponent::CommitPreparedTier(const float CurrentHea
 	UpdateHealth(CurrentHealth, MaxHealth);
 }
 
-void UCastleMainTowerBalloonComponent::UpdateHealth(const float CurrentHealth, const float MaxHealth)
+bool UCastleMainTowerBalloonComponent::UpdateHealth(const float CurrentHealth, const float MaxHealth)
 {
+	// 生命来源须提供有效区间内的原始值。报错前不改动存活颗数或组件显隐。
+	if (!FMath::IsFinite(CurrentHealth) || !FMath::IsFinite(MaxHealth) || MaxHealth <= 0.0f
+		|| CurrentHealth < 0.0f || CurrentHealth > MaxHealth)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("主塔 %s 的吊挂生命无效：当前 %g，最大 %g。"),
+			*GetPathNameSafe(GetOwner()), CurrentHealth, MaxHealth);
+		return false;
+	}
 	const int32 RigCount = LiveParts.Num();
-	check(RigCount > 0 && FMath::IsFinite(MaxHealth) && MaxHealth > 0.0f);
-	// 保持清单顺序（中央挂点居首）；残血显示一颗，生命恰好归零时才彻底隐藏。
-	const int32 Count = CurrentHealth <= 0.0f ? 0
-		: FMath::Clamp(FMath::CeilToInt(static_cast<double>(CurrentHealth) * RigCount / MaxHealth), 1, RigCount);
+	check(RigCount > 0);
+	// 有效生命比例乘以套件颗数再向上取整，结果一定落在 [0, RigCount]。
+	const int32 Count = FMath::CeilToInt(static_cast<double>(CurrentHealth) * RigCount / MaxHealth);
 	for (int32 Index = FMath::Min(Count, LiveCount); Index < FMath::Max(Count, LiveCount); ++Index)
 	{
 		const bool bVisible = Index < Count;
@@ -303,4 +310,5 @@ void UCastleMainTowerBalloonComponent::UpdateHealth(const float CurrentHealth, c
 			*GetPathNameSafe(GetOwner()), LiveCount - Count, Count);
 	}
 	LiveCount = Count;
+	return true;
 }
