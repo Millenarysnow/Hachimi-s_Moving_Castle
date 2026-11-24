@@ -86,9 +86,8 @@ void UCastleMainTowerComponent::NotifyHealthChanged(const float PreviousHealth, 
 	// 地面棋盘可继续使用仅有生命组件的主塔，已接入的塔顶先刷新再通知 HUD。
 	if (BalloonPresentation)
 	{
-		int32 CurrentBalloons, Capacity;
-		GetBalloonCounts(CurrentBalloons, Capacity);
-		BalloonPresentation->SetLiveCount(CurrentBalloons);
+		// 吊挂套件用原始生命比例采样。逻辑气球已向上取整，不能作为视觉颗数的输入。
+		BalloonPresentation->UpdateHealth(CurrentHealth, MaxHealth);
 	}
 	OnHealthChanged.Broadcast(PreviousHealth, CurrentHealth, Damage);
 }
@@ -102,10 +101,11 @@ bool UCastleMainTowerComponent::AttachBalloonPresentation(UCastleMainTowerBalloo
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
 	}
-	if (!Presentation->SetCapacity(MaxBalloons, OutReason)) { return false; }
-	int32 CurrentBalloons, Capacity;
-	GetBalloonCounts(CurrentBalloons, Capacity);
-	Presentation->SetLiveCount(CurrentBalloons);
+	if (!Presentation->UpdateHealth(CurrentHealth, MaxHealth))
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 的吊挂生命无效。"), *GetPathName()));
+		return false;
+	}
 	BalloonPresentation = Presentation;
 	return true;
 }
@@ -123,8 +123,8 @@ bool UCastleMainTowerComponent::PrepareTowerBalloonTier(const int32 NewMaxBalloo
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
 	}
-	// 表现组件先准备整批新容量，失败时不修改对外可见的生命或等级。
-	return !BalloonPresentation || BalloonPresentation->SetCapacity(NewMaxBalloons, OutReason);
+	// 逻辑容量单独校验。实际套件等级由棋盘的开放层数选择和提交。
+	return true;
 }
 
 bool UCastleMainTowerComponent::SetTowerBalloonTier(const int32 NewMaxBalloons, const float NewBaseMaxHealth,
@@ -148,7 +148,7 @@ void UCastleMainTowerComponent::CommitPreparedBalloonTier(
 
 void UCastleMainTowerComponent::DiscardPreparedBalloonTier()
 {
-	if (BalloonPresentation) { BalloonPresentation->DiscardCapacityAbove(MaxBalloons); }
+	if (BalloonPresentation) { BalloonPresentation->DiscardPreparedTier(); }
 }
 
 bool UCastleMainTowerComponent::SetMaxHealthMultiplier(const float Multiplier, const bool bScaleCurrentHealth)

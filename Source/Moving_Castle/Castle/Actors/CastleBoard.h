@@ -22,6 +22,7 @@ class UCastleBackpackComponent;
 class UCastleCombatDataAsset;
 class UCastleGroundGenerator;
 class UCastleMainTowerComponent;
+class UCastleMainTowerBalloonComponent;
 class UCastleTowerSideGridComponent;
 class UCastleTowerDispatchConfigDataAsset;
 class UStaticMeshComponent;
@@ -149,7 +150,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
 	int32 GetUnlockedLayerCount() const;
 
-	/** 完整追加新塔身和侧格之后才发布新的建筑高度上限。 */
+	/** 整塔和吊挂套件切换、侧格追加完成后才发布新的建筑高度上限。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|棋盘")
 	bool ExpandMainTowerLayers(int32 TargetLayerCount, FText& OutReason);
 
@@ -473,15 +474,8 @@ protected:
 	/** 只有启用逐级扩层的塔侧关卡使用此运行时状态。 */
 	int32 CurrentUnlockedLayers = 0;
 	bool UsesProgressiveTowerLayers() const;
-	/** 塔身网格由主塔持有。这里记录每段的原碰撞状态，揭开新层时恢复。 */
-	struct FTowerBodyPart
-	{
-		TWeakObjectPtr<UStaticMeshComponent> Mesh;
-		ECollisionEnabled::Type Collision = ECollisionEnabled::NoCollision;
-		bool bAffectsNavigation = false;
-	};
-	TArray<TArray<FTowerBodyPart>> TowerBodySections;
-	UPROPERTY(Transient) TObjectPtr<USceneComponent> TowerCrownAnchor;
+	/** 主塔持有表现组件；棋盘只在开局和侧格扩层事务中切换整套美术。 */
+	UPROPERTY(Transient) TObjectPtr<UCastleMainTowerBalloonComponent> TowerPresentation;
 	bool InitializeProgressiveTowerPresentation(AActor& Tower, UCastleMainTowerComponent& Health, FText& OutReason);
 
 	/** 塔侧模式的中心整列不可被房间占用，在预览和真正登记时共同校验。 */

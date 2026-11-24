@@ -71,9 +71,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|主塔")
 	bool ApplyHealing(float Amount);
 
-	/** 升级先验证数值并准备隐藏资源，棋盘扩层成功后才发布等级与生命。 */
+	/** 升级先验证逻辑容量与生命；棋盘扩层事务按层数准备对应的视觉套件。 */
 	bool PrepareTowerBalloonTier(int32 NewMaxBalloons, float NewBaseMaxHealth, bool bFullHeal, FText& OutReason);
-	/** 准备成功后提交同一组数值；气球组件此时已分配所需容量。 */
+	/** 棋盘扩层成功后提交数值，并向新套件同步真实生命比例。 */
 	void CommitPreparedBalloonTier(int32 NewMaxBalloons, float NewBaseMaxHealth, bool bFullHeal);
 	/** 棋盘扩层失败时撤下预建资源，现有数值与可见气球保持原状。 */
 	void DiscardPreparedBalloonTier();
@@ -99,7 +99,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|主塔")
 	void GetBalloonCounts(int32& OutCurrentBalloons, int32& OutMaxBalloons) const;
 
-	/** 棋盘完成塔顶锚点布置后接入占位气球表现。 */
+	/** 棋盘完成初始整塔和锚点布置后接入吊挂套件表现。 */
 	bool AttachBalloonPresentation(UCastleMainTowerBalloonComponent* Presentation, FText& OutReason);
 
 	/** 返回敌人应该追踪的世界空间目标点。 */

@@ -34,8 +34,8 @@
 
 namespace
 {
-	// 主塔原件每段的美术高度独立于棋盘逻辑层高；开局布置和扩层共用这个段高。
-	constexpr double SourceSectionHeight = 500.0;
+	// L05 随套件加载校验，正式棋盘只开放到 L04 的九层。
+	constexpr int32 MaxPlayableTowerLayers = 9;
 
 	/** 将局部空间法线转换成六面枚举，优先使用绝对值最大的轴。 */
 	ECastleGridFace GetGridFaceFromNormal(const FVector& LocalNormal)
@@ -141,10 +141,19 @@ void ACastleBoard::BeginPlay()
 		}
 		if (UsesProgressiveTowerLayers())
 		{
-			if (InitialUnlockedLayers < 1 || MaxTowerLayers < InitialUnlockedLayers || MaxTowerLayers > 9 || GridSize.Z < MaxTowerLayers)
+			// 棋盘层数须对应正式可玩套件，最大层数同时受玩法上限和棋盘容量约束。
+			if (UCastleMainTowerBalloonComponent::FindTierIndex(InitialUnlockedLayers) == INDEX_NONE
+				|| UCastleMainTowerBalloonComponent::FindTierIndex(MaxTowerLayers) == INDEX_NONE
+				|| MaxTowerLayers < InitialUnlockedLayers || MaxTowerLayers > MaxPlayableTowerLayers || GridSize.Z < MaxTowerLayers)
 			{
-				UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 的主塔层数配置无效：初始 %d，最大 %d，棋盘容量 %d；最大层数不得超过 9 和棋盘容量。"),
+				UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 的主塔层数配置无效：初始 %d，最大 %d，棋盘容量 %d；棋盘只开放 3、5、7、9 层。"),
 					*GetPathName(), InitialUnlockedLayers, MaxTowerLayers, GridSize.Z);
+				return;
+			}
+			if (!FMath::IsNearlyEqual(LayerHeight, 560.0f))
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 的层高 %.2f cm 与主塔套件的 560 cm 不一致。"),
+					*GetPathName(), LayerHeight);
 				return;
 			}
 			CurrentUnlockedLayers = InitialUnlockedLayers;
@@ -341,115 +350,44 @@ bool ACastleBoard::SpawnMainTower(FText& OutFailureReason)
 
 bool ACastleBoard::InitializeProgressiveTowerPresentation(AActor& Tower, UCastleMainTowerComponent& Health, FText& OutReason)
 {
-	const auto Reject = [&](const FString& Detail)
+	USceneComponent* Root = Tower.GetRootComponent();
+	const TInlineComponentArray<UStaticMeshComponent*> Meshes(&Tower);
+	if (!IsValid(Root) || Meshes.Num() != 1 || Meshes[0]->GetFName() != TEXT("TowerBodyMesh")
+		|| Meshes[0]->GetStaticMesh() == nullptr)
 	{
-		OutReason = FText::FromString(FString::Printf(TEXT("棋盘 %s 的主塔 %s 无法布置塔尖和气球：%s。"),
-			*GetPathName(), *Tower.GetPathName(), *Detail));
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 必须配置塔根和唯一含默认网格的 TowerBodyMesh。"), *Tower.GetPathName()));
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
-	};
-	// 正式美术源由十段 500 cm 塔身和独立塔冠组成。用塔根局部包围盒下沿分段，
-	// 跨过段尾的接缝件仍归原段。严格核对资产结构，避免换资产后错误隐藏碰撞或塔冠。
-	constexpr int32 SourceSectionCount = 10;
-	constexpr int32 PartsPerSection = 42;
-	constexpr int32 CrownPartCount = 54;
-	constexpr double SourceCrownBase = SourceSectionCount * SourceSectionHeight;
-	USceneComponent* Root = Tower.GetRootComponent();
-	if (!IsValid(Root)) { return Reject(TEXT("塔根缺失")); }
-	TInlineComponentArray<UStaticMeshComponent*> Meshes(&Tower);
-	TArray<UStaticMeshComponent*> Crown;
-	TowerBodySections.SetNum(SourceSectionCount);
-	double CrownTop = SourceCrownBase;
-	const FTransform& TowerTransform = Tower.GetActorTransform();
-	for (UStaticMeshComponent* Part : Meshes)
-	{
-		if (!IsValid(Part->GetStaticMesh()) || !Part->GetAttachParent()
-			|| Part->GetAttachParent()->GetFName() != TEXT("BuildingMeshGroup"))
-		{
-			return Reject(FString::Printf(TEXT("分件 %s 的网格或 BuildingMeshGroup 挂接无效"), *Part->GetName()));
-		}
-		const FTransform Relative = Part->GetComponentTransform().GetRelativeTransform(TowerTransform);
-		const FBox Bounds = Part->GetStaticMesh()->GetBoundingBox().TransformBy(Relative);
-		if (!Bounds.IsValid || Bounds.Min.ContainsNaN() || Bounds.Max.ContainsNaN() || Bounds.Min.Z < -0.01)
-		{
-			return Reject(FString::Printf(TEXT("分件 %s 的塔根空间包围盒无效"), *Part->GetName()));
-		}
-		// 0.01 cm 只用于抵消世界变换往返误差，确保位于段界的原始分件稳定归组。
-		const double Base = Bounds.Min.Z + 0.01;
-		// 主塔美术分件如同普通建筑视觉根，只保留 Visibility 射线查询与遮挡，不阻挡 Pawn 也不参与导航。
-		const ECollisionEnabled::Type VisualCollision = Part->GetCollisionEnabled() != ECollisionEnabled::NoCollision
-			? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision;
-		Part->SetCollisionEnabled(VisualCollision);
-		Part->SetCollisionResponseToAllChannels(ECR_Ignore);
-		Part->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
-		Part->SetCanEverAffectNavigation(false);
-		if (Base >= SourceCrownBase)
-		{
-			Crown.Add(Part);
-			CrownTop = FMath::Max(CrownTop, Bounds.Max.Z);
-		}
-		else
-		{
-			const int32 Section = FMath::FloorToInt(Base / SourceSectionHeight);
-			TowerBodySections[Section].Add({Part, VisualCollision, false});
-		}
 	}
-	if (Crown.Num() != CrownPartCount || TowerBodySections.ContainsByPredicate([](const auto& Section)
-		{ return Section.Num() != PartsPerSection; }))
+	// 只配置美术网格。双门组件稍后创建自己的 ECC_Pawn 地板，并保留中央断开。
+	UStaticMeshComponent* Body = Meshes[0];
+	Body->SetMobility(EComponentMobility::Movable);
+	Body->SetCanEverAffectNavigation(false);
+	Body->SetGenerateOverlapEvents(false);
+	Body->SetCollisionResponseToAllChannels(ECR_Ignore);
+	Body->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+	Body->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+
+	USceneComponent* Crown = NewObject<USceneComponent>(&Tower, TEXT("TowerCrownAnchor"));
+	USceneComponent* Lift = NewObject<USceneComponent>(&Tower, TEXT("TowerBalloonAnchor"));
+	for (USceneComponent* Anchor : {Crown, Lift})
 	{
-		return Reject(TEXT("预期十段塔身各 42 件、塔冠 54 件"));
+		Anchor->SetupAttachment(Root);
+		Tower.AddInstanceComponent(Anchor);
+		Anchor->RegisterComponent();
+	}
+	auto* Presentation = NewObject<UCastleMainTowerBalloonComponent>(&Tower, TEXT("TowerBalloons"));
+	Tower.AddInstanceComponent(Presentation);
+	Presentation->RegisterComponent();
+	if (!Presentation->Initialize(Body, Crown, Lift, OutReason)
+		|| !Presentation->PrepareTier(CurrentUnlockedLayers, OutReason))
+	{
+		return false;
 	}
 
-	USceneComponent* BodyAnchor = NewObject<USceneComponent>(&Tower, TEXT("TowerBodyAnchor"));
-	USceneComponent* Anchor = NewObject<USceneComponent>(&Tower, TEXT("TowerCrownAnchor"));
-	for (USceneComponent* Group : {BodyAnchor, Anchor})
-	{
-		Group->SetupAttachment(Root);
-		Tower.AddInstanceComponent(Group);
-		Group->RegisterComponent();
-		if (!Group->IsRegistered()) { return Reject(TEXT("运行时塔身或塔冠锚点未注册")); }
-	}
-	// 按原始变换挂接塔身，保留每个分件的原始比例。
-	for (int32 Layer = 0; Layer < TowerBodySections.Num(); ++Layer)
-	{
-		for (const FTowerBodyPart& Entry : TowerBodySections[Layer])
-		{
-			UStaticMeshComponent* Part = Entry.Mesh.Get();
-			Part->SetMobility(EComponentMobility::Movable);
-			if (!Part->AttachToComponent(BodyAnchor, FAttachmentTransformRules::KeepWorldTransform))
-			{
-				return Reject(FString::Printf(TEXT("无法挂载塔身分件 %s"), *Part->GetName()));
-			}
-			if (Layer >= CurrentUnlockedLayers)
-			{
-				// 隐藏的美术也退出射线、物理和寻路，避免未开放层继续阻挡搭建与通行。
-				Part->SetVisibility(false);
-				Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-				Part->SetCanEverAffectNavigation(false);
-			}
-		}
-	}
-	for (UStaticMeshComponent* Part : Crown)
-	{
-		Part->SetMobility(EComponentMobility::Movable);
-		if (!Part->AttachToComponent(Anchor, FAttachmentTransformRules::KeepWorldTransform))
-		{
-			return Reject(FString::Printf(TEXT("无法挂载塔尖分件 %s"), *Part->GetName()));
-		}
-	}
-	// 用最高可见塔身段的顶面减去塔冠原始底面，得到塔冠和下挂气球的初始偏移。
-	Anchor->SetRelativeLocation(FVector(0, 0, CurrentUnlockedLayers * SourceSectionHeight - SourceCrownBase));
-
-	USceneComponent* BalloonAnchor = NewObject<USceneComponent>(&Tower, TEXT("TowerBalloonAnchor"));
-	BalloonAnchor->SetupAttachment(Anchor);
-	BalloonAnchor->SetRelativeLocation(FVector(0, 0, CrownTop + 10.0));
-	Tower.AddInstanceComponent(BalloonAnchor);
-	BalloonAnchor->RegisterComponent();
-	UCastleMainTowerBalloonComponent* Balloons = NewObject<UCastleMainTowerBalloonComponent>(&Tower, TEXT("TowerBalloons"));
-	Tower.AddInstanceComponent(Balloons);
-	Balloons->RegisterComponent();
-	if (!Balloons->Initialize(BalloonAnchor, OutReason) || !Health.AttachBalloonPresentation(Balloons, OutReason)) { return false; }
-	TowerCrownAnchor = Anchor;
+	Presentation->CommitPreparedTier(Health.CurrentHealth, Health.MaxHealth);
+	if (!Health.AttachBalloonPresentation(Presentation, OutReason)) { return false; }
+	TowerPresentation = Presentation;
 	return true;
 }
 
@@ -463,40 +401,33 @@ bool ACastleBoard::ExpandMainTowerLayers(const int32 TargetLayerCount, FText& Ou
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
 	};
-	if (!UsesProgressiveTowerLayers() || !IsValid(MainTowerActor) || !IsValid(TowerSideGrid) || !IsValid(TowerCrownAnchor)
-		|| TowerBodySections.Num() <= MaxTowerLayers)
+	if (!UsesProgressiveTowerLayers() || !IsValid(MainTowerActor) || !IsValid(TowerSideGrid) || !IsValid(TowerPresentation))
 	{
-		return Reject(TEXT("当前地图未启用扩层，或塔身、塔尖、侧格组件未就绪"));
+		return Reject(TEXT("当前地图未启用扩层，或整塔表现、侧格未就绪"));
+	}
+	if (TargetLayerCount > MaxPlayableTowerLayers || UCastleMainTowerBalloonComponent::FindTierIndex(TargetLayerCount) == INDEX_NONE)
+	{
+		return Reject(TEXT("主塔棋盘只开放 3、5、7、9 层"));
 	}
 	if (TargetLayerCount <= CurrentUnlockedLayers || TargetLayerCount > MaxTowerLayers)
 	{
 		return Reject(TEXT("目标层数必须严格大于当前开放层数且不得超过最大主塔层数"));
 	}
-	for (int32 Layer = CurrentUnlockedLayers; Layer < TargetLayerCount; ++Layer)
-	{
-		for (const FTowerBodyPart& Part : TowerBodySections[Layer])
-		{
-			if (!Part.Mesh.IsValid() || !Part.Mesh->IsRegistered()) { return Reject(TEXT("新增层的塔身网格已失效")); }
-		}
-	}
-	if (!TowerSideGrid->ExpandToLayerCount(TargetLayerCount, OutReason)) { return false; }
+	const auto* Health = MainTowerActor->FindComponentByClass<UCastleMainTowerComponent>();
+	if (!IsValid(Health)) { return Reject(TEXT("主塔生命组件缺失")); }
 
-	// 确认侧格整批生成后再显出既有分件，同时保持旧层的网格变换与房间索引不动。
+	// 先注册隐藏吊挂，再追加侧格。任一步失败都保留原等级网格、吊挂及旧房间索引。
+	if (!TowerPresentation->PrepareTier(TargetLayerCount, OutReason)) { return false; }
+	if (!TowerSideGrid->ExpandToLayerCount(TargetLayerCount, OutReason))
+	{
+		TowerPresentation->DiscardPreparedTier();
+		return false;
+	}
+
 	FScopedCastleNavigationChange GeometryChange(GetWorld(), this);
-	for (int32 Layer = CurrentUnlockedLayers; Layer < TargetLayerCount; ++Layer)
-	{
-		for (const FTowerBodyPart& Part : TowerBodySections[Layer])
-		{
-			Part.Mesh->SetVisibility(true);
-			Part.Mesh->SetCollisionEnabled(Part.Collision);
-			Part.Mesh->SetCanEverAffectNavigation(Part.bAffectsNavigation);
-		}
-	}
-
-	// 塔冠和气球一起上移新增塔身的美术高度，跟随最高可见段的顶面。
-	TowerCrownAnchor->AddRelativeLocation(FVector(0, 0, (TargetLayerCount - CurrentUnlockedLayers) * SourceSectionHeight));
+	TowerPresentation->CommitPreparedTier(Health->CurrentHealth, Health->MaxHealth);
 	CurrentUnlockedLayers = TargetLayerCount;
-	UE_LOG(LogMoving_Castle, Display, TEXT("棋盘 %s 的主塔已扩展到 %d 层。"), *GetPathName(), CurrentUnlockedLayers);
+	UE_LOG(LogMoving_Castle, Display, TEXT("棋盘 %s 的主塔已切换为 %d 层整塔与配套吊挂。"), *GetPathName(), CurrentUnlockedLayers);
 	return true;
 }
 

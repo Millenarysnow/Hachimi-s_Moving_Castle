@@ -11,7 +11,17 @@ class USceneComponent;
 class UStaticMesh;
 class UStaticMeshComponent;
 
-/** 占位气球及球绳；数量由生命组件驱动，整体随棋盘的塔顶锚点移动。 */
+/** 同一个作者挂点上的拉索和大气球随生命同步显隐。固定挂环已烘焙在塔身网格中。 */
+USTRUCT()
+struct FCastleMainTowerLiftParts
+{
+	GENERATED_BODY()
+
+	UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> Tether;
+	UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> Balloon;
+};
+
+/** 以 560 cm 套件的数据同时切换整塔模型和吊挂，视觉颗数由真实生命比例驱动。 */
 UCLASS()
 class UCastleMainTowerBalloonComponent final : public UActorComponent
 {
@@ -20,24 +30,33 @@ class UCastleMainTowerBalloonComponent final : public UActorComponent
 public:
 	UCastleMainTowerBalloonComponent();
 
-	/** 校验资产并登记塔顶锚点；气球与绳子始终成对生成。 */
-	bool Initialize(USceneComponent* InAnchor, FText& OutReason);
+	/** 层数到作者套件的索引；不支持的层数返回 INDEX_NONE。 */
+	static int32 FindTierIndex(int32 LayerCount);
 
-	/** 预备本等级的表现容量；失败时保留之前的所有实例。 */
-	bool SetCapacity(int32 Capacity, FText& OutReason);
+	/** 在开局校验全套资产，并登记整塔网格与两个原有命名的运行时锚点。 */
+	bool Initialize(UStaticMeshComponent* InTowerMesh, USceneComponent* InCrownAnchor,
+		USceneComponent* InBalloonAnchor, FText& OutReason);
 
-	/** 升级事务失败时销毁尚未发布的隐藏资源，保留旧等级全部气球。 */
-	void DiscardCapacityAbove(int32 Capacity);
+	/** 先注册隐藏的吊挂组；侧格扩层失败时只销毁这批未发布的组件。 */
+	bool PrepareTier(int32 LayerCount, FText& OutReason);
+	void DiscardPreparedTier();
 
-	/** 只切换受影响的气球和球绳，序号在一次游戏内保持稳定。 */
-	void SetLiveCount(int32 Count);
+	/** 侧格成功追加后一次换上整塔网格和吊挂，用同一时刻的主塔生命刷新显隐。 */
+	void CommitPreparedTier(float CurrentHealth, float MaxHealth);
+	/** 校验生命状态后刷新显隐，非法输入时保留上一帧的吊挂状态。 */
+	bool UpdateHealth(float CurrentHealth, float MaxHealth);
 
 private:
-	UPROPERTY(Transient) TObjectPtr<USceneComponent> Anchor;
-	UPROPERTY(Transient) TObjectPtr<UStaticMesh> BalloonMesh;
-	UPROPERTY(Transient) TObjectPtr<UStaticMesh> StringMesh;
-	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> BalloonMaterial;
-	UPROPERTY(Transient) TArray<TObjectPtr<UStaticMeshComponent>> Balloons;
-	UPROPERTY(Transient) TArray<TObjectPtr<UStaticMeshComponent>> Strings;
+	/** 类默认对象持有硬引用，使运行时未使用的预留等级及其材质也进入 Cook。 */
+	UPROPERTY() TArray<TObjectPtr<UStaticMesh>> TowerAssets;
+	UPROPERTY() TArray<TObjectPtr<UStaticMesh>> LiftAssets;
+	UPROPERTY() TObjectPtr<UMaterialInterface> DarkMaterial;
+
+	UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> TowerMesh;
+	UPROPERTY(Transient) TObjectPtr<USceneComponent> CrownAnchor;
+	UPROPERTY(Transient) TObjectPtr<USceneComponent> BalloonAnchor;
+	UPROPERTY(Transient) TArray<FCastleMainTowerLiftParts> LiveParts;
+	UPROPERTY(Transient) TArray<FCastleMainTowerLiftParts> PendingParts;
+	int32 PendingTierIndex = INDEX_NONE;
 	int32 LiveCount = 0;
 };
