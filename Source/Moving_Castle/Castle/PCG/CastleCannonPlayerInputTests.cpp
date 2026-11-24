@@ -31,6 +31,7 @@ namespace CastleCannonPlayerInputTests
 		{
 			if (FPlatformTime::Seconds()>Deadline)
 			{ Test->AddError(FString::Printf(TEXT("玩家取点扩大复现超时：Family=%d Scenario=%d Stage=%d"),Family,Scenario,Stage)); Cleanup(); return true; }
+			if (GFrameCounter < NextInputCheckFrame) { return false; }
 			if (!Board) { return Initialize(); }
 			if (!Nav->IsNavigationReady()) { return false; }
 			if (Stage==0) { return Prepare(); }
@@ -152,6 +153,8 @@ namespace CastleCannonPlayerInputTests
 			// 与项目现有巡逻输入测试采用相同的键鼠事件入口，保留引擎设备过滤和输入栈。
 			Controller->InputKey(FInputKeyEventArgs(nullptr,INPUTDEVICEID_NONE,Key,IE_Pressed,FPlatformTime::Cycles64()));
 			Controller->InputKey(FInputKeyEventArgs(nullptr,INPUTDEVICEID_NONE,Key,IE_Released,FPlatformTime::Cycles64()));
+			// Editor 的潜伏命令可能早于 PIE 的 PlayerInput。留出完整一帧派发事件，才检查状态或移动相机。
+			NextInputCheckFrame = GFrameCounter + 2;
 		}
 		void AimGround(FIntVector Cell)
 		{
@@ -275,6 +278,7 @@ namespace CastleCannonPlayerInputTests
 		int32 Family=0,Scenario=0,Stage=0;
 		double Deadline=FPlatformTime::Seconds()+120.0;
 		double InitializationDeadline=FPlatformTime::Seconds()+20.0;
+		uint64 NextInputCheckFrame=0;
 		const TCHAR* Families[4]={TEXT("ArcherTower"),TEXT("Farm"),TEXT("ShieldTower"),TEXT("NormalRoom")};
 		const TCHAR* Scenarios[3]={TEXT("CannonRoof_NeighborInside"),TEXT("BothInside"),TEXT("CannonInside_NeighborRoof")};
 	};
