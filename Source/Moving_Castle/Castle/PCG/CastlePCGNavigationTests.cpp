@@ -289,15 +289,17 @@ namespace CastlePCGNavigationTests
 				+ FVector(0, 0, Layout.StandingHeight - Board->LayerHeight * 0.5);
 			const auto& Parts = Lower->HachimisLayout->Ladder->Parts;
 			const FCollisionQueryParams Query(SCENE_QUERY_STAT(StackedLevelTwoPatrolFloor), true);
-			// 依持久化作者组检查上层带洞楼板。压条射线随后按压条自己的作者组定位组件，
-			// 因而能单独检验导航落点，不混淆楼板空间归属与具体压条的资产分组。
+			// 此处为水平二级上叠一级，宽边视觉板接管上层组。压条仍由梯井玩法与本族梯套件提供。
 			int32 UpperFloorCount = 0;
+			const FString DeckName = FString::Printf(TEXT("SM_HC515_%s_Deck"), *Lower->HachimisLayout->Family.ToString());
 			for (const auto* Mesh : TInlineComponentArray<UStaticMeshComponent*>(Upper))
 			{
-				UpperFloorCount += Mesh->ComponentHasTag(TEXT("CastlePCGGroup=UpperFloor"));
+				if (!Mesh->ComponentHasTag(TEXT("CastlePCGGroup=UpperFloor"))) { continue; }
+				++UpperFloorCount;
+				Test->TestTrue(TEXT("上层梯井视觉使用下层家族的宽边板"), Mesh->GetStaticMesh()
+					&& Mesh->GetStaticMesh()->GetName() == DeckName);
 			}
-			Test->TestEqual(TEXT("整组带洞楼板属于上层 Actor"), UpperFloorCount,
-				Parts.FilterByPredicate([](const FCastleV4Part& Part) { return Part.Group == TEXT("UpperFloor"); }).Num());
+			Test->TestEqual(TEXT("唯一的梯井宽边板属于上层 Actor"), UpperFloorCount, 1);
 			for (const FCastleV4Part& Part : Parts)
 			{
 				if (!Part.Node.ToString().Contains(TEXT("Hatch_SideLip"))) { continue; }
