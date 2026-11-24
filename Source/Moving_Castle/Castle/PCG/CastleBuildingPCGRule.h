@@ -12,33 +12,6 @@ class ICastlePCGNoiseProvider;
 /** 阶段按枚举顺序执行，同一阶段保留规则集里的显式顺序。 */
 enum class ECastlePCGRuleStage : uint8 { Topology, Structure, Detail };
 
-/** 本轮纯求值上下文；只包含正式已完成建筑的邻接，不保存求值顺序状态。 */
-struct MOVING_CASTLE_API FCastlePCGRuleContext
-{
-	ACastleBuildingBase* Building = nullptr;
-	TArray<FCastlePCGCellAdjacency> Adjacencies;
-	int32 Seed = 0;
-	UObject* NoiseProvider = nullptr;
-	bool bUseLadderNoise = false;
-	FName LadderChannel;
-};
-
-/** 单个格面目标；同一格面每轮只能有一个连通状态。 */
-struct MOVING_CASTLE_API FCastlePCGFaceTarget
-{
-	FIntVector Cell = FIntVector::ZeroValue;
-	ECastlePCGFace Face = ECastlePCGFace::None;
-	bool bConnected = false;
-};
-
-/** 声明式规则输出，不创建组件也不控制动画。1=封闭顶板，2=唯一梯子格。 */
-struct MOVING_CASTLE_API FCastlePCGTarget
-{
-	TMap<FIntVector, uint8> Ceilings;
-	TArray<FCastlePCGFaceTarget> Faces;
-	FString StableKey() const;
-};
-
 /** 可在规则集内组合的原生语义规则基类，具体规则不反向进入棋盘代码。 */
 UCLASS(Abstract, BlueprintType, EditInlineNew, DefaultToInstanced)
 class MOVING_CASTLE_API UCastleBuildingPCGRule : public UObject
@@ -59,8 +32,6 @@ class MOVING_CASTLE_API UCastlePCGVerticalRule : public UCastleBuildingPCGRule
 public:
 	virtual ECastlePCGRuleStage GetStage() const override { return ECastlePCGRuleStage::Topology; }
 	virtual bool Evaluate(const FCastlePCGBoardQuery& Query, FCastlePCGSemanticField& Field, FString& Error) const override;
-	/** 分期保留旧规则测试入口，运行时使用整盘接口。 */
-	bool Evaluate(const FCastlePCGRuleContext& Context, FCastlePCGTarget& Out, FString& Error) const;
 };
 
 /** 平面规则：输出全部跨建筑相邻格面，连通时开护栏并铺桥，否则保留阻隔。 */

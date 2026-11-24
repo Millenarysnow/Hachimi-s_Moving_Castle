@@ -126,7 +126,7 @@ namespace CastlePCGNavigationTests
 		{
 			FVector Expected = Board->GetGridWorldLocation(Cell);
 			Expected.Z = FloorZ;
-			// V4 梯井位于正 X、正 Y。公共走板上用原射线的镜像位置复现下层美术、上层功能面的归属。
+			// V4 梯井位于正 X、正 Y，用镜像位置射向公共走板以避开井口。
 			const FVector Start = Expected + FVector(-120, -120, 180);
 			const FVector End = Start - FVector(0, 0, 100000);
 			FHitResult VisibilityHit, PhysicalHit;
@@ -141,9 +141,11 @@ namespace CastlePCGNavigationTests
 				&& FMath::IsNearlyEqual(PhysicalHit.ImpactPoint.Z, FloorZ, 1.0))) { return false; }
 			if (bUpperFloor)
 			{
-				// 关键复现条件：美术命中归下层 Actor，不能再据此把上层楼板降一层。
-				if (!Test->TestTrue(TEXT("上层视线命中下层拥有的梯口铺板，同时 Pawn 命中上层原格"), VisibilityHit.GetActor() == Lower
-					&& PhysicalHit.GetActor() == Upper && FMath::IsNearlyEqual(VisibilityHit.ImpactPoint.Z, FloorZ, 1.0))) { return false; }
+				// 视觉拾取与 Pawn 楼板共同属于上层格，实际玩法射线保持同一层高。
+				if (!Test->TestTrue(TEXT("Visibility 和 Pawn 均命中上层，视觉命中其带洞铺板"),
+					VisibilityHit.GetActor() == Upper && PhysicalHit.GetActor() == Upper
+					&& VisibilityHit.GetComponent()->ComponentHasTag(TEXT("CastlePCGGroup=UpperFloor"))
+					&& FMath::IsNearlyEqual(VisibilityHit.ImpactPoint.Z, FloorZ, 1.0))) { return false; }
 			}
 			else if (Cast<ACastleGroundTileActor>(VisibilityHit.GetActor()))
 			{
@@ -287,13 +289,27 @@ namespace CastlePCGNavigationTests
 				+ FVector(0, 0, Layout.StandingHeight - Board->LayerHeight * 0.5);
 			const auto& Parts = Lower->HachimisLayout->Ladder->Parts;
 			const FCollisionQueryParams Query(SCENE_QUERY_STAT(StackedLevelTwoPatrolFloor), true);
-			for (UStaticMeshComponent* Trim : TInlineComponentArray<UStaticMeshComponent*>(Lower))
+			// 依持久化作者组检查上层带洞楼板。压条射线随后按压条自己的作者组定位组件，
+			// 因而能单独检验导航落点，不混淆楼板空间归属与具体压条的资产分组。
+			int32 UpperFloorCount = 0;
+			for (const auto* Mesh : TInlineComponentArray<UStaticMeshComponent*>(Upper))
 			{
-				if (!Trim->ComponentHasTag(TEXT("CastlePCGDynamic")) || !Parts.ContainsByPredicate([Trim](const FCastleV4Part& Part)
-					{ return Part.Mesh == Trim->GetStaticMesh() && Part.Node.ToString().Contains(TEXT("Hatch_SideLip")); }))
+				UpperFloorCount += Mesh->ComponentHasTag(TEXT("CastlePCGGroup=UpperFloor"));
+			}
+			Test->TestEqual(TEXT("整组带洞楼板属于上层 Actor"), UpperFloorCount,
+				Parts.FilterByPredicate([](const FCastleV4Part& Part) { return Part.Group == TEXT("UpperFloor"); }).Num());
+			for (const FCastleV4Part& Part : Parts)
+			{
+				if (!Part.Node.ToString().Contains(TEXT("Hatch_SideLip"))) { continue; }
+				const auto* Owner = Part.Group == TEXT("UpperFloor") ? Upper : Lower;
+				const FName NodeTag(TEXT("CastlePCGNode=") + Part.Node.ToString());
+				const TInlineComponentArray<UStaticMeshComponent*> Meshes(Owner);
+				UStaticMeshComponent* const* Match = Meshes.FindByPredicate([&](const UStaticMeshComponent* Mesh)
 				{
-					continue;
-				}
+					return Mesh->GetStaticMesh() == Part.Mesh && Mesh->ComponentHasTag(NodeTag);
+				});
+				if (!Test->TestNotNull(TEXT("作者压条随其分组安装"), Match)) { return; }
+				UStaticMeshComponent* Trim = *Match;
 				// 从作者压条的实际位置构造有限组斜角。入选射线须确实先经过压条和导航墙盒，
 				// 且延伸到下层，才能检验最近合法楼板优先于更远的平面。
 				const FVector Lip = Trim->Bounds.Origin;

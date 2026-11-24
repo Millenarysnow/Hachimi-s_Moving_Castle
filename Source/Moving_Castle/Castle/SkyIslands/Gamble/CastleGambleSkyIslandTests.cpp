@@ -54,7 +54,8 @@ namespace
 			TEXT("/Game/MovingCastle/Data/SkyIslands/DA_GambleSkyIsland.DA_GambleSkyIsland"));
 	}
 
-	bool IsSameCard(const FCastleBuildingDescriptor& A, const FCastleBuildingDescriptor& B)
+	/** 本文件的整卡比较与建造栏使用不同的符号，供 Unity 编译合并时区分。 */
+	bool IsSameGambleCard(const FCastleBuildingDescriptor& A, const FCastleBuildingDescriptor& B)
 	{
 		return A.Definition == B.Definition && A.Level == B.Level && A.Color == B.Color && A.Number == B.Number;
 	}
@@ -127,14 +128,14 @@ bool FCastleGambleIslandAutomationTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("同数字垂直相邻"), Island->TryPlaceCard(1, FIntVector(0, 0, 1), Reason));
 	TestTrue(TEXT("撤回最后一张"), Island->TryReturnLastCard(Reason));
 	FCastleBuildingDescriptor Returned;
-	TestTrue(TEXT("撤回保留完整牌面"), Backpack.TryGetItemAt(1, Returned) && IsSameCard(Returned, BlueOne));
+	TestTrue(TEXT("撤回保留完整牌面"), Backpack.TryGetItemAt(1, Returned) && IsSameGambleCard(Returned, BlueOne));
 	TestFalse(TEXT("拦截复制张数溢出"), Island->MiniBoard.CanSettle(MAX_int32, Reason));
 
 	Island->EndPlay(EEndPlayReason::Destroyed);
 	TestEqual(TEXT("EndPlay 清空未下注暂存"), Island->MiniBoard.GetPlacements().Num(), 0);
 	TestEqual(TEXT("EndPlay 全量退回"), Backpack.GetItemCount(), 4);
-	TestTrue(TEXT("离岛退回第一张原牌"), Backpack.TryGetItemAt(2, Returned) && IsSameCard(Returned, RedOne));
-	TestTrue(TEXT("离岛退回第二张原牌"), Backpack.TryGetItemAt(3, Returned) && IsSameCard(Returned, RedTwo));
+	TestTrue(TEXT("离岛退回第一张原牌"), Backpack.TryGetItemAt(2, Returned) && IsSameGambleCard(Returned, RedOne));
+	TestTrue(TEXT("离岛退回第二张原牌"), Backpack.TryGetItemAt(3, Returned) && IsSameGambleCard(Returned, RedTwo));
 
 	const auto VerifyRoulette = [&](ECastleRouletteColor Bet, ECastleRouletteColor Result, int32 Expected)
 	{
@@ -153,7 +154,7 @@ bool FCastleGambleIslandAutomationTest::RunTest(const FString& Parameters)
 		Paid.Append(PayoutBackpack.GetTempItems());
 		TestEqual(TEXT("总返还张数"), Paid.Num(), Expected);
 		TestEqual(TEXT("临时栏溢出张数"), PayoutBackpack.GetTempItemCount(), FMath::Max(0, Expected - 1));
-		for (const FCastleBuildingDescriptor& Card : Paid) { TestTrue(TEXT("复制保留完整牌面"), IsSameCard(Card, RedOne)); }
+		for (const FCastleBuildingDescriptor& Card : Paid) { TestTrue(TEXT("复制保留完整牌面"), IsSameGambleCard(Card, RedOne)); }
 		Island->Tick(2.0f);
 	};
 	VerifyRoulette(ECastleRouletteColor::Black, ECastleRouletteColor::Black, 2);
@@ -435,7 +436,7 @@ public:
 		Test.TestFalse(TEXT("右键撤回从微缩棋盘移除叠放房间"), Island->MiniRooms.Contains(Target.AdjacentCell));
 		FCastleBuildingDescriptor Returned;
 		Test.TestTrue(TEXT("撤回叠放房间后原卡还回手牌"),
-			Backpack->TryGetItemAt(OriginalCount, Returned) && IsSameCard(Returned, Card));
+			Backpack->TryGetItemAt(OriginalCount, Returned) && IsSameGambleCard(Returned, Card));
 		const FVector RouletteCenter = Island->Roulette->GetComponentLocation();
 		FHitResult Hit;
 		const FCollisionQueryParams Query(SCENE_QUERY_STAT(CastleGambleAcceptanceAutomation), false, Controller->GetPawn());
