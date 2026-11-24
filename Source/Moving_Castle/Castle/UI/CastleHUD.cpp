@@ -158,15 +158,10 @@ void ACastleHUD::DrawHUD()
 		return;
 	}
 	const ACastlePlayerController* Controller = Cast<ACastlePlayerController>(PlayerOwner);
-	if (Controller != nullptr)
+	if (Controller == nullptr || !Controller->ShouldDrawCenterCrosshair())
 	{
-		// 金币与提示由 WBP 接管，Canvas 为主塔编辑和空岛建造绘制中心准星。
-		FText EditReason;
-		if (Controller->GetShop()->IsShopOpen()
-			|| (!Controller->IsDirectorEditingAllowed(EditReason) && !Controller->GetInteractiveSkyIsland()))
-		{
-			return;
-		}
+		// 控制器统一裁定模式与模态状态。设计模式由系统指针表达瞄准位置。
+		return;
 	}
 
 	const float CenterX = Canvas->SizeX * 0.5f;

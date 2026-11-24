@@ -2,6 +2,7 @@
 
 #include "CastleFlightPawn.h"
 
+#include "CastlePlayerController.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -91,7 +92,7 @@ void ACastleFlightPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 	PlayerInputComponent->BindKey(EKeys::LeftControl, IE_Pressed, this, &ACastleFlightPawn::DescendPressed);
 	PlayerInputComponent->BindKey(EKeys::LeftControl, IE_Released, this, &ACastleFlightPawn::DescendReleased);
 
-	// 鼠标轴在控制器中锁定到视口中心，轴值只表示相对移动量。
+	// 鼠标轴只传入相对移动量；当前模式及模态门控由控制器查询。
 	PlayerInputComponent->BindAxisKey(EKeys::MouseX, this, &ACastleFlightPawn::HandleMouseYaw);
 	PlayerInputComponent->BindAxisKey(EKeys::MouseY, this, &ACastleFlightPawn::HandleMousePitch);
 }
@@ -198,7 +199,8 @@ void ACastleFlightPawn::DescendReleased()
 
 void ACastleFlightPawn::HandleMouseYaw(float AxisValue)
 {
-	if (!FMath::IsNearlyZero(AxisValue))
+	const auto* CastleController = Cast<ACastlePlayerController>(Controller);
+	if (CastleController && CastleController->CanRotateCameraFromMouse() && !FMath::IsNearlyZero(AxisValue))
 	{
 		AddControllerYawInput(AxisValue * MouseSensitivity);
 	}
@@ -206,7 +208,8 @@ void ACastleFlightPawn::HandleMouseYaw(float AxisValue)
 
 void ACastleFlightPawn::HandleMousePitch(float AxisValue)
 {
-	if (!FMath::IsNearlyZero(AxisValue))
+	const auto* CastleController = Cast<ACastlePlayerController>(Controller);
+	if (CastleController && CastleController->CanRotateCameraFromMouse() && !FMath::IsNearlyZero(AxisValue))
 	{
 		// 鼠标向上移动时视角向上，符合常见第一人称操作习惯。
 		AddControllerPitchInput(-AxisValue * MouseSensitivity);

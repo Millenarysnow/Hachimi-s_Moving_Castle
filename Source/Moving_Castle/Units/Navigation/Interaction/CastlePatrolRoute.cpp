@@ -5,7 +5,7 @@
 #include "CastleTowerDispatchSubsystem.h"
 #include "Interaction/CastlePatrolWaypointMarker.h"
 #include "CastlePlayerController.h"
-#include "CastleShopComponent.h"
+#include "Castle/Input/CastleControlMode.h"
 #include "Components/InputComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
@@ -177,7 +177,7 @@ ACastlePatrolRoute::ACastlePatrolRoute()
 	SetRootComponent(CreateDefaultSubobject<USceneComponent>(TEXT("Root")));
 	static ConstructorHelpers::FClassFinder<ACastlePatrolWaypointMarker> Markers(WaypointMarkerAsset);
 	WaypointMarkerClass = Markers.Class;
-	// 编辑时先消费左键，避免同一次输入继续放置建筑；退出编辑后左键交还原控制器。
+	// 优先处理路线快捷键。独立演示的放点键也只在编辑期间消费。
 	InputPriority = 10;
 }
 
@@ -215,7 +215,13 @@ void ACastlePatrolRoute::BeginPlay()
 	{
 		EnableInput(Controller);
 		InputComponent->BindKey(EKeys::P, IE_Pressed, this, &ACastlePatrolRoute::ToggleEditing);
-		InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ACastlePatrolRoute::AddPointAtViewCenter).bConsumeInput = false;
+		if (!Controller->IsA<ACastlePlayerController>())
+		{
+			// 无棋盘的巡逻演示使用通用控制器，路线 Actor 自行接入经典主交互。
+			const auto& Bindings = CastleControlInput::GetBindings(ECastleControlMode::Classic);
+			InputComponent->BindKey(Bindings.Get(ECastleWorldInputAction::PrimaryInteract), IE_Pressed,
+				this, &ACastlePatrolRoute::AddPointAtAim).bConsumeInput = false;
+		}
 		InputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &ACastlePatrolRoute::UndoPoint).bConsumeInput = false;
 		InputComponent->BindKey(EKeys::Enter, IE_Pressed, this, &ACastlePatrolRoute::ApplyDraft).bConsumeInput = false;
 		InputComponent->BindKey(EKeys::Delete, IE_Pressed, this, &ACastlePatrolRoute::ClearRoute).bConsumeInput = false;
@@ -240,9 +246,9 @@ bool ACastlePatrolRoute::SetWorldWaypoints(const TArray<FVector>& Waypoints, FTe
 
 bool ACastlePatrolRoute::CanEdit() const
 {
-	const auto* Controller = Cast<ACastlePlayerController>(GetWorld()->GetFirstPlayerController());
+	auto* Controller = Cast<ACastlePlayerController>(GetWorld()->GetFirstPlayerController());
 	FText Reason;
-	return bOwnsRoute && bAllowPlayerEditing && (!Controller || (!Controller->GetShop()->IsShopOpen() && Controller->IsCastleEditingAllowed(Reason)));
+	return bOwnsRoute && bAllowPlayerEditing && (!Controller || (!Controller->IsModalInputActive() && Controller->IsCastleEditingAllowed(Reason)));
 }
 
 bool ACastlePatrolRoute::SetMaxPlayerWaypoints(const int32 NewLimit)
@@ -303,7 +309,7 @@ void ACastlePatrolRoute::ClearPatrolRoute()
 
 void ACastlePatrolRoute::ToggleEditing()
 {
-	const auto* Controller = Cast<ACastlePlayerController>(GetWorld()->GetFirstPlayerController());
+	auto* Controller = Cast<ACastlePlayerController>(GetWorld()->GetFirstPlayerController());
 	FText Reason;
 	if (Controller && !Controller->IsCastleEditingAllowed(Reason)) { ShowMessage(Reason.ToString(), false); return; }
 	if (!CanEdit()) { return; }
@@ -315,10 +321,19 @@ void ACastlePatrolRoute::ToggleEditing()
 	}
 	DraftWaypoints = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>()->GetRequestedWaypoints();
 	SetEditing(true);
-	ShowMessage(TEXT("巡逻编辑：瞄准建筑楼顶或地面后左键添加路径点；建筑取本层楼内地板，棋盘内地面取格心；Backspace 撤回，Enter 提交路线，Delete 清空，P 取消。"), true);
+	if (Controller)
+	{
+		// 路线状态已提交，关闭面板后只恢复本模式的路径编辑输入。
+		Controller->CloseBuildingDemolishMenu();
+	}
+	const ECastleControlMode Mode = Controller ? Controller->GetControlMode() : ECastleControlMode::Classic;
+	const auto& Bindings = CastleControlInput::GetBindings(Mode);
+	const FText InteractKey = CastleControlInput::GetKeyDisplayText(Bindings.Get(ECastleWorldInputAction::PrimaryInteract));
+	ShowMessage(FString::Printf(TEXT("巡逻编辑：瞄准建筑楼顶或地面后按%s添加路径点；建筑取本层楼内地板，棋盘内地面取格心；Backspace 撤回，Enter 提交路线，Delete 清空，P 取消。"),
+		*InteractKey.ToString()), true);
 }
 
-void ACastlePatrolRoute::AddPointAtViewCenter()
+void ACastlePatrolRoute::AddPointAtAim()
 {
 	if (!bEditing || !CanEdit()) { return; }
 	// 路线序号从 1 开始；满 99 点后明确拒绝添加，不循环编号也不跳过显示。
@@ -336,13 +351,22 @@ void ACastlePatrolRoute::AddPointAtViewCenter()
 		ShowMessage(CapacityFailure.ToString(), false);
 		return;
 	}
-	APlayerController* Controller = GetWorld()->GetFirstPlayerController();
-	int32 Width, Height;
-	Controller->GetViewportSize(Width, Height);
-	FVector Origin, Direction;
-	if (Width <= 0 || Height <= 0 || !Controller->DeprojectScreenPositionToWorld(Width * 0.5, Height * 0.5, Origin, Direction))
+	const APlayerController* Player = GetWorld()->GetFirstPlayerController();
+	if (!IsValid(Player))
 	{
-		ShowMessage(TEXT("当前视口无法生成中心射线。"), false);
+		UE_LOG(LogMoving_Castle, Error, TEXT("巡逻入口 %s 无法放点：当前世界没有有效玩家控制器。"), *GetPathName());
+		return;
+	}
+	const auto* Controller = Cast<ACastlePlayerController>(Player);
+	FVector Origin, Direction;
+	float X = 0.0f, Y = 0.0f;
+	// 城堡关卡读取玩家模式；独立演示明确使用经典准星与同一套反投影坐标。
+	const bool bHasAim = Controller ? Controller->TryGetAimWorldRay(Origin, Direction)
+		: CastleControlInput::TryGetClassicAimScreenPosition(*Player, X, Y)
+			&& Player->DeprojectScreenPositionToWorld(X, Y, Origin, Direction);
+	if (!bHasAim)
+	{
+		ShowMessage(TEXT("当前操作模式无法取得瞄准射线。"), false);
 		return;
 	}
 	FVector Point;
@@ -452,7 +476,7 @@ void ACastlePatrolRoute::ClearRoute()
 void ACastlePatrolRoute::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	// 打开商店时退出草稿模式并释放左键，保证购买/放置输入不会被巡逻编辑截获。
+	// 模态或阶段变化后退出草稿模式，避免继续截获其他交互的输入。
 	if (bEditing && !CanEdit()) { CancelEditingDraft(); }
 	if (!bOwnsRoute) { return; }
 	if (!bShowRoute)

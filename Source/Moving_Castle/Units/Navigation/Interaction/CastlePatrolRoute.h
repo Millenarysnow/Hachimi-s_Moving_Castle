@@ -47,6 +47,9 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 	bool IsEditing() const { return bEditing; }
 
+	/** 控制器的主交互入口只在路径编辑独占世界点击时调用。 */
+	void AddPointAtAim();
+
 	/** 供路径编辑 UI 按钮与 Backspace 快捷键共用同一撤回入口，不重复维护草稿逻辑。 */
 	void UndoDraftPoint();
 
@@ -90,7 +93,6 @@ private:
 	bool bEditing = false;
 	bool bOwnsRoute = false;
 	void ToggleEditing();
-	void AddPointAtViewCenter();
 	bool CheckDraftWaypointCapacity(FText& OutReason) const;
 	bool TryAppendDraftWaypoint(FVector Point, FText& OutReason);
 	void UndoPoint();

@@ -420,7 +420,8 @@ public:
 		if (!Test.TestTrue(TEXT("控制器准星命中合法微缩地块"),
 			Target.bValid && Target.AdjacentCell == Match->GetGroundCell().Coordinate
 			&& Island->CanPlaceCardAtIslandCursor(Target, SelectedSlot))) { return true; }
-		if (!PressKey(EKeys::LeftMouseButton)) { return true; }
+		// 与世界主交互一致，经典模式使用右键，设计模式使用左键。
+		if (!PressKey(Controller->GetPrimaryPlaceInteractKey())) { return true; }
 		Test.TestEqual(TEXT("左键建造消耗一张原卡"), Backpack->GetItemCount() + Backpack->GetTempItemCount(), InitialCards - 1);
 		const auto MatchingCell = Target.AdjacentCell;
 		const auto* Room = Island->MiniRooms.FindRef(MatchingCell).Get();
@@ -432,7 +433,7 @@ public:
 		int32 SlotIndex = INDEX_NONE;
 		if (!Test.TestTrue(TEXT("添加同牌验证垂直叠放"), Backpack->TryAddItem(Card, SlotIndex, Reason)
 			&& Island->TryPlaceBackpackAtIslandCursor(Target, SlotIndex, Reason))) { return true; }
-		if (!PressKey(EKeys::RightMouseButton)) { return true; }
+		if (!PressKey(Controller->GetDemolishKey())) { return true; }
 		Test.TestFalse(TEXT("右键撤回从微缩棋盘移除叠放房间"), Island->MiniRooms.Contains(Target.AdjacentCell));
 		FCastleBuildingDescriptor Returned;
 		Test.TestTrue(TEXT("撤回叠放房间后原卡还回手牌"),

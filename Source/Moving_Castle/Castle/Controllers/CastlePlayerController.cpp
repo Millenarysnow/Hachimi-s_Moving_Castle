@@ -31,6 +31,7 @@
 #include "Castle/UI/Items/CastleBadgeBarWidget.h"
 #include "Castle/UI/Items/CastleBadgeReplaceModalWidget.h"
 #include "Castle/UI/Items/CastleTempBuildBarWidget.h"
+#include "Castle/UI/Common/CastleControlSettingsWidget.h"
 #include "Components/InputComponent.h"
 
 ACastlePlayerController::ACastlePlayerController()
@@ -40,6 +41,7 @@ ACastlePlayerController::ACastlePlayerController()
 	PrimaryActorTick.TickGroup = TG_PostUpdateWork;
 	Economy = CreateDefaultSubobject<UCastleEconomyComponent>(TEXT("Economy"));
 	Shop = CreateDefaultSubobject<UCastleShopComponent>(TEXT("Shop"));
+	InitializePopupClasses();
 }
 
 void ACastlePlayerController::BeginPlay()
@@ -51,13 +53,12 @@ void ACastlePlayerController::BeginPlay()
 		return;
 	}
 
-	// 屏幕中心是游戏内唯一指针，系统鼠标不再显示，也不再产生模板点击事件。
-	bShowMouseCursor = false;
+	// 自动化从经典模式开始，避免本机保存的玩家设置改变世界交互测试的射线。
+	if (!GIsAutomationTesting && !CastleControlInput::LoadMode(ControlMode)) { return; }
+	// 世界交互只经语义输入派发，关闭 Actor 自身的模板点击和悬停事件。
 	bEnableClickEvents = false;
 	bEnableMouseOverEvents = false;
-	FInputModeGameOnly InputMode;
-	InputMode.SetConsumeCaptureMouseDown(true);
-	SetInputMode(InputMode);
+	RefreshModalInput(true);
 	// 已配置关卡保留其路线 Actor；普通建造关卡自动提供一个空的玩家路径点编辑入口。
 	if (!UGameplayStatics::GetActorOfClass(GetWorld(), ACastlePatrolRoute::StaticClass()))
 	{
@@ -76,11 +77,77 @@ void ACastlePlayerController::BeginPlay()
 	int32 ViewportSizeX = 0;
 	int32 ViewportSizeY = 0;
 	GetViewportSize(ViewportSizeX, ViewportSizeY);
-	if (ViewportSizeX > 0 && ViewportSizeY > 0)
+	if (ControlMode == ECastleControlMode::Classic && ViewportSizeX > 0 && ViewportSizeY > 0)
 	{
 		// 将系统鼠标放到视口中心，保证首次获得焦点时射线方向稳定。
 		SetMouseLocation(ViewportSizeX / 2, ViewportSizeY / 2);
 	}
+}
+
+void ACastlePlayerController::SetControlMode(ECastleControlMode NewMode, bool bSaveConfig)
+{
+	if (NewMode != ECastleControlMode::Classic && NewMode != ECastleControlMode::Design)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s 收到无效的操作模式 %d。"), *GetPathName(), static_cast<int32>(NewMode));
+		return;
+	}
+	if (bSaveConfig && !GIsAutomationTesting) { CastleControlInput::SaveMode(NewMode); }
+	if (ControlMode == NewMode) { return; }
+	// 一次按下只能属于原操作模式。换键后需要重新按下才能发起新的派兵。
+	if (bHoldingTowerDispatch) { ReleaseTowerDispatchInput(); }
+	ControlMode = NewMode;
+	HideDirectorEditingPresentation();
+	RefreshModalInput(true);
+	UE_LOG(LogMoving_Castle, Display, TEXT("玩家操作模式切换为 %s。"), *UEnum::GetValueAsString(ControlMode));
+	OnControlModeChanged.Broadcast(ControlMode);
+}
+
+FKey ACastlePlayerController::GetPrimaryPlaceInteractKey() const
+{
+	return CastleControlInput::GetBindings(ControlMode).Get(ECastleWorldInputAction::PrimaryInteract);
+}
+
+FKey ACastlePlayerController::GetDemolishKey() const
+{
+	return CastleControlInput::GetBindings(ControlMode).Get(ECastleWorldInputAction::Demolish);
+}
+
+FText ACastlePlayerController::GetPrimaryPlaceInteractKeyDisplayText() const
+{
+	return CastleControlInput::GetKeyDisplayText(GetPrimaryPlaceInteractKey());
+}
+
+FText ACastlePlayerController::GetDemolishKeyDisplayText() const
+{
+	return CastleControlInput::GetKeyDisplayText(GetDemolishKey());
+}
+
+bool ACastlePlayerController::TryGetAimScreenPosition(float& OutScreenX, float& OutScreenY) const
+{
+	if (ControlMode == ECastleControlMode::Design)
+	{
+		return GetMousePosition(OutScreenX, OutScreenY);
+	}
+	return CastleControlInput::TryGetClassicAimScreenPosition(*this, OutScreenX, OutScreenY);
+}
+
+bool ACastlePlayerController::TryGetAimWorldRay(FVector& OutOrigin, FVector& OutDirection) const
+{
+	float X = 0.0f, Y = 0.0f;
+	return TryGetAimScreenPosition(X, Y) && DeprojectScreenPositionToWorld(X, Y, OutOrigin, OutDirection);
+}
+
+bool ACastlePlayerController::CanRotateCameraFromMouse() const
+{
+	return !IsLookInputIgnored() && !BuildingDemolishMenu && !bHoldingTemporaryHUDPointer && (ControlMode == ECastleControlMode::Classic
+		|| IsInputKeyDown(CastleControlInput::GetBindings(ControlMode).Get(ECastleWorldInputAction::HoldCameraLook)));
+}
+
+bool ACastlePlayerController::ShouldDrawCenterCrosshair() const
+{
+	FText Reason;
+	return ControlMode == ECastleControlMode::Classic && !bModalInputActive && !BuildingDemolishMenu && !bHoldingTemporaryHUDPointer
+		&& (IsDirectorEditingAllowed(Reason) || GetInteractiveSkyIsland());
 }
 
 void ACastlePlayerController::Tick(float DeltaSeconds)
@@ -89,13 +156,19 @@ void ACastlePlayerController::Tick(float DeltaSeconds)
 
 	if (IsLocalController())
 	{
+		// 失焦会清空 PlayerInput 的按键状态，未送达的 Alt 松键也必须归还经典指针。
+		if (bHoldingTemporaryHUDPointer && !IsInputKeyDown(EKeys::LeftAlt)) { EndTemporaryHUDPointer(); }
 		UpdateTowerDispatchInput();
 		FText EditReason;
-		if (ACastleSkyIslandBase* Island = GetInteractiveSkyIsland())
+		if (BuildingDemolishMenu)
+		{
+			if (!CanUseBuildingDemolishMenu(EditReason)) { CloseBuildingDemolishMenu(); }
+		}
+		else if (ACastleSkyIslandBase* Island = GetInteractiveSkyIsland(); Island && !bHoldingTemporaryHUDPointer)
 		{
 			UpdateGridCursor(Island);
 		}
-		else if (!Shop->IsShopOpen() && IsCastleEditingAllowed(EditReason))
+		else if (!bModalInputActive && !bHoldingTemporaryHUDPointer && IsCastleEditingAllowed(EditReason))
 		{
 			UpdateGridCursor();
 		}
@@ -139,10 +212,15 @@ void ACastlePlayerController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this, &ACastlePlayerController::SelectPreviousBackpackSlot);
 	InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &ACastlePlayerController::SelectNextBackpackSlot);
 	InputComponent->BindKey(EKeys::B, IE_Pressed, this, &ACastlePlayerController::ToggleShop);
-	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ACastlePlayerController::PlacePrototypeBuildingAtCursor);
-	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &ACastlePlayerController::ReleaseTowerDispatchInput).bConsumeInput = false;
-	// 右键在其他系统仍可使用；只有支持微缩建造的空岛会撤回房间。
-	InputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &ACastlePlayerController::RetractIslandPlacement).bConsumeInput = false;
+	InputComponent->BindKey(EKeys::O, IE_Pressed, this, &ACastlePlayerController::ToggleControlSettings).bExecuteWhenPaused = true;
+	InputComponent->BindKey(EKeys::Escape, IE_Pressed, this, &ACastlePlayerController::HandleClosePopup).bExecuteWhenPaused = true;
+	InputComponent->BindKey(EKeys::LeftAlt, IE_Pressed, this, &ACastlePlayerController::BeginTemporaryHUDPointer).bExecuteWhenPaused = true;
+	InputComponent->BindKey(EKeys::LeftAlt, IE_Released, this, &ACastlePlayerController::EndTemporaryHUDPointer).bExecuteWhenPaused = true;
+	for (const FKey& Key : CastleControlInput::GetPointerKeys())
+	{
+		InputComponent->BindKey(Key, IE_Pressed, this, &ACastlePlayerController::HandleWorldPointerPressed);
+		InputComponent->BindKey(Key, IE_Released, this, &ACastlePlayerController::HandleWorldPointerReleased).bConsumeInput = false;
+	}
 	// 战斗控制快捷键允许在暂停期间继续响应，确保按 T 暂停后可再次按 T 恢复或按 F/R 操作。
 	InputComponent->BindKey(EKeys::T, IE_Pressed, this, &ACastlePlayerController::ToggleBattlePauseShortcut).bExecuteWhenPaused = true;
 	InputComponent->BindKey(EKeys::F, IE_Pressed, this, &ACastlePlayerController::ToggleBattleSpeedShortcut).bExecuteWhenPaused = true;
@@ -151,6 +229,8 @@ void ACastlePlayerController::SetupInputComponent()
 
 void ACastlePlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	RemoveBuildingDemolishWidget();
+	RemoveControlSettingsWidget();
 	if (UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld()))
 	{
 		Badges->OnBadgesChanged.RemoveDynamic(this, &ACastlePlayerController::HandleItemBadgeChanged);
@@ -221,19 +301,9 @@ void ACastlePlayerController::UpdateGridCursor(ACastleSkyIslandBase* Island)
 		return;
 	}
 
-	int32 ViewportSizeX = 0;
-	int32 ViewportSizeY = 0;
-	GetViewportSize(ViewportSizeX, ViewportSizeY);
-	if (ViewportSizeX <= 0 || ViewportSizeY <= 0)
-	{
-		CurrentGridCursorTarget = FCastleGridCursorTarget();
-		GridCursor->HideCursor();
-		return;
-	}
-
 	FVector RayOrigin = FVector::ZeroVector;
 	FVector RayDirection = FVector::ForwardVector;
-	if (!DeprojectScreenPositionToWorld(ViewportSizeX * 0.5f, ViewportSizeY * 0.5f, RayOrigin, RayDirection))
+	if (!TryGetAimWorldRay(RayOrigin, RayDirection))
 	{
 		CurrentGridCursorTarget = FCastleGridCursorTarget();
 		GridCursor->HideCursor();
@@ -371,18 +441,63 @@ bool ACastlePlayerController::TryPopBalloonFromRay(const FVector& Start, const F
 	const ACastleSupplyBalloon* Balloon = Cast<ACastleSupplyBalloon>(Hit.GetActor());
 	if (!Balloon) { return false; }
 	bOutConsumed = true;
-	// 即使非法落点导致投放失败，这次输入也只属于气球，不允许同一下左键误放建筑。
+	// 即使非法落点导致投放失败，这次主交互也只属于气球。
 	return GetWorld()->GetSubsystem<UCastleSupportTowerSubsystem>()->PopBalloon(Balloon->GetTargetId());
+}
+
+void ACastlePlayerController::HandleWorldPointerPressed(FKey Key)
+{
+	if (ControlSettings)
+	{
+		// 面板与齿轮优先处理自己的点击。到达世界的点击属于设置面板外部。
+		ToggleControlSettings();
+		return;
+	}
+	if (bModalInputActive || bHoldingTemporaryHUDPointer) { return; }
+	if (BuildingDemolishMenu)
+	{
+		// 面板内的点击由 UMG 消费。透到世界的点击只改选或关闭，不能触发放置。
+		float X, Y;
+		if (GetMousePosition(X, Y)) { HandleDemolishOutsideClick(Key, FVector2D(X, Y)); }
+		return;
+	}
+	if (Key == GetPrimaryPlaceInteractKey()) { PlacePrototypeBuildingAtCursor(); }
+	else if (Key == GetDemolishKey())
+	{
+		float X, Y;
+		if (TryGetAimScreenPosition(X, Y))
+		{
+			const FVector2D ScreenPosition(X, Y);
+			if (auto* Building = FindDemolishTargetAt(ScreenPosition))
+			{
+				// 已命中场上建筑时，仅尝试打开它的菜单。挂载失败不改为撤回微缩建筑。
+				OpenBuildingDemolishMenu(*Building, ScreenPosition);
+				return;
+			}
+		}
+		RetractIslandPlacement();
+	}
+}
+
+void ACastlePlayerController::HandleWorldPointerReleased(FKey Key)
+{
+	if (bHoldingTowerDispatch && Key == GetPrimaryPlaceInteractKey()) { ReleaseTowerDispatchInput(); }
 }
 
 void ACastlePlayerController::PlacePrototypeBuildingAtCursor()
 {
-	// UI 使用鼠标时绝不继续向世界发送左键放置，避免购买同时误放建筑。
-	if (Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive)
+	// 模态界面占用指针，世界主交互在输入栈和直接调用两种入口都受同一门控。
+	if (bModalInputActive || BuildingDemolishMenu || bHoldingTemporaryHUDPointer)
 	{
 		return;
 	}
-	// 气球点击属于战斗操作，在构筑门控前消费；同一次左键不会同时放置房间。
+	if (auto* Route = Cast<ACastlePatrolRoute>(UGameplayStatics::GetActorOfClass(GetWorld(), ACastlePatrolRoute::StaticClass()));
+		Route && Route->IsEditing())
+	{
+		Route->AddPointAtAim();
+		return;
+	}
+	// 气球点击属于战斗操作，在构筑门控前消费。
 	FVector Origin, End;
 	const bool bHasRay = TryGetDispatchAim(Origin, End);
 	if (ACastleSkyIslandBase* Island = GetInteractiveSkyIsland(); Island && bHasRay)
@@ -429,16 +544,17 @@ void ACastlePlayerController::PlacePrototypeBuildingAtCursor()
 		return;
 	}
 
+	// 点击时重新解析命中，避免设计模式使用上一帧光标的建筑格。
+	FCastleGridCursorTarget Target;
+	if (bHasRay) { ActiveBoard->TryResolveGridCursorTarget(Origin, End, Target); }
 	FText FailureReason;
-	ActiveBoard->PlaceBackpackBuildingAtCursor(CurrentGridCursorTarget, SelectedBackpackIndex, FailureReason);
+	ActiveBoard->PlaceBackpackBuildingAtCursor(Target, SelectedBackpackIndex, FailureReason);
 }
 
 bool ACastlePlayerController::TryGetDispatchAim(FVector& OutStart, FVector& OutEnd) const
 {
-	int32 Width = 0, Height = 0;
-	GetViewportSize(Width, Height);
 	FVector Direction;
-	if (Width <= 0 || Height <= 0 || !DeprojectScreenPositionToWorld(Width * 0.5f, Height * 0.5f, OutStart, Direction))
+	if (!TryGetAimWorldRay(OutStart, Direction))
 	{
 		return false;
 	}
@@ -473,8 +589,8 @@ void ACastlePlayerController::UpdateTowerDispatchInput()
 	}
 	if (!bHoldingTowerDispatch) { return; }
 	FVector Start, End;
-	if (!Dispatch || !Dispatch->IsSessionActive() || !IsInputKeyDown(EKeys::LeftMouseButton)
-		|| Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive
+	if (!Dispatch || !Dispatch->IsSessionActive() || !IsInputKeyDown(GetPrimaryPlaceInteractKey())
+		|| bModalInputActive || bHoldingTemporaryHUDPointer
 		|| !TryGetDispatchAim(Start, End) || !IsMainTowerHit(Start, End))
 	{
 		ReleaseTowerDispatchInput();
@@ -483,7 +599,7 @@ void ACastlePlayerController::UpdateTowerDispatchInput()
 
 void ACastlePlayerController::ToggleTowerAutoDispatchShortcut()
 {
-	if (Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive) { return; }
+	if (bModalInputActive) { return; }
 	auto* Dispatch = GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>();
 	if (Dispatch && Dispatch->IsSessionActive()) { Dispatch->ToggleAutoDispatch(); }
 }
@@ -511,7 +627,7 @@ void ACastlePlayerController::ToggleShop()
 
 void ACastlePlayerController::ToggleBattlePauseShortcut()
 {
-	if (Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive)
+	if (bModalInputActive)
 	{
 		return;
 	}
@@ -526,7 +642,7 @@ void ACastlePlayerController::ToggleBattlePauseShortcut()
 
 void ACastlePlayerController::ToggleBattleSpeedShortcut()
 {
-	if (Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive)
+	if (bModalInputActive)
 	{
 		return;
 	}
@@ -541,7 +657,7 @@ void ACastlePlayerController::ToggleBattleSpeedShortcut()
 
 void ACastlePlayerController::RetryBattleShortcut()
 {
-	if (Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive)
+	if (bModalInputActive)
 	{
 		return;
 	}
@@ -685,6 +801,7 @@ void ACastlePlayerController::SetDirectorModalState(const bool bRewardOpen, cons
 
 void ACastlePlayerController::HideDirectorEditingPresentation()
 {
+	CloseBuildingDemolishMenu();
 	CurrentGridCursorTarget = FCastleGridCursorTarget();
 	if (IsValid(GridCursor)) { GridCursor->HideCursor(); }
 }
@@ -804,11 +921,10 @@ void ACastlePlayerController::InteractWithSkyIsland()
 {
 	auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
 	if (!Director || Director->GetPhase() != ECastleDirectorPhase::SkyIsland || bModalInputActive) { return; }
-	FVector Start;
-	FRotator Rotation;
-	GetPlayerViewPoint(Start, Rotation);
+	FVector Start, End;
+	if (!TryGetDispatchAim(Start, End)) { return; }
 	FText Reason;
-	if (!Director->TryInteractWithSkyIsland(Start, Start + Rotation.Vector() * GridCursorTraceDistance, Reason))
+	if (!Director->TryInteractWithSkyIsland(Start, End, Reason))
 	{
 		ShowDirectorMessage(Reason);
 	}
@@ -829,7 +945,10 @@ void ACastlePlayerController::RefreshModalInput(const bool bForceRefresh)
 	const auto* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
 	// 使用库存真相源，避免依赖多个动态委托监听者的刷新顺序。
 	const bool bBadgeReplaceOpen = BadgeReplaceWidget && Badges && Badges->TryGetPendingBadge(PendingBadge);
-	const bool bNewOpen = Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive || bBadgeReplaceOpen;
+	const bool bHigherModalOpen = Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive || bBadgeReplaceOpen;
+	if (bHigherModalOpen) { RemoveControlSettingsWidget(); }
+	const bool bNewOpen = bHigherModalOpen || ControlSettings != nullptr;
+	if (bNewOpen) { RemoveBuildingDemolishWidget(); }
 	// 普通商店的购买/刷新通知不改变开关，沿用旧行为，不重设模式或抢回焦点。
 	if (bNewOpen == bModalInputActive && !bForceRefresh) { return; }
 	if (bNewOpen != bModalInputActive)
@@ -839,10 +958,10 @@ void ACastlePlayerController::RefreshModalInput(const bool bForceRefresh)
 		SetIgnoreMoveInput(bNewOpen);
 		SetIgnoreLookInput(bNewOpen);
 	}
-	bShowMouseCursor = bNewOpen;
+	bShowMouseCursor = bNewOpen || BuildingDemolishMenu || bHoldingTemporaryHUDPointer || ControlMode == ECastleControlMode::Design;
 	// 游戏结束会在本帧暂停世界，必须立即清理目标，不能等下一帧控制器 Tick。
 	FText EditReason;
-	if (bNewOpen || !IsCastleEditingAllowed(EditReason))
+	if (bNewOpen || BuildingDemolishMenu || bHoldingTemporaryHUDPointer || !IsCastleEditingAllowed(EditReason))
 	{
 		CurrentGridCursorTarget = FCastleGridCursorTarget();
 		if (GridCursor) { GridCursor->HideCursor(); }
@@ -853,7 +972,7 @@ void ACastlePlayerController::RefreshModalInput(const bool bForceRefresh)
 		if (DirectorFocusWidget) { Mode.SetWidgetToFocus(DirectorFocusWidget->TakeWidget()); }
 		SetInputMode(Mode);
 	}
-	else if (bNewOpen)
+	else if (bShowMouseCursor)
 	{
 		FInputModeGameAndUI Mode;
 		Mode.SetHideCursorDuringCapture(false);
@@ -861,11 +980,6 @@ void ACastlePlayerController::RefreshModalInput(const bool bForceRefresh)
 		if (bBadgeReplaceOpen) { Mode.SetWidgetToFocus(BadgeReplaceWidget->TakeWidget()); }
 		else if (bRewardInputActive && DirectorFocusWidget) { Mode.SetWidgetToFocus(DirectorFocusWidget->TakeWidget()); }
 		SetInputMode(Mode);
-		CurrentGridCursorTarget = FCastleGridCursorTarget();
-		if (GridCursor != nullptr)
-		{
-			GridCursor->HideCursor();
-		}
 	}
 	else
 	{

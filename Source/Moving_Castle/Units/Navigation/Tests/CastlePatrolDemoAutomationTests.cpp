@@ -17,6 +17,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "InputKeyEventArgs.h"
+#include "Castle/Input/CastleControlMode.h"
 #include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
 #include "Materials/Material.h"
@@ -28,7 +29,7 @@
 
 namespace CastlePatrolDemoTests
 {
-	/** 真正使用本地玩家输入栈验证 P/左键/Enter/撤回/清空，并检查实际骨骼 NPC 的运行状态。 */
+	/** 使用通用玩家控制器验证经典右键、路线快捷键和实际骨骼 NPC 的运行状态。 */
 	class FDemoCommand : public IAutomationLatentCommand
 	{
 	public:
@@ -52,6 +53,7 @@ namespace CastlePatrolDemoTests
 				if (!Test->TestNotNull(TEXT("游戏世界有巡逻线可视化子系统"), Drawing)) { return true; }
 				Units = World->GetSubsystem<UCastleMassUnitSubsystem>();
 				Controller = World->GetFirstPlayerController();
+				if (!Test->TestNotNull(TEXT("独立巡逻演示有真实玩家控制器"), Controller)) { return true; }
 			}
 			FCastleMassUnitSnapshot Snapshot;
 			switch (Stage)
@@ -126,7 +128,7 @@ namespace CastlePatrolDemoTests
 				return false;
 			case 4:
 				CheckMarkers(4);
-				Test->TestFalse(TEXT("P 退出编辑并释放左键"), Route->IsEditing());
+				Test->TestFalse(TEXT("P 退出编辑并释放主交互键"), Route->IsEditing());
 				Test->TestEqual(TEXT("取消草稿保留四点完整路线"), Navigation->GetSharedPath().Waypoints.Num(), 4);
 				Press(EKeys::P);
 				Stage = 5;
@@ -149,23 +151,31 @@ namespace CastlePatrolDemoTests
 				Test->TestTrue(TEXT("清空后 NPC 实际停速"), Snapshot.Velocity.IsNearlyZero());
 				Spawner->DespawnUnits();
 				Spawner->Count = 1;
-				// 将视口中心精确对准实际下层地面，左键仍由正式碰撞射线与输入绑定处理。
+				// 将视口中心精确对准下层地面，经典主交互仍由实际碰撞射线与输入绑定处理。
 				Demo->DemoCamera->SetWorldLocation(FVector(-1200, -300, 800));
 				Demo->DemoCamera->SetWorldRotation(FRotator(-90, 0, 0));
 				Controller->SetViewTarget(Demo);
 				Stage = 7;
 				return false;
 			case 7:
-				Press(EKeys::LeftMouseButton);
+			{
+				// 独立演示和城堡关卡共用经典语义映射，确认演示实际收到右键。
+				const auto& Bindings = CastleControlInput::GetBindings(ECastleControlMode::Classic);
+				const FKey& Key = Bindings.Get(ECastleWorldInputAction::PrimaryInteract);
+				if (!Test->TestEqual(TEXT("独立巡逻演示使用经典右键放点"), Key, EKeys::RightMouseButton)) { return true; }
+				Press(Key);
 				Stage = 8;
 				return false;
+			}
 			case 8:
 				CheckMarkers(1);
 				Press(EKeys::Enter);
 				Stage = 9;
 				return false;
 			case 9:
-				if (!Test->TestTrue(TEXT("左键碰撞落点和 Enter 正式发布单点路线"), Navigation->GetSharedPath().bValid && Navigation->GetSharedPath().Waypoints.Num() == 1)) { return true; }
+				// 等待真实输入栈完成 Enter 派发后读取已发布的路线。
+				if (Route->IsEditing()) { return false; }
+				if (!Test->TestTrue(TEXT("右键碰撞落点和 Enter 正式发布单点路线"), Navigation->GetSharedPath().bValid && Navigation->GetSharedPath().Waypoints.Num() == 1)) { return true; }
 				CheckMarkers(1);
 				Test->TestFalse(TEXT("提交后退出编辑"), Route->IsEditing());
 				Test->TestEqual(TEXT("单点待命没有多余查询"), Navigation->PathQueryCount, 4);

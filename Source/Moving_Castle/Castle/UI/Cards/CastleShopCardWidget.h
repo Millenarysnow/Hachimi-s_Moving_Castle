@@ -46,6 +46,9 @@ public:
 	bool Configure(UCastleShopWidget& InShop, const FCastleBuildingDescriptor& Descriptor, const ACastleBoard* Board,
 		bool bSold);
 
+	/** 场上建筑使用同一牌面及摄影服务，独立展示时没有商店的购买和动态摄影权限。 */
+	bool ConfigureStandalone(const FCastleBuildingDescriptor& Descriptor, const ACastleBoard* Board);
+
 	/** 普通与箔光是同一张牌的表现状态，不触发重新成像。 */
 	void SetFoilPreview(bool bEnabled);
 
@@ -56,7 +59,7 @@ public:
 	const FCastleBuildingDescriptor& GetDescriptor() const { return DisplayedDescriptor; }
 
 	/** 返回当前是否处于已售罄态（已售罄禁止拖转与短点购买）。 */
-	bool IsSold() const { return !bCanInspect; }
+	bool IsSold() const { return bIsSold; }
 
 	/** 短点卡面触发购买事件（方案 A：位移未超过拖拽阈值且在卡面内松手）。 */
 	FCastleShopCardClicked OnCardClicked;
@@ -100,6 +103,8 @@ private:
 	void RequestFaceRender();
 	bool ReportSetupError(const FCastleBuildingDescriptor& Descriptor, const FText& Reason);
 	void SetPortraitStatus(const FText& Message, const FText& Details);
+	bool ConfigurePresentation(UCastleShopWidget* InShop, const FCastleBuildingDescriptor& Descriptor,
+		const ACastleBoard* Board, bool bSold);
 
 	UPROPERTY()
 	TObjectPtr<UMaterialInterface> FaceMaterial;
@@ -156,4 +161,5 @@ private:
 	bool bReturning = false;
 	bool bFoilPreview = false;
 	bool bCanInspect = false;
+	bool bIsSold = false;
 };

@@ -172,6 +172,18 @@ void UCastleShopCardWidget::NativeOnInitialized()
 bool UCastleShopCardWidget::Configure(UCastleShopWidget& InShop, const FCastleBuildingDescriptor& Descriptor,
 	const ACastleBoard* Board, bool bSold)
 {
+	return ConfigurePresentation(&InShop, Descriptor, Board, bSold);
+}
+
+bool UCastleShopCardWidget::ConfigureStandalone(const FCastleBuildingDescriptor& Descriptor, const ACastleBoard* Board)
+{
+	// 与商品走同一取景、文字与材质流程；没有商店所有者，卡面始终保持只读。
+	return ConfigurePresentation(nullptr, Descriptor, Board, false);
+}
+
+bool UCastleShopCardWidget::ConfigurePresentation(UCastleShopWidget* InShop, const FCastleBuildingDescriptor& Descriptor,
+	const ACastleBoard* Board, bool bSold)
+{
 	FText Reason;
 	if (!Descriptor.Validate(Reason))
 	{
@@ -264,9 +276,10 @@ bool UCastleShopCardWidget::Configure(UCastleShopWidget& InShop, const FCastleBu
 	TrailingNumber->SetText(CardNumber);
 	Title->SetText(Descriptor.Definition->DisplayName);
 	LevelLabel->SetText(FText::Format(NSLOCTEXT("CastleCard", "Level", "等级 {0}"), FText::AsNumber(Descriptor.Level)));
-	ShopOwner = &InShop;
+	ShopOwner = InShop;
 	DisplayedDescriptor = Descriptor;
-	bCanInspect = !bSold;
+	bIsSold = bSold;
+	bCanInspect = InShop && !bSold;
 	RefreshPortrait();
 	ApplyFaceState();
 	return true;
