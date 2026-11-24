@@ -1,4 +1,5 @@
 #include "CastleHachimisV4PCG.h"
+#include "Moving_Castle.h"
 
 #include "Castle/PCG/CastlePCGSemantics.h"
 #include "Castle/PCG/CastleBuildingPCGRule.h"
@@ -363,14 +364,16 @@ namespace CastleV4PCG
 	bool AddAttachments(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FCastlePCGSemanticField& Field,
 		FCastlePCGApplyPlan& Plan, FString& Error)
 	{
-		auto AddKit = [&](const FIntVector& Cell, const FCastlePCGAttachmentSpec& Spec)
+		auto AddKit = [&](const FIntVector& Cell, const FCastlePCGAttachmentSpec& Spec, FName VisualGroup = NAME_None)
 		{
 			// 锚点和功能盒都在所占格底面坐标系中，建筑移动或旋转时自然随其组件。
 			const FTransform Anchor = Spec.AnchorTransform * CellFrame(Board, Cell).GetRelativeTransform(Building.GetActorTransform());
 			for (const FCastleV4Part& Part : Spec.Kit->Parts)
 			{
 				if (!AddPart(Building, Part, Anchor, Plan, Error)) { return false; }
-				Plan.Visual.Visuals.Last().bSelectable = Spec.bSelectable;
+				FCastlePCGMeshTemplate& Visual = Plan.Visual.Visuals.Last();
+				Visual.bSelectable = Spec.bSelectable;
+				if (!VisualGroup.IsNone()) { Visual.Group = VisualGroup; }
 			}
 			if (Spec.bAffectsNavigation)
 			{
@@ -383,6 +386,18 @@ namespace CastleV4PCG
 		{
 			const FCastlePCGCellSpec& Spec = Field.Cells.FindChecked(Cell);
 			if (Spec.Roof == ECastlePCGRoof::Override && !AddKit(Cell, Spec.RoofOverride)) { return false; }
+			if (Spec.DeckOverride.IsSet())
+			{
+				const bool bHatch = Spec.Deck == ECastlePCGDeck::Hatch;
+				if (!AddKit(Cell, Spec.DeckOverride.GetValue(), bHatch ? FName(TEXT("UpperFloor")) : NAME_None)) { return false; }
+				if (bHatch)
+				{
+					// D7 已授权的临时替代。功能层仍装配切洞板和双向梯链接。
+					UE_LOG(LogMoving_Castle, Warning,
+						TEXT("建筑 %s 格 %s：挖洞款宽边地板美术暂缺，视觉暂用无洞宽边 Deck 替代，切洞碰撞与爬梯保持开启"),
+						*Building.GetPathName(), *Cell.ToString());
+				}
+			}
 		}
 		for (const auto& Entry : Field.GetAttachments())
 		{
@@ -412,15 +427,25 @@ namespace CastleV4PCG
 				const FCastlePCGSideFaceSpec& Side = Field.SideFaces.FindChecked({Cells.FindChecked(Slot.Cell), Face});
 				if (!PrepareWall(Building, Board, Rules, Side, Slot, Original, Plan, Error)) { return false; }
 			}
+			// 整体替换要求摘掉原屋面系统的所有作者件，包括没有单格覆盖的接缝下搭片。
+			const bool bReplaceWholeRoof = Building.GetOccupiedCoordinates().ContainsByPredicate([&](const FIntVector& Cell)
+			{
+				return Field.Cells.FindChecked(Cell).bOverrideWholeRoof;
+			});
 			for (int32 Index = 0; Index < Layout.Parts.Num(); ++Index)
 			{
 				const FCastleV4Part& Part = Layout.Parts[Index];
-				if ((Part.Group == TEXT("Roof") || Part.Group == TEXT("RoofKeys")) && Part.Cells.ContainsByPredicate([&](const FIntVector& Cell)
+				if ((Part.Group == TEXT("Roof") || Part.Group == TEXT("RoofKeys")) && (bReplaceWholeRoof || Part.Cells.ContainsByPredicate([&](const FIntVector& Cell)
 				{
 					return Field.Cells.FindChecked(Cells.FindChecked(Cell)).Roof != ECastlePCGRoof::Keep;
-				})) { Plan.Visual.Hidden.Add(Original[Index].Component); }
+				}))) { Plan.Visual.Hidden.Add(Original[Index].Component); }
 				if (Part.Group != TEXT("Foundation")) { continue; }
-				if (Part.Cells.ContainsByPredicate([&](const FIntVector& Cell){ return Field.Cells.FindChecked(Cells.FindChecked(Cell)).Deck == ECastlePCGDeck::Hatch; }))
+				const auto IsDeckVisualReplaced = [&](const FIntVector& Cell)
+				{
+					const FCastlePCGCellSpec& Spec = Field.Cells.FindChecked(Cells.FindChecked(Cell));
+					return Spec.Deck == ECastlePCGDeck::Hatch || Spec.DeckOverride.IsSet();
+				};
+				if (Part.Cells.ContainsByPredicate(IsDeckVisualReplaced))
 				{
 					Plan.Visual.Hidden.Add(Original[Index].Component);
 					for (const FCastleV4Part& Slice : Layout.FoundationSlices)
@@ -430,7 +455,7 @@ namespace CastleV4PCG
 						{
 							return Reject(Building, Error, Slice.Node.ToString() + TEXT(" 的作者底盘切片归属非法。"));
 						}
-						if (Field.Cells.FindChecked(Cells.FindChecked(Slice.Cells[0])).Deck != ECastlePCGDeck::Hatch
+						if (!IsDeckVisualReplaced(Slice.Cells[0])
 							&& !AddPart(Building, Slice, FTransform::Identity, Plan, Error)) { return false; }
 					}
 				}
@@ -449,7 +474,8 @@ namespace CastleV4PCG
 			{
 				if (!PrepareIncomingDeck(Board, Building, Cell, Pair.Key, *Incoming, Plan, Error)) { return false; }
 				// V4 上层只接收共享井口的带洞楼板组；混接旧下层的楼板由旧适配器准备。
-				if (Incoming->Kit && !AddStairGroup(Building, *Incoming, TEXT("UpperFloor"), Plan, Error)) { return false; }
+				if (Incoming->Kit && !Field.Cells.FindChecked(Cell).DeckOverride.IsSet()
+					&& !AddStairGroup(Building, *Incoming, TEXT("UpperFloor"), Plan, Error)) { return false; }
 			}
 			if (const FStairInterface* Outgoing = Stairs.Find(Cell))
 			{

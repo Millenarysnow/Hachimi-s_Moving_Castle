@@ -412,6 +412,15 @@ bool FCastlePCGStructureExtensions::RunTest(const FString& Parameters)
 	ACastleBuildingBase* Tower = Place(*this, *Board, *Archer, Above, 2, ECastleTileColor::Green);
 	if (!Tower || !TestTrue(TEXT("正式二级尾格悬挑"), Tower->GetOccupiedCoordinates().Contains(Overhang)
 		&& !Board->GetBuildingAt(Overhang - FCastlePCGBoardQuery::Up))) { return false; }
+	// 正式斜撑随实际棋盘提交装配，虽然跨入下一层可见空间，也不能成为选择射线的命中对象。
+	const FName BraceTag(TEXT("CastlePCGNode=SM_HC515_Archer_Cantilever"));
+	TestEqual(TEXT("尾格所属二级箭塔实际生成一套单格悬挑斜撑"), CountVisibleParts(*Tower, BraceTag), 1);
+	for (const auto* Mesh : TInlineComponentArray<UStaticMeshComponent*>(Tower))
+	{
+		if (!Mesh->ComponentHasTag(BraceTag)) { continue; }
+		TestTrue(TEXT("正式斜撑不拦截选择射线或导航"), Mesh->GetCollisionResponseToChannel(ECC_Visibility) == ECR_Ignore
+			&& !Mesh->CanEverAffectNavigation());
+	}
 	const UCastleHachimisV4Layout& Layout = *Tower->HachimisLayout;
 	const FCastleV4Part* RoofPart = Layout.Parts.FindByPredicate([](const FCastleV4Part& Part)
 	{
@@ -458,6 +467,7 @@ bool FCastlePCGStructureExtensions::RunTest(const FString& Parameters)
 	Brace->bDuplicate = false;
 	// 新的直接支撑只改变悬挑条件，之前只读六邻会遗漏某些更远的斜撑规则依赖。
 	if (!Place(*this, *Board, *Room, Overhang - FCastlePCGBoardQuery::Up, 1, ECastleTileColor::Purple)) { return false; }
+	TestEqual(TEXT("直接支撑到位后卸下正式斜撑"), CountVisibleParts(*Tower, BraceTag), 0);
 	TestEqual(TEXT("补齐支撑后移除斜撑"), CountVisibleParts(*Tower, TEXT("CastlePCGNode=RegressionBrace")), 0);
 	TestEqual(TEXT("补齐支撑后移除覆写"), CountVisibleParts(*Tower, TEXT("CastlePCGNode=RegressionRoof")), 0);
 	TestTrue(TEXT("作者屋顶精确恢复"), OriginalRoof->IsVisible());
