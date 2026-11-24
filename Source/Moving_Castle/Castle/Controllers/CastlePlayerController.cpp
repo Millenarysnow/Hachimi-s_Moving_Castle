@@ -128,11 +128,7 @@ bool ACastlePlayerController::TryGetAimScreenPosition(float& OutScreenX, float& 
 	{
 		return GetMousePosition(OutScreenX, OutScreenY);
 	}
-	int32 Width = 0, Height = 0;
-	GetViewportSize(Width, Height);
-	OutScreenX = Width * 0.5f;
-	OutScreenY = Height * 0.5f;
-	return Width > 0 && Height > 0;
+	return CastleControlInput::TryGetClassicAimScreenPosition(*this, OutScreenX, OutScreenY);
 }
 
 bool ACastlePlayerController::TryGetAimWorldRay(FVector& OutOrigin, FVector& OutDirection) const

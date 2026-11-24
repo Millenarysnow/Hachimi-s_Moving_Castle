@@ -2,6 +2,7 @@
 
 #include "CastleControlMode.h"
 
+#include "GameFramework/PlayerController.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Moving_Castle.h"
 
@@ -40,6 +41,16 @@ FText CastleControlInput::GetKeyDisplayText(const FKey& Key)
 	if (Key == EKeys::RightMouseButton) { return INVTEXT("鼠标右键"); }
 	if (Key == EKeys::MiddleMouseButton) { return INVTEXT("鼠标中键"); }
 	return Key.GetDisplayName();
+}
+
+bool CastleControlInput::TryGetClassicAimScreenPosition(const APlayerController& Controller, float& OutX, float& OutY)
+{
+	// 使用玩家视口的像素尺寸，与鼠标位置及反投影 API 使用同一坐标系。
+	int32 Width = 0, Height = 0;
+	Controller.GetViewportSize(Width, Height);
+	OutX = Width * 0.5f;
+	OutY = Height * 0.5f;
+	return Width > 0 && Height > 0;
 }
 
 bool CastleControlInput::LoadMode(ECastleControlMode& OutMode)

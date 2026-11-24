@@ -6,6 +6,8 @@
 #include "InputCoreTypes.h"
 #include "CastleControlMode.generated.h"
 
+class APlayerController;
+
 /** 玩家本地操作预设。存档使用稳定名称，显示名称由设置界面提供。 */
 UENUM(BlueprintType)
 enum class ECastleControlMode : uint8
@@ -36,6 +38,8 @@ namespace CastleControlInput
 	const FCastleControlBindings& GetBindings(ECastleControlMode Mode);
 	TArray<FKey> GetPointerKeys();
 	FText GetKeyDisplayText(const FKey& Key);
+	/** 经典玩家和通用控制器巡逻演示共用窗口中心坐标。 */
+	bool TryGetClassicAimScreenPosition(const APlayerController& Controller, float& OutX, float& OutY);
 	bool LoadMode(ECastleControlMode& OutMode);
 	void SaveMode(ECastleControlMode Mode);
 }
