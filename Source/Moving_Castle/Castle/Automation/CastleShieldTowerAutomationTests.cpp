@@ -86,15 +86,21 @@ bool FCastleShieldTowerFrameworkTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("合成保留正式定义身份"), Merged->GetBuildingDefinition() == Definition);
 	TestEqual(TEXT("合成新实例不继承旧触发次数"), Merged->BuildingEffect->TriggerCount, int64(0));
 	Merged->BuildingMerge->TickComponent(100.0f, LEVELTICK_All, nullptr);
-	if (!Board->RemoveBuildingToBackpack(Merged, Board->PrototypeBackpack, Reason)) { AddError(Reason.ToString()); return false; }
+	if (!Board->DemolishBuildingCellToBackpack(Merged, FIntVector::ZeroValue, Board->PrototypeBackpack, Reason))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
 	FCastleBuildingDescriptor Recovered;
-	if (!TestTrue(TEXT("二级盾塔可回收到背包"), Board->PrototypeBackpack->TryGetItemAt(0, Recovered))) { return false; }
-	TestTrue(TEXT("回收保留盾塔定义和二级"), Recovered.Definition == Definition && Recovered.Level == 2);
-	TestEqual(TEXT("回收释放全部占用"), Board->GetOccupiedRoomCellCount(), 0);
+	if (!TestTrue(TEXT("指定格可作为卡回收到背包"), Board->PrototypeBackpack->TryGetItemAt(0, Recovered))) { return false; }
+	TestTrue(TEXT("回收保留盾塔定义且退回一级"), Recovered.Definition == Definition && Recovered.Level == 1);
+	TestEqual(TEXT("回收只释放一个占用"), Board->GetOccupiedRoomCellCount(), 1);
+	const auto* Retained = Board->GetBuildingAt(FIntVector(1, 0, 0));
+	TestTrue(TEXT("剩余格原地降级为一级盾塔"), Retained && Retained->GetBuildingLevel() == 1);
 
-	// 二级卡再次走正式生成入口，再回收出售，覆盖卡牌完整流转而不改变盾塔玩法。
+	// 回收卡可再次放到同一格，再通过单格入口收回出售。
 	ACastleBuildingBase* Restored = Board->PlaceBuildingFromBackpack(FIntVector::ZeroValue, Board->PrototypeBackpack, 0, false, Reason);
-	if (!TestNotNull(TEXT("回收的二级盾塔可重新放置"), Restored) || !CastleBuildingTests::CompletePlacement(Restored)) { return false; }
+	if (!TestNotNull(TEXT("回收的一级盾塔可重新放置"), Restored) || !CastleBuildingTests::CompletePlacement(Restored)) { return false; }
 	if (!Board->RemoveBuildingToBackpack(Restored, Board->PrototypeBackpack, Reason) || !Shop->TryOpenShop(Reason)) { AddError(Reason.ToString()); return false; }
 	int32 SellPrice = 0;
 	if (!Shop->TryGetSellPrice(0, SellPrice, Reason)) { AddError(Reason.ToString()); return false; }

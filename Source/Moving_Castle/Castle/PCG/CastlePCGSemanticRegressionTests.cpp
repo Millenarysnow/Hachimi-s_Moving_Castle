@@ -412,8 +412,16 @@ bool FCastlePCGStructureExtensions::RunTest(const FString& Parameters)
 	ACastleBuildingBase* Tower = Place(*this, *Board, *Archer, Above, 2, ECastleTileColor::Green);
 	if (!Tower || !TestTrue(TEXT("正式二级尾格悬挑"), Tower->GetOccupiedCoordinates().Contains(Overhang)
 		&& !Board->GetBuildingAt(Overhang - FCastlePCGBoardQuery::Up))) { return false; }
-	// 正式斜撑随实际棋盘提交装配，虽然跨入下一层可见空间，也不能成为选择射线的命中对象。
 	const FName BraceTag(TEXT("CastlePCGNode=SM_HC515_Archer_Cantilever"));
+	TestEqual(TEXT("侧下方普通房没有承托立面，尾格不生成正式斜撑"), CountVisibleParts(*Tower, BraceTag), 0);
+	// 换成真正提供立面的功能塔，验证正式挂件装配与射线、导航隔离。
+	if (!Board->RemoveBuilding(SupportRoom, Reason)
+		|| !Place(*this, *Board, *Archer, Support, 1, ECastleTileColor::Green))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	Complete(Tower);
 	TestEqual(TEXT("尾格所属二级箭塔实际生成一套单格悬挑斜撑"), CountVisibleParts(*Tower, BraceTag), 1);
 	for (const auto* Mesh : TInlineComponentArray<UStaticMeshComponent*>(Tower))
 	{

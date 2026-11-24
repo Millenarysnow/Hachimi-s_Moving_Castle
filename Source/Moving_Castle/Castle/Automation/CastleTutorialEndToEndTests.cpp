@@ -1,4 +1,5 @@
 #if WITH_EDITOR && WITH_DEV_AUTOMATION_TESTS && !UE_BUILD_SHIPPING
+#include "Blueprint/SlateBlueprintLibrary.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Castle/Dialogue/CastleDialogueScriptDataAsset.h"
 #include "Castle/Dialogue/CastleDialogueSubsystem.h"
@@ -10,8 +11,10 @@
 #include "Castle/Tutorial/CastleTutorialConfigDataAsset.h"
 #include "Castle/Tutorial/CastleTutorialDirector.h"
 #include "Castle/Tutorial/CastleTutorialWidgets.h"
+#include "Castle/UI/BuildBar/CastleBuildBarWidget.h"
 #include "Castle/UI/Common/CastleHUDControls.h"
 #include "Castle/UI/Director/CastleDirectorWidgets.h"
+#include "Castle/UI/Items/CastleBadgeBarWidget.h"
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
@@ -22,10 +25,12 @@
 #include "CastleShopWidget.h"
 #include "CastleTowerDispatchSubsystem.h"
 #include "Components/Image.h"
+#include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Editor.h"
 #include "Engine/GameInstance.h"
+#include "Engine/GameViewportClient.h"
 #include "EngineUtils.h"
 #include "FileHelpers.h"
 #include "Interaction/CastlePatrolRoute.h"
@@ -34,7 +39,9 @@
 #include "Misc/PackageName.h"
 #include "PlayInEditorDataTypes.h"
 #include "Settings/LevelEditorPlaySettings.h"
+#include "Slate/SceneViewport.h"
 #include "Tests/AutomationCommon.h"
+#include "Widgets/SWindow.h"
 
 namespace
 {
@@ -54,7 +61,7 @@ namespace
 		return true;
 	}
 
-	bool StartPIE(FAutomationTestBase& Test, const TCHAR* Map)
+	bool StartPIE(FAutomationTestBase& Test, const TCHAR* Map, const FIntPoint ViewportSize = FIntPoint::ZeroValue)
 	{
 		const FString Filename = FPackageName::LongPackageNameToFilename(Map, FPackageName::GetMapPackageExtension());
 		// 通用 PIE 测试可能把地图留在上一个用例中。原生地图加载会关闭该 PIE 后再重新创建实例。
@@ -66,6 +73,12 @@ namespace
 		Settings->SetPlayNetMode(PIE_Standalone);
 		Settings->SetPlayNumberOfClients(1);
 		Settings->SetRunUnderOneProcess(true);
+		if (ViewportSize != FIntPoint::ZeroValue)
+		{
+			// 独立 PIE 窗口保持测试指定的实际像素尺寸，避免借用编辑器布局中的任意小视口。
+			Settings->NewWindowWidth = ViewportSize.X;
+			Settings->NewWindowHeight = ViewportSize.Y;
+		}
 		FRequestPlaySessionParams Params;
 		Params.EditorPlaySettings = Settings;
 		Params.bAllowOnlineSubsystem = false;
@@ -362,6 +375,114 @@ bool FCastleTutorialEndToEndTest::RunTest(const FString&)
 	return true;
 }
 
+/** 在真实 PIE 视口中读取 UMG 缓存几何，验证相对锚点及教程 HUD 的挂载和显隐。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleTutorialDialogueViewportTest, "MovingCastle.Dialogue.TutorialViewportLayout",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleTutorialDialogueViewportTest::RunTest(const FString&)
+{
+	if (!StartPIE(*this, TEXT("/Game/MovingCastle/Maps/TutorialMap"), FIntPoint(1280, 720))) { return false; }
+	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([this, Deadline = FPlatformTime::Seconds() + 45.0,
+		bBothPortraits = false, FramesSinceResize = 0]() mutable
+	{
+		UWorld* World = GEditor->PlayWorld;
+		auto* Player = World ? Cast<ACastlePlayerController>(World->GetFirstPlayerController()) : nullptr;
+		auto* Widget = World ? FindScreenWidget<UCastleDialogueWidget>(*World) : nullptr;
+		auto* BuildBar = World ? FindScreenWidget<UCastleBuildBarWidget>(*World) : nullptr;
+		if (!Player || !Widget || !BuildBar)
+		{
+			if (FPlatformTime::Seconds() < Deadline) { return false; }
+			AddError(TEXT("教程 PIE 未挂载预期的对话和建造栏。"));
+			return true;
+		}
+		auto* Dialogue = World->GetGameInstance()->GetSubsystem<UCastleDialogueSubsystem>();
+		auto* RightImage = Widget->GetWidgetFromName(TEXT("RightPortrait"));
+		if (!TestTrue(TEXT("教程开场剧本与正式右侧立绘绑定有效"), Dialogue && Dialogue->IsDialoguePlaying() && RightImage))
+		{
+			return true;
+		}
+
+		if (!bBothPortraits)
+		{
+			// 桌面工作区较小时，窗口边框会挤占请求尺寸。把真实 PIE 渲染目标固定在验收像素。
+			auto* ViewportClient = World->GetGameViewport();
+			auto* Viewport = ViewportClient ? ViewportClient->GetGameViewport() : nullptr;
+			const TSharedPtr<SWindow> Window = ViewportClient ? ViewportClient->GetWindow() : nullptr;
+			if (!TestNotNull(TEXT("可固定实际 PIE 渲染视口"), Viewport) || !TestTrue(TEXT("PIE 窗口存在"), Window.IsValid()))
+			{
+				return true;
+			}
+			Window->Resize(FVector2D(1280, 720));
+			Viewport->SetViewportSize(1280, 720);
+			Viewport->SetFixedViewportSize(1280, 720);
+			// 经过真实的剧本行和揭示逻辑推进到双立绘，不给视口注入伪造数据。
+			for (int32 Step = 0; Step < 6 && RightImage->GetVisibility() == ESlateVisibility::Collapsed; ++Step)
+			{
+				Dialogue->AdvanceDialogueForAutomation();
+			}
+			if (!TestEqual(TEXT("已推进到双立绘的开场台词"), RightImage->GetVisibility(), ESlateVisibility::HitTestInvisible))
+			{
+				return true;
+			}
+			bBothPortraits = true;
+			return false;
+		}
+		// 缩放框需要经过布局和绘制两轮才能把初始几何换成新尺寸，避免采到旧窗口的子控件缓存。
+		if (++FramesSinceResize <= 4) { return false; }
+
+		const auto Measure = [&](const FName Name, FVector2D& OutMin, FVector2D& OutMax)
+		{
+			const UWidget* Child = Widget->GetWidgetFromName(Name);
+			if (!Child) { return false; }
+			const FGeometry& Geometry = Child->GetCachedGeometry();
+			if (Geometry.GetLocalSize().IsNearlyZero()) { return false; }
+			FVector2D Unused;
+			USlateBlueprintLibrary::LocalToViewport(World, Geometry, FVector2D::ZeroVector, OutMin, Unused);
+			USlateBlueprintLibrary::LocalToViewport(World, Geometry, Geometry.GetLocalSize(), OutMax, Unused);
+			return true;
+		};
+		FVector2D PanelMin, PanelMax, LeftSlotMin, LeftSlotMax, RightSlotMin, RightSlotMax, LeftMin, LeftMax, RightMin, RightMax;
+		if (!Measure(TEXT("DialoguePanel"), PanelMin, PanelMax)
+			|| !Measure(TEXT("LeftPortraitSlot"), LeftSlotMin, LeftSlotMax)
+			|| !Measure(TEXT("RightPortraitSlot"), RightSlotMin, RightSlotMax)
+			|| !Measure(TEXT("LeftPortrait"), LeftMin, LeftMax) || !Measure(TEXT("RightPortrait"), RightMin, RightMax))
+		{
+			if (FPlatformTime::Seconds() < Deadline) { return false; }
+			AddError(TEXT("对话面板或两侧立绘没有取得 PIE 视口几何。"));
+			return true;
+		}
+		int32 ViewportWidth, ViewportHeight;
+		Player->GetViewportSize(ViewportWidth, ViewportHeight);
+		const FVector2D Panel = PanelMax - PanelMin, LeftSlot = LeftSlotMax - LeftSlotMin, RightSlot = RightSlotMax - RightSlotMin;
+		const FVector2D Left = LeftMax - LeftMin, Right = RightMax - RightMin;
+		AddInfo(FString::Printf(TEXT("DialogueViewport %dx%d px: panel %.2fx%.2f, left slot %.2fx%.2f, right slot %.2fx%.2f, left image %.2fx%.2f, right image %.2fx%.2f"),
+			ViewportWidth, ViewportHeight, Panel.X, Panel.Y, LeftSlot.X, LeftSlot.Y, RightSlot.X, RightSlot.Y, Left.X, Left.Y, Right.X, Right.Y));
+		TestEqual(TEXT("独立 PIE 视口为 1280×720"), FIntPoint(ViewportWidth, ViewportHeight), FIntPoint(1280, 720));
+		TestTrue(TEXT("面板实际覆盖超过视口宽度的 75%"), Panel.X > ViewportWidth * 0.75);
+		TestTrue(TEXT("两张立绘底边均贴合对话面板上沿"), FMath::IsNearlyEqual(LeftMax.Y, PanelMin.Y, 2.0)
+			&& FMath::IsNearlyEqual(RightMax.Y, PanelMin.Y, 2.0));
+		// 离屏窗口合成到固定渲染目标时会应用各轴像素缩放，正方形基准从实际生成的 UMG 盒校验。
+		const auto* LeftBox = Cast<USizeBox>(Widget->GetWidgetFromName(TEXT("LeftPortrait"))->GetParent());
+		const auto* RightBox = Cast<USizeBox>(RightImage->GetParent());
+		TestTrue(TEXT("左右立绘均使用 380×380 的 UMG 设计基准"),
+			LeftBox && RightBox && LeftBox->GetWidthOverride() == 380.0f && LeftBox->GetHeightOverride() == 380.0f
+			&& RightBox->GetWidthOverride() == 380.0f && RightBox->GetHeightOverride() == 380.0f);
+		TestEqual(TEXT("实际对话期收起建造栏"), BuildBar->GetVisibility(), ESlateVisibility::Collapsed);
+		TestNull(TEXT("教程视口没有正式徽章栏"), FindScreenWidget<UCastleBadgeBarWidget>(*World));
+		// 完成本段剧本后由子系统发出活动状态变更，检查无需等待 UMG Tick 的即时恢复。
+		const int32 OpeningLineCount = Dialogue->GetCurrentScript()->Lines.Num();
+		for (int32 Step = 0; Step < OpeningLineCount && Dialogue->IsDialoguePlaying(); ++Step)
+		{
+			Dialogue->AdvanceDialogueForAutomation();
+		}
+		TestFalse(TEXT("开场对话已播放完成"), Dialogue->IsDialoguePlaying());
+		TestEqual(TEXT("对话结束立即恢复底部建造栏"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		return true;
+	}));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(StopPIE()));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDialoguePresentationTest, "MovingCastle.Dialogue.PresentationAndGuide",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -393,7 +514,7 @@ bool FCastleDialoguePresentationTest::RunTest(const FString&)
 		auto* Left = Cast<UImage>(Widget->GetWidgetFromName(TEXT("LeftPortrait")));
 		auto* Right = Cast<UImage>(Widget->GetWidgetFromName(TEXT("RightPortrait")));
 		if (!TestTrue(TEXT("左右槽都已绑定且首行只显示城主"), Left && Right
-			&& Left->GetVisibility() == ESlateVisibility::Visible && Right->GetVisibility() == ESlateVisibility::Collapsed)) { return true; }
+			&& Left->GetVisibility() == ESlateVisibility::HitTestInvisible && Right->GetVisibility() == ESlateVisibility::Collapsed)) { return true; }
 		TestTrue(TEXT("模态阻止飞行和转视角"), Controller->IsModalInputActive() && Controller->IsLookInputIgnored()
 			&& Controller->IsMoveInputIgnored() && Controller->bShowMouseCursor);
 		const FString FirstLine = Dialogue->GetResolvedCurrentLineText().ToString();
@@ -404,7 +525,7 @@ bool FCastleDialoguePresentationTest::RunTest(const FString&)
 		Click(*Widget, TEXT("ContinueButton"));
 		TestNotEqual(TEXT("第二次点击才换到下一行"), Dialogue->GetResolvedCurrentLineText().ToString(), FirstLine);
 		Dialogue->AdvanceDialogueForAutomation();
-		TestEqual(TEXT("旺财出场后右侧显示"), Right->GetVisibility(), ESlateVisibility::Visible);
+		TestEqual(TEXT("旺财出场后右侧显示且不截获点击"), Right->GetVisibility(), ESlateVisibility::HitTestInvisible);
 		TestEqual(TEXT("当前发言侧高亮"), Right->GetColorAndOpacity().R, 1.0f);
 		TestEqual(TEXT("非发言侧降低明度"), Left->GetColorAndOpacity().R, 0.45f);
 		const FText Keys = INVTEXT("{PlaceKey}|{DemolishKey}");

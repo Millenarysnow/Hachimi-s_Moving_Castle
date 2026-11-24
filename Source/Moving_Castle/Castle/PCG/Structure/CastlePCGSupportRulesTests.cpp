@@ -144,6 +144,10 @@ bool FCastlePCGOverhangStructure::RunTest(const FString& Parameters)
 	// 从主塔侧双格悬挑上拆掉外格时，剩下的首格重新匹配单格资产。
 	Check(Solve({{C, Data(C)}}, C - X), Cantilever);
 	TestEqual(TEXT("拆除侧下承托建筑后斜撑消失"), Solve({{C, Data(C)}}, {}).GetAttachments().Num(), 0);
+	TestEqual(TEXT("悬挑塔侧下只有普通房底板时没有承托斜撑"),
+		Solve({{C, Data(C)}, {C - X - Up, Data(C - X - Up, true)}}, {}).GetAttachments().Num(), 0);
+	// 同一普通房位置即使有占用，也不会让对侧主塔的单侧承托变成贯通拱撑。
+	Check(Solve({{C, Data(C)}, {C - X - Up, Data(C - X - Up, true)}}, C + X), Cantilever);
 	TestEqual(TEXT("普通房及地面层均不生成斜撑"),
 		Solve({{C, Data(C, true)}, {C - X - Up, Data(C - X - Up)}}, C - X).GetAttachments().Num(), 0);
 	TestEqual(TEXT("地面功能塔即使靠主塔柱也不生成斜撑"),

@@ -104,17 +104,22 @@ bool FCastleBuildingDefinitionPlacementTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("升级后仍引用同一建筑定义"), Merged->GetBuildingDefinition() == Definition);
 	TestTrue(TEXT("二级使用测试显式提供的模型"), Merged->GetVisualBounds().IsValid != 0);
 	TestEqual(TEXT("合成建筑占用两格"), Merged->GetOccupiedCoordinates().Num(), 2);
-	TestTrue(TEXT("回收成功"), Board->RemoveBuildingToBackpack(Merged, Board->PrototypeBackpack, Reason));
+	if (!TestTrue(TEXT("指定格回收成功"), Board->DemolishBuildingCellToBackpack(
+		Merged, FIntVector::ZeroValue, Board->PrototypeBackpack, Reason))) { AddError(Reason.ToString()); return false; }
+	auto* Survivor = Board->GetBuildingAt(FIntVector(1, 0, 0));
+	if (!TestNotNull(TEXT("另一格仍有降级建筑"), Survivor)) { return false; }
+	TestEqual(TEXT("另一格降级成一级"), Survivor->GetBuildingLevel(), 1);
 	FCastleBuildingDescriptor Recovered;
 	TestTrue(TEXT("回收后的卡牌存在"), Board->PrototypeBackpack->TryGetItemAt(0, Recovered));
-	TestTrue(TEXT("背包保留同一 Data Asset、等级与卡牌属性"), Recovered.Definition == Definition
-		&& Recovered.Level == 2 && Recovered.Color == Card.Color && Recovered.Number == Card.Number);
+	TestTrue(TEXT("背包保留同一 Data Asset、色号并返还一级"), Recovered.Definition == Definition
+		&& Recovered.Level == 1 && Recovered.Color == Card.Color && Recovered.Number == Card.Number);
 	ACastleBuildingBase* Replaced = Board->PlaceBuildingFromBackpack(FIntVector(0, 0, 0), Board->PrototypeBackpack, 0, false, Reason);
-	if (!TestNotNull(TEXT("升级卡回收后可按等级占用范围重新放置"), Replaced)) { AddError(Reason.ToString()); return false; }
+	if (!TestNotNull(TEXT("回收的一级卡可放回原格"), Replaced)) { AddError(Reason.ToString()); return false; }
 	TestTrue(TEXT("重新放置仍播放原有 Assembly Flight"), CastleBuildingTests::CompletePlacement(Replaced));
-	TestEqual(TEXT("二级卡重新放置仍占两格"), Replaced->GetOccupiedCoordinates().Num(), 2);
+	TestEqual(TEXT("回收卡重新放置只占瞄准格"), Replaced->GetOccupiedCoordinates().Num(), 1);
 	TestTrue(TEXT("重新放置仍引用同一定义"), Replaced->GetBuildingDefinition() == Definition);
 	Board->RemoveBuilding(Replaced, Reason);
+	Board->RemoveBuilding(Survivor, Reason);
 
 	// 同类逻辑类、颜色和数字相同，但不同资产定义的建筑不能混合升级。
 	ACastleBuildingBase* Original = Board->PlaceBuilding(FIntVector(0, 0, 0), Card, false, Reason);
@@ -228,10 +233,13 @@ bool FCastleDirectBuildingBlueprintTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("全部蓝图模型组件得到保留"), Compared, AuthoredTransforms.Num());
 	};
 	CheckDirectBlueprint(Merged);
-	TestTrue(TEXT("二级建筑回收到背包"), Board->RemoveBuildingToBackpack(Merged, Board->PrototypeBackpack, Reason));
-	ACastleBuildingBase* Replaced = Board->PlaceBuildingFromBackpack(FIntVector(0, 0, 0), Board->PrototypeBackpack, 0, false, Reason);
-	if (!TestNotNull(TEXT("背包二级卡重新直接生成蓝图"), Replaced)) { AddError(Reason.ToString()); return false; }
+	if (!TestTrue(TEXT("二级建筑指定格回收"), Board->DemolishBuildingCellToBackpack(
+		Merged, FIntVector::ZeroValue, Board->PrototypeBackpack, Reason))) { AddError(Reason.ToString()); return false; }
+	ACastleBuildingBase* Replaced = Board->PlaceBuildingFromBackpack(FIntVector::ZeroValue, Board->PrototypeBackpack, 0, true, Reason);
+	if (!TestNotNull(TEXT("背包一级卡可放回原格"), Replaced)) { AddError(Reason.ToString()); return false; }
 	CastleBuildingTests::CompletePlacement(Replaced);
+	Replaced = CastleBuildingTests::FindPlacedLevel(Board, 2);
+	if (!TestNotNull(TEXT("重放后与剩余格合并为正式二级蓝图"), Replaced)) { return false; }
 	CheckDirectBlueprint(Replaced);
 	Board->RemoveBuilding(Replaced, Reason);
 

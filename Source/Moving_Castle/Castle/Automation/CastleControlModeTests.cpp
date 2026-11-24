@@ -9,6 +9,7 @@
 #include "Castle/Components/CastleBackpackComponent.h"
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Data/CastleBuildingDefinition.h"
+#include "Castle/UI/Cards/CastleCardPortraitSubsystem.h"
 #include "Castle/UI/Cards/CastleShopCardWidget.h"
 #include "Castle/UI/Common/CastleBuildingDemolishMenuWidget.h"
 #include "Castle/UI/Common/CastleControlSettingsWidget.h"
@@ -18,11 +19,13 @@
 #include "Components/Button.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "InputKeyEventArgs.h"
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
+#include "TextureResource.h"
 
 namespace
 {
@@ -206,7 +209,7 @@ namespace
 				Tower = Board->GetBuildingAt(TowerCell);
 				if (!Tower || !Tower->CanReceiveBuildingTrigger() || Tower->GetBuildingLevel() != 2
 					|| Tower->BuildingMerge->bIsPlaying) { return false; }
-				AimAt(*Room);
+				AimAt(RoomCell);
 				++Stage;
 				return false;
 			case 2:
@@ -214,7 +217,7 @@ namespace
 				++Stage;
 				return false;
 			case 3:
-				if (!CheckCard(*Player, *Room)) { return true; }
+				if (!CheckCard(*Player, *Room, RoomCell)) { return true; }
 				Test.TestTrue(TEXT("经典菜单显示鼠标并停用相机鼠标轴"), Player->bShowMouseCursor && !Player->CanRotateCameraFromMouse());
 				if (!ClickDemolish(*Player)) { return true; }
 				Test.TestTrue(TEXT("满建筑栏后原建筑与菜单仍存在"), Board->GetBuildingAt(RoomCell) == Room
@@ -223,7 +226,7 @@ namespace
 				if (!CheckRecovered(*Player, *Room, RoomCell)) { return true; }
 				++Stage;
 				Player->SetControlMode(ECastleControlMode::Design, false);
-				AimAt(*Tower);
+				AimAt(TowerCell);
 				return false;
 			case 4:
 			{
@@ -235,8 +238,31 @@ namespace
 				return false;
 			}
 			case 5:
-				if (!CheckCard(*Player, *Tower) || !RemoveBackpackCard()) { return true; }
+			{
+				if (!CheckCard(*Player, *Tower, TowerCell)) { return true; }
+				// 这段地图从未开店。使用菜单同一摄影请求，等待真实 RHI 生成一级建筑画面。
+				auto* Studio = Player->GetWorld()->GetSubsystem<UCastleCardPortraitSubsystem>();
+				FText PortraitReason;
+				auto* Portrait = Studio ? Studio->RequestPortrait(TowerCard, Board, PortraitReason) : nullptr;
+				if (!Test.TestNotNull(TEXT("未开商店时已提交独立一级摄影请求"), Portrait)) { return true; }
+				if (Portrait->GetState() == ECastleCardPortraitState::Pending) { return false; }
+				if (!Test.TestEqual(TEXT("商店外独立摄影完成"), Portrait->GetState(), ECastleCardPortraitState::Ready))
+				{
+					Test.AddError(Portrait->GetFailureReason().ToString());
+					return true;
+				}
+				TArray<FFloat16Color> Pixels;
+				auto* Texture = Portrait->GetTexture();
+				if (!Test.TestTrue(TEXT("独立牌的摄影纹理可真实读回"), Texture
+					&& Texture->GameThread_GetRenderTargetResource()->ReadFloat16Pixels(Pixels))) { return true; }
+				Test.TestTrue(TEXT("独立牌含不透明、带色的建筑像素"), Pixels.ContainsByPredicate([](const FFloat16Color& Pixel)
+				{
+					return Pixel.A.GetFloat() < 0.5f && Pixel.R.GetFloat() + Pixel.G.GetFloat() + Pixel.B.GetFloat() > 0.05f;
+				}));
+				if (!RemoveBackpackCard()) { return true; }
 				if (!CheckRecovered(*Player, *Tower, TowerCell) || !RemoveBackpackCard()) { return true; }
+				const auto* Survivor = Board->GetBuildingAt(TowerCell + FIntVector(1, 0, 0));
+				Test.TestTrue(TEXT("只拆除射线命中的格，另一格原地降为一级"), Survivor && Survivor->GetBuildingLevel() == 1);
 				// 用刚回收建筑的空格验证设计主交互。视口中心与鼠标命中故意分离。
 				{
 					int32 Index;
@@ -252,6 +278,7 @@ namespace
 				}
 				++Stage;
 				return false;
+			}
 			case 6:
 			{
 				FVector2D Mouse;
@@ -340,19 +367,20 @@ namespace
 			return false;
 		}
 
-		void AimAt(const ACastleBuildingBase& Target)
+		void AimAt(const FIntVector& TargetCell)
 		{
-			Camera->SetActorLocationAndRotation(Target.GetActorLocation() + FVector(120, 120, 1200), FRotator(-90, 0, 0));
+			Camera->SetActorLocationAndRotation(Board->GetGridWorldLocation(TargetCell) + FVector(120, 120, 1200), FRotator(-90, 0, 0));
 		}
 
-		bool CheckCard(const ACastlePlayerController& Player, const ACastleBuildingBase& Expected) const
+		bool CheckCard(const ACastlePlayerController& Player, const ACastleBuildingBase& Expected, const FIntVector& Cell) const
 		{
 			const auto* Menu = Player.GetBuildingDemolishMenu();
-			if (!Test.TestTrue(TEXT("拆除键命中正式 WBP 的目标建筑"), Menu && Menu->GetTargetBuilding() == &Expected)) { return false; }
+			if (!Test.TestTrue(TEXT("拆除键命中正式 WBP 的目标建筑与格"), Menu
+				&& Menu->GetTargetBuilding() == &Expected && Menu->GetTargetCell() == Cell)) { return false; }
 			const auto& Card = Menu->GetBuildingCard()->GetDescriptor();
 			const auto Actual = Expected.GetBuildingDescriptor();
-			return Test.TestTrue(TEXT("独立卡牌读取建筑的等级、色号、数字与定义"),
-				Card.Level == Actual.Level && Card.Color == Actual.Color && Card.Number == Actual.Number && Card.Definition == Actual.Definition);
+			return Test.TestTrue(TEXT("独立卡牌显示同定义同色号的一级回收卡"),
+				Card.Level == 1 && Card.Color == Actual.Color && Card.Number == Actual.Number && Card.Definition == Actual.Definition);
 		}
 
 		bool ClickDemolish(const ACastlePlayerController& Player) const
@@ -377,10 +405,10 @@ namespace
 			const auto Expected = Building.GetBuildingDescriptor();
 			if (!ClickDemolish(Player)) { return false; }
 			FCastleBuildingDescriptor Returned;
-			return Test.TestTrue(TEXT("回收后建筑离开棋盘、菜单关闭、背包增加一张对应等级卡"),
+			return Test.TestTrue(TEXT("回收后目标格空闲、菜单关闭、背包增加一张一级卡"),
 				!Board->GetBuildingAt(Cell) && !Player.GetBuildingDemolishMenu()
 				&& Board->PrototypeBackpack->GetItemCount() == 10 && Board->PrototypeBackpack->TryGetItemAt(9, Returned)
-				&& Returned.Level == Expected.Level && Returned.Number == Expected.Number
+				&& Returned.Level == 1 && Returned.Number == Expected.Number
 				&& Returned.Color == Expected.Color && Returned.Definition == Expected.Definition);
 		}
 
