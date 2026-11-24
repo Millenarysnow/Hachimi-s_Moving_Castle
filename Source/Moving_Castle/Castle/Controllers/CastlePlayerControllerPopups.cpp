@@ -78,25 +78,28 @@ bool ACastlePlayerController::IsDemolishableBuilding(const ACastleBuildingBase* 
 		&& ACastleBoard::FindBoardForBuilding(Building) == ActiveBoard;
 }
 
-bool ACastlePlayerController::TryOpenBuildingDemolishAt(FVector2D ScreenPosition)
+ACastleBuildingBase* ACastlePlayerController::FindDemolishTargetAt(FVector2D ScreenPosition) const
 {
 	FText Reason;
-	if (!CanUseBuildingDemolishMenu(Reason)) { return false; }
+	if (!CanUseBuildingDemolishMenu(Reason)) { return nullptr; }
 	FVector Origin, Direction;
-	if (!DeprojectScreenPositionToWorld(ScreenPosition.X, ScreenPosition.Y, Origin, Direction)) { return false; }
+	if (!DeprojectScreenPositionToWorld(ScreenPosition.X, ScreenPosition.Y, Origin, Direction)) { return nullptr; }
 	// 单次可见性射线只考虑实际首个遮挡面。飞行 Pawn 和卡牌视图不会抢走场上建筑命中。
 	FHitResult Hit;
-	FCollisionQueryParams Params(SCENE_QUERY_STAT(CastleBuildingDemolishClick), false, GetPawn());
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(CastleBuildingDemolishClick), true, GetPawn());
 	GetWorld()->LineTraceSingleByChannel(Hit, Origin, Origin + Direction * GridCursorTraceDistance, ECC_Visibility, Params);
 	auto* Building = Cast<ACastleBuildingBase>(Hit.GetActor());
-	if (!IsDemolishableBuilding(Building)) { return false; }
+	return IsDemolishableBuilding(Building) ? Building : nullptr;
+}
 
+bool ACastlePlayerController::OpenBuildingDemolishMenu(ACastleBuildingBase& Building, FVector2D ScreenPosition)
+{
 	auto* Menu = BuildingDemolishMenuClass ? CreateWidget<UCastleBuildingDemolishMenuWidget>(this, BuildingDemolishMenuClass) : nullptr;
-	if (!Menu || !Menu->ConfigureTarget(*Building, *ActiveBoard, ScreenPosition) || !Menu->AddToPlayerScreen(35))
+	const FVector2D LogicalOffset = ControlMode == ECastleControlMode::Classic ? FVector2D(12.0, 12.0) : FVector2D::ZeroVector;
+	if (!Menu || !Menu->ConfigureTarget(Building, *ActiveBoard, ScreenPosition, LogicalOffset) || !Menu->AddToPlayerScreen(35))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s 无法加载、绑定或挂载拆除资产 %s。"), *GetPathName(), DemolishMenuPath);
-		// 已命中建筑却无法展示菜单时消费此次输入，避免转去撤回微缩盘建筑。
-		return true;
+		return false;
 	}
 	const bool bFirstOpen = !BuildingDemolishMenu;
 	RemoveBuildingDemolishWidget();
@@ -113,7 +116,14 @@ void ACastlePlayerController::HandleDemolishOutsideClick(FKey Key, FVector2D Scr
 {
 	if (!BuildingDemolishMenu) { return; }
 	// 菜单期间两种模式都显示真实指针。经典准星仍保持为正常世界交互的瞄准源。
-	if (Key == GetDemolishKey() && TryOpenBuildingDemolishAt(ScreenPosition)) { return; }
+	if (Key == GetDemolishKey())
+	{
+		if (auto* Building = FindDemolishTargetAt(ScreenPosition))
+		{
+			OpenBuildingDemolishMenu(*Building, ScreenPosition);
+			return;
+		}
+	}
 	CloseBuildingDemolishMenu();
 }
 
@@ -162,4 +172,24 @@ void ACastlePlayerController::HandleClosePopup()
 {
 	if (BuildingDemolishMenu) { CloseBuildingDemolishMenu(); }
 	else if (ControlSettings) { ToggleControlSettings(); }
+}
+
+void ACastlePlayerController::BeginTemporaryHUDPointer()
+{
+	// 临时指针只改变经典常态。已有设置、拆除或导演模态继续决定输入焦点。
+	if (ControlMode != ECastleControlMode::Classic || bModalInputActive || BuildingDemolishMenu || bHoldingTemporaryHUDPointer)
+	{
+		return;
+	}
+	bHoldingTemporaryHUDPointer = true;
+	if (bHoldingTowerDispatch) { ReleaseTowerDispatchInput(); }
+	RefreshModalInput(true);
+}
+
+void ACastlePlayerController::EndTemporaryHUDPointer()
+{
+	if (!bHoldingTemporaryHUDPointer) { return; }
+	bHoldingTemporaryHUDPointer = false;
+	// 已从 HUD 打开的模态仍持有输入，松 Alt 时不抢它的焦点。
+	if (!bModalInputActive && !BuildingDemolishMenu) { RefreshModalInput(true); }
 }

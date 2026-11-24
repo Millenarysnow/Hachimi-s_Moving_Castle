@@ -9,6 +9,7 @@
 #include "CastlePlayerController.generated.h"
 
 class ACastleBoard;
+class ACastleBuildingBase;
 class ACastleGridCursor;
 class ACastleSkyIslandBase;
 class UCastleEconomyComponent;
@@ -58,7 +59,6 @@ public:
 	/** 齿轮和弹窗共用控制器实例，保持一份设置与拆除状态。 */
 	void ToggleControlSettings();
 	void CloseBuildingDemolishMenu();
-	void HandleDemolishOutsideClick(FKey Key, FVector2D ScreenPosition);
 	void ConfirmBuildingDemolish(const UCastleBuildingDemolishMenuWidget& Menu);
 	const UCastleBuildingDemolishMenuWidget* GetBuildingDemolishMenu() const { return BuildingDemolishMenu; }
 
@@ -175,9 +175,13 @@ protected:
 	void HandleWorldPointerPressed(FKey Key);
 	void HandleWorldPointerReleased(FKey Key);
 	void HandleClosePopup();
+	void BeginTemporaryHUDPointer();
+	void EndTemporaryHUDPointer();
 	bool CanUseBuildingDemolishMenu(FText& OutReason) const;
 	bool IsDemolishableBuilding(const ACastleBuildingBase* Building) const;
-	bool TryOpenBuildingDemolishAt(FVector2D ScreenPosition);
+	ACastleBuildingBase* FindDemolishTargetAt(FVector2D ScreenPosition) const;
+	bool OpenBuildingDemolishMenu(ACastleBuildingBase& Building, FVector2D ScreenPosition);
+	void HandleDemolishOutsideClick(FKey Key, FVector2D ScreenPosition);
 	void InitializePopupClasses();
 	void RemoveBuildingDemolishWidget();
 	void RemoveControlSettingsWidget();
@@ -246,6 +250,8 @@ protected:
 	bool bModalInputActive = false;
 	bool bRewardInputActive = false;
 	bool bGameOverInputActive = false;
+	/** 左 Alt 仅在经典模式临时释放 HUD 指针，模态结束后按真实按住状态恢复。 */
+	bool bHoldingTemporaryHUDPointer = false;
 	ECastleControlMode ControlMode = ECastleControlMode::Classic;
 	/** 硬类引用使两个正式 WBP 与控制器一起进入烹煮产物。 */
 	UPROPERTY() TSubclassOf<UCastleControlSettingsWidget> ControlSettingsClass;

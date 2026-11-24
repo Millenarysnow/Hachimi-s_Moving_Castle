@@ -56,6 +56,12 @@ void UCastleControlSettingsWidget::SelectDesign()
 	if (auto* Controller = SettingsController.Get()) { Controller->SetControlMode(ECastleControlMode::Design); }
 }
 
+FReply UCastleControlSettingsWidget::NativeOnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& Event)
+{
+	// WBP 的 Canvas 只留下设置面板可命中。面板内部的标题或留白仍属于设置界面。
+	return FReply::Handled();
+}
+
 void UCastleControlSettingsWidget::NativeDestruct()
 {
 	if (auto* Controller = SettingsController.Get()) { Controller->OnControlModeChanged.RemoveAll(this); }

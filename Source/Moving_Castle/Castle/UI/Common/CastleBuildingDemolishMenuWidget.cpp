@@ -2,7 +2,6 @@
 
 #include "CastleBuildingDemolishMenuWidget.h"
 
-#include "Blueprint/SlateBlueprintLibrary.h"
 #include "Blueprint/WidgetLayoutLibrary.h"
 #include "CastleBuildingBase.h"
 #include "CastlePlayerController.h"
@@ -14,7 +13,7 @@
 #include "Moving_Castle.h"
 
 bool UCastleBuildingDemolishMenuWidget::ConfigureTarget(ACastleBuildingBase& Building, const ACastleBoard& Board,
-	FVector2D ScreenPosition)
+	FVector2D ScreenPosition, FVector2D LogicalOffset)
 {
 	// 槽位由 WBP 定义，检查完整之后才创建并订阅可提交拆除的控件。
 	const TPair<const TCHAR*, UWidget*> Required[] = {{TEXT("PopupPanel"), PopupPanel.Get()},
@@ -42,6 +41,7 @@ bool UCastleBuildingDemolishMenuWidget::ConfigureTarget(ACastleBuildingBase& Bui
 	BuildingCardSlot->SetContent(BuildingCard);
 	TargetBuilding = &Building;
 	ClickPixel = ScreenPosition;
+	AnchorOffset = LogicalOffset;
 	DemolishButton->OnClicked.AddUniqueDynamic(this, &UCastleBuildingDemolishMenuWidget::HandleDemolishClicked);
 	// 先计算真实卡牌和按钮的总尺寸，第一帧就定位到视口内。
 	ForceLayoutPrepass();
@@ -65,7 +65,7 @@ void UCastleBuildingDemolishMenuWidget::PlacePanel(FVector2D ViewportSize, float
 	const double Fit = FMath::Min3(1.0, ViewportSize.X / Desired.X, ViewportSize.Y / Desired.Y);
 	PopupPanel->SetRenderScale(FVector2D(Fit, Fit));
 	CastChecked<UCanvasPanelSlot>(PopupPanel->Slot)->SetPosition(
-		ClampPopupPosition(ClickPixel / Scale + FVector2D(12.0, 12.0), Desired * Fit, ViewportSize));
+		ClampPopupPosition(ClickPixel / Scale + AnchorOffset, Desired * Fit, ViewportSize));
 }
 
 void UCastleBuildingDemolishMenuWidget::NativeTick(const FGeometry& MyGeometry, float DeltaSeconds)
@@ -76,16 +76,7 @@ void UCastleBuildingDemolishMenuWidget::NativeTick(const FGeometry& MyGeometry, 
 
 FReply UCastleBuildingDemolishMenuWidget::NativeOnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& Event)
 {
-	// 点击空白仅关闭或改选，不能穿透到建造。面板内部由前景按钮优先消费。
-	if (!PopupPanel->GetCachedGeometry().IsUnderLocation(Event.GetScreenSpacePosition()))
-	{
-		if (auto* Controller = GetOwningPlayer<ACastlePlayerController>())
-		{
-			FVector2D Pixel, ViewportPosition;
-			USlateBlueprintLibrary::AbsoluteToViewport(this, Event.GetScreenSpacePosition(), Pixel, ViewportPosition);
-			Controller->HandleDemolishOutsideClick(Event.GetEffectingButton(), Pixel);
-		}
-	}
+	// 仅面板本体可命中。内部留白消费点击，面板外的 HUD 按钮与世界仍正常收到事件。
 	return FReply::Handled();
 }
 

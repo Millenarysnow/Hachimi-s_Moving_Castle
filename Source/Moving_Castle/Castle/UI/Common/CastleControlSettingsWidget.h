@@ -21,6 +21,7 @@ public:
 
 protected:
 	virtual void NativeDestruct() override;
+	virtual FReply NativeOnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& Event) override;
 
 private:
 	void RefreshMode(ECastleControlMode Mode);
