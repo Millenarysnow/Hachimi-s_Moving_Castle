@@ -3,6 +3,7 @@
 
 #include "Castle/Combat/CastleCombatSubsystem.h"
 #include "Castle/Controllers/CastlePlayerController.h"
+#include "Castle/Guide/CastleGuideSubsystem.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/UI/Common/CastleHUDControls.h"
 #include "CastleMainTowerComponent.h"
@@ -11,6 +12,7 @@
 #include "Components/Image.h"
 #include "Components/TextBlock.h"
 #include "Components/WidgetSwitcher.h"
+#include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
 #include "Moving_Castle.h"
@@ -370,7 +372,15 @@ void UCastleDirectorHUDWidget::HandlePatrolEditingChanged(const bool bIsEditing)
 
 void UCastleDirectorHUDWidget::HandleGuideClicked()
 {
-	UE_LOG(LogMoving_Castle, Display, TEXT("主界面 HUD：点击查看攻略按钮（后端界面暂未实现）。"));
+	UCastleGuideSubsystem* Guide = GetWorld() && GetWorld()->GetGameInstance()
+		? GetWorld()->GetGameInstance()->GetSubsystem<UCastleGuideSubsystem>() : nullptr;
+	ACastlePlayerController* Controller = Cast<ACastlePlayerController>(GetOwningPlayer());
+	FText Failure;
+	if (!Guide || !Guide->ShowGuideBook(Controller, Failure))
+	{
+		if (Failure.IsEmpty()) { Failure = FText::FromString(TEXT("主界面 HUD 无法取得圖文百科子系統或玩家控制器。")); }
+		UE_LOG(LogMoving_Castle, Error, TEXT("主界面 HUD %s 打开图文百科失败：%s"), *GetClass()->GetPathName(), *Failure.ToString());
+	}
 }
 
 void UCastleDirectorHUDWidget::HandleSettingsClicked()
@@ -400,6 +410,11 @@ void UCastleDirectorHUDWidget::HandleBuildShopClicked()
 	{
 		Controller->ToggleShop();
 	}
+}
+
+void UCastleDirectorHUDWidget::SetTutorialShopButtonEnabled(const bool bEnabled)
+{
+	BuildShopButton->SetActionEnabled(bEnabled);
 }
 
 void UCastleDirectorHUDWidget::HandlePathUndoClicked()

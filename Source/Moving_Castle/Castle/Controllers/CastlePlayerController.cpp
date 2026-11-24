@@ -229,6 +229,7 @@ void ACastlePlayerController::SetupInputComponent()
 
 void ACastlePlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	CloseDialogueAndGuideForWorldEnd();
 	RemoveBuildingDemolishWidget();
 	RemoveControlSettingsWidget();
 	if (UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld()))
@@ -606,12 +607,19 @@ void ACastlePlayerController::ToggleTowerAutoDispatchShortcut()
 
 void ACastlePlayerController::ToggleShop()
 {
+	// 更高层的剧情和百科面板拥有输入，B 不会关闭它们下方的教学商店。
+	if (!PresentationModals.IsEmpty()) { return; }
 	if (Shop->IsShopOpen())
 	{
 		Shop->CloseShop();
 		return;
 	}
 	FText AccessReason;
+	if (TutorialShopAccess.IsSet() && !TutorialShopAccess.GetValue())
+	{
+		ShowDirectorMessage(INVTEXT("当前教学步骤尚未开放商店。"));
+		return;
+	}
 	if (const UCastleDirectorSubsystem* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
 		Director && !Director->IsShopAccessAllowed(AccessReason)) { ShowDirectorMessage(AccessReason); return; }
 	if (ActiveBoard == nullptr)
@@ -799,6 +807,19 @@ void ACastlePlayerController::SetDirectorModalState(const bool bRewardOpen, cons
 	RefreshModalInput(true);
 }
 
+void ACastlePlayerController::SetPresentationModalState(const bool bOpen, UUserWidget* FocusWidget)
+{
+	if (!IsValid(FocusWidget))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s 收到无效的模态控件。"), *GetPathName());
+		return;
+	}
+	// 按实例归还焦点，对话关闭后可继续操作它下方的教程奖励面板。
+	if (bOpen) { PresentationModals.AddUnique(FocusWidget); }
+	else { PresentationModals.RemoveSingle(FocusWidget); }
+	RefreshModalInput(true);
+}
+
 void ACastlePlayerController::HideDirectorEditingPresentation()
 {
 	CloseBuildingDemolishMenu();
@@ -945,7 +966,8 @@ void ACastlePlayerController::RefreshModalInput(const bool bForceRefresh)
 	const auto* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
 	// 使用库存真相源，避免依赖多个动态委托监听者的刷新顺序。
 	const bool bBadgeReplaceOpen = BadgeReplaceWidget && Badges && Badges->TryGetPendingBadge(PendingBadge);
-	const bool bHigherModalOpen = Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive || bBadgeReplaceOpen;
+	const bool bHigherModalOpen = Shop->IsShopOpen() || bRewardInputActive || bGameOverInputActive
+		|| bBadgeReplaceOpen || !PresentationModals.IsEmpty();
 	if (bHigherModalOpen) { RemoveControlSettingsWidget(); }
 	const bool bNewOpen = bHigherModalOpen || ControlSettings != nullptr;
 	if (bNewOpen) { RemoveBuildingDemolishWidget(); }
@@ -979,6 +1001,7 @@ void ACastlePlayerController::RefreshModalInput(const bool bForceRefresh)
 		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 		if (bBadgeReplaceOpen) { Mode.SetWidgetToFocus(BadgeReplaceWidget->TakeWidget()); }
 		else if (bRewardInputActive && DirectorFocusWidget) { Mode.SetWidgetToFocus(DirectorFocusWidget->TakeWidget()); }
+		else if (!PresentationModals.IsEmpty()) { Mode.SetWidgetToFocus(PresentationModals.Last()->TakeWidget()); }
 		SetInputMode(Mode);
 	}
 	else

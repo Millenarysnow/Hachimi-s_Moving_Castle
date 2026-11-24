@@ -365,10 +365,10 @@ void UCastleShopWidget::RefreshShop()
 	RefreshBgStates->SetActiveWidgetIndex(0);
 	CloseBgStates->SetActiveWidgetIndex(0);
 
-	// 同步 6 个商品卡座。
+	// 仅教学货架支持空槽，保留常规商店六个商品的配置约束。
 	const TArray<FCastleShopOffer> Offers = Shop->GetOffers();
 	const auto OfferSlots = GetOfferSlots();
-	if (Offers.Num() != OfferSlots.Num())
+	if (Offers.Num() > OfferSlots.Num() || (!Shop->UsesScriptedOffers() && Offers.Num() != OfferSlots.Num()))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("商店商品数量 %d 与 WBP 固定槽位数 %d 不一致。"),
 			Offers.Num(), OfferSlots.Num());
@@ -378,11 +378,18 @@ void UCastleShopWidget::RefreshShop()
 	const bool bHasRoomAndBagCapacity = (OwnedRooms + 1 <= RoomLimit) && (BackpackItems.Num() < BackpackCapacity);
 	for (int32 Index = 0; Index < OfferSlots.Num(); ++Index)
 	{
+		const bool bHasOffer = Offers.IsValidIndex(Index);
+		OfferSlots[Index]->SetVisibility(bHasOffer ? ESlateVisibility::Visible : ESlateVisibility::Hidden);
+		if (!bHasOffer) { continue; }
 		const FCastleShopOffer& Offer = Offers[Index];
 		const bool bCanAfford = CurrentGold >= Offer.Price;
 		const int32 MatchingCount = CountMatchingLv1CardsInBackpack(BackpackItems, Offer.Descriptor);
 		OfferSlots[Index]->ConfigureOffer(*this, Index, Offer, BoundBoard,
 			bCanAfford, bHasRoomAndBagCapacity, bFoilPreview, MatchingCount);
+	}
+	if (Shop->UsesScriptedOffers() && Offers.IsEmpty())
+	{
+		RefreshLabel->SetText(INVTEXT("暂时缺货 · 刷新 [R]"));
 	}
 
 	// 同步 10 格备战席。

@@ -18,6 +18,7 @@ class UCastleCombatConfigDataAsset;
 class UCastleTowerDispatchConfigDataAsset;
 class UCastleTowerUpgradeRewardWidget;
 class UCastleWildcardRoomPickerWidget;
+class UCastleDialogueScriptDataAsset;
 
 /** 单个主塔等级的固定成长数据；赠送数量仅在本次跨入对应等级时生成。 */
 USTRUCT(BlueprintType)
@@ -68,6 +69,9 @@ public:
 
 	/** 工厂只接受显式登记的玩法类，波次 2 正式资产保留空映射。 */
 	UPROPERTY(EditAnywhere, Category = "导演|空岛") TMap<ECastleSkyIslandType, TSubclassOf<ACastleSkyIslandBase>> SkyIslandClasses;
+	/** MainMap 的三类奖励空岛逐一登记首次剧情，休息空岛没有剧本。 */
+	UPROPERTY(EditAnywhere, Category = "导演|空岛")
+	TMap<ECastleSkyIslandType, TObjectPtr<UCastleDialogueScriptDataAsset>> SkyIslandArrivalDialogues;
 	UPROPERTY(EditAnywhere, Category = "导演|空岛") float SkyIslandSpawnDistance = 9500.0f;
 	UPROPERTY(EditAnywhere, Category = "导演|空岛") float SkyIslandHeightOffset = 1200.0f;
 	UPROPERTY(EditAnywhere, Category = "导演|空岛") FKey SkyIslandInteractKey = EKeys::E;

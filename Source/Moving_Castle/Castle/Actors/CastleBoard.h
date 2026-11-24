@@ -125,6 +125,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|建造面", meta = (Units = "cm", EditCondition = "PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides"))
 	float TowerSideSurfaceOffset = 0.0f;
 
+	/** 教学地图显式固定塔侧花色；正式游局保持每局独立采样。 */
+	UPROPERTY(EditAnywhere, Category = "棋盘|建造面")
+	bool bUseFixedTowerSideSeed = false;
+
+	UPROPERTY(EditAnywhere, Category = "棋盘|建造面", meta = (EditCondition = "bUseFixedTowerSideSeed"))
+	int32 FixedTowerSideSeed = 93;
+
 	/** 由正式塔侧关卡开启；地面棋盘及旧塔侧夹具仍使用它们自己的 GridSize.Z。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|主塔扩层")
 	bool bEnableProgressiveTowerLayers = false;
@@ -207,6 +214,9 @@ public:
 	/** 原型背包装入普通房间、箭塔、炮塔、农田和盾塔各两张五色 1～9 号卡。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "棋盘|原型操作")
 	TObjectPtr<UCastleBackpackComponent> PrototypeBackpack;
+	/** 教程地图显式关闭样例牌，由教学导演按步骤发放固定手牌。 */
+	UPROPERTY(EditAnywhere, Category = "棋盘|原型操作")
+	bool bDealPrototypeDeckOnBeginPlay = true;
 
 	/** 当前数字键对应的样例卡牌，便于在没有 UI 资源时直接验证放置和合成。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "棋盘|原型操作")

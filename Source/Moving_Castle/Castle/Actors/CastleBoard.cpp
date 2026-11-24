@@ -175,7 +175,7 @@ void ACastleBoard::BeginPlay()
 
 	if (PlacementSurfaceMode == ECastlePlacementSurfaceMode::GroundBoard && !GeneratedGroundCells.IsEmpty())
 	{
-		InitializePrototypeDeck();
+		if (bDealPrototypeDeckOnBeginPlay) { InitializePrototypeDeck(); }
 	}
 
 	if (bSpawnMainTowerOnBeginPlay)
@@ -189,7 +189,7 @@ void ACastleBoard::BeginPlay()
 		}
 	}
 
-	if (PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides)
+	if (bDealPrototypeDeckOnBeginPlay && PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides)
 	{
 		InitializePrototypeDeck();
 	}
@@ -318,7 +318,7 @@ bool ACastleBoard::SpawnMainTower(FText& OutFailureReason)
 		UCastleTowerSideGridComponent* Grid = NewObject<UCastleTowerSideGridComponent>(TowerActor, TEXT("TowerSideGrid"));
 		TowerActor->AddInstanceComponent(Grid);
 		Grid->RegisterComponent();
-		const int32 RunSeed = static_cast<int32>(GetTypeHash(FGuid::NewGuid()));
+		const int32 RunSeed = bUseFixedTowerSideSeed ? FixedTowerSideSeed : static_cast<int32>(GetTypeHash(FGuid::NewGuid()));
 		if (!Grid->Initialize(GetBoardCenterCoordinate(), GetUnlockedLayerCount(), GroundTileSize, LayerHeight,
 			TowerSideSurfaceOffset, RunSeed, OutFailureReason))
 		{

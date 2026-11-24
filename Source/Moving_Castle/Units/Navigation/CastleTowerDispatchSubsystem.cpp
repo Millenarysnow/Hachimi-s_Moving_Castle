@@ -140,6 +140,7 @@ bool UCastleTowerDispatchSubsystem::TryDispatchSingleNPC(FText& OutReason)
 	--ReserveCount;
 	check(ReserveCount + ActiveNPCs.Num() == SessionTotalNPCs);
 	UE_LOG(LogMoving_Castle, Display, TEXT("主塔门 A 派出 1 名 NPC，待命 %d，在场 %d。"), ReserveCount, ActiveNPCs.Num());
+	OnNPCDispatched.Broadcast(Spawned[0]);
 	return true;
 }
 

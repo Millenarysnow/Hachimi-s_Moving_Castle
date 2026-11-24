@@ -130,7 +130,7 @@ bool UCastleShopComponent::TryOpenShop(FText& OutFailureReason)
 		return true;
 	}
 	TGuardValue<bool> TradeGuard(bTrading, true);
-	if (Offers.IsEmpty())
+	if (!bScriptedStock && Offers.IsEmpty())
 	{
 		FRandomStream CandidateStream = RandomStream;
 		TArray<FCastleShopOffer> Candidates;
@@ -174,6 +174,47 @@ bool UCastleShopComponent::TryRefreshOffers(FText& OutFailureReason)
 bool UCastleShopComponent::TryRefreshOffersForReward(FText& OutFailureReason)
 {
 	return RefreshOffersInternal(true, OutFailureReason);
+}
+
+bool UCastleShopComponent::SetScriptedOffers(TConstArrayView<FCastleBuildingDescriptor> Current,
+	TConstArrayView<FCastleBuildingDescriptor> OnRefresh, FText& OutReason)
+{
+	OutReason = FText::GetEmpty();
+	const auto Reject = [&]()
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("商店 %s 教学货架配置失败：%s"), *GetPathName(), *OutReason.ToString());
+		return false;
+	};
+	if (!bInitialized || bOpen || bTrading || Current.Num() > 6 || OnRefresh.Num() > 6)
+	{
+		OutReason = INVTEXT("商店须在初始化后、闭店且无交易时更换教学货架，每批最多六张牌。");
+		return Reject();
+	}
+	const auto Prepare = [&](TConstArrayView<FCastleBuildingDescriptor> Source, TArray<FCastleShopOffer>& Target)
+	{
+		for (const FCastleBuildingDescriptor& Card : Source)
+		{
+			if (!Card.Validate(OutReason)) { return false; }
+			if (Card.Level != 1 || !Board->BuildingDefinitions.Contains(Card.Definition))
+			{
+				OutReason = INVTEXT("教学商品必须是棋盘已登记的一星建筑。");
+				return false;
+			}
+			FCastleShopOffer& Offer = Target.AddDefaulted_GetRef();
+			Offer.Descriptor = Card;
+			if (!CalculatePrice(Card, false, Offer.Price, OutReason)) { return false; }
+		}
+		return true;
+	};
+	// 两批都完成验证和报价后才替换现有货架。
+	TArray<FCastleShopOffer> CurrentOffers, RefreshOffers;
+	if (!Prepare(Current, CurrentOffers) || !Prepare(OnRefresh, RefreshOffers)) { return Reject(); }
+	Offers = MoveTemp(CurrentOffers);
+	ScriptedRefreshOffers = MoveTemp(RefreshOffers);
+	bScriptedStock = true;
+	bScriptedRefreshPending = !OnRefresh.IsEmpty();
+	OnShopChanged.Broadcast();
+	return true;
 }
 
 bool UCastleShopComponent::TryOpenForReward(UCastleEconomyComponent* InEconomy, ACastleBoard* InBoard, FText& OutFailureReason)
@@ -282,7 +323,16 @@ bool UCastleShopComponent::RefreshOffersInternal(const bool bFree, FText& OutFai
 	TGuardValue<bool> TradeGuard(bTrading, true);
 	FRandomStream CandidateStream = RandomStream;
 	TArray<FCastleShopOffer> Candidates;
-	if (!GenerateOffers(CandidateStream, Candidates, OutFailureReason))
+	if (bScriptedStock)
+	{
+		if (!bScriptedRefreshPending)
+		{
+			OutFailureReason = INVTEXT("当前教学货架没有安排下一批商品。");
+			return false;
+		}
+		Candidates = ScriptedRefreshOffers;
+	}
+	else if (!GenerateOffers(CandidateStream, Candidates, OutFailureReason))
 	{
 		if (bFree) { UE_LOG(LogMoving_Castle, Error, TEXT("%s 奖励换批失败：%s"), *GetPathName(), *OutFailureReason.ToString()); }
 		return false;
@@ -296,6 +346,7 @@ bool UCastleShopComponent::RefreshOffersInternal(const bool bFree, FText& OutFai
 		return false;
 	}
 	RandomStream = CandidateStream;
+	if (bScriptedStock) { bScriptedRefreshPending = false; }
 	OnShopChanged.Broadcast();
 	return true;
 }

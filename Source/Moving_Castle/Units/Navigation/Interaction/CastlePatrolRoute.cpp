@@ -235,7 +235,7 @@ bool ACastlePatrolRoute::SetWorldWaypoints(const TArray<FVector>& Waypoints, FTe
 	const auto* Dispatch = GetWorld()->GetSubsystem<UCastleTowerDispatchSubsystem>();
 	const auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
 	// 正式单局在编辑时就求解双门开环，其他地图仍可运行既有闭环巡逻演示。
-	const bool bAccepted = (Director && Director->IsRunning()) || (Dispatch && Dispatch->IsSessionActive())
+	const bool bAccepted = bTutorialRoute || (Director && Director->IsRunning()) || (Dispatch && Dispatch->IsSessionActive())
 		? Navigation->RequestTowerDispatchRoute(Waypoints, OutFailureReason)
 		: Navigation->RequestSharedPatrolRoute(Waypoints, OutFailureReason);
 	if (!bAccepted) { return false; }
@@ -315,6 +315,11 @@ void ACastlePatrolRoute::ToggleEditing()
 	if (!CanEdit()) { return; }
 	if (bEditing)
 	{
+		if (bSubmitDraftOnToggle)
+		{
+			ApplyDraft();
+			return;
+		}
 		CancelEditingDraft();
 		ShowMessage(TEXT("已取消路径草稿，继续使用已发布路线。"), true);
 		return;
@@ -329,8 +334,9 @@ void ACastlePatrolRoute::ToggleEditing()
 	const ECastleControlMode Mode = Controller ? Controller->GetControlMode() : ECastleControlMode::Classic;
 	const auto& Bindings = CastleControlInput::GetBindings(Mode);
 	const FText InteractKey = CastleControlInput::GetKeyDisplayText(Bindings.Get(ECastleWorldInputAction::PrimaryInteract));
-	ShowMessage(FString::Printf(TEXT("巡逻编辑：瞄准建筑楼顶或地面后按%s添加路径点；建筑取本层楼内地板，棋盘内地面取格心；Backspace 撤回，Enter 提交路线，Delete 清空，P 取消。"),
-		*InteractKey.ToString()), true);
+	const TCHAR* SubmitHint = bSubmitDraftOnToggle ? TEXT("P 或 Enter 提交路线") : TEXT("Enter 提交路线，P 取消");
+	ShowMessage(FString::Printf(TEXT("巡逻编辑：瞄准建筑楼顶或地面后按%s添加路径点；Backspace 撤回，Delete 清空，%s。"),
+		*InteractKey.ToString(), SubmitHint), true);
 }
 
 void ACastlePatrolRoute::AddPointAtAim()
@@ -476,8 +482,10 @@ void ACastlePatrolRoute::ClearRoute()
 void ACastlePatrolRoute::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	// 模态或阶段变化后退出草稿模式，避免继续截获其他交互的输入。
-	if (bEditing && !CanEdit()) { CancelEditingDraft(); }
+	// 教程在 P 进入编辑后要插播对话与百科；保留草稿，输入仍由 CanEdit 阻止。
+	const auto* Controller = Cast<ACastlePlayerController>(GetWorld()->GetFirstPlayerController());
+	const bool bTutorialModal = bTutorialRoute && Controller && Controller->IsModalInputActive();
+	if (bEditing && !bTutorialModal && !CanEdit()) { CancelEditingDraft(); }
 	if (!bOwnsRoute) { return; }
 	if (!bShowRoute)
 	{

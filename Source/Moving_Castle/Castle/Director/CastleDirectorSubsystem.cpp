@@ -10,6 +10,9 @@
 #include "Castle/SkyIslands/CastleSkyIslandTestFixture.h"
 
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
+#include "Castle/Dialogue/CastleDialogueScriptDataAsset.h"
+#include "Castle/Dialogue/CastleDialogueSubsystem.h"
+#include "Engine/GameInstance.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/Director/CastleDirectorSettings.h"
 #include "CastleBoard.h"
@@ -491,6 +494,16 @@ bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirector
 		return Reject(FText::Format(INVTEXT("空岛类型 {0} 尚未配置具体玩法类，或已登记的类无效：{1}。"),
 			TypeName, FText::FromString(GetPathNameSafe(Class))));
 	}
+	// 首访剧情只属于正式地图。先校验依赖，避免因数据缺失而传送玩家或消耗访问机会。
+	const bool bRequiresDialogue = Type != ECastleSkyIslandType::Rest
+		&& UWorld::RemovePIEPrefix(GetWorld()->GetOutermost()->GetName()) == TEXT("/Game/MovingCastle/Maps/MainMap");
+	auto* GameInstance = GetWorld()->GetGameInstance();
+	auto* Dialogue = bRequiresDialogue && GameInstance ? GameInstance->GetSubsystem<UCastleDialogueSubsystem>() : nullptr;
+	UCastleDialogueScriptDataAsset* ArrivalScript = IslandConfig.SkyIslandArrivalDialogues.FindRef(Type).Get();
+	if (bRequiresDialogue && (!Dialogue || !IsValid(ArrivalScript)))
+	{
+		return Reject(INVTEXT("缺少对话子系统或空岛类型对应的 SkyIslandArrivalDialogues 剧本。"));
+	}
 	// 所有玩法依赖由空岛初始化验证。准备失败的岛立即销毁，玩家和当前节点留在主塔。
 	const FVector Origin = Tower->GetOwner()->GetActorLocation() + Board->GetActorForwardVector() * IslandConfig.SkyIslandSpawnDistance
 		+ FVector::UpVector * IslandConfig.SkyIslandHeightOffset;
@@ -514,6 +527,19 @@ bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirector
 		FText RestoreReason;
 		if (!Board->SetPlacementSurfacePresentationHidden(false, RestoreReason)) { return Reject(RestoreReason); }
 		return Reject(INVTEXT("玩家无法传送至空岛到达锚点。"));
+	}
+	bool bStartedDialogue = false;
+	if (bRequiresDialogue && !Dialogue->TryPlayFirstVisitSkyIslandDialogue(Type, ArrivalScript, Controller, bStartedDialogue, OutReason))
+	{
+		// 界面准备失败时撤回传送。旧节点、步数及商店权限尚未提交。
+		if (!Pawn->TeleportTo(ReturnTransform.GetLocation(), ReturnTransform.Rotator()))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("空岛 %s 首访剧情加载失败，无法恢复玩家入岛前的位置。"), *Island->GetPathName());
+		}
+		Island->Destroy();
+		FText RestoreReason;
+		if (!Board->SetPlacementSurfacePresentationHidden(false, RestoreReason)) { return Reject(RestoreReason); }
+		return Reject(OutReason);
 	}
 	// 传送成功后再提交返塔信息，并移除已离开编辑阶段的节点及其待处理重叠。
 	IslandReturnTransform = ReturnTransform;
