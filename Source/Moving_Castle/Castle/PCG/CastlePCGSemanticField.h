@@ -20,6 +20,8 @@ struct FCastlePCGBoardCell
 	bool bRoom = false;
 	/** 格底棋盘朝向在建筑作者坐标中的变换，供外梯与内梯洞进行同空间比较。 */
 	FTransform CellInBuilding = FTransform::Identity;
+	/** 建筑正式占格数。规则用它区分单格建筑和跨格造型。 */
+	int32 BuildingCellCount = 1;
 };
 
 /** 同一作者样例被拆给多个单格房拥有，每格记录自己的局部索引。 */
@@ -53,6 +55,8 @@ struct FCastlePCGCellSpec
 	ECastlePCGRoof Roof = ECastlePCGRoof::Keep;
 	ECastlePCGDeck Deck = ECastlePCGDeck::Solid;
 	FCastlePCGAttachmentSpec RoofOverride;
+	/** 底盘视觉与物理梯洞分别表达，替换网格不会改变 Deck 或层界。 */
+	TOptional<FCastlePCGAttachmentSpec> DeckOverride;
 	FCastlePCGRoomSample RoomDeck;
 	FCastlePCGRoomSample RoomFrame;
 };
@@ -130,7 +134,7 @@ public:
 	FCastlePCGBoardQuery(const ACastleBoard& Board, const TMap<FIntVector, ACastleBuildingBase*>& Occupancy, UObject* InNoise);
 	/** 无世界规则测试可直接构造同一套纯数据查询。 */
 	FCastlePCGBoardQuery(TMap<FIntVector, FCastlePCGBoardCell> InCells, const UCastlePCGRuleSetDataAsset& InRules,
-		UObject* InNoise, int32 InSeed, int32 InGroundLayer);
+		UObject* InNoise, int32 InSeed, int32 InGroundLayer, TOptional<FIntVector> InTowerColumn = {});
 
 	const TArray<FIntVector>& OrderedCells() const { return SortedCells; }
 	const FCastlePCGBoardCell* Find(const FIntVector& Cell) const { return Cells.Find(Cell); }
@@ -139,10 +143,14 @@ public:
 	int32 GetOverhangDepth(const FIntVector& Cell) const;
 	bool IsOverhanging(const FIntVector& Cell) const { return GetOverhangDepth(Cell) > 0; }
 	bool IsMainTowerDoorFace(const FIntVector& Cell, const FIntVector& Side) const;
+	/** 主塔侧建模式下，塔柱在任意楼层的 XY 投影都可承托上层构件。 */
+	bool IsMainTowerColumn(const FIntVector& Cell) const;
 	bool SampleNoise(const FIntVector& Cell, FName Channel, float& Value, FString& Error) const;
 	/** 水平连通分量按已求出的侧面计算，根节点是每个分量的字典序首格。 */
 	TMap<FIntVector, FIntVector> HorizontalComponents(const FCastlePCGSemanticField& Field, bool bRoomsOnly) const;
 	const UCastlePCGRuleSetDataAsset& Config() const { return *Rules; }
+	int32 GetGroundLayer() const { return GroundLayer; }
+	double GetCellPitch() const { return Pitch; }
 	double GetLayerHeight() const { return LayerHeight; }
 	FVector CellBottom(const FIntVector& Cell) const;
 

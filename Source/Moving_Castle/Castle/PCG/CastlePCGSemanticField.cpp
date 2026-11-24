@@ -69,6 +69,7 @@ FCastlePCGBoardQuery::FCastlePCGBoardQuery(const ACastleBoard& Board,
 				if (CastlePCGSemantics::CellLess(Cell, Data->BuildingRoot)) { Data->BuildingRoot = Cell; }
 			}
 			Data->Layout = Building.HachimisLayout;
+			Data->BuildingCellCount = Building.GetOccupiedCoordinates().Num();
 			Data->Color = static_cast<uint8>(Building.GetBuildingColor());
 			Data->Number = Building.GetBuildingNumber();
 			Data->bRoom = Data->Layout && Building.IsNormalRoom();
@@ -82,8 +83,10 @@ FCastlePCGBoardQuery::FCastlePCGBoardQuery(const ACastleBoard& Board,
 }
 
 FCastlePCGBoardQuery::FCastlePCGBoardQuery(TMap<FIntVector, FCastlePCGBoardCell> InCells,
-	const UCastlePCGRuleSetDataAsset& InRules, UObject* InNoise, int32 InSeed, int32 InGroundLayer)
-	: Cells(MoveTemp(InCells)), Rules(&InRules), Noise(InNoise), Seed(InSeed), GroundLayer(InGroundLayer)
+	const UCastlePCGRuleSetDataAsset& InRules, UObject* InNoise, int32 InSeed, int32 InGroundLayer,
+	TOptional<FIntVector> InTowerColumn)
+	: Cells(MoveTemp(InCells)), Rules(&InRules), Noise(InNoise), Seed(InSeed), GroundLayer(InGroundLayer),
+	  bTowerSides(InTowerColumn.IsSet()), TowerCell(InTowerColumn.Get(FIntVector::ZeroValue))
 {
 	SortCells();
 }
@@ -114,6 +117,11 @@ int32 FCastlePCGBoardQuery::GetOverhangDepth(const FIntVector& Cell) const
 bool FCastlePCGBoardQuery::IsMainTowerDoorFace(const FIntVector& Cell, const FIntVector& Side) const
 {
 	return bTowerSides && Side.Y == 0 && Side.Z == 0 && FMath::Abs(Side.X) == 1 && Cell + Side == TowerCell;
+}
+
+bool FCastlePCGBoardQuery::IsMainTowerColumn(const FIntVector& Cell) const
+{
+	return bTowerSides && Cell.X == TowerCell.X && Cell.Y == TowerCell.Y;
 }
 
 bool FCastlePCGBoardQuery::SampleNoise(const FIntVector& Cell, FName Channel, float& Value, FString& Error) const

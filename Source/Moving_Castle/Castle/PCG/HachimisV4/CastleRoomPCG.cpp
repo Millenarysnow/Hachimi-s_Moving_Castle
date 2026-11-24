@@ -196,11 +196,12 @@ bool CastleV4PCG::PrepareRoom(const ACastleBoard& Board, const ACastleBuildingBa
 	const FIntVector Cell = Building.GetOccupiedCoordinates()[0];
 	const FCastlePCGCellSpec& Room = Field.Cells.FindChecked(Cell);
 	const bool bIncomingHatch = Room.Deck == ECastlePCGDeck::Hatch;
-	// 普通房独立拥有当前底盘；通梯时由上层接口的 UpperFloor 组接管。
-	if (Room.Deck != ECastlePCGDeck::Solid || Room.RoomDeck.Layout != Building.HachimisLayout)
+	const bool bDeckOverride = Room.DeckOverride.IsSet();
+	// 普通房独立拥有当前底盘，宽边套件和梯井组使用同一个格归属。
+	if (bDeckOverride || Room.Deck != ECastlePCGDeck::Solid || Room.RoomDeck.Layout != Building.HachimisLayout)
 	{
 		for (const auto& Part : Original) { Plan.Visual.Hidden.Add(Part.Component); }
-		if (!bIncomingHatch && !AddDeck(Board, Building, Field, Room.RoomDeck, Cell, Plan, Error)) { return false; }
+		if (!bIncomingHatch && !bDeckOverride && !AddDeck(Board, Building, Field, Room.RoomDeck, Cell, Plan, Error)) { return false; }
 	}
 	if (Room.RoomFrame.Layout && !AddFrame(Board, Building, Field, Room.RoomFrame, Cell, Plan, Error)) { return false; }
 	for (const ECastlePCGFace Direction : FCastlePCGBoardQuery::Sides)

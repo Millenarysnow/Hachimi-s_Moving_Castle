@@ -3,6 +3,8 @@
 #include "CastleDeterministicPCGNoise.h"
 #include "Engine/StaticMesh.h"
 #include "HachimisV4/CastleHachimisV4Layout.h"
+#include "Moving_Castle.h"
+#include "Structure/CastlePCGSupportRules.h"
 
 namespace
 {
@@ -249,6 +251,8 @@ bool UCastlePCGRuleSetDataAsset::ValidateConfiguration(FString& Error) const
 	int32 PlanarIndex = INDEX_NONE;
 	int32 VerticalIndex = INDEX_NONE;
 	int32 RoomFormIndex = INDEX_NONE;
+	int32 BraceIndex = INDEX_NONE;
+	int32 StepIndex = INDEX_NONE;
 	for (int32 Index = 0; Index < Rules.Num(); ++Index)
 	{
 		const UCastleBuildingPCGRule* Rule = Rules[Index];
@@ -271,6 +275,29 @@ bool UCastlePCGRuleSetDataAsset::ValidateConfiguration(FString& Error) const
 		if (Rule->IsA<UCastlePCGPlanarRule>() && !Register(PlanarIndex, ECastlePCGRuleStage::Topology)) { return false; }
 		if (Rule->IsA<UCastlePCGVerticalRule>() && !Register(VerticalIndex, ECastlePCGRuleStage::Topology)) { return false; }
 		if (Rule->IsA<UCastlePCGRoomFormRule>() && !Register(RoomFormIndex, ECastlePCGRuleStage::Structure)) { return false; }
+		// 两条规则各自负责完整套件校验，与本轮棋盘是否用到该家族无关。
+		if (const auto* Brace = Cast<UCastlePCGOverhangBraceRule>(Rule))
+		{
+			if (!Register(BraceIndex, ECastlePCGRuleStage::Structure) || !Brace->ValidateKits(Error))
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("%s：%s"), *GetPathName(), *Error);
+				return false;
+			}
+		}
+		if (const auto* Step = Cast<UCastlePCGHorizontalLevel2StepRule>(Rule))
+		{
+			if (!Register(StepIndex, ECastlePCGRuleStage::Structure) || !Step->ValidateKits(Error))
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("%s：%s"), *GetPathName(), *Error);
+				return false;
+			}
+		}
+	}
+	if (BraceIndex == INDEX_NONE || StepIndex == INDEX_NONE)
+	{
+		Error = FString::Printf(TEXT("规则集 %s 必须配齐 OverhangBrace、HorizontalLevel2Step。"), *GetPathName());
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *Error);
+		return false;
 	}
 	if (PlanarIndex == INDEX_NONE || VerticalIndex == INDEX_NONE || RoomFormIndex == INDEX_NONE)
 	{
@@ -318,6 +345,14 @@ bool UCastlePCGRuleSetDataAsset::Solve(const FCastlePCGBoardQuery& Query, FCastl
 			if (Entry.Value.Roof == ECastlePCGRoof::Override && !Entry.Value.RoofOverride.Validate(Error))
 			{
 				Error = FString::Printf(TEXT("规则 %s 的格 %s：%s"), *Rule->GetPathName(), *Entry.Key.ToString(), *Error);
+				return false;
+			}
+			// 底盘覆写只允许视觉件，切洞碰撞与梯位始终由阶段一的层界决定。
+			if (const auto& Deck = Entry.Value.DeckOverride; Deck.IsSet()
+				&& (!Deck->Validate(Error) || Deck->bAffectsNavigation))
+			{
+				Error = FString::Printf(TEXT("规则 %s 的格 %s 含非法底盘视觉覆写 %s。%s"),
+					*Rule->GetPathName(), *Entry.Key.ToString(), *GetPathNameSafe(Deck->Kit), *Error);
 				return false;
 			}
 		}

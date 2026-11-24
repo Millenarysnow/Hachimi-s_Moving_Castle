@@ -1,6 +1,7 @@
 #include "HachimisV4ImportCommandlet.h"
 
 #if WITH_EDITOR
+#include "Castle/PCG/Structure/CastlePCGSupportRules.h"
 #include "CastleHachimisV4Layout.h"
 #include "Algo/Count.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -74,6 +75,8 @@ namespace HachimisV4Import
 		explicit FImporter(const FString& InDirectory, const FString& InRebuildMesh, bool bInShieldDelivery)
 			: Directory(InDirectory), RebuildMesh(InRebuildMesh), bShieldDelivery(bInShieldDelivery) {}
 		bool Run(const FJsonObject& Manifest);
+		/** 独立交付只写斜撑、坡顶、宽边地板与正式规则集。 */
+		bool RunSupportDelivery();
 
 	private:
 		FString Directory;
@@ -85,15 +88,17 @@ namespace HachimisV4Import
 		TMap<FName, UCastleV4LadderKit*> LadderKits;
 		TArray<UObject*> AssemblyAssets;
 
-		bool ReadScene(const FJsonObject& Row, FSceneSource& Out, bool bRoofModule = false);
+		bool ReadScene(const FJsonObject& Row, FSceneSource& Out, bool bRoofModule = false, FName SupportGroup = NAME_None);
 		bool VerifyRoofModules(const FJsonObject& Row, const FSceneSource& Building);
-		bool ReadNode(FbxNode& Node, FbxNode& Root, FSceneSource& Out, const FString& File);
+		bool ReadNode(FbxNode& Node, FbxNode& Root, FSceneSource& Out, const FString& File, FName SupportGroup);
 		bool ImportWall(const FJsonObject& Row);
 		bool ImportLadder(const FJsonObject& Row);
 		bool ImportBuilding(const FJsonObject& Row);
-		bool StorePart(FPartSource& Source, const FString& Folder);
+		bool StorePart(FPartSource& Source, const FString& Folder, const FString& AssetName = {});
 		bool StoreSlices(const FPartSource& Source, UCastleHachimisV4Layout& Layout, const FString& Folder);
 		UMaterial* ReadMaterial(FbxSurfaceMaterial& Source, const FString& File);
+		UMaterial* ReadSupportMaterial(FbxSurfaceMaterial& Source, const FString& File);
+		bool ImportSupportPart(FName Family, FName Group, const FString& Folder, FCastleV4Part& Out);
 	};
 
 	bool Fail(const FString& Object, const FString& Reason)
@@ -259,7 +264,19 @@ namespace HachimisV4Import
 		return Material;
 	}
 
-	bool FImporter::ReadNode(FbxNode& Node, FbxNode& Root, FSceneSource& Out, const FString& File)
+	UMaterial* FImporter::ReadSupportMaterial(FbxSurfaceMaterial& Source, const FString& File)
+	{
+		const FString Name = UTF8_TO_TCHAR(Source.GetName());
+		if (!Name.StartsWith(TEXT("M_HC515_")))
+		{
+			Fail(File, Name + TEXT(" 不是结构补件的作者材质名"));
+			return nullptr;
+		}
+		// 该批作者材质使用独立命名空间；复用 V4 的 FBX 颜色换算及同名一致性检查。
+		return ReadMaterial(Source, File);
+	}
+
+	bool FImporter::ReadNode(FbxNode& Node, FbxNode& Root, FSceneSource& Out, const FString& File, FName SupportGroup)
 	{
 		const FString Name = UTF8_TO_TCHAR(Node.GetName());
 		const FTransform Local = TransformOf(Root.EvaluateGlobalTransform().Inverse() * Node.EvaluateGlobalTransform());
@@ -273,7 +290,8 @@ namespace HachimisV4Import
 			FbxNode& Parent = *Node.GetParent();
 			Source.Part.Node = *Name;
 			Source.Part.Local = Local;
-			Source.Part.Group = PropertyName(Node, "part_group");
+			// 结构补件按整份 FBX 声明用途，原造型则逐节点读取作者语义。
+			Source.Part.Group = SupportGroup.IsNone() ? PropertyName(Node, "part_group") : SupportGroup;
 			Source.Parent = UTF8_TO_TCHAR(Parent.GetName());
 			Source.WallKey = PropertyName(Parent, "wall_key").ToString();
 			Source.RoofCell = PropertyName(Parent, "roof_cell").ToString();
@@ -282,7 +300,8 @@ namespace HachimisV4Import
 			if (Source.Part.Group.IsNone()) { return Fail(File, Name + TEXT(" 缺少 part_group")); }
 			for (int32 Index = 0; Index < Node.GetMaterialCount(); ++Index)
 			{
-				UMaterial* Material = ReadMaterial(*Node.GetMaterial(Index), File);
+				UMaterial* Material = SupportGroup.IsNone() ? ReadMaterial(*Node.GetMaterial(Index), File)
+					: ReadSupportMaterial(*Node.GetMaterial(Index), File);
 				if (!Material) { return false; }
 				Source.Materials.Add(Material);
 			}
@@ -343,12 +362,12 @@ namespace HachimisV4Import
 		}
 		for (int32 Child = 0; Child < Node.GetChildCount(); ++Child)
 		{
-			if (!ReadNode(*Node.GetChild(Child), Root, Out, File)) { return false; }
+			if (!ReadNode(*Node.GetChild(Child), Root, Out, File, SupportGroup)) { return false; }
 		}
 		return true;
 	}
 
-	bool FImporter::ReadScene(const FJsonObject& Row, FSceneSource& Out, bool bRoofModule)
+	bool FImporter::ReadScene(const FJsonObject& Row, FSceneSource& Out, bool bRoofModule, FName SupportGroup)
 	{
 		const FString File = Directory / Row.GetStringField(TEXT("file"));
 		FbxManager* Manager = FbxManager::Create();
@@ -383,7 +402,12 @@ namespace HachimisV4Import
 			Out.RoofAnchor = FVector(Value[0], -Value[1], Value[2]);
 			if (Out.RoofAnchor.ContainsNaN()) { return Fail(File, TEXT("独立屋面锚点包含非法坐标")); }
 		}
-		if (!ReadNode(*Root, *Root, Out, File)) { return false; }
+		if (!ReadNode(*Root, *Root, Out, File, SupportGroup)) { return false; }
+		// 本批次每个作者根作为一件完整网格导入，原建筑批次保持逐节点清单约束。
+		if (!SupportGroup.IsNone())
+		{
+			return !Out.Parts.IsEmpty() || Fail(File, TEXT("作者根缺少可装配网格"));
+		}
 		if (Out.Parts.Num() != Row.GetIntegerField(TEXT("mesh_parts"))
 			|| Out.Mounts.Num() + Out.ClimbMarkers.Num() + 1 != Row.GetIntegerField(TEXT("empty_nodes")))
 		{
@@ -417,16 +441,16 @@ namespace HachimisV4Import
 		return BytesToHex(HashBytes, FSHA1::DigestSize);
 	}
 
-	bool FImporter::StorePart(FPartSource& Source, const FString& Folder)
+	bool FImporter::StorePart(FPartSource& Source, const FString& Folder, const FString& AssetName)
 	{
 		const FString Digest = GeometryDigest(Source);
-		const FString Key = Folder / Digest;
+		const FString Key = Folder / (AssetName.IsEmpty() ? Digest : AssetName);
 		if (UStaticMesh* const* Existing = Meshes.Find(Key)) { Source.Part.Mesh = *Existing; return true; }
-		const FString PackageName = Folder / (TEXT("SM_") + Digest);
+		const FString PackageName = Folder / (AssetName.IsEmpty() ? TEXT("SM_") + Digest : AssetName);
 		const bool bAlreadySaved = FPackageName::DoesPackageExist(PackageName);
 		UStaticMesh* Mesh = CreateOrLoad<UStaticMesh>(PackageName);
 		if (!Mesh || Source.Triangles.IsEmpty()) { return Fail(PackageName, TEXT("静态网格缺少资源或三角")); }
-		if (!bAlreadySaved || Mesh->bDoFastBuild || Digest == RebuildMesh)
+		if (!bAlreadySaved || Mesh->bDoFastBuild || Digest == RebuildMesh || !AssetName.IsEmpty())
 		{
 			// 持久化网格须走编辑器标准构建，FastBuild 的重载路径不会重新计算渲染包围盒。
 			FStaticMeshCompilingManager::Get().FinishCompilation({Mesh});
@@ -492,6 +516,95 @@ namespace HachimisV4Import
 		}
 		Source.Part.Mesh = Mesh;
 		Meshes.Add(Key, Mesh);
+		return true;
+	}
+
+	bool FImporter::ImportSupportPart(FName Family, FName Group, const FString& Folder, FCastleV4Part& Out)
+	{
+		const FString AuthorName = Family.ToString() + TEXT("_") + Group.ToString();
+		const FString MeshName = TEXT("SM_HC515_") + AuthorName;
+		FJsonObject File;
+		File.SetStringField(TEXT("file"), MeshName + TEXT(".fbx"));
+		File.SetStringField(TEXT("root"), TEXT("ROOT_") + AuthorName);
+		FSceneSource Scene;
+		if (!ReadScene(File, Scene, false, Group)) { return false; }
+		FPartSource Combined;
+		Combined.Part.Node = *MeshName;
+		Combined.Part.Group = Group;
+		Combined.Part.Local = FTransform::Identity;
+		for (const FPartSource& Node : Scene.Parts)
+		{
+			// 各作者节点的顶点与法线烘焙到共同根；法线按逆转置换算以保留非均匀缩放效果。
+			TArray<int32> Slots;
+			for (UMaterial* Material : Node.Materials) { Slots.Add(Combined.Materials.AddUnique(Material)); }
+			const FTransform& Local = Node.Part.Local;
+			for (const FTriangle& Original : Node.Triangles)
+			{
+				FTriangle& Triangle = Combined.Triangles.Add_GetRef(Original);
+				Triangle.Material = Slots[Original.Material];
+				for (FCorner& Corner : Triangle.Corners)
+				{
+					Corner.Position = FVector3f(Local.TransformPosition(FVector(Corner.Position)));
+					Corner.Normal = FVector3f(Local.TransformVectorNoScale(FVector(Corner.Normal) / Local.GetScale3D()).GetSafeNormal());
+				}
+			}
+		}
+		if (!StorePart(Combined, Folder, MeshName)) { return false; }
+		Out = MoveTemp(Combined.Part);
+		return true;
+	}
+
+	bool FImporter::RunSupportDelivery()
+	{
+		const FString RuleSetPath = TEXT("/Game/MovingCastle/Data/DA_CastlePCGRuleSet.DA_CastlePCGRuleSet");
+		auto* RuleSet = LoadObject<UCastlePCGRuleSetDataAsset>(nullptr, *RuleSetPath);
+		if (!RuleSet) { return Fail(RuleSetPath, TEXT("正式 PCG 规则集不可读")); }
+		auto* Braces = NewObject<UCastlePCGOverhangBraceRule>(RuleSet);
+		auto* Step = NewObject<UCastlePCGHorizontalLevel2StepRule>(RuleSet);
+		const FString BraceFolder = FString(AssetRoot) / TEXT("Overhang");
+		const FString StepFolder = FString(AssetRoot) / TEXT("Level2Step");
+		for (const FName Family : CastlePCGSupport::Families())
+		{
+			for (const ECastlePCGBraceKind Kind : CastlePCGSupport::BraceKinds())
+			{
+				const FName Group = CastlePCGSupport::BraceName(Kind);
+				const FString KitPath = BraceFolder / FString::Printf(TEXT("DA_%s_%sKit"), *Family.ToString(), *Group.ToString());
+				auto* Kit = CreateOrLoad<UCastlePCGAttachmentKit>(KitPath);
+				if (!Kit) { return Fail(KitPath, TEXT("斜撑套件不可读")); }
+				Kit->Parts.Reset();
+				if (!ImportSupportPart(Family, Group, BraceFolder, Kit->Parts.AddDefaulted_GetRef())) { return false; }
+				Braces->FamilyKits.FindOrAdd(Family).ByKind.Add(Kind, Kit);
+				AssemblyAssets.Add(Kit);
+			}
+			const FString SlopePath = StepFolder / (TEXT("DA_") + Family.ToString() + TEXT("_StepSlopeKit"));
+			const FString DeckPath = StepFolder / (TEXT("DA_") + Family.ToString() + TEXT("_StepDeckKit"));
+			FCastlePCGStepKits& Kits = Step->FamilyKits.Add(Family);
+			Kits.Slope = CreateOrLoad<UCastlePCGAttachmentKit>(SlopePath);
+			Kits.Deck = CreateOrLoad<UCastlePCGAttachmentKit>(DeckPath);
+			if (!Kits.Slope || !Kits.Deck) { return Fail(SlopePath + TEXT(" / ") + DeckPath, TEXT("坡顶或底盘套件不可读")); }
+			Kits.Slope->Parts.Reset();
+			Kits.Deck->Parts.Reset();
+			if (!ImportSupportPart(Family, TEXT("Slope"), StepFolder, Kits.Slope->Parts.AddDefaulted_GetRef())
+				|| !ImportSupportPart(Family, TEXT("WallApron"), StepFolder, Kits.Slope->Parts.AddDefaulted_GetRef())
+				|| !ImportSupportPart(Family, TEXT("Deck"), StepFolder, Kits.Deck->Parts.AddDefaulted_GetRef()))
+			{
+				return false;
+			}
+			AssemblyAssets.Add(Kits.Slope);
+			AssemblyAssets.Add(Kits.Deck);
+		}
+		// 重跑导入只替换这两种规则实例，其他规则和资产参数保持原样。
+		RuleSet->Rules.RemoveAll([](const TObjectPtr<UCastleBuildingPCGRule>& Rule)
+		{
+			return Rule && (Rule->IsA<UCastlePCGOverhangBraceRule>() || Rule->IsA<UCastlePCGHorizontalLevel2StepRule>());
+		});
+		RuleSet->Rules.Add(Braces);
+		RuleSet->Rules.Add(Step);
+		FString Error;
+		if (!RuleSet->ValidateConfiguration(Error)) { return Fail(RuleSetPath, Error); }
+		for (UObject* Asset : AssemblyAssets) { if (!Save(*Asset)) { return false; } }
+		if (!Save(*RuleSet)) { return false; }
+		UE_LOG(LogHachimisV4, Display, TEXT("正式规则集已绑定 %d 个结构网格、%d 个套件。"), Meshes.Num(), AssemblyAssets.Num());
 		return true;
 	}
 
@@ -871,6 +984,13 @@ namespace HachimisV4Import
 int32 UHachimisV4ImportCommandlet::Main(const FString& Params)
 {
 #if WITH_EDITOR
+	FString SupportSource;
+	if (FParse::Value(*Params, TEXT("SupportSource="), SupportSource))
+	{
+		// SDK 从暂存的 ASCII 文件路径读取；内容仍来自原始交付，不改写 FBX。
+		HachimisV4Import::FImporter Importer(SupportSource, FString(), false);
+		return Importer.RunSupportDelivery() ? 0 : 1;
+	}
 	// 清点脚本已核对物理目录和作者清单，导入器再次核对根节点、材质、尺度和每个语义槽。
 	FString ManifestPath;
 	FString Json;
