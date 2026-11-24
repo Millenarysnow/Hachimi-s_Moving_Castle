@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
 #include "CastleGameplayTypes.h"
+#include "Castle/Input/CastleControlMode.h"
 #include "CastlePlayerController.generated.h"
 
 class ACastleBoard;
@@ -17,12 +18,18 @@ class ACastleMassEnemySpawner;
 class UUserWidget;
 class UCastleBackpackComponent;
 class UCastleBadgeReplaceModalWidget;
+class UCastleControlSettingsWidget;
+class UCastleBuildingDemolishMenuWidget;
+
+/** 提供给准星、设置界面及教程的即时模式变更事件。 */
+DECLARE_MULTICAST_DELEGATE_OneParam(FCastleControlModeChanged, ECastleControlMode);
+/** 回收成功后使用事务提交前的描述通知教程，原建筑 Actor 已被棋盘销毁。 */
+DECLARE_MULTICAST_DELEGATE_OneParam(FCastleBuildingDemolished, const FCastleBuildingDescriptor&);
 
 /**
  * 移动城堡的自有玩家控制器。
  *
- * 控制器隐藏系统鼠标并把视口中心作为唯一指针位置，每帧将中心射线交给
- * 棋盘解析，再驱动浅蓝色网格面指示器。建筑放置输入会在此基础上继续扩展。
+ * 控制器统一仲裁鼠标、模态输入和世界瞄准。棋盘、空岛和路线编辑共享当前瞄准源。
  */
 UCLASS()
 class MOVING_CASTLE_API ACastlePlayerController : public APlayerController
@@ -33,6 +40,28 @@ public:
 	/** 初始化中心指针和游戏输入模式。 */
 	ACastlePlayerController();
 
+	ECastleControlMode GetControlMode() const { return ControlMode; }
+	/** 设置界面保存本地偏好；自动化可显式指定模式且不写入配置。 */
+	void SetControlMode(ECastleControlMode NewMode, bool bSaveConfig = true);
+	FKey GetPrimaryPlaceInteractKey() const;
+	FKey GetDemolishKey() const;
+	FText GetPrimaryPlaceInteractKeyDisplayText() const;
+	FText GetDemolishKeyDisplayText() const;
+	bool TryGetAimScreenPosition(float& OutScreenX, float& OutScreenY) const;
+	bool TryGetAimWorldRay(FVector& OutOrigin, FVector& OutDirection) const;
+	bool CanRotateCameraFromMouse() const;
+	bool IsModalInputActive() const { return bModalInputActive; }
+	bool ShouldDrawCenterCrosshair() const;
+	FCastleControlModeChanged OnControlModeChanged;
+	FCastleBuildingDemolished OnBuildingDemolishedToBackpack;
+
+	/** 齿轮和弹窗共用控制器实例，保持一份设置与拆除状态。 */
+	void ToggleControlSettings();
+	void CloseBuildingDemolishMenu();
+	void HandleDemolishOutsideClick(FKey Key, FVector2D ScreenPosition);
+	void ConfirmBuildingDemolish(const UCastleBuildingDemolishMenuWidget& Menu);
+	const UCastleBuildingDemolishMenuWidget* GetBuildingDemolishMenu() const { return BuildingDemolishMenu; }
+
 	/** 返回当前帧的网格目标副本，供 HUD 和后续放置系统读取。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|网格指针")
 	FCastleGridCursorTarget GetCurrentGridCursorTarget() const
@@ -40,10 +69,10 @@ public:
 		return CurrentGridCursorTarget;
 	}
 
-	/** 左键先处理准星命中的气球，未命中才按当前网格目标处理建筑放置。 */
+	/** 主交互优先处理路径、空岛和气球，再按点击瞬间的瞄准目标放置。 */
 	void PlacePrototypeBuildingAtCursor();
 
-	/** 执行左键射线的气球分支；命中即消费此次点击，返回值单独表示是否成功投放。 */
+	/** 执行主交互射线的气球分支；命中即消费点击，返回值单独表示是否成功投放。 */
 	bool TryPopBalloonFromRay(const FVector& Start, const FVector& End, bool& bOutConsumed);
 
 	/** 当前玩家的独立金币账户，奖励和资源建筑可通过此入口接入收支。 */
@@ -143,6 +172,15 @@ protected:
 	/** 执行屏幕中心反投影和棋盘吸附。 */
 	void UpdateGridCursor(ACastleSkyIslandBase* Island = nullptr);
 	void RetractIslandPlacement();
+	void HandleWorldPointerPressed(FKey Key);
+	void HandleWorldPointerReleased(FKey Key);
+	void HandleClosePopup();
+	bool CanUseBuildingDemolishMenu(FText& OutReason) const;
+	bool IsDemolishableBuilding(const ACastleBuildingBase* Building) const;
+	bool TryOpenBuildingDemolishAt(FVector2D ScreenPosition);
+	void InitializePopupClasses();
+	void RemoveBuildingDemolishWidget();
+	void RemoveControlSettingsWidget();
 
 	/** 数字键按当前背包顺序选牌，1 至 9、0 对应十个实际槽位。 */
 	void SelectPrototypeSlot1();
@@ -208,6 +246,12 @@ protected:
 	bool bModalInputActive = false;
 	bool bRewardInputActive = false;
 	bool bGameOverInputActive = false;
+	ECastleControlMode ControlMode = ECastleControlMode::Classic;
+	/** 硬类引用使两个正式 WBP 与控制器一起进入烹煮产物。 */
+	UPROPERTY() TSubclassOf<UCastleControlSettingsWidget> ControlSettingsClass;
+	UPROPERTY() TSubclassOf<UCastleBuildingDemolishMenuWidget> BuildingDemolishMenuClass;
+	UPROPERTY(Transient) TObjectPtr<UCastleControlSettingsWidget> ControlSettings;
+	UPROPERTY(Transient) TObjectPtr<UCastleBuildingDemolishMenuWidget> BuildingDemolishMenu;
 	UPROPERTY(Transient)
 	TObjectPtr<UUserWidget> DirectorFocusWidget;
 	UPROPERTY(Transient) TArray<TObjectPtr<UUserWidget>> DirectorItemWidgets;

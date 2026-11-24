@@ -375,7 +375,8 @@ void UCastleDirectorHUDWidget::HandleGuideClicked()
 
 void UCastleDirectorHUDWidget::HandleSettingsClicked()
 {
-	UE_LOG(LogMoving_Castle, Display, TEXT("主界面 HUD：点击设置按钮（后端界面暂未实现）。"));
+	// 设置按钮和世界快捷键都交给控制器仲裁输入状态。
+	if (auto* Controller = GetOwningPlayer<ACastlePlayerController>()) { Controller->ToggleControlSettings(); }
 }
 
 void UCastleDirectorHUDWidget::HandleMainMenuClicked()

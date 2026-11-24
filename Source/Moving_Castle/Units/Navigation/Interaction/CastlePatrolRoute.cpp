@@ -215,7 +215,6 @@ void ACastlePatrolRoute::BeginPlay()
 	{
 		EnableInput(Controller);
 		InputComponent->BindKey(EKeys::P, IE_Pressed, this, &ACastlePatrolRoute::ToggleEditing);
-		InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ACastlePatrolRoute::AddPointAtViewCenter).bConsumeInput = false;
 		InputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &ACastlePatrolRoute::UndoPoint).bConsumeInput = false;
 		InputComponent->BindKey(EKeys::Enter, IE_Pressed, this, &ACastlePatrolRoute::ApplyDraft).bConsumeInput = false;
 		InputComponent->BindKey(EKeys::Delete, IE_Pressed, this, &ACastlePatrolRoute::ClearRoute).bConsumeInput = false;
@@ -240,9 +239,9 @@ bool ACastlePatrolRoute::SetWorldWaypoints(const TArray<FVector>& Waypoints, FTe
 
 bool ACastlePatrolRoute::CanEdit() const
 {
-	const auto* Controller = Cast<ACastlePlayerController>(GetWorld()->GetFirstPlayerController());
+	auto* Controller = Cast<ACastlePlayerController>(GetWorld()->GetFirstPlayerController());
 	FText Reason;
-	return bOwnsRoute && bAllowPlayerEditing && (!Controller || (!Controller->GetShop()->IsShopOpen() && Controller->IsCastleEditingAllowed(Reason)));
+	return bOwnsRoute && bAllowPlayerEditing && (!Controller || (!Controller->IsModalInputActive() && Controller->IsCastleEditingAllowed(Reason)));
 }
 
 bool ACastlePatrolRoute::SetMaxPlayerWaypoints(const int32 NewLimit)
@@ -303,7 +302,7 @@ void ACastlePatrolRoute::ClearPatrolRoute()
 
 void ACastlePatrolRoute::ToggleEditing()
 {
-	const auto* Controller = Cast<ACastlePlayerController>(GetWorld()->GetFirstPlayerController());
+	auto* Controller = Cast<ACastlePlayerController>(GetWorld()->GetFirstPlayerController());
 	FText Reason;
 	if (Controller && !Controller->IsCastleEditingAllowed(Reason)) { ShowMessage(Reason.ToString(), false); return; }
 	if (!CanEdit()) { return; }
@@ -315,10 +314,16 @@ void ACastlePatrolRoute::ToggleEditing()
 	}
 	DraftWaypoints = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>()->GetRequestedWaypoints();
 	SetEditing(true);
-	ShowMessage(TEXT("巡逻编辑：瞄准建筑楼顶或地面后左键添加路径点；建筑取本层楼内地板，棋盘内地面取格心；Backspace 撤回，Enter 提交路线，Delete 清空，P 取消。"), true);
+	if (Controller)
+	{
+		// 路线状态已提交，关闭面板后只恢复本模式的路径编辑输入。
+		Controller->CloseBuildingDemolishMenu();
+		ShowMessage(FString::Printf(TEXT("巡逻编辑：瞄准建筑楼顶或地面后按%s添加路径点；建筑取本层楼内地板，棋盘内地面取格心；Backspace 撤回，Enter 提交路线，Delete 清空，P 取消。"),
+			*Controller->GetPrimaryPlaceInteractKeyDisplayText().ToString()), true);
+	}
 }
 
-void ACastlePatrolRoute::AddPointAtViewCenter()
+void ACastlePatrolRoute::AddPointAtAim()
 {
 	if (!bEditing || !CanEdit()) { return; }
 	// 路线序号从 1 开始；满 99 点后明确拒绝添加，不循环编号也不跳过显示。
@@ -336,13 +341,11 @@ void ACastlePatrolRoute::AddPointAtViewCenter()
 		ShowMessage(CapacityFailure.ToString(), false);
 		return;
 	}
-	APlayerController* Controller = GetWorld()->GetFirstPlayerController();
-	int32 Width, Height;
-	Controller->GetViewportSize(Width, Height);
+	const auto* Controller = Cast<ACastlePlayerController>(GetWorld()->GetFirstPlayerController());
 	FVector Origin, Direction;
-	if (Width <= 0 || Height <= 0 || !Controller->DeprojectScreenPositionToWorld(Width * 0.5, Height * 0.5, Origin, Direction))
+	if (!Controller || !Controller->TryGetAimWorldRay(Origin, Direction))
 	{
-		ShowMessage(TEXT("当前视口无法生成中心射线。"), false);
+		ShowMessage(TEXT("当前操作模式无法取得瞄准射线。"), false);
 		return;
 	}
 	FVector Point;

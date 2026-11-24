@@ -188,9 +188,19 @@ bool ACastlePinballNPCSkyIsland::EnterAimMode(ACastlePlayerController& Controlle
 	// 高优先级输入只在瞄准期间存在。按住方向键由 Tick 读取，阻止下层飞行输入响应。
 	AimInput = NewObject<UInputComponent>(this);
 	AimInput->bBlockInput = true;
-	for (const FKey& Key : {EKeys::LeftMouseButton, EKeys::SpaceBar})
+	AimInput->BindKey(EKeys::SpaceBar, IE_Pressed, this, &ACastlePinballNPCSkyIsland::LaunchFromInput);
+	// 此输入组件高于控制器；通过同一映射分流，不让发射同时触发棋盘放置。
+	for (const FKey& Key : CastleControlInput::GetPointerKeys())
 	{
-		AimInput->BindKey(Key, IE_Pressed, this, &ACastlePinballNPCSkyIsland::LaunchFromInput);
+		FInputKeyBinding Binding(FInputChord(Key), IE_Pressed);
+		Binding.KeyDelegate.GetDelegateWithKeyForManualSet().BindWeakLambda(this, [this](FKey Pressed)
+		{
+			if (const auto* Player = AimController.Get(); Player && Pressed == Player->GetPrimaryPlaceInteractKey())
+			{
+				LaunchFromInput();
+			}
+		});
+		AimInput->KeyBindings.Add(MoveTemp(Binding));
 	}
 	for (const FKey& Key : {EKeys::E, EKeys::Tab, EKeys::Escape})
 	{
