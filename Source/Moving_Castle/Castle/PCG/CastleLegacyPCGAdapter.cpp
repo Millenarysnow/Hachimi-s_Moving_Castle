@@ -306,11 +306,29 @@ bool CastleLegacyPCG::Prepare(const ACastleBoard& Board, const ACastleBuildingBa
 	}
 	for (const FIntVector& Cell : Building.GetOccupiedCoordinates())
 	{
+		const bool bDeckOverride = Field.Cells.FindChecked(Cell).DeckOverride.IsSet();
+		if (bDeckOverride)
+		{
+			// 旧单格原型的 StaticMesh 是原装底板视觉，GameplayRoot 下的功能板由玩法阶段独立处理。
+			const FCastlePCGPartAnnotation* OriginalDeck = OriginalParts.FindByPredicate([&](const FCastlePCGPartAnnotation& Part)
+			{
+				return Part.LocalCellOffset == Cell - Minimum && Part.Component->GetFName() == TEXT("StaticMesh");
+			});
+			if (!OriginalDeck)
+			{
+				Error = FString::Printf(TEXT("%s 在格 %s 缺少旧单格原装底板 StaticMesh。"), *Building.GetPathName(), *Cell.ToString());
+				return false;
+			}
+			Plan.Visual.Hidden.Add(OriginalDeck->Component);
+		}
 		// 旧上层使用自身站立标高，来梯可来自 V4 套件或旧模板。
 		if (const CastleV4PCG::FStairInterface* Incoming = Stairs.Find(Cell - FCastlePCGBoardQuery::Up))
 		{
 			UStaticMeshComponent* Floor = FindLegacyFloor(Board, Building, Cell, Error);
 			if (!Floor || !CastleV4PCG::CutDeck(Board, Building, Cell, 0.0, *Floor, *Incoming, Plan, Error)) { return false; }
+			// 二级上叠时公共挂件阶段负责唯一的 UpperFloor 视觉件。
+			// 旧版接收层仍先切原功能板，保留下层套件提供的井口与竖梯通行。
+			if (bDeckOverride) { continue; }
 			if (Incoming->Kit)
 			{
 				if (!CastleV4PCG::AddStairGroup(Building, *Incoming, TEXT("UpperFloor"), Plan, Error)) { return false; }

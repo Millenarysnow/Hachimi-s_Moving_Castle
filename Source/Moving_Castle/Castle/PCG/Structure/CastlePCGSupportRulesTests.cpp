@@ -177,4 +177,49 @@ bool FCastlePCGOverhangStructure::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePCGStepSkyExposure, "MovingCastle.Castle.PCG.Structure.StepSkyExposure",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastlePCGStepSkyExposure::RunTest(const FString& Parameters)
+{
+	const auto* Rules = CastlePCGSupportTests::LoadRules(*this);
+	if (!Rules) { return false; }
+	auto* Layout = NewObject<UCastleHachimisV4Layout>();
+	Layout->Family = TEXT("Archer");
+	Layout->Grid = FIntVector(2, 1, 1);
+	const FIntVector Covered(1, 1, 0), Exposed(2, 1, 0), Up = FCastlePCGBoardQuery::Up;
+	FCastlePCGBoardCell Lower;
+	Lower.Layout = Layout;
+	Lower.BuildingRoot = Covered;
+	Lower.BuildingCellCount = 2;
+	FCastlePCGBoardCell Upper;
+	Upper.BuildingRoot = Covered + Up;
+	Upper.BuildingCellCount = 1;
+	const auto* Step = CastlePCGSupportTests::FindRule<UCastlePCGHorizontalLevel2StepRule>(*Rules);
+	if (!TestNotNull(TEXT("正式水平二级叠放规则"), Step)) { return false; }
+	for (const bool bOverhead : {false, true})
+	{
+		TMap<FIntVector, FCastlePCGBoardCell> Cells = {{Covered, Lower}, {Exposed, Lower}, {Covered + Up, Upper}};
+		if (bOverhead)
+		{
+			// 从已叠一侧的更高邻格侧挑过来，外露格紧邻上一层依然是空格。
+			FCastlePCGBoardCell Cantilever = Upper;
+			Cantilever.BuildingRoot = Exposed + Up * 2;
+			Cells.Add(Exposed + Up * 2, Cantilever);
+		}
+		FCastlePCGBoardQuery Query(MoveTemp(Cells), *Rules, nullptr, 0, 0);
+		FCastlePCGSemanticField Field;
+		Field.Cells.Add(Exposed);
+		Field.Cells.Add(Covered + Up);
+		FString Error;
+		if (!Step->Evaluate(Query, Field, Error)) { AddError(Error); return false; }
+		TestNull(TEXT("外露侧的紧邻上一层保持空置"), Query.Find(Exposed + Up));
+		TestEqual(TEXT("隔层悬挑遮挡时停用半坡和上层地板覆写"),
+			Field.Cells.FindChecked(Exposed).Roof == ECastlePCGRoof::Override, !bOverhead);
+		TestEqual(TEXT("上层套件地板与半坡同启停"),
+			Field.Cells.FindChecked(Covered + Up).DeckOverride.IsSet(), !bOverhead);
+	}
+	return true;
+}
+
 #endif

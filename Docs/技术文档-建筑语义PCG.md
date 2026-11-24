@@ -74,7 +74,7 @@ ACastleBoard（仅发布占用与布局提交事件）
 
 **悬挑斜撑与水平二级上堆一级规则均以纯语义与独立套件接入 Stage 2。**
 - **悬挑斜撑（`UCastlePCGOverhangBraceRule`）** 仅对 6 类功能塔的悬空格判定承托墙。格位高于地面层且正下方无建筑时，正交方向紧邻主塔柱列或侧下方 `(dx, dy, -1)` 存在已放置建筑即可承托。单格按单向、相邻双向、对向双向分别挂载本族 `Cantilever`、`CornerFan`、`ThroughArch`。双格悬挑按单端或双端承托由近墙首格挂载本族 `DeepCorbel` 或 `OpposedSpan`。挂点位于承托墙沿的楼板底面中点，导入后的局部 `+Y` 沿悬挑向外。斜撑只提供视觉效果，选中射线和 Recast 都忽略它。
-- **水平二级上堆一级（`UCastlePCGHorizontalLevel2StepRule`）** 在下层水平二级功能塔 A 恰有一格正上方放置单格建筑 B，且另一格正上方为空时触发。A 隐藏原装屋面，在外露格顶面挂载同族的 `Slope + WallApron`，高边朝 B，滴水檐朝外。B 的底盘视觉使用 A 同族的套件地板 `Deck`。导入保留作者几何，边框为 `515 × 515 cm`，铺面高 `40.8 cm`，角钉顶高 `42.4 cm`。当 A 与 B 之间形成梯井时，`CutDeck` 与双向 `UCastleLadderLinkComponent` 继续提供通行。挖洞款套件地板交付前，视觉暂用无洞 `Deck` 并输出 `Warning`，待补齐挖洞款后替换套件资产。
+- **水平二级上堆一级（`UCastlePCGHorizontalLevel2StepRule`）** 在下层水平二级功能塔 A 恰有一格正上方放置单格建筑 B，且另一格所在列上方没有建筑遮挡时触发。A 隐藏原装屋面，在外露格顶面挂载同族的 `Slope + WallApron`，高边朝 B，滴水檐朝外。B 的底盘视觉使用 A 同族的套件地板 `Deck`。导入保留作者几何，边框为 `515 × 515 cm`，铺面高 `40.8 cm`，角钉顶高 `42.4 cm`。当 A 与 B 之间形成梯井时，`CutDeck` 与双向 `UCastleLadderLinkComponent` 继续提供通行。挖洞款套件地板交付前，视觉暂用无洞 `Deck` 并输出 `Warning`，待补齐挖洞款后替换套件资产。
 
 **非 V4 占位建筑走隔离适配器，不污染 V4 主干。** 当前仅无 `HachimisLayout` 的占位建筑（如 `BP_SpeedRoom_lv1`）与极简测试夹具走独立的 `LegacyAdapter`，提供水平功能桥/阻隔与 40.8 cm/0 cm 高度过渡斜面；常态全 V4 棋盘不实例化旧版 `BP_Variant_LV1/LV2` 模板 Actor，待全部正式建筑迁入 V4 后可整体移除该适配器。
 

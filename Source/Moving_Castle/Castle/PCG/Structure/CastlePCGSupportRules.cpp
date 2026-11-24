@@ -208,7 +208,9 @@ bool UCastlePCGHorizontalLevel2StepRule::Evaluate(const FCastlePCGBoardQuery& Qu
 		{
 			const FIntVector Exposed = Covered + Direction;
 			const FCastlePCGBoardCell* Other = Query.Find(Exposed);
-			if (!Other || Other->BuildingRoot != Lower.BuildingRoot || Query.Find(Exposed + Query.Up)) { continue; }
+			// 外露侧同列必须通天，隔一层的悬挑也会遮住坡顶。
+			if (!Other || Other->BuildingRoot != Lower.BuildingRoot || Query.Find(Exposed + Query.Up)
+				|| !Query.IsSkyExposed(Exposed)) { continue; }
 			const FCastlePCGStepKits* Kits = FamilyKits.Find(Lower.Layout->Family);
 			if (!Kits || !Kits->Slope || !Kits->Deck)
 			{
