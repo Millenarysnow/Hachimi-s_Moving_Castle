@@ -12,6 +12,22 @@ bool CastlePCGSemantics::CellLess(const FIntVector& A, const FIntVector& B)
 	return A.X != B.X ? A.X < B.X : (A.Y != B.Y ? A.Y < B.Y : A.Z < B.Z);
 }
 
+FIntVector CastlePCGSemantics::RoomFramePartOwner(const UCastleHachimisV4Layout& Layout, const FCastleV4Part& Part)
+{
+	const FVector Center = Part.Local.TransformPosition(Part.Mesh->GetBoundingBox().GetCenter());
+	const int32 Layer = Center.Z >= Layout.StoryRise ? 1 : 0;
+	FIntVector Owner(0, 0, Layer);
+	double Closest = TNumericLimits<double>::Max();
+	for (int32 X = 0; X < Layout.Grid.X; ++X)
+	for (int32 Y = 0; Y < Layout.Grid.Y; ++Y)
+	{
+		const FIntVector Candidate(X, Y, Layer);
+		const double Distance = FVector::DistSquared2D(Center, Layout.CellBottom(Candidate));
+		if (Distance < Closest - 0.1) { Owner = Candidate; Closest = Distance; }
+	}
+	return Owner;
+}
+
 FIntVector CastlePCGSemantics::FaceOffset(const ECastlePCGFace Face)
 {
 	switch (Face)

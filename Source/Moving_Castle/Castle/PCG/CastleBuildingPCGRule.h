@@ -3,10 +3,14 @@
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "CastlePCGTypes.h"
+#include "CastlePCGSemanticField.h"
 #include "CastleBuildingPCGRule.generated.h"
 
 class UStaticMesh;
 class ICastlePCGNoiseProvider;
+
+/** 阶段按枚举顺序执行，同一阶段保留规则集里的显式顺序。 */
+enum class ECastlePCGRuleStage : uint8 { Topology, Structure, Detail };
 
 /** 本轮纯求值上下文；只包含正式已完成建筑的邻接，不保存求值顺序状态。 */
 struct MOVING_CASTLE_API FCastlePCGRuleContext
@@ -41,8 +45,10 @@ class MOVING_CASTLE_API UCastleBuildingPCGRule : public UObject
 {
 	GENERATED_BODY()
 public:
-	/** 完整求值后返回结果；无效噪声/规则配置必须返回失败。 */
-	virtual bool Evaluate(const FCastlePCGRuleContext& Context, FCastlePCGTarget& Out, FString& Error) const PURE_VIRTUAL(UCastleBuildingPCGRule::Evaluate, return false;);
+	/** 所有新规则整盘求值。失败时调用方拒绝发布语义场。 */
+	virtual ECastlePCGRuleStage GetStage() const PURE_VIRTUAL(UCastleBuildingPCGRule::GetStage, return ECastlePCGRuleStage::Topology;);
+	virtual bool Evaluate(const FCastlePCGBoardQuery& Query, FCastlePCGSemanticField& Field, FString& Error) const
+		PURE_VIRTUAL(UCastleBuildingPCGRule::Evaluate, return false;);
 };
 
 /** 垂直规则：移除屋顶，每一对可通行建筑只选择一格梯子。 */
@@ -51,7 +57,10 @@ class MOVING_CASTLE_API UCastlePCGVerticalRule : public UCastleBuildingPCGRule
 {
 	GENERATED_BODY()
 public:
-	virtual bool Evaluate(const FCastlePCGRuleContext& Context, FCastlePCGTarget& Out, FString& Error) const override;
+	virtual ECastlePCGRuleStage GetStage() const override { return ECastlePCGRuleStage::Topology; }
+	virtual bool Evaluate(const FCastlePCGBoardQuery& Query, FCastlePCGSemanticField& Field, FString& Error) const override;
+	/** 分期保留旧规则测试入口，运行时使用整盘接口。 */
+	bool Evaluate(const FCastlePCGRuleContext& Context, FCastlePCGTarget& Out, FString& Error) const;
 };
 
 /** 平面规则：输出全部跨建筑相邻格面，连通时开护栏并铺桥，否则保留阻隔。 */
@@ -60,7 +69,18 @@ class MOVING_CASTLE_API UCastlePCGPlanarRule : public UCastleBuildingPCGRule
 {
 	GENERATED_BODY()
 public:
-	virtual bool Evaluate(const FCastlePCGRuleContext& Context, FCastlePCGTarget& Out, FString& Error) const override;
+	virtual ECastlePCGRuleStage GetStage() const override { return ECastlePCGRuleStage::Topology; }
+	virtual bool Evaluate(const FCastlePCGBoardQuery& Query, FCastlePCGSemanticField& Field, FString& Error) const override;
+};
+
+/** 普通房作者样例归属和通梯方向由结构阶段决定。 */
+UCLASS(BlueprintType, EditInlineNew)
+class MOVING_CASTLE_API UCastlePCGRoomFormRule : public UCastleBuildingPCGRule
+{
+	GENERATED_BODY()
+public:
+	virtual ECastlePCGRuleStage GetStage() const override { return ECastlePCGRuleStage::Structure; }
+	virtual bool Evaluate(const FCastlePCGBoardQuery& Query, FCastlePCGSemanticField& Field, FString& Error) const override;
 };
 
 /** 项目规则与美术配置。缺少任何必需资源都拒绝本轮变化，不生成占位资源。 */
@@ -106,4 +126,6 @@ public:
 	TObjectPtr<class UCastleV4WallKit> RoomL1Bay;
 
 	bool ValidateConfiguration(FString& Error) const;
+	/** 验证、求值并发布完整语义场；禁止半轮结果进入装配。 */
+	bool Solve(const FCastlePCGBoardQuery& Query, FCastlePCGSemanticField& Out, FString& Error) const;
 };

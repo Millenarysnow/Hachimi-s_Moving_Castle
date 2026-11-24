@@ -133,38 +133,40 @@ bool UCastleBuildingPCGSubsystem::RecomputeInternal(ACastleBoard* Board, const F
 	{
 		for (const auto& Pair : *Previous) { if (!CurrentOccupancy.Contains(Pair.Key)) { MarkCellAndNeighbors(Pair.Key); } }
 	}
-	// 先求值整份格面语义，为普通房水平互达和上下两侧共用的梯口提供稳定输入。
+	// 本阶段由整盘求解器决定分量、梯位和房型；下一阶段再将装配器迁移为直接读取语义场。
+	const FCastlePCGBoardQuery Query(*Board, Occupancy, Noise);
+	FCastlePCGSemanticField Field;
+	if (!Rules->Solve(Query, Field, Error)) { return false; }
 	CastleV4PCG::FTargets Targets;
+	CastleV4PCG::FRooms Rooms;
 	for (auto* Building : Buildings)
 	{
-		FCastlePCGRuleContext Context;
-		Context.Building = Building;
-		Context.Seed = Board->GroundSeed;
-		Context.NoiseProvider = Noise;
-		Context.bUseLadderNoise = Rules->bUseNoiseForLadderCellSelection;
-		Context.LadderChannel = Rules->LadderSelectionNoiseChannel;
+		FCastlePCGTarget& Target = Targets.Add(Building);
 		for (const auto& Cell : Building->GetOccupiedCoordinates())
 		{
-			for (const auto& Direction : Directions)
+			const FCastlePCGCellSpec& CellSpec = Field.Cells.FindChecked(Cell);
+			if (CellSpec.RoomDeck.Layout)
 			{
-				ACastleBuildingBase* const* Neighbor = Occupancy.Find(Cell + Direction);
-				if (!Neighbor || *Neighbor == Building) { continue; }
-				FCastlePCGCellAdjacency Adj;
-				Adj.FirstBuilding = Building;
-				Adj.SecondBuilding = *Neighbor;
-				Adj.FirstCell = Cell;
-				Adj.SecondCell = Cell + Direction;
-				Adj.Offset = Direction;
-				Adj.bCanTraverse = CastleV4PCG::CanTraverse(*Building, **Neighbor);
-				Context.Adjacencies.Add(Adj);
+				const auto& Deck = CellSpec.RoomDeck;
+				const auto& Frame = CellSpec.RoomFrame;
+				Rooms.Add(Cell, {{Deck.Layout, Deck.Cell, Deck.Origin, Deck.bTurn},
+					{Frame.Layout, Frame.Cell, Frame.Origin, Frame.bTurn}});
+			}
+			if (const FCastlePCGVerticalSpec* Interface = Field.VerticalInterfaces.Find(Cell))
+			{
+				Target.Ceilings.Add(Cell, Interface->State == ECastlePCGVertical::Ladder ? 2 : 1);
+			}
+			for (const ECastlePCGFace Face : Query.Sides)
+			{
+				const FCastlePCGSideFaceSpec& Side = Field.SideFaces.FindChecked({Cell, Face});
+				if (Side.bHasNeighbor || Side.State == ECastlePCGSide::MainTowerDoor)
+				{
+					Target.Faces.Add({Cell, Face, Side.IsConnected()});
+				}
 			}
 		}
-		FCastlePCGTarget& Target = Targets.Add(Building);
-		for (UCastleBuildingPCGRule* Rule : Rules->Rules) { if (!Rule->Evaluate(Context, Target, Error)) { return false; } }
 	}
-	CastleV4PCG::FRooms Rooms;
 	CastleV4PCG::FStairs Stairs;
-	if (!CastleV4PCG::BuildRooms(*Rules, Occupancy, Targets, Rooms, Error)) { return false; }
 	if (!CastleV4PCG::BuildStairs(*Board, Occupancy, Targets, Rooms, Stairs, Error)) { return false; }
 	for (auto* Building : Buildings)
 	{
