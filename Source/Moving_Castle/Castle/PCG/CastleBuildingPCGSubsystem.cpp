@@ -15,6 +15,7 @@
 #include "Moving_Castle.h"
 #include "NavigationData.h"
 #include "NavigationSystem.h"
+#include "NavMesh/RecastNavMesh.h"
 
 namespace
 {
@@ -46,6 +47,15 @@ namespace
 			{
 				Error = FString::Printf(TEXT("%s 的格 %s 梯链接坐标或变换无效。"),
 					*Building.GetPathName(), *Link.LowerCell.ToString());
+				return false;
+			}
+			// 与 Link 登记使用同一父节点变换。高度非法必须在导航锁和旧组件移交之前拒绝。
+			const FTransform WorldFrame = Link.Relative * Building.GameplayRoot->GetComponentTransform();
+			const double Rise = WorldFrame.TransformPosition(Link.LadderTop).Z - WorldFrame.TransformPosition(Link.LadderBottom).Z;
+			if (!FMath::IsFinite(Rise) || Rise <= UE_DOUBLE_SMALL_NUMBER)
+			{
+				Error = FString::Printf(TEXT("%s 的格 %s 梯链接世界高度 %g 无效。"),
+					*Building.GetPathName(), *Link.LowerCell.ToString(), Rise);
 				return false;
 			}
 		}
@@ -125,7 +135,6 @@ bool UCastleBuildingPCGSubsystem::RecomputeInternal(ACastleBoard* Board, const F
 	TArray<TPair<UCastleBuildingPCGComponent*, FCastlePCGApplyPlan>> Plans;
 	TArray<int32> GameplayChanges;
 	TArray<int32> VisualChanges;
-	bool bNeedsDynamicRecast = false;
 	for (ACastleBuildingBase* Building : Buildings)
 	{
 		UCastleBuildingPCGComponent* Component = Building->BuildingPCG;
@@ -141,7 +150,6 @@ bool UCastleBuildingPCGSubsystem::RecomputeInternal(ACastleBoard* Board, const F
 		if (!CastleV4PCG::AddAttachments(*Board, *Building, Field, Plan, Error) || !ValidatePlan(*Building, Plan, Error)) { return false; }
 		Plan.FinalizeKeys();
 		const int32 Index = Plans.Num() - 1;
-		bNeedsDynamicRecast |= !Plan.Gameplay.LadderFrames.IsEmpty();
 		if (Component->GetAppliedGameplayKey() != Plan.Gameplay.Key) { GameplayChanges.Add(Index); }
 		if (Component->GetAppliedVisualKey() != Plan.Visual.Key)
 		{
@@ -153,19 +161,22 @@ bool UCastleBuildingPCGSubsystem::RecomputeInternal(ACastleBoard* Board, const F
 			VisualChanges.Add(Index);
 		}
 	}
-	if (bNeedsDynamicRecast)
-	{
-		UNavigationSystemV1* Navigation = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
-		const ANavigationData* Data = Navigation ? Navigation->GetDefaultNavDataInstance(FNavigationSystem::DontCreate) : nullptr;
-		if (!Data || Data->GetRuntimeGenerationMode() != ERuntimeGenerationType::Dynamic)
-		{
-			Error = Board->GetPathName() + TEXT(" 的楼层梯接口要求有效的动态 Recast 导航数据。");
-			return false;
-		}
-	}
-
 	if (!GameplayChanges.IsEmpty())
 	{
+		// 梯子必须登记到动态 Recast。无导航数据的纯逻辑世界允许提交普通碰撞，
+		// 而有导航数据的世界必须能更新墙、桥、切板及挂件占用的导航区域。
+		UNavigationSystemV1* Navigation = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
+		const ANavigationData* Data = Navigation ? Navigation->GetDefaultNavDataInstance(FNavigationSystem::DontCreate) : nullptr;
+		const bool bHasLadderChanges = GameplayChanges.ContainsByPredicate([&Plans](int32 Index)
+		{
+			return !Plans[Index].Value.Gameplay.LadderFrames.IsEmpty();
+		});
+		if ((bHasLadderChanges || Data)
+			&& (!Cast<ARecastNavMesh>(Data) || Data->GetRuntimeGenerationMode() != ERuntimeGenerationType::Dynamic))
+		{
+			Error = Board->GetPathName() + TEXT(" 的玩法几何差量要求有效的动态 Recast 导航数据。");
+			return false;
+		}
 		// 整轮玩法变更共享导航锁。试装失败时在锁内撤回次序相反的全部已触碰建筑。
 		const FScopedCastleNavigationChange NavigationChange(GetWorld(), Board);
 		for (int32 Change = 0; Change < GameplayChanges.Num(); ++Change)
@@ -184,7 +195,8 @@ bool UCastleBuildingPCGSubsystem::RecomputeInternal(ACastleBoard* Board, const F
 	for (const int32 Index : VisualChanges)
 	{
 		const auto& Entry = Plans[Index];
-		Entry.Key->ApplyVisual(*Board, Entry.Value.Visual, Origin);
+		// 仅表现签名变化时，不把动画登记到导航子系统。
+		Entry.Key->ApplyVisual(*Board, Entry.Value.Visual, Origin, GameplayChanges.Contains(Index));
 	}
 	for (const auto& Entry : Plans) { Entry.Key->UpdateAppliedKey(); }
 	if (!GameplayChanges.IsEmpty() || !VisualChanges.IsEmpty()) { OnPCGLayoutUpdated.Broadcast(Board); }

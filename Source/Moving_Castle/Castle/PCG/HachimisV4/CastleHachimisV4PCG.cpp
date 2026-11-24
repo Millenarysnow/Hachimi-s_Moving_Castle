@@ -48,13 +48,6 @@ namespace CastleV4PCG
 		return true;
 	}
 
-	FTransform CellFrame(const ACastleBoard& Board, const FIntVector& Cell)
-	{
-		const FVector BottomWorld = Board.GetGridWorldLocation(Cell)
-			- Board.GetActorTransform().TransformVector(FVector(0, 0, Board.LayerHeight * 0.5));
-		return FTransform(Board.GetActorQuat(), BottomWorld, Board.GetActorScale3D());
-	}
-
 	bool MapCells(const ACastleBuildingBase& Building, const ACastleBoard& Board, TMap<FIntVector, FIntVector>& Out, FString& Error)
 	{
 		const UCastleHachimisV4Layout& Layout = *Building.HachimisLayout;
@@ -184,8 +177,7 @@ namespace CastleV4PCG
 				Error = FString::Printf(TEXT("梯位 %s 缺少已完成的上下层建筑。"), *Cell.ToString());
 				return false;
 			}
-			// 纯旧造型保留其独立模板契约，只有至少一侧 V4 时才解析共享套件框架。
-			if (!Lower->HachimisLayout && !Upper->HachimisLayout) { continue; }
+			// 所有接梯的两侧共用同一井口，即使上下都是占位建筑也需要由上层切板。
 			FStairInterface& Interface = Out.Add(Cell);
 			Interface.WorldFrame = CellFrame(Board, Cell);
 			Interface.WorldFrame.SetRotation(Board.GetActorQuat() * FQuat(FVector::UpVector, FMath::DegreesToRadians(Spec.BoardYaw)));
@@ -274,18 +266,24 @@ namespace CastleV4PCG
 		const UCastleHachimisV4Layout& Layout = *Building.HachimisLayout;
 		// 门洞状态只来自规则。开口几何由原墙槽的作者套件决定。
 		const bool bOpen = Face.IsDoor();
+		const bool bRemoveWall = !Face.bOwnsWall || Face.State == ECastlePCGSide::MergedOpen;
 		const UCastleV4WallKit& Kit = *Slot.Kit;
 		if (!FMath::IsFinite(Kit.Opening) || Kit.Opening < 150.0 || Kit.Open.IsEmpty() || Kit.Closed.IsEmpty())
 		{
 			return Reject(Building, Error, Kit.GetPathName() + TEXT(" 的墙状态或门宽无效"));
 		}
 		const FTransform Mount = Slot.Mount;
-		if (bOpen)
+		if (bOpen || bRemoveWall)
 		{
 			for (int32 Index = 0; Index < Layout.Parts.Num(); ++Index)
 			{
 				if (Layout.Parts[Index].Group == Slot.Node) { Plan.Visual.Hidden.Add(Original[Index].Component); }
 			}
+		}
+		// 贯通面和归对侧的共享墙都不在本侧安装网格或阻隔功能盒。
+		if (bRemoveWall) { return true; }
+		if (bOpen)
+		{
 			for (const FCastleV4Part& Part : Kit.Open)
 			{
 				if (!AddPart(Building, Part, Mount, Plan, Error)) { return false; }

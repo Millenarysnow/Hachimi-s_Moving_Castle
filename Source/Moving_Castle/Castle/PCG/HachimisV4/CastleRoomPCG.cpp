@@ -131,7 +131,7 @@ namespace CastleRoomPCG
 		FCastlePCGApplyPlan& Plan, FString& Error)
 	{
 		// 合并贯通或另一侧拥有共享墙的结果已由 Planar 规则写入。
-		if (!Face.bOwnsWall || (!Face.bHasNeighbor && !Sample.Layout)) { return true; }
+		if (!Face.bOwnsWall || Face.State == ECastlePCGSide::MergedOpen || (!Face.bHasNeighbor && !Sample.Layout)) { return true; }
 		const bool bOpen = Face.IsDoor();
 		const UCastleHachimisV4Layout* Model = Sample.Layout;
 		const FCastleV4WallSlot* Slot = nullptr;

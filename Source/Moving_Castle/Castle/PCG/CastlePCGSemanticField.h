@@ -18,6 +18,8 @@ struct FCastlePCGBoardCell
 	int32 Number = 0;
 	double BoardYaw = 0.0;
 	bool bRoom = false;
+	/** 格底棋盘朝向在建筑作者坐标中的变换，供外梯与内梯洞进行同空间比较。 */
+	FTransform CellInBuilding = FTransform::Identity;
 };
 
 /** 同一作者样例被拆给多个单格房拥有，每格记录自己的局部索引。 */
@@ -128,7 +130,7 @@ public:
 	FCastlePCGBoardQuery(const ACastleBoard& Board, const TMap<FIntVector, ACastleBuildingBase*>& Occupancy, UObject* InNoise);
 	/** 无世界规则测试可直接构造同一套纯数据查询。 */
 	FCastlePCGBoardQuery(TMap<FIntVector, FCastlePCGBoardCell> InCells, const UCastlePCGRuleSetDataAsset& InRules,
-		UObject* InNoise, int32 InSeed);
+		UObject* InNoise, int32 InSeed, int32 InGroundLayer);
 
 	const TArray<FIntVector>& OrderedCells() const { return SortedCells; }
 	const FCastlePCGBoardCell* Find(const FIntVector& Cell) const { return Cells.Find(Cell); }
@@ -151,6 +153,7 @@ private:
 	const UCastlePCGRuleSetDataAsset* Rules;
 	UObject* Noise;
 	int32 Seed;
+	int32 GroundLayer;
 	double Pitch = 515.0;
 	double LayerHeight = 560.0;
 	bool bTowerSides = false;

@@ -209,7 +209,8 @@ void UCastleBuildingPCGComponent::FinishGameplay(bool bCommit)
 	BeforeGameplay.Reset();
 }
 
-void UCastleBuildingPCGComponent::ApplyVisual(const ACastleBoard& Board, const FCastlePCGVisualPlan& Plan, const FVector Origin)
+void UCastleBuildingPCGComponent::ApplyVisual(const ACastleBoard& Board, const FCastlePCGVisualPlan& Plan, const FVector Origin,
+	bool bGameplayChanged)
 {
 	ACastleBuildingBase* Building = CastChecked<ACastleBuildingBase>(GetOwner());
 	UBuildingMergeComponent& Merge = *Building->BuildingMerge;
@@ -256,7 +257,8 @@ void UCastleBuildingPCGComponent::ApplyVisual(const ACastleBoard& Board, const F
 		Merge.bUseSharedChangeOrigin = true;
 		Merge.ChangeOrigin = Origin;
 		Merge.ArrivalDirection = Board.GetActorForwardVector();
-		const bool bStarted = Merge.StartVisualChange({Snapshot});
+		// 纯视觉过渡不请求导航重建。随玩法切换的过渡继续沿用合并的导航生命周期。
+		const bool bStarted = bGameplayChanged ? Merge.StartChange({Snapshot}) : Merge.StartVisualChange({Snapshot});
 		Snapshot->Destroy();
 		if (bStarted) { return; }
 		Error = Merge.LastError;

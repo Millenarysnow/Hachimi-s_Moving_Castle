@@ -2,6 +2,7 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Castle/PCG/CastlePCGSemanticTestRules.h"
 #include "Castle/Components/CastleMainTowerComponent.h"
 #include "Castle/Actors/CastleBoard.h"
 #include "Castle/Actors/CastleBuildingBase.h"
@@ -140,9 +141,7 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("建立扩层棋盘"), Board)) { return false; }
 	CastleBuildingTests::ConfigureBoard(Board);
 	CastleBuildingTests::FScopedNativeBuildingModels BuildingModels(World);
-	if (!TestNotNull(TEXT("复制实际 PCG 规则资产"), Board->PCGRuleSet.Get())) { return false; }
-	Board->PCGRuleSet = DuplicateObject<UCastlePCGRuleSetDataAsset>(Board->PCGRuleSet, Board);
-	Board->PCGRuleSet->Rules = {NewObject<UCastlePCGPlanarRule>(Board->PCGRuleSet)};
+	if (!CastlePCGTests::ConfigurePlacementOnlyPCG(*Board, *this)) { return false; }
 	Board->GridSize = FIntVector(5, 5, 9);
 	Board->PlacementSurfaceMode = ECastlePlacementSurfaceMode::MainTowerSides;
 	Board->TowerSideSurfaceOffset = 290.0f;

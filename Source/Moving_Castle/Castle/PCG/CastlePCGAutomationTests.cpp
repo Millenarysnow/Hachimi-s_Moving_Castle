@@ -183,7 +183,7 @@ bool FCastlePCGRuleTest::RunTest(const FString& Parameters)
 		Entry.Number = 7;
 	}
 	FCastlePCGSemanticField Field;
-	if (!Config->Solve(FCastlePCGBoardQuery(Towers, *Config, Noise, 0), Field, Error)) { AddError(Error); return false; }
+	if (!Config->Solve(FCastlePCGBoardQuery(Towers, *Config, Noise, 0, 0), Field, Error)) { AddError(Error); return false; }
 	CheckSelection(Field, A);
 
 	// 四个独立房各自使用自己的根格。每层同色联通，仍应只择一个梯位。
@@ -194,7 +194,7 @@ bool FCastlePCGRuleTest::RunTest(const FString& Parameters)
 	const TArray<FIntVector> Order{A, B, A + Up, B + Up};
 	for (const FIntVector& Cell : Order) { Rooms.Add(Cell, {Cell, Room, 1, 7, 0.0, true}); }
 	for (int32 Index = Order.Num() - 1; Index >= 0; --Index) { ReverseRooms.Add(Order[Index], Rooms.FindChecked(Order[Index])); }
-	if (!Config->Solve(FCastlePCGBoardQuery(Rooms, *Config, Noise, 0), Field, Error)) { AddError(Error); return false; }
+	if (!Config->Solve(FCastlePCGBoardQuery(Rooms, *Config, Noise, 0, 0), Field, Error)) { AddError(Error); return false; }
 	CheckSelection(Field, A);
 	TestTrue(TEXT("同色房合并底盘与双包边"), Field.Cells.FindChecked(B).Deck == ECastlePCGDeck::Merged
 		&& Field.SideFaces.FindChecked({A, ECastlePCGFace::PositiveX}).State == ECastlePCGSide::MergedOpen);
@@ -212,22 +212,22 @@ bool FCastlePCGRuleTest::RunTest(const FString& Parameters)
 	}
 	if (!TestTrue(TEXT("选到明确偏好次格的确定性种子"), Seed != INDEX_NONE)) { return false; }
 	Config->bUseNoiseForLadderCellSelection = true;
-	if (!Config->Solve(FCastlePCGBoardQuery(Rooms, *Config, Noise, Seed), Field, Error)) { AddError(Error); return false; }
+	if (!Config->Solve(FCastlePCGBoardQuery(Rooms, *Config, Noise, Seed, 0), Field, Error)) { AddError(Error); return false; }
 	CheckSelection(Field, B);
 	FCastlePCGSemanticField ReverseField;
-	if (!Config->Solve(FCastlePCGBoardQuery(ReverseRooms, *Config, Noise, Seed), ReverseField, Error)) { AddError(Error); return false; }
+	if (!Config->Solve(FCastlePCGBoardQuery(ReverseRooms, *Config, Noise, Seed, 0), ReverseField, Error)) { AddError(Error); return false; }
 	CheckSelection(ReverseField, B);
 	TestEqual(TEXT("不同占用插入顺序保持相同梯向"), ReverseField.VerticalInterfaces.FindChecked(B).BoardYaw,
 		Field.VerticalInterfaces.FindChecked(B).BoardYaw);
 
 	Rooms.FindChecked(B).Color = 2;
-	if (!Config->Solve(FCastlePCGBoardQuery(Rooms, *Config, Noise, Seed), Field, Error)) { AddError(Error); return false; }
+	if (!Config->Solve(FCastlePCGBoardQuery(Rooms, *Config, Noise, Seed, 0), Field, Error)) { AddError(Error); return false; }
 	const auto& Shared = Field.SideFaces.FindChecked({A, ECastlePCGFace::PositiveX});
 	const auto& FarSide = Field.SideFaces.FindChecked({B, ECastlePCGFace::NegativeX});
 	TestTrue(TEXT("异色同号保留带洞共享墙，归坐标较小侧"), Shared.State == ECastlePCGSide::OpenDoor
 		&& Shared.bOwnsWall && FarSide.State == ECastlePCGSide::OpenDoor && !FarSide.bOwnsWall);
 	Rooms.FindChecked(B).Number = 8;
-	if (!Config->Solve(FCastlePCGBoardQuery(Rooms, *Config, Noise, Seed), Field, Error)) { AddError(Error); return false; }
+	if (!Config->Solve(FCastlePCGBoardQuery(Rooms, *Config, Noise, Seed, 0), Field, Error)) { AddError(Error); return false; }
 	TestTrue(TEXT("异色异号按闭墙求解"), Field.SideFaces.FindChecked({A, ECastlePCGFace::PositiveX}).State == ECastlePCGSide::Closed);
 	TestTrue(TEXT("异色异号交界不产生梯子"), Field.VerticalInterfaces.FindChecked(B).State == ECastlePCGVertical::Closed);
 	return true;
@@ -286,7 +286,7 @@ bool FCastlePCGRuntimeTest::RunTest(const FString& Parameters)
 	AddExpectedError(TEXT("的建筑 PCG 视觉过渡失败"), EAutomationExpectedErrorFlags::Contains, 1);
 	FCastlePCGVisualPlan VisualPlan;
 	VisualPlan.Key = TEXT("RestoredOriginalVisuals");
-	Lower->BuildingPCG->ApplyVisual(*Board, VisualPlan, FVector::ZeroVector);
+	Lower->BuildingPCG->ApplyVisual(*Board, VisualPlan, FVector::ZeroVector, false);
 	Lower->BuildingMerge->Duration = Duration;
 	TestEqual(TEXT("过渡失败推进视觉键"), Lower->BuildingPCG->GetAppliedVisualKey(), VisualPlan.Key);
 	TestEqual(TEXT("过渡失败保留玩法键"), Lower->BuildingPCG->GetAppliedGameplayKey(), GameplayKey);

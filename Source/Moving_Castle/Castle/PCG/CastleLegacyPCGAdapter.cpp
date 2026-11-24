@@ -67,6 +67,19 @@ namespace CastleLegacyPCG
 		Result.Relative = (Template.Relative * Frame).GetRelativeTransform(Building->GetActorTransform());
 		return Result;
 	}
+
+	/** 只把显式请求的一组变体零件装配到本侧，始终使用同一个井口框架。 */
+	void AddLegacyStairGroup(const CastleLegacyPCG::FVariants& Variants, const CastleV4PCG::FStairInterface& Stair,
+		const ACastleBuildingBase& Building, FName Group, FCastlePCGApplyPlan& Plan)
+	{
+		for (const FCastlePCGMeshTemplate& Template : Variants.LV2)
+		{
+			if (Template.Group != Group) { continue; }
+			FCastlePCGMeshTemplate Part = PlaceTemplate(Template, Stair.WorldFrame, &Building);
+			Part.bSelectable = true;
+			Plan.Visual.Visuals.Add(MoveTemp(Part));
+		}
+	}
 	void AddHeightTransition(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FIntVector& Cell,
 		const FIntVector& Side, const UCastlePCGRuleSetDataAsset& Rules, FCastlePCGApplyPlan& Plan)
 	{
@@ -265,30 +278,21 @@ bool CastleLegacyPCG::Prepare(const ACastleBoard& Board, const ACastleBuildingBa
 				if (bLadder) { Plan.Visual.Hidden.Add(Part.Component); }
 			}
 		}
-		const FTransform Frame = CastleV4PCG::CellFrame(Board, Cell);
-		if (const CastleV4PCG::FStairInterface* Mixed = Stairs.Find(Cell))
-		{
-			// 旧盾塔在下时继续装旧模板，V4 上层按其同一个缺角切换原底盘功能板。
-			// 上层已生成切口四边功能面，旧下层不能再铺一整块封死梯井。
-			for (const FCastlePCGMeshTemplate& Template : Variants.LV2)
-			{
-				if (Template.Group != TEXT("Ladder")) { continue; }
-				FCastlePCGMeshTemplate Part = PlaceTemplate(Template, Mixed->WorldFrame, &Building);
-				Part.bSelectable = true;
-				Plan.Visual.Visuals.Add(MoveTemp(Part));
-			}
-			CastleV4PCG::AddLink(Plan, Cell, Mixed->WorldFrame.GetRelativeTransform(Building.GetActorTransform()), Mixed->Hatch);
-			continue;
-		}
 		if (bLadder)
 		{
-			for (const auto& Template : Variants.LV2) { Plan.Visual.Visuals.Add(PlaceTemplate(Template, Frame, &Building)); }
-			// 旧系列使用已经验收的 LV2 动作点，V4 使用独立测得的作者点。
-			Plan.Gameplay.LadderFrames.Add({Cell, Frame.GetRelativeTransform(Building.GetActorTransform()),
-				FVector(-58.317, 40.0, 0.0), FVector(40.0, 40.0, Board.LayerHeight),
-				FVector(-58.317, 150.0, 0.0), FVector(-58.317, 150.0, Board.LayerHeight)});
+			const CastleV4PCG::FStairInterface* Outgoing = Stairs.Find(Cell);
+			if (!Outgoing || Outgoing->Kit)
+			{
+				Error = FString::Printf(TEXT("%s 在格 %s 缺少旧变体的层界框架。"), *Building.GetPathName(), *Cell.ToString());
+				return false;
+			}
+			// 下层只拥有竖梯和 Link，上层四片功能板围住井口，避免整片封闭顶板堵住洞口。
+			AddLegacyStairGroup(Variants, *Outgoing, Building, TEXT("Ladder"), Plan);
+			CastleV4PCG::AddLink(Plan, Cell, Outgoing->WorldFrame.GetRelativeTransform(Building.GetActorTransform()), Outgoing->Hatch);
+			continue;
 		}
-		else if (!bHasSlab)
+		const FTransform Frame = CastleV4PCG::CellFrame(Board, Cell);
+		if (!bHasSlab)
 		{
 			FCastlePCGMeshTemplate Slab;
 			Slab.Mesh = Rules.FlatFloorSlabMesh;
@@ -302,12 +306,19 @@ bool CastleLegacyPCG::Prepare(const ACastleBoard& Board, const ACastleBuildingBa
 	}
 	for (const FIntVector& Cell : Building.GetOccupiedCoordinates())
 	{
-		// V4 在下时，沿用盾塔自己的板面高度和原碰撞身份，只切换重合格的板。
-		if (const CastleV4PCG::FStairInterface* Mixed = Stairs.Find(Cell - FIntVector(0, 0, 1)))
+		// 旧上层使用自身站立标高，来梯可来自 V4 套件或旧模板。
+		if (const CastleV4PCG::FStairInterface* Incoming = Stairs.Find(Cell - FCastlePCGBoardQuery::Up))
 		{
 			UStaticMeshComponent* Floor = FindLegacyFloor(Board, Building, Cell, Error);
-			if (!Floor || !CastleV4PCG::CutDeck(Board, Building, Cell, 0.0, *Floor, *Mixed, Plan, Error)
-				|| !CastleV4PCG::AddStairGroup(Building, *Mixed, TEXT("UpperFloor"), Plan, Error)) { return false; }
+			if (!Floor || !CastleV4PCG::CutDeck(Board, Building, Cell, 0.0, *Floor, *Incoming, Plan, Error)) { return false; }
+			if (Incoming->Kit)
+			{
+				if (!CastleV4PCG::AddStairGroup(Building, *Incoming, TEXT("UpperFloor"), Plan, Error)) { return false; }
+			}
+			else
+			{
+				AddLegacyStairGroup(Variants, *Incoming, Building, TEXT("UpperFloor"), Plan);
+			}
 		}
 	}
 	for (const auto& Part : OriginalParts)
@@ -409,13 +420,7 @@ void CastleLegacyPCG::PrepareMixed(const ACastleBoard& Board, const ACastleBuild
 		if (Incoming && !Incoming->Kit)
 		{
 			// 旧下层的带洞板也安装到上层所在空间。竖梯仍由旧下层自己的准备函数安装。
-			for (const FCastlePCGMeshTemplate& Template : Variants.LV2)
-			{
-				if (Template.Group != TEXT("UpperFloor")) { continue; }
-				FCastlePCGMeshTemplate Part = PlaceTemplate(Template, Incoming->WorldFrame, &Building);
-				Part.bSelectable = true;
-				Plan.Visual.Visuals.Add(MoveTemp(Part));
-			}
+			AddLegacyStairGroup(Variants, *Incoming, Building, TEXT("UpperFloor"), Plan);
 		}
 	}
 }

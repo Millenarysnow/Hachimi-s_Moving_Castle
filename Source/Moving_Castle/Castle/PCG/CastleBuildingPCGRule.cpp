@@ -13,7 +13,8 @@ namespace
 	}
 
 	/** 规则不能移除已占格或生成棋盘外的格面和层界，以免装配器读到缺漏语义。 */
-	bool ValidateDomains(const FCastlePCGBoardQuery& Query, const FCastlePCGSemanticField& Field, bool bRequireFaces, FString& Error)
+	bool ValidateDomains(const FCastlePCGBoardQuery& Query, const FCastlePCGSemanticField& Field, bool bRequireFaces,
+		bool bRequireVerticalConsistency, FString& Error)
 	{
 		if (Field.Cells.Num() != Query.OrderedCells().Num()
 			|| (bRequireFaces && Field.SideFaces.Num() != Query.OrderedCells().Num() * UE_ARRAY_COUNT(Query.Sides)))
@@ -41,10 +42,22 @@ namespace
 					}
 				}
 			}
+			if (bRequireVerticalConsistency)
+			{
+				const FCastlePCGVerticalSpec* Incoming = Field.VerticalInterfaces.Find(Cell - Query.Up);
+				const bool bIncomingLadder = Incoming && Incoming->State == ECastlePCGVertical::Ladder;
+				if ((Spec->Deck == ECastlePCGDeck::Hatch) != bIncomingLadder)
+				{
+					Error = FString::Printf(TEXT("格 %s 的底盘梯洞与下方层界不一致。"), *Cell.ToString());
+					return false;
+				}
+			}
 		}
 		for (const auto& Interface : Field.VerticalInterfaces)
 		{
-			if (!Query.Find(Interface.Key) || !Query.FindOffset(Interface.Key, Query.Up)
+			const FCastlePCGBoardCell* Lower = Query.Find(Interface.Key);
+			const FCastlePCGBoardCell* Upper = Query.FindOffset(Interface.Key, Query.Up);
+			if (!Lower || !Upper || Lower->BuildingRoot == Upper->BuildingRoot
 				|| Interface.Value.State > ECastlePCGVertical::Ladder)
 			{
 				Error = FString::Printf(TEXT("格 %s 的层界语义无效。"), *Interface.Key.ToString());
@@ -174,6 +187,53 @@ bool UCastlePCGVerticalRule::Evaluate(const FCastlePCGBoardQuery& Query, FCastle
 		Interface.State = ECastlePCGVertical::Ladder;
 		Interface.Kit = Lower.Layout ? Lower.Layout->Ladder.Get() : nullptr;
 		Interface.BoardYaw = Lower.Layout && !Lower.bRoom ? Lower.BoardYaw : 0.0;
+		if (Lower.Layout && Lower.Layout->Grid.Z == 2 && Lower.Layout->InternalHatch.Opening.IsValid)
+		{
+			const FBox& InternalOpening = Lower.Layout->InternalHatch.Opening;
+			// 检查开口坐标后再用其中心判定格位，避免非有限坐标绕开净空条件。
+			if (InternalOpening.Min.ContainsNaN() || InternalOpening.Max.ContainsNaN())
+			{
+				Error = FString::Printf(TEXT("格 %s 的布局 %s 内梯开口坐标无效。"), *Selected.ToString(), *Lower.Layout->GetPathName());
+				return false;
+			}
+			const FVector CellCenter = Lower.CellInBuilding.GetLocation();
+			const FVector OpeningCenter = InternalOpening.GetCenter();
+			const double HalfPitch = Lower.Layout->CellPitch * 0.5;
+			// 内梯洞只约束同一作者 XY 格的出梯口。其他格继续使用建筑本身的朝向。
+			if (FMath::Abs(CellCenter.X - OpeningCenter.X) < HalfPitch
+				&& FMath::Abs(CellCenter.Y - OpeningCenter.Y) < HalfPitch)
+			{
+				if (!IsValid(Interface.Kit))
+				{
+					Error = FString::Printf(TEXT("格 %s 的布局 %s 缺少有效外梯套件。"),
+						*Selected.ToString(), *Lower.Layout->GetPathName());
+					return false;
+				}
+				// 以城堡 Recast 的 35 cm AgentRadius 扩出水平净空，确保入口可落在有支撑的楼板上。
+				const FBox Clearance = InternalOpening.ExpandBy(FVector(35.0, 35.0, 0.0));
+				bool bFoundOrientation = false;
+				for (int32 Quarter = 0; Quarter < 4; ++Quarter)
+				{
+					const double CandidateYaw = Lower.BoardYaw + Quarter * 90.0;
+					const FTransform LadderInBuilding = FTransform(FRotator(0, CandidateYaw, 0)) * Lower.CellInBuilding;
+					const FCastleV4Hatch& Hatch = Interface.Kit->Hatch;
+					if (!Clearance.IsInsideOrOnXY(LadderInBuilding.TransformPosition(Hatch.BottomStand))
+						&& !Clearance.IsInsideOrOnXY(LadderInBuilding.TransformPosition(Hatch.LadderBottom)))
+					{
+						// 上下两侧装配都读取这一朝向，带洞楼板和实体梯会一起转动。
+						Interface.BoardYaw = CandidateYaw;
+						bFoundOrientation = true;
+						break;
+					}
+				}
+				if (!bFoundOrientation)
+				{
+					Error = FString::Printf(TEXT("格 %s 的布局 %s 与外梯套件 %s 在四个朝向均冲突。"),
+						*Selected.ToString(), *Lower.Layout->GetPathName(), *Interface.Kit->GetPathName());
+					return false;
+				}
+			}
+		}
 		Field.Cells.FindChecked(Selected + Query.Up).Deck = ECastlePCGDeck::Hatch;
 	}
 	return true;
@@ -186,24 +246,41 @@ bool UCastlePCGRuleSetDataAsset::ValidateConfiguration(FString& Error) const
 		|| !FMath::IsFinite(FloorThickness) || FloorThickness <= 0.0 || !FMath::IsFinite(BarrierHeight) || BarrierHeight < 100.0)
 	{ Error = FString::Printf(TEXT("规则集 %s 的通道、桥宽、厚度或阻隔高度非法。"), *GetPathName()); return false; }
 	if (Rules.IsEmpty()) { Error = FString::Printf(TEXT("规则集 %s 未配置语义规则。"), *GetPathName()); return false; }
-	bool bPlanar = false;
-	bool bVertical = false;
-	bool bRoomForm = false;
-	for (const UCastleBuildingPCGRule* Rule : Rules)
+	int32 PlanarIndex = INDEX_NONE;
+	int32 VerticalIndex = INDEX_NONE;
+	int32 RoomFormIndex = INDEX_NONE;
+	for (int32 Index = 0; Index < Rules.Num(); ++Index)
 	{
+		const UCastleBuildingPCGRule* Rule = Rules[Index];
 		if (!IsValid(Rule) || Rule->GetStage() > ECastlePCGRuleStage::Detail)
 		{
 			Error = FString::Printf(TEXT("规则集 %s 含空规则或非法阶段：%s。"), *GetPathName(), *GetPathNameSafe(Rule));
 			return false;
 		}
-		// 平面语义必须先于使用它的垂直接口规则；不按类名暗中改写规则顺序。
-		bPlanar |= Rule->IsA<UCastlePCGPlanarRule>();
-		bVertical |= bPlanar && Rule->IsA<UCastlePCGVerticalRule>();
-		bRoomForm |= Rule->IsA<UCastlePCGRoomFormRule>();
+		// 每种必需规则只执行一次。子类可替换实现，但不能换阶段或重复写入同一个基础域。
+		auto Register = [&](int32& RoleIndex, ECastlePCGRuleStage Stage)
+		{
+			if (RoleIndex != INDEX_NONE || Rule->GetStage() != Stage)
+			{
+				Error = FString::Printf(TEXT("规则集 %s 的必需规则 %s 重复或阶段错误。"), *GetPathName(), *Rule->GetPathName());
+				return false;
+			}
+			RoleIndex = Index;
+			return true;
+		};
+		if (Rule->IsA<UCastlePCGPlanarRule>() && !Register(PlanarIndex, ECastlePCGRuleStage::Topology)) { return false; }
+		if (Rule->IsA<UCastlePCGVerticalRule>() && !Register(VerticalIndex, ECastlePCGRuleStage::Topology)) { return false; }
+		if (Rule->IsA<UCastlePCGRoomFormRule>() && !Register(RoomFormIndex, ECastlePCGRuleStage::Structure)) { return false; }
 	}
-	if (!bPlanar || !bVertical || !bRoomForm)
+	if (PlanarIndex == INDEX_NONE || VerticalIndex == INDEX_NONE || RoomFormIndex == INDEX_NONE)
 	{
-		Error = FString::Printf(TEXT("规则集 %s 必须配齐 Planar、Vertical、RoomForm，且 Planar 须位于 Vertical 前。"), *GetPathName());
+		Error = FString::Printf(TEXT("规则集 %s 必须配齐 Planar、Vertical、RoomForm。"), *GetPathName());
+		return false;
+	}
+	// 必需规则保留明确的依赖顺序，扩展规则仍按各自声明的阶段执行。
+	if (PlanarIndex >= VerticalIndex || VerticalIndex >= RoomFormIndex)
+	{
+		Error = FString::Printf(TEXT("规则集 %s 的必需规则顺序无效。Planar 须位于 Vertical 前，Vertical 须位于 RoomForm 前。"), *GetPathName());
 		return false;
 	}
 	return true;
@@ -215,14 +292,18 @@ bool UCastlePCGRuleSetDataAsset::Solve(const FCastlePCGBoardQuery& Query, FCastl
 	// 求解失败时保留调用者原有场；后续阶段只读取这轮已经完成的结果。
 	FCastlePCGSemanticField Field;
 	for (const FIntVector& Cell : Query.OrderedCells()) { Field.Cells.Add(Cell); }
+	bool bHasPlanarOutput = false;
+	bool bHasVerticalOutput = false;
 	for (const ECastlePCGRuleStage Stage : {ECastlePCGRuleStage::Topology, ECastlePCGRuleStage::Structure, ECastlePCGRuleStage::Detail})
 	for (const UCastleBuildingPCGRule* Rule : Rules)
 	{
 		if (Rule->GetStage() != Stage) { continue; }
 		TOptional<FCastlePCGSemanticField> Previous;
 		if (Stage == ECastlePCGRuleStage::Detail) { Previous.Emplace(Field); }
+		bHasPlanarOutput |= Rule->IsA<UCastlePCGPlanarRule>();
+		bHasVerticalOutput |= Rule->IsA<UCastlePCGVerticalRule>();
 		if (!Rule->Evaluate(Query, Field, Error)
-			|| !ValidateDomains(Query, Field, Stage != ECastlePCGRuleStage::Topology || Rule->IsA<UCastlePCGPlanarRule>(), Error))
+			|| !ValidateDomains(Query, Field, bHasPlanarOutput, bHasVerticalOutput, Error))
 		{
 			Error = FString::Printf(TEXT("规则 %s：%s"), *Rule->GetPathName(), *Error);
 			return false;

@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Castle/PCG/CastleBuildingPCGComponent.h"
 #include "Castle/PCG/CastlePCGSemanticField.h"
+#include "Castle/PCG/CastlePCGSemantics.h"
 #include "CastleHachimisV4Layout.h"
 
 class ACastleBuildingBase;
@@ -21,7 +22,8 @@ namespace CastleV4PCG
 	using FOccupancy = TMap<FIntVector, ACastleBuildingBase*>;
 	using FStairs = TMap<FIntVector, FStairInterface>;
 
-	FTransform CellFrame(const ACastleBoard& Board, const FIntVector& Cell);
+	// 继续提供装配侧入口，与规则快照共享棋盘格底实现。
+	using CastlePCGSemantics::CellFrame;
 	bool MapCells(const ACastleBuildingBase& Building, const ACastleBoard& Board, TMap<FIntVector, FIntVector>& Out, FString& Error);
 	bool Extract(ACastleBuildingBase& Building, const ACastleBoard& Board, TArray<FCastlePCGPartAnnotation>& Out, FString& Error);
 	/** 把求解器给出的套件、格位、朝向解析为两侧共用世界坐标。 */

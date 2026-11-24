@@ -2,6 +2,7 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Castle/PCG/CastlePCGSemanticTestRules.h"
 #include "Misc/AutomationTest.h"
 
 #include "CastleBuildingTestUtilities.h"
@@ -132,11 +133,7 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("创建测试棋盘"), Board)) { return false; }
 	Board->GridSize = FIntVector(3, 3, 3);
 	CastleBuildingTests::ConfigureBoard(Board);
-	// 本组只验证定向放置，独立世界明确关闭导航；沿用边界测试的平面 PCG 输入，
-	// 避免新增上层场景请求本夹具未配置的 Recast 梯子连接，正式棋盘规则资产保持原样。
-	if (!TestNotNull(TEXT("放置测试显式复制的 PCG 规则资产"), Board->PCGRuleSet.Get())) { return false; }
-	Board->PCGRuleSet = DuplicateObject<UCastlePCGRuleSetDataAsset>(Board->PCGRuleSet, Board);
-	Board->PCGRuleSet->Rules = { NewObject<UCastlePCGPlanarRule>(Board->PCGRuleSet) };
+	if (!CastlePCGTests::ConfigurePlacementOnlyPCG(*Board, *this)) { return false; }
 	UCastleBuildingDefinition* Definition = Board->BuildingDefinitions[1];
 	UCastleBuildingDefinition* NormalRoomDefinition = Board->BuildingDefinitions[0];
 	FText Reason;

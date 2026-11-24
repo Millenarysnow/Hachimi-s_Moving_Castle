@@ -10,6 +10,14 @@ bool CastlePCGSemantics::CellLess(const FIntVector& A, const FIntVector& B)
 	return A.X != B.X ? A.X < B.X : (A.Y != B.Y ? A.Y < B.Y : A.Z < B.Z);
 }
 
+FTransform CastlePCGSemantics::CellFrame(const ACastleBoard& Board, const FIntVector& Cell)
+{
+	// 棋盘接口返回格中心。用棋盘的完整变换扣除半层高，得到作者楼板共用的格底。
+	const FVector BottomWorld = Board.GetGridWorldLocation(Cell)
+		- Board.GetActorTransform().TransformVector(FVector(0, 0, Board.LayerHeight * 0.5));
+	return FTransform(Board.GetActorQuat(), BottomWorld, Board.GetActorScale3D());
+}
+
 FIntVector CastlePCGSemantics::RoomFramePartOwner(const UCastleHachimisV4Layout& Layout, const FCastleV4Part& Part)
 {
 	const FVector Center = Part.Local.TransformPosition(Part.Mesh->GetBoundingBox().GetCenter());

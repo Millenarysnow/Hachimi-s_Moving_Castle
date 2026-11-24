@@ -82,7 +82,8 @@ public:
 	bool ApplyGameplay(const FCastlePCGGameplayPlan& Plan, FString& Error);
 	void FinishGameplay(bool bCommit);
 	/** 视觉过渡失败时记录错误，最终组件与视觉键保持为本轮计划。 */
-	void ApplyVisual(const ACastleBoard& Board, const FCastlePCGVisualPlan& Plan, FVector Origin);
+	/** 同一栋建筑的玩法也发生变化时，保留合并动画原有的导航观察。 */
+	void ApplyVisual(const ACastleBoard& Board, const FCastlePCGVisualPlan& Plan, FVector Origin, bool bGameplayChanged);
 	/** 成功完成整轮后维护兼容的聚合键；单通道 Diff 只比较各自的键。 */
 	void UpdateAppliedKey();
 	/** 只返回当前已激活的梯子，不返回等待动画的临时美术件。 */

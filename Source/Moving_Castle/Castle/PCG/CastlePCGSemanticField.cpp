@@ -50,7 +50,8 @@ bool FCastlePCGSemanticField::AddAttachment(const FCastlePCGAttachmentKey& Key, 
 
 FCastlePCGBoardQuery::FCastlePCGBoardQuery(const ACastleBoard& Board,
 	const TMap<FIntVector, ACastleBuildingBase*>& Occupancy, UObject* InNoise)
-	: Rules(Board.PCGRuleSet), Noise(InNoise), Seed(Board.GroundSeed), Pitch(Board.CellSize), LayerHeight(Board.LayerHeight),
+	: Rules(Board.PCGRuleSet), Noise(InNoise), Seed(Board.GroundSeed), GroundLayer(Board.GridOrigin.Z),
+	  Pitch(Board.CellSize), LayerHeight(Board.LayerHeight),
 	  bTowerSides(Board.PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides), TowerCell(Board.GetBoardCenterCoordinate())
 {
 	// 以建筑的首格作为稳定身份，不把 Actor、组件或世界记录传入规则。
@@ -73,14 +74,16 @@ FCastlePCGBoardQuery::FCastlePCGBoardQuery(const ACastleBoard& Board,
 			Data->bRoom = Data->Layout && Building.IsNormalRoom();
 			Data->BoardYaw = (Board.GetActorQuat().Inverse() * Building.GetActorQuat()).Rotator().Yaw;
 		}
-		Cells.Add(Entry.Key, *Data);
+		FCastlePCGBoardCell& Cell = Cells.Add(Entry.Key, *Data);
+		// 与装配器使用同一棋盘格底基准，保留建筑旋转及棋盘原点带来的位置变化。
+		Cell.CellInBuilding = CastlePCGSemantics::CellFrame(Board, Entry.Key).GetRelativeTransform(Building.GetActorTransform());
 	}
 	SortCells();
 }
 
 FCastlePCGBoardQuery::FCastlePCGBoardQuery(TMap<FIntVector, FCastlePCGBoardCell> InCells,
-	const UCastlePCGRuleSetDataAsset& InRules, UObject* InNoise, int32 InSeed)
-	: Cells(MoveTemp(InCells)), Rules(&InRules), Noise(InNoise), Seed(InSeed)
+	const UCastlePCGRuleSetDataAsset& InRules, UObject* InNoise, int32 InSeed, int32 InGroundLayer)
+	: Cells(MoveTemp(InCells)), Rules(&InRules), Noise(InNoise), Seed(InSeed), GroundLayer(InGroundLayer)
 {
 	SortCells();
 }
@@ -102,9 +105,9 @@ bool FCastlePCGBoardQuery::IsSkyExposed(const FIntVector& Cell) const
 
 int32 FCastlePCGBoardQuery::GetOverhangDepth(const FIntVector& Cell) const
 {
-	// 深度按格数计，棋盘地表承接 Z=0，不把地底计入悬空距离。
+	// 深度按格数计。GridOrigin.Z 是各棋盘自己的地面层，其下方不属于可悬空空间。
 	int32 Depth = 0;
-	for (FIntVector Below = Cell - Up; Below.Z >= 0 && !Cells.Contains(Below); Below -= Up) { ++Depth; }
+	for (FIntVector Below = Cell - Up; Below.Z >= GroundLayer && !Cells.Contains(Below); Below -= Up) { ++Depth; }
 	return Depth;
 }
 

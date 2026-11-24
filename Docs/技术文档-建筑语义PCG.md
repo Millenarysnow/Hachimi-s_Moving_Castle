@@ -63,9 +63,10 @@ ACastleBoard（仅发布占用与布局提交事件）
 **V4 建筑从绑定资产 `UCastleHachimisV4Layout` 读取显式零件分组，不再按尺寸猜语义。** 正式七族（箭塔、炮塔、农田、盾塔、气球塔、蜂巢、普通房，含单格五级）均为 V4 资产；SCS 作者件通过 `CastleV4Part=` 索引一对一映射，动态件支持 Visibility 选中射线，导航仅消费 `GameplayRoot`。
 
 **跨层梯井按导入期已有的零件分组拆归上下两栋建筑。** 同一道梯井使用下层建筑本族的 `UCastleV4LadderKit` 保证几何与材质无缝咬合，但落地时严格按空间归属拆分：
-- `Group == "Ladder"`（竖梯本体）连同双向 `UCastleLadderLinkComponent` 归**下层建筑 Actor**；
-- `Group == "UpperFloor"`（带洞楼板与梯口压条）连同四条围洞功能楼板 `CutDeck` 归**上层建筑 Actor**（上层隐藏自身原实心底盘，由 `UpperFloor` 接替）。
+- `Group == "Ladder"`（竖梯本体与梯口压条）连同双向 `UCastleLadderLinkComponent` 归**下层建筑 Actor**。
+- `Group == "UpperFloor"`（带洞楼板）连同四条围洞功能楼板 `CutDeck` 归**上层建筑 Actor**（上层隐藏自身原实心底盘，由 `UpperFloor` 接替）。
 - 任一 `UCastleV4LadderKit` 若缺少 `Ladder` 或 `UpperFloor` 任一组，或出现未声明分组，均视为资产配置错误并报错拒绝。
+- 二层 V4 塔从 `InternalHatch.Opening` 所在格继续向上接外梯时，规则依次检查四个正交朝向，选择让下端落脚点和登梯点避开内梯开口及其水平净空的朝向。四个朝向均冲突则报错拒绝。
 
 **普通房保留单格独立一级 Actor 身份，外观由规则按格拆分装配。**
 - 水平拼接口径保持清晰区分：**同色**普通房相邻合并底盘并去双包边，接触面为 `MergedOpen`（无墙打通）；**异色同号**普通房相邻保留带门洞的共享墙（`OpenDoor`），由坐标字典序较小侧持有墙体视觉与阻隔碰撞；**异色异号**相邻为 `Closed` 闭墙；裸 L1 底盘仅在与异色房或功能塔接壤时按语义面装配 `Room_L1_Bay`。

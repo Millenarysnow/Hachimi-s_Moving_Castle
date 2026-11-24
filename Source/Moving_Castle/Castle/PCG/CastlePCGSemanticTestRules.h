@@ -5,6 +5,37 @@
 #include "CastlePCGSemantics.h"
 #include "CastlePCGSemanticTestRules.generated.h"
 
+/** 无导航的放置夹具显式采用封闭层界，保留屋顶受遮挡时的语义。 */
+UCLASS(Transient, NotBlueprintable)
+class UCastlePCGTestPlacementVerticalRule : public UCastlePCGVerticalRule
+{
+	GENERATED_BODY()
+public:
+	virtual bool Evaluate(const FCastlePCGBoardQuery& Query, FCastlePCGSemanticField& Field, FString& Error) const override
+	{
+		for (const FIntVector& Cell : Query.OrderedCells())
+		{
+			const FCastlePCGBoardCell* Upper = Query.FindOffset(Cell, Query.Up);
+			if (Upper && Query.Find(Cell)->BuildingRoot != Upper->BuildingRoot)
+			{
+				// 封闭层界不改上格的实心楼板，也不会要求登记梯子导航链接。
+				Field.VerticalInterfaces.Add(Cell, {ECastlePCGVertical::Closed});
+				Field.Cells.FindChecked(Cell).Roof = ECastlePCGRoof::Hidden;
+			}
+		}
+		return true;
+	}
+};
+
+#if WITH_DEV_AUTOMATION_TESTS
+class FAutomationTestBase;
+namespace CastlePCGTests
+{
+	/** 保留完整规则集契约，并为原生放置夹具配置其明确的无梯需求。 */
+	bool ConfigurePlacementOnlyPCG(ACastleBoard& Board, FAutomationTestBase& Test);
+}
+#endif
+
 /** 回归测试显式覆写门洞语义，用于证明消费者不会再次计算通行关系。 */
 UCLASS(Transient, NotBlueprintable)
 class UCastlePCGTestClosedPlanarRule : public UCastlePCGPlanarRule
@@ -12,15 +43,17 @@ class UCastlePCGTestClosedPlanarRule : public UCastlePCGPlanarRule
 	GENERATED_BODY()
 public:
 	bool bCloseDoors = true;
+	bool bMergeDoors = false;
 
 	virtual bool Evaluate(const FCastlePCGBoardQuery& Query, FCastlePCGSemanticField& Field, FString& Error) const override
 	{
 		if (!Super::Evaluate(Query, Field, Error)) { return false; }
-		if (bCloseDoors)
+		if (bCloseDoors || bMergeDoors)
 		{
 			for (auto& Entry : Field.SideFaces)
 			{
-				if (Entry.Value.IsDoor()) { Entry.Value.State = ECastlePCGSide::Closed; }
+				// 保留 bOwnsWall，用以单独验证 MergedOpen 本身就足以让墙槽取消墙体。
+				if (Entry.Value.IsDoor()) { Entry.Value.State = bMergeDoors ? ECastlePCGSide::MergedOpen : ECastlePCGSide::Closed; }
 			}
 		}
 		return true;
