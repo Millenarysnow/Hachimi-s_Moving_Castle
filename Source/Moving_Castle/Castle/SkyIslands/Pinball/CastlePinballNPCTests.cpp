@@ -46,12 +46,11 @@ namespace
 	bool PinballHasInteractionAim(ACastlePlayerController& Controller, const USceneComponent& Target)
 	{
 		// 离屏 PIE 的射线依赖相机缓存；等真实交互射线命中后才发送下一次按键。
-		FVector Start;
-		FRotator View;
-		Controller.GetPlayerViewPoint(Start, View);
+		FVector Start, Direction;
+		if (!Controller.TryGetAimWorldRay(Start, Direction)) { return false; }
 		FHitResult Hit;
 		const FCollisionQueryParams Query(SCENE_QUERY_STAT(PinballTestAim), false, Controller.GetPawn());
-		Controller.GetWorld()->LineTraceSingleByChannel(Hit, Start, Start + View.Vector() * 100000.0, ECC_Visibility, Query);
+		Controller.GetWorld()->LineTraceSingleByChannel(Hit, Start, Start + Direction * 100000.0, ECC_Visibility, Query);
 		return Hit.GetComponent() == &Target;
 	}
 
@@ -233,6 +232,8 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 		auto* Island = IslandIterator ? *IslandIterator : nullptr;
 		if (Stage == 0)
 		{
+			// 此用例瞄准离屏中心；锁定测试实例模式，避免鼠标光标位置影响射线。
+			Controller->SetControlMode(ECastleControlMode::Classic, false);
 			ReturnLocation = Controller->GetPawn()->GetActorLocation();
 			BeforeStep = Director->GetClearedSteps();
 			TestTrue(TEXT("控制台找到弹珠机验收命令"), IConsoleManager::Get().ProcessUserConsoleInput(

@@ -297,7 +297,8 @@ namespace
 		Config.StartingGold = 500;
 		Config.HUDClass = LoadClass<UCastleDirectorHUDWidget>(nullptr,
 			TEXT("/Game/MovingCastle/UI/Director/WBP_DirectorHUD.WBP_DirectorHUD_C"));
-		auto* Ghost = FindAsset<UMassEntityConfigAsset>(TEXT("/Game/MovingCastle/Mass/DA_MassEnemyBase"));
+		// 正式幽灵模板包含飞行追击、近战主塔伤害和幽灵动画，沿用教程的一波三只出场规则。
+		auto* Ghost = FindAsset<UMassEntityConfigAsset>(TEXT("/Game/MovingCastle/Mass/DA_MassEnemy_ShadowSwarm"));
 		if (!Ghost) { return false; }
 		auto* Curve = AuthorAsset<UCastleDifficultyCurveDataAsset>(DataRoot + TEXT("DA_TutorialDifficulty"));
 		FCastleCombatWaveDefinition Wave;

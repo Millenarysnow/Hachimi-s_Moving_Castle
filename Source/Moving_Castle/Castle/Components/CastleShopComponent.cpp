@@ -427,6 +427,12 @@ bool UCastleShopComponent::TryGetSellPrice(int32 BackpackIndex, int32& OutPrice,
 
 bool UCastleShopComponent::TrySellBackpackItem(int32 BackpackIndex, FText& OutFailureReason)
 {
+	// 固定货架只包含教学所需物品，保留回路所需的普通房卡。
+	if (UsesScriptedOffers())
+	{
+		OutFailureReason = INVTEXT("新手教程期间暂不可出售房间卡");
+		return false;
+	}
 	int32 Price = 0;
 	if (!ValidateTrade(OutFailureReason) || !TryGetSellPrice(BackpackIndex, Price, OutFailureReason)
 		|| !Economy->CanAddGold(Price, OutFailureReason))

@@ -15,6 +15,15 @@ namespace
 bool UCastleDialogueSubsystem::PlayScript(UCastleDialogueScriptDataAsset* Script,
 	ACastlePlayerController* Controller, FText& OutReason)
 {
+	auto* Widget = PrepareScript(Script, Controller, OutReason);
+	if (!Widget) { return false; }
+	StartPreparedScript(*Script, *Controller, *Widget);
+	return true;
+}
+
+UCastleDialogueWidget* UCastleDialogueSubsystem::PrepareScript(UCastleDialogueScriptDataAsset* Script,
+	ACastlePlayerController* Controller, FText& OutReason)
+{
 	OutReason = FText::GetEmpty();
 	if (IsValid(CurrentScript))
 	{
@@ -36,7 +45,7 @@ bool UCastleDialogueSubsystem::PlayScript(UCastleDialogueScriptDataAsset* Script
 	if (!OutReason.IsEmpty())
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
-		return false;
+		return nullptr;
 	}
 
 	UClass* WidgetClass = LoadClass<UCastleDialogueWidget>(nullptr, DialogueWidgetClassPath);
@@ -45,9 +54,10 @@ bool UCastleDialogueSubsystem::PlayScript(UCastleDialogueScriptDataAsset* Script
 		OutReason = FText::FromString(FString::Printf(TEXT("剧本 %s 无法加载必需界面 %s。"),
 			*Script->GetPathName(), DialogueWidgetClassPath));
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
-		return false;
+		return nullptr;
 	}
 	UCastleDialogueWidget* Widget = CreateWidget<UCastleDialogueWidget>(Controller, WidgetClass);
+	if (Widget) { Widget->SetVisibility(ESlateVisibility::Collapsed); }
 	if (!IsValid(Widget) || !Widget->ConfigureDialogue(this, Controller, OutReason) || !Widget->AddToPlayerScreen(70))
 	{
 		if (OutReason.IsEmpty())
@@ -57,18 +67,24 @@ bool UCastleDialogueSubsystem::PlayScript(UCastleDialogueScriptDataAsset* Script
 		}
 		if (IsValid(Widget)) { Widget->RemoveFromParent(); }
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
-		return false;
+		return nullptr;
 	}
+	return Widget;
+}
 
-	CurrentScript = Script;
-	CurrentWidget = Widget;
-	CurrentController = Controller;
+void UCastleDialogueSubsystem::StartPreparedScript(UCastleDialogueScriptDataAsset& Script,
+	ACastlePlayerController& Controller, UCastleDialogueWidget& Widget)
+{
+	check(!CurrentScript);
+	CurrentScript = &Script;
+	CurrentWidget = &Widget;
+	CurrentController = &Controller;
 	CurrentLineIndex = 0;
-	Controller->SetPresentationModalState(true, Widget);
-	Widget->SetKeyboardFocus();
 	ShowCurrentLine();
-	UE_LOG(LogMoving_Castle, Display, TEXT("开始播放对话剧本 %s，共 %d 行。"), *Script->GetPathName(), Script->Lines.Num());
-	return true;
+	Widget.SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+	Controller.SetPresentationModalState(true, &Widget);
+	Widget.SetKeyboardFocus();
+	UE_LOG(LogMoving_Castle, Display, TEXT("开始播放对话剧本 %s，共 %d 行。"), *Script.GetPathName(), Script.Lines.Num());
 }
 
 void UCastleDialogueSubsystem::AdvanceCurrentLine()
@@ -142,16 +158,11 @@ FText UCastleDialogueSubsystem::ResolveInputText(const FText& Template, const AC
 	return FText::FromString(Resolved);
 }
 
-bool UCastleDialogueSubsystem::TryPlayFirstVisitSkyIslandDialogue(const ECastleSkyIslandType Type,
-	UCastleDialogueScriptDataAsset* Script, ACastlePlayerController* Controller, bool& bOutStarted, FText& OutReason)
+void UCastleDialogueSubsystem::StartPreparedSkyIslandDialogue(const ECastleSkyIslandType Type,
+	UCastleDialogueScriptDataAsset& Script, ACastlePlayerController& Controller, UCastleDialogueWidget& Widget)
 {
-	bOutStarted = false;
-	OutReason = FText::GetEmpty();
-	if (Type == ECastleSkyIslandType::Rest || HasPlayedFirstVisitSkyIslandDialogue(Type)) { return true; }
-	if (!PlayScript(Script, Controller, OutReason)) { return false; }
+	StartPreparedScript(Script, Controller, Widget);
 	PlayedSkyIslandDialogues.Add(Type);
-	bOutStarted = true;
-	return true;
 }
 
 void UCastleDialogueSubsystem::ResetSkyIslandDialogueHistory()

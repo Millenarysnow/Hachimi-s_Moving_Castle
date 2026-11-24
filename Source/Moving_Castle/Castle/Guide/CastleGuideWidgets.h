@@ -19,6 +19,7 @@ class MOVING_CASTLE_API UCastleGuidePopupWidget : public UUserWidget
 public:
 	bool HasRequiredBindings() const;
 	bool Configure(UCastleGuideSubsystem* InSubsystem, const FCastleGuideEntry& Entry);
+	void RefreshDescription();
 
 protected:
 	virtual void NativeOnInitialized() override;
@@ -31,6 +32,7 @@ private:
 	UFUNCTION() void HandleCloseClicked();
 	UPROPERTY(Transient) TObjectPtr<UCastleGuideSubsystem> GuideSubsystem;
 	FName EntryId;
+	FText DescriptionTemplate;
 };
 
 /** 左下角问号打开的图文百科；导航和分页状态由 C++ 管理。 */

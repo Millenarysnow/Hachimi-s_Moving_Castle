@@ -10,10 +10,24 @@
 #include "CastleTowerDispatchConfigDataAsset.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
+#include "Interaction/CastlePatrolRoute.h"
 #include "Mass/CastleMassPatrolFragments.h"
 #include "MassEntityConfigAsset.h"
 #include "MassEntitySubsystem.h"
 #include "Moving_Castle.h"
+
+namespace
+{
+	bool UsesTutorialDispatchRoute(UWorld* World)
+	{
+		for (TActorIterator<ACastlePatrolRoute> It(World); It; ++It)
+		{
+			if (It->IsTutorialRoute()) { return true; }
+		}
+		return false;
+	}
+}
 
 bool UCastleTowerDispatchSubsystem::Reject(FText& OutReason, const FString& Detail, const bool bConfigurationError) const
 {
@@ -60,6 +74,7 @@ bool UCastleTowerDispatchSubsystem::StartBattleDispatchSession(UMassEntityConfig
 	ReserveCount = SessionTotalNPCs = InitialPoolCount;
 	bSessionActive = true;
 	bAutoDispatchEnabled = false;
+	bRequiresFirstManualDispatch = UsesTutorialDispatchRoute(GetWorld());
 	AutoDispatchElapsed = 0.0;
 	StopManualDispatch();
 	UE_LOG(LogMoving_Castle, Display, TEXT("主塔战斗出兵会话已开始，待命 %d 名 NPC。"), ReserveCount);
@@ -72,7 +87,7 @@ bool UCastleTowerDispatchSubsystem::EndBattleDispatchSession(FText& OutReason)
 	if (!bSessionActive) { return Reject(OutReason, TEXT("当前没有主塔出兵会话。"), false); }
 	const auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
 	// 正式导演可在后续关卡复用已提交开环，单独的出兵演示结束后恢复闭环。
-	if (!bEndingSession && !(Director && Director->IsRunning()))
+	if (!bEndingSession && !(Director && Director->IsRunning()) && !UsesTutorialDispatchRoute(GetWorld()))
 	{
 		auto* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
 		if (!Navigation) { return Reject(OutReason, TEXT("当前世界缺少巡逻导航子系统，无法恢复普通巡逻。"), true); }
@@ -138,6 +153,8 @@ bool UCastleTowerDispatchSubsystem::TryDispatchSingleNPC(FText& OutReason)
 	Patrol.RouteRevision = Path->RouteRevision;
 	ActiveNPCs.Add({Spawned[0]});
 	--ReserveCount;
+	// 在成功提交实体后解除门控，让同一派出事件可以开启后续循环。
+	if (bStartingManualDispatch) { bRequiresFirstManualDispatch = false; }
 	check(ReserveCount + ActiveNPCs.Num() == SessionTotalNPCs);
 	UE_LOG(LogMoving_Castle, Display, TEXT("主塔门 A 派出 1 名 NPC，待命 %d，在场 %d。"), ReserveCount, ActiveNPCs.Num());
 	OnNPCDispatched.Broadcast(Spawned[0]);
@@ -146,6 +163,11 @@ bool UCastleTowerDispatchSubsystem::TryDispatchSingleNPC(FText& OutReason)
 
 bool UCastleTowerDispatchSubsystem::SetAutoDispatchEnabled(const bool bEnabled)
 {
+	if (bEnabled && bRequiresFirstManualDispatch)
+	{
+		ShowMessage(INVTEXT("请先点击主塔，手动派出城主。"), false);
+		return false;
+	}
 	if (!bSessionActive || bEndingSession)
 	{
 		FText Reason;
@@ -182,6 +204,7 @@ void UCastleTowerDispatchSubsystem::GetDispatchCounts(int32& OutReserveCount, in
 bool UCastleTowerDispatchSubsystem::BeginManualDispatch(FText& OutReason)
 {
 	StopManualDispatch();
+	const TGuardValue<bool> ManualRequest(bStartingManualDispatch, true);
 	bManualDispatchHeld = TryDispatchSingleNPC(OutReason);
 	return bManualDispatchHeld;
 }

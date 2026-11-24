@@ -28,9 +28,12 @@ public:
 	static FText ResolveInputText(const FText& Template, const ACastlePlayerController& Controller);
 	FCastleDialogueFinished OnDialogueFinished;
 
-	/** 首次短剧情仅在成功挂载后标记；Rest 类型不触发也不写标记。 */
-	bool TryPlayFirstVisitSkyIslandDialogue(ECastleSkyIslandType Type, UCastleDialogueScriptDataAsset* Script,
-		ACastlePlayerController* Controller, bool& bOutStarted, FText& OutReason);
+	/** 提前完成全部可失败的剧本及 WBP 准备，提交前界面保持折叠且不占用输入。 */
+	UCastleDialogueWidget* PrepareScript(UCastleDialogueScriptDataAsset* Script, ACastlePlayerController* Controller, FText& OutReason);
+	void StartPreparedScript(UCastleDialogueScriptDataAsset& Script, ACastlePlayerController& Controller, UCastleDialogueWidget& Widget);
+	/** 只有成功传送及提交已准备的界面后才写首访记录。 */
+	void StartPreparedSkyIslandDialogue(ECastleSkyIslandType Type, UCastleDialogueScriptDataAsset& Script,
+		ACastlePlayerController& Controller, UCastleDialogueWidget& Widget);
 	/** 地图退出时撤下界面，但不触发推进教学的完成事件。 */
 	void CancelForController(const ACastlePlayerController& Controller);
 	void ResetSkyIslandDialogueHistory();

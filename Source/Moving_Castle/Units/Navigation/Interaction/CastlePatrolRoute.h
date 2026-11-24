@@ -30,6 +30,7 @@ public:
 
 	/** 教学导演明确启用双门寻路，并在讲解弹窗期间保留正在编辑的草稿。 */
 	void ConfigureTutorialRoute() { bTutorialRoute = true; }
+	bool IsTutorialRoute() const { return bTutorialRoute; }
 
 	/** 只控制路点圆圈、悬浮编号和编辑状态提示；正式巡逻线由当前世界的可视化子系统控制。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="共享巡逻")

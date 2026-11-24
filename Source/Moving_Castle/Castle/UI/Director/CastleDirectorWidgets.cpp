@@ -378,7 +378,7 @@ void UCastleDirectorHUDWidget::HandleGuideClicked()
 	FText Failure;
 	if (!Guide || !Guide->ShowGuideBook(Controller, Failure))
 	{
-		if (Failure.IsEmpty()) { Failure = FText::FromString(TEXT("主界面 HUD 无法取得圖文百科子系統或玩家控制器。")); }
+		if (Failure.IsEmpty()) { Failure = INVTEXT("主界面 HUD 无法取得图文百科子系统或玩家控制器。"); }
 		UE_LOG(LogMoving_Castle, Error, TEXT("主界面 HUD %s 打开图文百科失败：%s"), *GetClass()->GetPathName(), *Failure.ToString());
 	}
 }

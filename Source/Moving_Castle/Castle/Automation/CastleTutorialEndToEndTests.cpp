@@ -3,6 +3,7 @@
 #include "Castle/Dialogue/CastleDialogueScriptDataAsset.h"
 #include "Castle/Dialogue/CastleDialogueSubsystem.h"
 #include "Castle/Dialogue/CastleDialogueWidget.h"
+#include "Castle/Combat/CastleCombatConfigDataAsset.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/Guide/CastleGuideSubsystem.h"
 #include "Castle/Guide/CastleGuideWidgets.h"
@@ -15,8 +16,10 @@
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
+#include "CastleNavigationSubsystem.h"
 #include "CastlePlayerController.h"
 #include "CastleShopComponent.h"
+#include "CastleShopWidget.h"
 #include "CastleTowerDispatchSubsystem.h"
 #include "Components/Image.h"
 #include "Components/TextBlock.h"
@@ -26,6 +29,7 @@
 #include "EngineUtils.h"
 #include "FileHelpers.h"
 #include "Interaction/CastlePatrolRoute.h"
+#include "MassEntityConfigAsset.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/PackageName.h"
 #include "PlayInEditorDataTypes.h"
@@ -114,6 +118,8 @@ public:
 		{
 			Test.TestTrue(TEXT("S10 已实际派出城主并挂载气泡"), Tutorial->HasShownDispatchBubble());
 			Test.TestEqual(TEXT("完成于 S14"), Step, 14);
+			Test.TestEqual(TEXT("摆上农田后仍使用 S8 原始路点"),
+				World->GetSubsystem<UCastleNavigationSubsystem>()->GetRequestedWaypoints(), OriginalWaypoints);
 			return true;
 		}
 		if (Step != LastStep)
@@ -199,7 +205,14 @@ public:
 		}
 		case 4: if (Action++ == 0) { Controller->ToggleShop(); } break;
 		case 5:
-			if (Action++ == 0 && !Shop->TryBuyOffer(0, Reason)) { return Fail(Reason.ToString()); }
+			if (Action == 0)
+			{
+				// 先确认停留在商店的真实 Widget 可接收关闭台词后的快捷键。
+				auto* ShopWidget = FindScreenWidget<UCastleShopWidget>(*World);
+				if (!ShopWidget || !ShopWidget->HasUserFocus(Controller)) { return Wait(TEXT("商店未恢复键盘焦点")); }
+				if (!Shop->TryBuyOffer(0, Reason)) { return Fail(Reason.ToString()); }
+				++Action;
+			}
 			break;
 		case 6:
 			if (!Guide->IsEntryUnlocked(TEXT("Demolish"))) { break; }
@@ -229,12 +242,15 @@ public:
 					|| !Route->TryAppendDraftWaypoint(Waypoint(Rear), Reason)) { return Fail(Reason.ToString()); }
 				Route->ToggleEditing();
 				if (Route->IsEditing()) { return Fail(TEXT("再次按 P 后仍在编辑")); }
+				OriginalWaypoints = World->GetSubsystem<UCastleNavigationSubsystem>()->GetRequestedWaypoints();
 			}
 			break;
 		case 10:
 			if (Action++ == 0)
 			{
 				auto* Dispatch = World->GetSubsystem<UCastleTowerDispatchSubsystem>();
+				Test.TestFalse(TEXT("手动点塔前拒绝开启自动出兵"), Dispatch->SetAutoDispatchEnabled(true));
+				Test.TestFalse(TEXT("拒绝自动出兵时尚未产生城主气泡"), Tutorial->HasShownDispatchBubble());
 				if (!Dispatch->BeginManualDispatch(Reason)) { return Fail(Reason.ToString()); }
 				Dispatch->StopManualDispatch();
 			}
@@ -268,6 +284,12 @@ public:
 			}
 			else if (Action == 1 && ++ShopPause > 3)
 			{
+				auto* ShopWidget = FindScreenWidget<UCastleShopWidget>(*World);
+				if (!ShopWidget || !ShopWidget->HasUserFocus(Controller)) { return Wait(TEXT("缺货剧情关闭后商店未恢复焦点")); }
+				const int32 Before = Backpack->GetItemCount();
+				Test.TestFalse(TEXT("教学固定货架拒绝出售"), Shop->TrySellBackpackItem(0, Reason));
+				Test.TestEqual(TEXT("禁售提示"), Reason.ToString(), FString(TEXT("新手教程期间暂不可出售房间卡")));
+				Test.TestEqual(TEXT("拒绝出售后卡牌数量不变"), Backpack->GetItemCount(), Before);
 				if (!Shop->TryRefreshOffers(Reason)) { return Fail(Reason.ToString()); }
 				++Action;
 			}
@@ -279,22 +301,23 @@ public:
 			break;
 		case 14:
 		{
-			const FIntVector Farm = Center + FIntVector(0, 2, 0);
+			const FIntVector Farm = Center + FIntVector(0, 1, 0);
 			if (Action == 0)
 			{
-				if (!Place(Farm, Center + FIntVector(0, 1, 0), ECastleGridFace::PositiveY, ECastleBuildingType::Farm))
-				{
-					return Fail(Reason.ToString());
-				}
+				auto* Navigation = World->GetSubsystem<UCastleNavigationSubsystem>();
+				const auto Path = Navigation->AcquireSharedPath();
+				if (!Path || !Path->bValid) { return Wait(TEXT("箭塔合成后尚未发布原双门路线")); }
+				Test.TestTrue(TEXT("战后保留已提交的开环"), Path->bTowerDispatch);
+				Test.TestEqual(TEXT("战后仍是原玩家路点"), Navigation->GetRequestedWaypoints(), OriginalWaypoints);
+				// 将回路中段的普通房换成农田，保持两个已保存的路点不动。
+				auto* Room = Board->GetBuildingAt(Farm);
+				if (!Room || !Controller->OpenBuildingDemolishMenu(*Room, FVector2D(200, 200))) { return Fail(TEXT("无法回收中段普通房")); }
+				Controller->ConfirmBuildingDemolish(*Controller->GetBuildingDemolishMenu());
 				++Action;
 			}
-			else if (Action == 1 && Ready(Farm))
+			else if (Action == 1)
 			{
-				Route->ToggleEditing();
-				Route->ClearPatrolRoute();
-				if (!Route->TryAppendDraftWaypoint(Waypoint(Farm), Reason)
-					|| !Route->TryAppendDraftWaypoint(Waypoint(Rear), Reason)) { return Fail(Reason.ToString()); }
-				Route->ToggleEditing();
+				if (!Place(Farm, Center, ECastleGridFace::PositiveY, ECastleBuildingType::Farm)) { return Fail(Reason.ToString()); }
 				++Action;
 			}
 			break;
@@ -316,6 +339,7 @@ private:
 	int32 LastStep = 0;
 	int32 Action = 0;
 	int32 ShopPause = 0;
+	TArray<FVector> OriginalWaypoints;
 	double Deadline = FPlatformTime::Seconds() + 30.0;
 };
 
@@ -324,6 +348,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleTutorialEndToEndTest, "MovingCastle.Tuto
 
 bool FCastleTutorialEndToEndTest::RunTest(const FString&)
 {
+	// 确认保存后的教程资产引用含追击与攻击的正式幽灵模板。
+	const auto* Battle = LoadObject<UCastleCombatConfigDataAsset>(nullptr,
+		TEXT("/Game/MovingCastle/Data/Tutorial/DA_TutorialGhostBattle.DA_TutorialGhostBattle"));
+	if (!TestTrue(TEXT("教学战斗使用正式 ShadowSwarm 幽灵"),
+		Battle && Battle->Roster.Num() == 1 && GetNameSafe(Battle->Roster[0].Configuration.Get()) == TEXT("DA_MassEnemy_ShadowSwarm")))
+	{
+		return false;
+	}
 	if (!StartPIE(*this, TEXT("/Game/MovingCastle/Maps/TutorialMap"))) { return false; }
 	ADD_LATENT_AUTOMATION_COMMAND(FCastleTutorialPIEDriver(*this));
 	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(StopPIE()));
@@ -408,6 +440,12 @@ bool FCastleDialoguePresentationTest::RunTest(const FString&)
 		auto* Popup = FindScreenWidget<UCastleGuidePopupWidget>(*World);
 		auto* Illustration = Popup ? Cast<UImage>(Popup->GetWidgetFromName(TEXT("Illustration"))) : nullptr;
 		TestTrue(TEXT("可选配图未交付时折叠"), Illustration && Illustration->GetVisibility() == ESlateVisibility::Collapsed);
+		const auto* PopupDescription = Popup ? Cast<UTextBlock>(Popup->GetWidgetFromName(TEXT("EntryDescription"))) : nullptr;
+		if (!TestNotNull(TEXT("说明正文绑定"), PopupDescription)) { return true; }
+		TestTrue(TEXT("经典模式弹窗解析拆除键"), PopupDescription->GetText().ToString().Contains(TEXT("鼠标左键")));
+		Controller->SetControlMode(ECastleControlMode::Design, false);
+		TestTrue(TEXT("打开期间弹窗刷新拆除键"), PopupDescription->GetText().ToString().Contains(TEXT("鼠标右键")));
+		Controller->SetControlMode(ECastleControlMode::Classic, false);
 		TestTrue(TEXT("关闭前未解锁拆除"), !Guide->IsEntryUnlocked(TEXT("Demolish")) && Controller->IsModalInputActive());
 		if (!Popup || !Click(*Popup, TEXT("CloseButton"))) { AddError(TEXT("图文说明关闭失败")); return true; }
 		TestTrue(TEXT("关闭后入册并恢复经典模式鼠标"), Guide->IsEntryUnlocked(TEXT("Demolish"))
@@ -418,14 +456,44 @@ bool FCastleDialoguePresentationTest::RunTest(const FString&)
 		GuideButton->OnButtonClicked.Broadcast();
 		if (!TestTrue(TEXT("通过正式 HUD 的问号打开百科"), Guide->HasOpenModal())) { return true; }
 		auto* Book = FindScreenWidget<UCastleGuideBookWidget>(*World);
+		const auto* BookDescription = Book ? Cast<UTextBlock>(Book->GetWidgetFromName(TEXT("EntryDescription"))) : nullptr;
+		if (!TestNotNull(TEXT("百科正文绑定"), BookDescription)) { return true; }
+		TestTrue(TEXT("MainMap 基础建造词条解析放置键"), BookDescription->GetText().ToString().Contains(TEXT("鼠标右键")));
 		if (!Book || !Click(*Book, TEXT("NextButton"))) { AddError(TEXT("百科翻页控件未挂载")); return true; }
 		const auto* Title = Cast<UTextBlock>(Book->GetWidgetFromName(TEXT("EntryTitle")));
 		TestTrue(TEXT("百科展示已收录词条"), Title && Title->GetText().ToString() == TEXT("拆除与回收"));
-		Click(*Book, TEXT("CloseButton"));
-		TestFalse(TEXT("关闭百科释放模态"), Controller->IsModalInputActive());
+		Controller->SetControlMode(ECastleControlMode::Design, false);
+		TestTrue(TEXT("书册打开期间刷新拆除键"), BookDescription->GetText().ToString().Contains(TEXT("鼠标右键"))
+			&& !BookDescription->GetText().ToString().Contains(TEXT("{DemolishKey}")));
+		GuideButton->OnButtonClicked.Broadcast();
+		TestFalse(TEXT("再次点击问号关闭百科并释放模态"), Guide->HasOpenModal() || Controller->IsModalInputActive());
 		return true;
 	}));
 	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(StopPIE()));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDialogueTerminationTest, "MovingCastle.Dialogue.ScriptTermination",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleDialogueTerminationTest::RunTest(const FString&)
+{
+	auto* Script = NewObject<UCastleDialogueScriptDataAsset>();
+	for (const FName Id : {FName(TEXT("Start")), FName(TEXT("Branch")), FName(TEXT("End"))})
+	{
+		auto& Line = Script->Lines.AddDefaulted_GetRef();
+		Line.LineId = Id;
+		Line.SpeakerName = INVTEXT("旺财");
+		Line.TextTemplate = INVTEXT("台词");
+	}
+	Script->Lines.Last().bEndsScript = true;
+	Script->Lines[0].Choices = {{INVTEXT("继续"), TEXT("Branch")}, {INVTEXT("结束"), TEXT("End")}};
+	Script->Lines[1].Choices = {{INVTEXT("返回"), TEXT("Start")}};
+	AddExpectedError(TEXT("存在无法保证结束的循环分支"), EAutomationExpectedErrorFlags::Contains, 1);
+	FText Reason;
+	TestFalse(TEXT("可选择结束仍不能掩盖循环选项"), Script->ValidateScript(Reason));
+	Script->Lines[1].Choices[0].TargetLineId = TEXT("End");
+	TestTrue(TEXT("所有分支可汇合到末行"), Script->ValidateScript(Reason));
 	return true;
 }
 #endif

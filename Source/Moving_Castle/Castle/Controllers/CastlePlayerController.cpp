@@ -1002,6 +1002,7 @@ void ACastlePlayerController::RefreshModalInput(const bool bForceRefresh)
 		if (bBadgeReplaceOpen) { Mode.SetWidgetToFocus(BadgeReplaceWidget->TakeWidget()); }
 		else if (bRewardInputActive && DirectorFocusWidget) { Mode.SetWidgetToFocus(DirectorFocusWidget->TakeWidget()); }
 		else if (!PresentationModals.IsEmpty()) { Mode.SetWidgetToFocus(PresentationModals.Last()->TakeWidget()); }
+		else if (Shop->IsShopOpen() && ShopFocusWidget.IsValid()) { Mode.SetWidgetToFocus(ShopFocusWidget->TakeWidget()); }
 		SetInputMode(Mode);
 	}
 	else
@@ -1010,6 +1011,16 @@ void ACastlePlayerController::RefreshModalInput(const bool bForceRefresh)
 		Mode.SetConsumeCaptureMouseDown(true);
 		SetInputMode(Mode);
 	}
+}
+
+void ACastlePlayerController::RegisterShopFocusWidget(UUserWidget& Widget)
+{
+	ShopFocusWidget = &Widget;
+}
+
+void ACastlePlayerController::UnregisterShopFocusWidget(const UUserWidget& Widget)
+{
+	if (ShopFocusWidget.Get() == &Widget) { ShopFocusWidget.Reset(); }
 }
 
 void ACastlePlayerController::ShowGameplayMessage(const FString& Message, bool bSuccess) const

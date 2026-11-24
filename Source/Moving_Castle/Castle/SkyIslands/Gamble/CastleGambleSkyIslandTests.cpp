@@ -345,6 +345,8 @@ public:
 			Test.TestTrue(TEXT("验收过程保留本局关数"), Director->GetClearedSteps() == OriginalStep);
 			return true;
 		}
+		// 本用例验证离屏视口的中心准星，显式选择经典模式且不保存偏好。
+		Controller->SetControlMode(ECastleControlMode::Classic, false);
 		ReturnLocation = Controller->GetPawn()->GetActorLocation();
 		OriginalStep = Director->GetClearedSteps();
 		FOutputDeviceNull Output;

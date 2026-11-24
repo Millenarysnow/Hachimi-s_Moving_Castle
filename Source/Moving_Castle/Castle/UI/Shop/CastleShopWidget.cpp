@@ -253,6 +253,7 @@ void UCastleShopWidget::NativeConstruct()
 	}
 
 	Shop = Controller->GetShop();
+	Controller->RegisterShopFocusWidget(*this);
 	Economy = Controller->GetEconomy();
 	Portraits = GetWorld() ? GetWorld()->GetSubsystem<UCastleCardPortraitSubsystem>() : nullptr;
 	Shop->OnShopChanged.AddUniqueDynamic(this, &UCastleShopWidget::RefreshShop);
@@ -262,6 +263,7 @@ void UCastleShopWidget::NativeConstruct()
 
 void UCastleShopWidget::NativeDestruct()
 {
+	if (auto* Controller = GetOwningPlayer<ACastlePlayerController>()) { Controller->UnregisterShopFocusWidget(*this); }
 	if (IsValid(Shop))
 	{
 		Shop->OnShopChanged.RemoveDynamic(this, &UCastleShopWidget::RefreshShop);
@@ -691,7 +693,7 @@ void UCastleShopWidget::HandleRefresh()
 	}
 	FText Reason;
 	const bool bSuccess = Shop->TryRefreshOffers(Reason);
-	ShowResult(bSuccess, TEXT("刷新成功，已换入 6 张全新建筑卡牌。"), Reason);
+	ShowResult(bSuccess, FString::Printf(TEXT("刷新成功，已上架 %d 张建筑卡牌。"), Shop->GetOffers().Num()), Reason);
 }
 
 void UCastleShopWidget::HandleRefreshPressed()

@@ -34,10 +34,15 @@ namespace
 	const FIntVector RearOffset(-1, 0, 0);
 	constexpr int32 TutorialStepCount = 14;
 
-	bool IsSameCard(const FCastleBuildingDescriptor& A, const FCastleBuildingDescriptor& B)
+	bool IsSameTutorialCard(const FCastleBuildingDescriptor& A, const FCastleBuildingDescriptor& B)
 	{
 		return A.Definition == B.Definition && A.Color == B.Color && A.Number == B.Number && A.Level == B.Level;
 	}
+
+	// 词条出现的阶段与原剧本一致，编辑器漏配时拒绝进入教学。
+	const TMap<int32, TArray<FName>> RequiredTutorialEntries = {
+		{1, {TEXT("Building")}}, {6, {TEXT("Demolish")}}, {8, {TEXT("Patrol")}}, {9, {TEXT("Ghost"), TEXT("Archer")}}
+	};
 }
 
 bool UCastleTutorialConfigDataAsset::ValidateTutorial(FText& OutReason) const
@@ -56,6 +61,8 @@ bool UCastleTutorialConfigDataAsset::ValidateTutorial(FText& OutReason) const
 		// S2 是唯一只等待实操的步骤，其余步骤均须有正式剧本。
 		if (Row.Number != 2 && !Row.Dialogue) { return Reject(TEXT("Steps.Dialogue")); }
 		if (Row.Dialogue && !Row.Dialogue->ValidateScript(OutReason)) { return false; }
+		const auto* ExpectedEntries = RequiredTutorialEntries.Find(Row.Number);
+		if (ExpectedEntries && Row.GuideEntries != *ExpectedEntries) { return Reject(TEXT("Steps.GuideEntries")); }
 	}
 	if (StarterRooms.Num() < 5 || StartingGold <= 0) { return Reject(TEXT("StarterRooms / StartingGold")); }
 	for (const auto& Room : StarterRooms)
@@ -127,6 +134,17 @@ bool ACastleTutorialDirector::InitializeTutorial(FText& OutReason)
 		OutReason = INVTEXT("教程缺少运行子系统、商店或空白且容量足够的开局建筑栏。");
 		return false;
 	}
+	TArray<FName> GuideIds;
+	for (const auto& Row : Configuration->Steps) { GuideIds.Append(Row.GuideEntries); }
+	const auto* BubbleProbe = CreateWidget<UCastleTutorialTextWidget>(Controller, Configuration->BubbleClass);
+	const auto* RewardProbe = CreateWidget<UCastleTutorialRewardWidget>(Controller, Configuration->RewardClass);
+	if (!BubbleProbe || !RewardProbe || !BubbleProbe->HasRequiredBindings() || !RewardProbe->HasRequiredBindings())
+	{
+		OutReason = FText::Format(INVTEXT("教学配置 {0} 的气泡或奖励界面无法绑定。"),
+			FText::FromString(Configuration->GetPathName()));
+		return false;
+	}
+	if (!Guide->BeginTutorial(*Controller, GuideIds, OutReason)) { return false; }
 	Route->ConfigureTutorialRoute();
 	if (!Route->SetMaxPlayerWaypoints(2) || !Shop->InitializeShop(Controller->GetEconomy(), Board, OutReason)
 		|| !Combat->InitializeCombat(Configuration->GhostBattle, OutReason))
@@ -400,8 +418,8 @@ bool ACastleTutorialDirector::HasRouteWithArcher() const
 bool ACastleTutorialDirector::HasPurchased(const FCastleBuildingDescriptor& Descriptor) const
 {
 	// 售罄状态与建筑栏两处均来自正式交易提交，已有同类建筑不会被误认成购买成功。
-	return Shop->GetOffers().ContainsByPredicate([&](const auto& Offer) { return Offer.bSold && IsSameCard(Descriptor, Offer.Descriptor); })
-		&& Board->PrototypeBackpack->GetItems().ContainsByPredicate([&](const auto& Card) { return IsSameCard(Descriptor, Card); });
+	return Shop->GetOffers().ContainsByPredicate([&](const auto& Offer) { return Offer.bSold && IsSameTutorialCard(Descriptor, Offer.Descriptor); })
+		&& Board->PrototypeBackpack->GetItems().ContainsByPredicate([&](const auto& Card) { return IsSameTutorialCard(Descriptor, Card); });
 }
 
 bool ACastleTutorialDirector::SpawnPathMarkers(FText& OutReason)
@@ -523,6 +541,7 @@ void ACastleTutorialDirector::ClaimCopyReward()
 
 void ACastleTutorialDirector::Fail(const FText& Reason)
 {
+	EndTutorialDispatch();
 	const FText Failure = Reason.IsEmpty() ? INVTEXT("必需运行状态初始化失败。") : Reason;
 	UE_LOG(LogMoving_Castle, Error, TEXT("教程 %s（配置 %s，S%d）停止：%s"),
 		*GetPathName(), *GetPathNameSafe(Configuration), Step, *Failure.ToString());
@@ -539,6 +558,7 @@ void ACastleTutorialDirector::EndPlay(const EEndPlayReason::Type Reason)
 	// 订阅与界面跟随本关卡销毁，GameInstance 不保留旧教程 Actor。
 	if (Controller) { Controller->OnBuildingDemolishedToBackpack.RemoveAll(this); }
 	if (Dispatch) { Dispatch->OnNPCDispatched.RemoveAll(this); }
+	EndTutorialDispatch();
 	if (Combat)
 	{
 		Combat->OnBattleCleared.RemoveAll(this);
@@ -552,4 +572,17 @@ void ACastleTutorialDirector::EndPlay(const EEndPlayReason::Type Reason)
 	}
 	RemovePathMarkers();
 	Super::EndPlay(Reason);
+}
+
+void ACastleTutorialDirector::EndTutorialDispatch()
+{
+	// 部分开战失败或退出关卡时也销毁已派出的 Mass 实体并释放编辑权限。
+	if (Dispatch && Dispatch->IsSessionActive())
+	{
+		FText Reason;
+		if (!Dispatch->EndBattleDispatchSession(Reason))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("教程 %s 无法结束出兵：%s"), *GetPathName(), *Reason.ToString());
+		}
+	}
 }

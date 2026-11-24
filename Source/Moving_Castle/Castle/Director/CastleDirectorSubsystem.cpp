@@ -12,6 +12,7 @@
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
 #include "Castle/Dialogue/CastleDialogueScriptDataAsset.h"
 #include "Castle/Dialogue/CastleDialogueSubsystem.h"
+#include "Castle/Dialogue/CastleDialogueWidget.h"
 #include "Engine/GameInstance.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/Director/CastleDirectorSettings.h"
@@ -518,28 +519,29 @@ bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirector
 		Island->Destroy();
 		return Reject(OutReason);
 	}
+	UCastleDialogueWidget* ArrivalWidget = nullptr;
+	if (bRequiresDialogue && !Dialogue->HasPlayedFirstVisitSkyIslandDialogue(Type))
+	{
+		// 校验台词、类和实际 BindWidget，并在传送前完成可失败的视口挂载。
+		ArrivalWidget = Dialogue->PrepareScript(ArrivalScript, Controller.Get(), OutReason);
+		if (!ArrivalWidget)
+		{
+			Island->Destroy();
+			FText RestoreReason;
+			if (!Board->SetPlacementSurfacePresentationHidden(false, RestoreReason)) { return Reject(RestoreReason); }
+			return Reject(OutReason);
+		}
+	}
 	const FTransform Arrival = Island->GetPlayerArrivalTransform();
 	const FTransform ReturnTransform = Pawn->GetActorTransform();
 	const FRotator ReturnControlRotation = Controller->GetControlRotation();
 	if (!Pawn->TeleportTo(Arrival.GetLocation(), Arrival.Rotator()))
 	{
+		if (ArrivalWidget) { ArrivalWidget->RemoveFromParent(); }
 		Island->Destroy();
 		FText RestoreReason;
 		if (!Board->SetPlacementSurfacePresentationHidden(false, RestoreReason)) { return Reject(RestoreReason); }
 		return Reject(INVTEXT("玩家无法传送至空岛到达锚点。"));
-	}
-	bool bStartedDialogue = false;
-	if (bRequiresDialogue && !Dialogue->TryPlayFirstVisitSkyIslandDialogue(Type, ArrivalScript, Controller, bStartedDialogue, OutReason))
-	{
-		// 界面准备失败时撤回传送。旧节点、步数及商店权限尚未提交。
-		if (!Pawn->TeleportTo(ReturnTransform.GetLocation(), ReturnTransform.Rotator()))
-		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("空岛 %s 首访剧情加载失败，无法恢复玩家入岛前的位置。"), *Island->GetPathName());
-		}
-		Island->Destroy();
-		FText RestoreReason;
-		if (!Board->SetPlacementSurfacePresentationHidden(false, RestoreReason)) { return Reject(RestoreReason); }
-		return Reject(OutReason);
 	}
 	// 传送成功后再提交返塔信息，并移除已离开编辑阶段的节点及其待处理重叠。
 	IslandReturnTransform = ReturnTransform;
@@ -558,6 +560,7 @@ bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirector
 	PendingNode.Reset();
 	DestroyNodes();
 	SetPhase(ECastleDirectorPhase::SkyIsland);
+	if (ArrivalWidget) { Dialogue->StartPreparedSkyIslandDialogue(Type, *ArrivalScript, *Controller.Get(), *ArrivalWidget); }
 	ShowMessage(FText::Format(INVTEXT("已到达空岛。瞄准物件并按 {0} 交互。"), IslandConfig.SkyIslandInteractKey.GetDisplayName()), false);
 	UE_LOG(LogMoving_Castle, Display, TEXT("导演进入空岛 %s，第 %d 步。"), *Island->GetPathName(), GetNextStep());
 	return true;

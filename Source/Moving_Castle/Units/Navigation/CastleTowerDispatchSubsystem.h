@@ -76,6 +76,9 @@ private:
 	bool bSessionActive = false;
 	bool bEndingSession = false;
 	bool bAutoDispatchEnabled = false;
+	/** 教学战斗首次派兵必须由主塔点击提交，之后才开放自动循环。 */
+	bool bRequiresFirstManualDispatch = false;
+	bool bStartingManualDispatch = false;
 	bool bManualDispatchHeld = false;
 	double AutoDispatchElapsed = 0.0;
 	double HoldDispatchElapsed = 0.0;

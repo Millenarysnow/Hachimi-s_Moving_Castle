@@ -16,6 +16,8 @@ class UCastleTutorialTextWidget : public UUserWidget
 {
 	GENERATED_BODY()
 public:
+	/** 教程启动前检查实际气泡和目标条实例。 */
+	bool HasRequiredBindings() const { return TutorialText != nullptr; }
 	bool SetTutorialText(const FText& Text);
 private:
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UTextBlock> TutorialText;
@@ -27,6 +29,7 @@ class UCastleTutorialRewardWidget : public UUserWidget
 {
 	GENERATED_BODY()
 public:
+	bool HasRequiredBindings() const;
 	bool Configure(ACastleTutorialDirector& Director);
 	bool ShowCard(const FCastleBuildingDescriptor& Descriptor, ACastleBoard& Board);
 protected:

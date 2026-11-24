@@ -52,8 +52,22 @@ bool UCastleDialogueScriptDataAsset::ValidateScript(FText& OutFailureReason) con
 	}
 	if (OutFailureReason.IsEmpty())
 	{
-		for (const FCastleDialogueLine& Line : Lines)
+		// 从末行反推。只有全部出口都已证实能结束时才标记上一行，避免有出口的循环通过校验。
+		TMap<FName, int32> Indices;
+		TArray<TArray<int32>> Predecessors;
+		TArray<int32> UnverifiedExits;
+		Predecessors.SetNum(Lines.Num());
+		UnverifiedExits.SetNumZeroed(Lines.Num());
+		for (int32 Index = 0; Index < Lines.Num(); ++Index) { Indices.Add(Lines[Index].LineId, Index); }
+		for (int32 Index = 0; Index < Lines.Num() - 1; ++Index)
 		{
+			const auto& Line = Lines[Index];
+			if (Line.Choices.IsEmpty())
+			{
+				Predecessors[Index + 1].Add(Index);
+				UnverifiedExits[Index] = 1;
+				continue;
+			}
 			for (const FCastleDialogueChoice& Choice : Line.Choices)
 			{
 				if (Choice.Text.IsEmpty() || Choice.TargetLineId.IsNone() || !LineIds.Contains(Choice.TargetLineId))
@@ -63,8 +77,27 @@ bool UCastleDialogueScriptDataAsset::ValidateScript(FText& OutFailureReason) con
 						*GetPathName(), *Line.LineId.ToString(), *Choice.TargetLineId.ToString()));
 					break;
 				}
+				Predecessors[Indices.FindChecked(Choice.TargetLineId)].Add(Index);
+				++UnverifiedExits[Index];
 			}
 			if (!OutFailureReason.IsEmpty()) { break; }
+		}
+		if (OutFailureReason.IsEmpty())
+		{
+			TArray<int32> Verified{Lines.Num() - 1};
+			for (int32 Index = 0; Index < Verified.Num(); ++Index)
+			{
+				for (const int32 Previous : Predecessors[Verified[Index]])
+				{
+					if (--UnverifiedExits[Previous] == 0) { Verified.Add(Previous); }
+				}
+			}
+			const int32 Invalid = UnverifiedExits.IndexOfByPredicate([](int32 Exits) { return Exits > 0; });
+			if (Invalid != INDEX_NONE)
+			{
+				OutFailureReason = FText::Format(INVTEXT("剧本 {0} 行 {1} 存在无法保证结束的循环分支。"),
+					FText::FromString(GetPathName()), FText::FromName(Lines[Invalid].LineId));
+			}
 		}
 	}
 	if (!OutFailureReason.IsEmpty())

@@ -1,6 +1,7 @@
 #include "CastleGuideSubsystem.h"
 
 #include "Castle/Controllers/CastlePlayerController.h"
+#include "Castle/Dialogue/CastleDialogueSubsystem.h"
 #include "Castle/Guide/CastleGuideDataAsset.h"
 #include "Castle/Guide/CastleGuideWidgets.h"
 #include "Components/Button.h"
@@ -53,7 +54,7 @@ bool UCastleGuideSubsystem::ShowEntryPopup(const FName EntryId, ACastlePlayerCon
 		return false;
 	}
 	ActivePopup = Widget;
-	ActiveController = Controller;
+	BindModalController(*Controller);
 	PendingEntryId = EntryId;
 	Controller->SetPresentationModalState(true, Widget);
 	Widget->SetKeyboardFocus();
@@ -63,9 +64,14 @@ bool UCastleGuideSubsystem::ShowEntryPopup(const FName EntryId, ACastlePlayerCon
 bool UCastleGuideSubsystem::ShowGuideBook(ACastlePlayerController* Controller, FText& OutReason)
 {
 	OutReason = FText::GetEmpty();
+	if (ActiveBook && ActiveController.Get() == Controller)
+	{
+		CloseGuideBook();
+		return true;
+	}
 	if (ActivePopup || ActiveBook || !IsValid(Controller) || Controller->GetWorld() != GetWorld())
 	{
-		OutReason = FText::FromString(TEXT("圖文百科無法打開：已有百科模態，或當前玩家控制器無效。"));
+		OutReason = INVTEXT("图文百科无法打开：已有百科模态，或当前玩家控制器无效。");
 	}
 	else if (!EnsureGuideData(OutReason))
 	{
@@ -76,13 +82,16 @@ bool UCastleGuideSubsystem::ShowGuideBook(ACastlePlayerController* Controller, F
 	{
 		for (const FCastleGuideEntry& Entry : GuideData->Entries)
 		{
-			if (Entry.bAvailableFromStart || UnlockedEntryIds.Contains(Entry.EntryId)) { UnlockedEntries.Add(Entry); }
+			if ((TutorialController.Get() != Controller && Entry.bAvailableFromStart) || UnlockedEntryIds.Contains(Entry.EntryId))
+			{
+				UnlockedEntries.Add(Entry);
+			}
 		}
 	}
 	UCastleGuideBookWidget* Widget = WidgetClass ? CreateWidget<UCastleGuideBookWidget>(Controller, WidgetClass) : nullptr;
 	if (OutReason.IsEmpty() && (!IsValid(Widget) || !Widget->Configure(this, UnlockedEntries) || !Widget->AddToPlayerScreen(71)))
 	{
-		OutReason = FText::FromString(TEXT("圖文百科 WBP 創建、必需控件綁定或掛載失敗。"));
+		OutReason = INVTEXT("图文百科 WBP 创建、必需控件绑定或挂载失败。");
 	}
 	if (!OutReason.IsEmpty())
 	{
@@ -91,10 +100,60 @@ bool UCastleGuideSubsystem::ShowGuideBook(ACastlePlayerController* Controller, F
 		return false;
 	}
 	ActiveBook = Widget;
-	ActiveController = Controller;
+	// 只让书册的面板区域拦截点击，左下角问号仍可关闭书册。
+	Widget->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+	BindModalController(*Controller);
 	Controller->SetPresentationModalState(true, Widget);
 	Widget->SetKeyboardFocus();
 	return true;
+}
+
+bool UCastleGuideSubsystem::BeginTutorial(ACastlePlayerController& Controller, TConstArrayView<FName> RequiredIds, FText& OutReason)
+{
+	if (!EnsureGuideData(OutReason)) { return false; }
+	for (const FName Id : RequiredIds)
+	{
+		if (!GuideData->FindEntry(Id))
+		{
+			OutReason = FText::Format(INVTEXT("百科资产 {0} 缺少必需教学词条 {1}。"),
+				FText::FromString(GuideData->GetPathName()), FText::FromName(Id));
+			return false;
+		}
+	}
+	auto* PopupClass = LoadRequiredWidgetClass(GuidePopupClassPath, OutReason);
+	if (!PopupClass) { return false; }
+	auto* BookClass = LoadRequiredWidgetClass(GuideBookClassPath, OutReason);
+	if (!BookClass) { return false; }
+	const auto* Popup = CreateWidget<UCastleGuidePopupWidget>(&Controller, PopupClass);
+	const auto* Book = CreateWidget<UCastleGuideBookWidget>(&Controller, BookClass);
+	if (!Popup || !Book || !Popup->HasRequiredBindings() || !Book->HasRequiredBindings())
+	{
+		OutReason = INVTEXT("教学百科弹窗或书册无法绑定必需控件。");
+		return false;
+	}
+	TutorialController = &Controller;
+	UnlockedEntryIds.Reset();
+	return true;
+}
+
+void UCastleGuideSubsystem::BindModalController(ACastlePlayerController& Controller)
+{
+	// 只在当前百科窗口存活期间刷新，文本模板保留在控件中供重算。
+	ActiveController = &Controller;
+	ControlModeChangedHandle = Controller.OnControlModeChanged.AddUObject(this, &UCastleGuideSubsystem::RefreshModalText);
+}
+
+void UCastleGuideSubsystem::ReleaseModalController()
+{
+	if (auto* Controller = ActiveController.Get()) { Controller->OnControlModeChanged.Remove(ControlModeChangedHandle); }
+	ControlModeChangedHandle.Reset();
+	ActiveController.Reset();
+}
+
+void UCastleGuideSubsystem::RefreshModalText(ECastleControlMode)
+{
+	if (ActivePopup) { ActivePopup->RefreshDescription(); }
+	if (ActiveBook) { ActiveBook->RefreshEntries(); }
 }
 
 void UCastleGuideSubsystem::CloseCurrentModal()
@@ -105,6 +164,7 @@ void UCastleGuideSubsystem::CloseCurrentModal()
 
 void UCastleGuideSubsystem::CancelForController(const ACastlePlayerController& Controller)
 {
+	if (TutorialController.Get() == &Controller) { TutorialController.Reset(); }
 	if (ActiveController.Get() != &Controller) { return; }
 	if (ActiveBook) { CloseGuideBook(); }
 	if (ActivePopup)
@@ -113,7 +173,7 @@ void UCastleGuideSubsystem::CancelForController(const ACastlePlayerController& C
 		ActivePopup->RemoveFromParent();
 		ActivePopup = nullptr;
 		PendingEntryId = NAME_None;
-		ActiveController.Reset();
+		ReleaseModalController();
 	}
 }
 
@@ -122,7 +182,7 @@ bool UCastleGuideSubsystem::EnsureGuideData(FText& OutReason)
 	if (!GuideData) { GuideData = LoadObject<UCastleGuideDataAsset>(nullptr, GuideDataPath); }
 	if (!GuideData)
 	{
-		OutReason = FText::FromString(FString::Printf(TEXT("無法載入必需圖文百科資產 %s。"), GuideDataPath));
+		OutReason = FText::FromString(FString::Printf(TEXT("无法加载必需图文百科资产 %s。"), GuideDataPath));
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
 	}
@@ -134,7 +194,7 @@ UClass* UCastleGuideSubsystem::LoadRequiredWidgetClass(const TCHAR* AssetPath, F
 	UClass* WidgetClass = LoadClass<UUserWidget>(nullptr, AssetPath);
 	if (!WidgetClass)
 	{
-		OutReason = FText::FromString(FString::Printf(TEXT("圖文百科無法載入必需界面類 %s。"), AssetPath));
+		OutReason = FText::FromString(FString::Printf(TEXT("图文百科无法加载必需界面类 %s。"), AssetPath));
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 	}
 	return WidgetClass;
@@ -150,10 +210,10 @@ void UCastleGuideSubsystem::CloseEntryPopup()
 	}
 	ActivePopup->RemoveFromParent();
 	ActivePopup = nullptr;
-	ActiveController.Reset();
+	ReleaseModalController();
 	PendingEntryId = NAME_None;
 	UnlockedEntryIds.Add(LearnedEntryId);
-	UE_LOG(LogMoving_Castle, Display, TEXT("圖文百科已解鎖條目 %s。"), *LearnedEntryId.ToString());
+	UE_LOG(LogMoving_Castle, Display, TEXT("图文百科已解锁条目 %s。"), *LearnedEntryId.ToString());
 	OnGuideEntryLearned.Broadcast(LearnedEntryId);
 }
 
@@ -166,13 +226,13 @@ void UCastleGuideSubsystem::CloseGuideBook()
 	}
 	ActiveBook->RemoveFromParent();
 	ActiveBook = nullptr;
-	ActiveController.Reset();
+	ReleaseModalController();
 }
 
 bool UCastleGuidePopupWidget::HasRequiredBindings() const
 {
 	const bool bValid = IsValid(Illustration) && IsValid(EntryTitle) && IsValid(EntryDescription) && IsValid(CloseButton);
-	if (!bValid) { UE_LOG(LogMoving_Castle, Error, TEXT("百科彈窗 WBP %s 缺少插圖、標題、說明或關閉按鈕。"), *GetClass()->GetPathName()); }
+	if (!bValid) { UE_LOG(LogMoving_Castle, Error, TEXT("百科弹窗 WBP %s 缺少插图、标题、说明或关闭按钮。"), *GetClass()->GetPathName()); }
 	return bValid;
 }
 
@@ -180,7 +240,7 @@ bool UCastleGuidePopupWidget::Configure(UCastleGuideSubsystem* InSubsystem, cons
 {
 	if (!HasRequiredBindings() || !IsValid(InSubsystem))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("百科彈窗 WBP %s 無法綁定子系統或條目 %s。"),
+		UE_LOG(LogMoving_Castle, Error, TEXT("百科弹窗 WBP %s 无法绑定子系统或条目 %s。"),
 			*GetClass()->GetPathName(), *Entry.EntryId.ToString());
 		return false;
 	}
@@ -188,8 +248,16 @@ bool UCastleGuidePopupWidget::Configure(UCastleGuideSubsystem* InSubsystem, cons
 	EntryId = Entry.EntryId;
 	SetGuideIllustration(*Illustration, Entry.Illustration);
 	EntryTitle->SetText(Entry.Title);
-	EntryDescription->SetText(Entry.Description);
+	DescriptionTemplate = Entry.Description;
+	RefreshDescription();
 	return true;
+}
+
+void UCastleGuidePopupWidget::RefreshDescription()
+{
+	const auto* Controller = GetOwningPlayer<ACastlePlayerController>();
+	check(Controller);
+	EntryDescription->SetText(UCastleDialogueSubsystem::ResolveInputText(DescriptionTemplate, *Controller));
 }
 
 void UCastleGuidePopupWidget::NativeOnInitialized()
@@ -204,7 +272,7 @@ void UCastleGuidePopupWidget::HandleCloseClicked()
 {
 	if (!IsValid(GuideSubsystem))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("百科條目 %s 關閉失敗：圖文百科子系統已失效。"), *EntryId.ToString());
+		UE_LOG(LogMoving_Castle, Error, TEXT("百科条目 %s 关闭失败：图文百科子系统已失效。"), *EntryId.ToString());
 		return;
 	}
 	GuideSubsystem->CloseCurrentModal();
@@ -214,7 +282,7 @@ bool UCastleGuideBookWidget::HasRequiredBindings() const
 {
 	const bool bValid = IsValid(Illustration) && IsValid(EntryTitle) && IsValid(EntryDescription)
 		&& IsValid(PageStatus) && IsValid(EmptyMessage) && IsValid(PreviousButton) && IsValid(NextButton) && IsValid(CloseButton);
-	if (!bValid) { UE_LOG(LogMoving_Castle, Error, TEXT("百科面板 WBP %s 缺少圖文、頁碼、空狀態或導航控件。"), *GetClass()->GetPathName()); }
+	if (!bValid) { UE_LOG(LogMoving_Castle, Error, TEXT("百科面板 WBP %s 缺少图文、页码、空状态或导航控件。"), *GetClass()->GetPathName()); }
 	return bValid;
 }
 
@@ -222,7 +290,7 @@ bool UCastleGuideBookWidget::Configure(UCastleGuideSubsystem* InSubsystem, const
 {
 	if (!HasRequiredBindings() || !IsValid(InSubsystem))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("百科面板 WBP %s 無法綁定百科子系統。"), *GetClass()->GetPathName());
+		UE_LOG(LogMoving_Castle, Error, TEXT("百科面板 WBP %s 无法绑定百科子系统。"), *GetClass()->GetPathName());
 		return false;
 	}
 	GuideSubsystem = InSubsystem;
@@ -261,7 +329,7 @@ void UCastleGuideBookWidget::HandleCloseClicked()
 {
 	if (!IsValid(GuideSubsystem))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("圖文百科面板 %s 關閉失敗：百科子系統已失效。"), *GetPathName());
+		UE_LOG(LogMoving_Castle, Error, TEXT("图文百科面板 %s 关闭失败：百科子系统已失效。"), *GetPathName());
 		return;
 	}
 	GuideSubsystem->CloseCurrentModal();
@@ -282,7 +350,7 @@ void UCastleGuideBookWidget::DisplayCurrentEntry()
 	}
 	if (!Entries.IsValidIndex(CurrentEntryIndex))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("百科面板 %s 的目前頁索引 %d 超出已解鎖條目數 %d。"),
+		UE_LOG(LogMoving_Castle, Error, TEXT("百科面板 %s 的当前页索引 %d 超出已解锁条目数 %d。"),
 			*GetPathName(), CurrentEntryIndex, Entries.Num());
 		return;
 	}
@@ -292,7 +360,9 @@ void UCastleGuideBookWidget::DisplayCurrentEntry()
 	EmptyMessage->SetVisibility(ESlateVisibility::Collapsed);
 	SetGuideIllustration(*Illustration, Entry.Illustration);
 	EntryTitle->SetText(Entry.Title);
-	EntryDescription->SetText(Entry.Description);
+	const auto* Controller = GetOwningPlayer<ACastlePlayerController>();
+	check(Controller);
+	EntryDescription->SetText(UCastleDialogueSubsystem::ResolveInputText(Entry.Description, *Controller));
 	PageStatus->SetText(FText::FromString(FString::Printf(TEXT("%d / %d"), CurrentEntryIndex + 1, Entries.Num())));
 	PreviousButton->SetIsEnabled(CurrentEntryIndex > 0);
 	NextButton->SetIsEnabled(CurrentEntryIndex + 1 < Entries.Num());

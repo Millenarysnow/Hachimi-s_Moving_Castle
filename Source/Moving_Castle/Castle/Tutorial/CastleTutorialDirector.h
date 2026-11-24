@@ -54,6 +54,7 @@ private:
 	bool SpawnPathMarkers(FText& OutReason);
 	void RemovePathMarkers();
 	void Fail(const FText& Reason);
+	void EndTutorialDispatch();
 	void HandleDemolished(const FCastleBuildingDescriptor& Descriptor);
 	void HandleDispatched(const FCastleMassUnitHandle& Unit);
 	void HandleBattleCleared(ECastleBattleKind Kind, int32 Ordinal);

@@ -27,13 +27,19 @@ void UCastleTutorialRewardWidget::NativeOnInitialized()
 	if (CardButton) { CardButton->OnClicked.AddUniqueDynamic(this, &UCastleTutorialRewardWidget::ClaimCard); }
 }
 
-bool UCastleTutorialRewardWidget::Configure(ACastleTutorialDirector& Director)
+bool UCastleTutorialRewardWidget::HasRequiredBindings() const
 {
 	if (!Choices || !ExperienceButton || !HealingButton || !CopyButton || !CardButton)
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("教程奖励界面 %s 缺少选择容器、奖励按钮或单卡容器。"), *GetClass()->GetPathName());
 		return false;
 	}
+	return true;
+}
+
+bool UCastleTutorialRewardWidget::Configure(ACastleTutorialDirector& Director)
+{
+	if (!HasRequiredBindings()) { return false; }
 	OwnerDirector = &Director;
 	const FText Locked = INVTEXT("本次教学请先体验复制功能房间");
 	ExperienceButton->SetToolTipText(Locked);

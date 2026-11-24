@@ -97,6 +97,9 @@ public:
 	void SetDirectorModalState(bool bRewardOpen, bool bGameOverOpen, UUserWidget* FocusWidget);
 	/** 对话、图文弹窗与教程奖励使用同一模态输入锁，关闭后按当前操作模式恢复。 */
 	void SetPresentationModalState(bool bOpen, UUserWidget* FocusWidget);
+	/** 已挂载的商店为上层教学模态关闭后的焦点接收者。 */
+	void RegisterShopFocusWidget(UUserWidget& Widget);
+	void UnregisterShopFocusWidget(const UUserWidget& Widget);
 	/** 正式导演启动时挂接道具 HUD；三个 WBP 全部绑定成功才加入视口。 */
 	bool MountDirectorItemHUD(UCastleBackpackComponent* Backpack, FText& OutReason);
 	/** 资产配置的交互键在导演完成启动校验时绑定。 */
@@ -236,6 +239,7 @@ protected:
 
 	/** 从商店和导演界面最终状态计算鼠标、输入模式及忽略计数。 */
 	void RefreshModalInput(bool bForceRefresh = false);
+	TWeakObjectPtr<UUserWidget> ShopFocusWidget;
 
 	/** 徽章弹窗监听者在 WBP 刷新可见性后更新控制器的唯一输入锁。 */
 	UFUNCTION()
