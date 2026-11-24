@@ -2,13 +2,15 @@
 
 #include "CoreMinimal.h"
 #include "Castle/PCG/CastleBuildingPCGComponent.h"
+#include "Castle/PCG/CastlePCGSemanticField.h"
 #include "CastleHachimisV4Layout.h"
 
 class ACastleBuildingBase;
+class UCastlePCGRuleSetDataAsset;
 
 namespace CastleV4PCG
 {
-	/** 垂直接口的数据由下层唯一拥有，上层用同一坐标切换地板和功能碰撞。 */
+	/** 求解后的层界在此解析为共享装配变换，上下 Actor 各自拥有本格零件。 */
 	struct FStairInterface
 	{
 		const UCastleV4LadderKit* Kit = nullptr;
@@ -16,47 +18,28 @@ namespace CastleV4PCG
 		FCastleV4Hatch Hatch;
 	};
 
-	/** 普通房样例的一个格。样例以棋盘底面中心放置，每个房间仅持有自己的部分。 */
-	struct FRoomSample
-	{
-		const UCastleHachimisV4Layout* Layout = nullptr;
-		FIntVector Cell = FIntVector::ZeroValue;
-		FIntVector Origin = FIntVector::ZeroValue;
-		bool bTurn = false;
-	};
-
-	struct FRoomCell
-	{
-		FRoomSample Deck;
-		FRoomSample Frame;
-	};
-
 	using FOccupancy = TMap<FIntVector, ACastleBuildingBase*>;
-	using FTargets = TMap<ACastleBuildingBase*, FCastlePCGTarget>;
-	using FRooms = TMap<FIntVector, FRoomCell>;
 	using FStairs = TMap<FIntVector, FStairInterface>;
 
-	bool CanTraverse(const ACastleBuildingBase& A, const ACastleBuildingBase& B);
-	/** 仅塔侧棋盘首层主塔的 ±X 门 A/B 外壁开启门洞通行，±Y 侧面与二层以上保持封闭。 */
-	bool IsMainTowerDoorFace(const ACastleBoard& Board, const FIntVector& Cell, const FIntVector& BoardSide);
-	bool IsRoom(const ACastleBuildingBase* Building);
 	FTransform CellFrame(const ACastleBoard& Board, const FIntVector& Cell);
 	bool MapCells(const ACastleBuildingBase& Building, const ACastleBoard& Board, TMap<FIntVector, FIntVector>& Out, FString& Error);
 	bool Extract(ACastleBuildingBase& Building, const ACastleBoard& Board, TArray<FCastlePCGPartAnnotation>& Out, FString& Error);
-	bool BuildRooms(const UCastlePCGRuleSetDataAsset& Rules, const FOccupancy& Occupancy, FTargets& Targets, FRooms& Rooms, FString& Error);
-	/** 共享楼梯几何来自下层所属资产；旧造型只在与 V4 混接时加入此计划。 */
-	bool BuildStairs(const ACastleBoard& Board, const FOccupancy& Occupancy, const FTargets& Targets, const FRooms& Rooms, FStairs& Out, FString& Error);
-	/** 在原梯格中选择满足上下房作者家具净空的楼板梯方向，不改家具或共享接口资格。 */
-	bool OrientRoomStair(const ACastleBoard& Board, const ACastleBuildingBase& Lower, const ACastleBuildingBase& Upper,
-		const FRoomSample& LowerFrame, const FRoomSample& UpperFrame, FStairInterface& Stair, FString& Error);
-	bool CutDeck(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FIntVector& Cell, const FIntVector& SourceCell,
-		const FStairInterface& Interface, FCastlePCGApplyPlan& Plan, FString& Error);
+	/** 把求解器给出的套件、格位、朝向解析为两侧共用世界坐标。 */
+	bool BuildStairs(const ACastleBoard& Board, const FOccupancy& Occupancy, const FCastlePCGSemanticField& Field, FStairs& Out, FString& Error);
+	/** 上层功能板的原件由具体资产适配器提供，四片补板按同一井口生成。 */
+	bool CutDeck(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FIntVector& Cell, double Walk,
+		UPrimitiveComponent& Floor, const FStairInterface& Interface, FCastlePCGApplyPlan& Plan, FString& Error);
 	void AddLink(FCastlePCGApplyPlan& Plan, const FIntVector& Lower, const FTransform& Frame, const FCastleV4Hatch& Hatch);
-	void FinalizeKey(const FCastlePCGTarget& Target, FCastlePCGApplyPlan& Plan);
+	/** 将指定组直接落到对应 Actor，保持同一井口框架。 */
+	bool AddStairGroup(const ACastleBuildingBase& Building, const FStairInterface& Stair, FName Group,
+		FCastlePCGApplyPlan& Plan, FString& Error);
+	/** 屋顶与挂件共享同一种锚定套件，功能盒按声明独立进入玩法计划。 */
+	bool AddAttachments(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FCastlePCGSemanticField& Field,
+		FCastlePCGApplyPlan& Plan, FString& Error);
 	bool PrepareRoom(const ACastleBoard& Board, const ACastleBuildingBase& Building, const UCastlePCGRuleSetDataAsset& Rules,
-		const FOccupancy& Occupancy, const FRooms& Rooms, const FStairs& Stairs, TConstArrayView<FCastlePCGPartAnnotation> Original,
+		const FCastlePCGSemanticField& Field, TConstArrayView<FCastlePCGPartAnnotation> Original,
 		FCastlePCGApplyPlan& Plan, FString& Error);
 	bool Prepare(const ACastleBoard& Board, const ACastleBuildingBase& Building, const UCastlePCGRuleSetDataAsset& Rules,
-		const FOccupancy& Occupancy, const FRooms& Rooms, const FStairs& Stairs, const FCastlePCGTarget& Target,
+		const FCastlePCGSemanticField& Field, const FStairs& Stairs,
 		TConstArrayView<FCastlePCGPartAnnotation> Original, FCastlePCGApplyPlan& Plan, FString& Error);
 }

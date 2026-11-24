@@ -11,6 +11,91 @@ namespace
 	{
 		return A.Color == B.Color || A.Number == B.Number;
 	}
+
+	/** 规则不能移除已占格或生成棋盘外的格面和层界，以免装配器读到缺漏语义。 */
+	bool ValidateDomains(const FCastlePCGBoardQuery& Query, const FCastlePCGSemanticField& Field, bool bRequireFaces, FString& Error)
+	{
+		if (Field.Cells.Num() != Query.OrderedCells().Num()
+			|| (bRequireFaces && Field.SideFaces.Num() != Query.OrderedCells().Num() * UE_ARRAY_COUNT(Query.Sides)))
+		{
+			Error = TEXT("语义格或四向侧面的数量与正式占格不一致。");
+			return false;
+		}
+		for (const FIntVector& Cell : Query.OrderedCells())
+		{
+			const FCastlePCGCellSpec* Spec = Field.Cells.Find(Cell);
+			if (!Spec || Spec->Roof > ECastlePCGRoof::Override || Spec->Deck > ECastlePCGDeck::Merged)
+			{
+				Error = FString::Printf(TEXT("格 %s 缺少有效格体语义。"), *Cell.ToString());
+				return false;
+			}
+			if (bRequireFaces)
+			{
+				for (const ECastlePCGFace Direction : Query.Sides)
+				{
+					const FCastlePCGSideFaceSpec* Side = Field.SideFaces.Find({Cell, Direction});
+					if (!Side || Side->State > ECastlePCGSide::MainTowerDoor)
+					{
+						Error = FString::Printf(TEXT("格 %s 的 %d 号侧面缺少有效语义。"), *Cell.ToString(), int32(Direction));
+						return false;
+					}
+				}
+			}
+		}
+		for (const auto& Interface : Field.VerticalInterfaces)
+		{
+			if (!Query.Find(Interface.Key) || !Query.FindOffset(Interface.Key, Query.Up)
+				|| Interface.Value.State > ECastlePCGVertical::Ladder)
+			{
+				Error = FString::Printf(TEXT("格 %s 的层界语义无效。"), *Interface.Key.ToString());
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** 表现阶段可改屋面和饰件，但不能改功能几何、梯位或墙面通行。 */
+	bool DetailKeepsGameplay(const FCastlePCGSemanticField& Before, const FCastlePCGSemanticField& After)
+	{
+		if (Before.VerticalInterfaces.Num() != After.VerticalInterfaces.Num()) { return false; }
+		for (const auto& Entry : Before.VerticalInterfaces)
+		{
+			const FCastlePCGVerticalSpec* Spec = After.VerticalInterfaces.Find(Entry.Key);
+			if (!Spec || Spec->State != Entry.Value.State || Spec->Kit != Entry.Value.Kit || Spec->BoardYaw != Entry.Value.BoardYaw) { return false; }
+		}
+		for (const auto& Entry : Before.SideFaces)
+		{
+			const FCastlePCGSideFaceSpec& Old = Entry.Value;
+			const FCastlePCGSideFaceSpec& New = After.SideFaces.FindChecked(Entry.Key);
+			if (Old.State != New.State || Old.bHasNeighbor != New.bHasNeighbor || Old.bNeighborLegacy != New.bNeighborLegacy
+				|| Old.bOwnsWall != New.bOwnsWall) { return false; }
+		}
+		for (const auto& Entry : Before.Cells)
+		{
+			const FCastlePCGCellSpec& Old = Entry.Value;
+			const FCastlePCGCellSpec& New = After.Cells.FindChecked(Entry.Key);
+			const auto SameRoomSample = [](const FCastlePCGRoomSample& A, const FCastlePCGRoomSample& B)
+			{
+				return A.Layout == B.Layout && A.Cell == B.Cell && A.Origin == B.Origin && A.bTurn == B.bTurn;
+			};
+			if (Old.Deck != New.Deck || !SameRoomSample(Old.RoomDeck, New.RoomDeck) || !SameRoomSample(Old.RoomFrame, New.RoomFrame))
+			{
+				return false;
+			}
+			if ((Old.Roof == ECastlePCGRoof::Override && Old.RoofOverride.bAffectsNavigation)
+				|| (New.Roof == ECastlePCGRoof::Override && New.RoofOverride.bAffectsNavigation))
+			{
+				if (Old.Roof != New.Roof || Old.RoofOverride.bAffectsNavigation != New.RoofOverride.bAffectsNavigation
+					|| Old.RoofOverride.NavigationExtent != New.RoofOverride.NavigationExtent
+					|| !Old.RoofOverride.AnchorTransform.Equals(New.RoofOverride.AnchorTransform, 0.0)) { return false; }
+			}
+		}
+		for (const auto& Entry : After.GetAttachments())
+		{
+			if (Entry.Value.bAffectsNavigation && !Before.GetAttachments().Contains(Entry.Key)) { return false; }
+		}
+		return true;
+	}
 }
 
 bool UCastlePCGPlanarRule::Evaluate(const FCastlePCGBoardQuery& Query, FCastlePCGSemanticField& Field, FString& Error) const
@@ -137,8 +222,7 @@ bool UCastlePCGVerticalRule::Evaluate(const FCastlePCGRuleContext& Context, FCas
 
 bool UCastlePCGRuleSetDataAsset::ValidateConfiguration(FString& Error) const
 {
-	if (!VariantLV1ActorClass || !VariantLV2ActorClass || !FlatFloorSlabMesh)
-	{ Error = FString::Printf(TEXT("规则集 %s 缺少 LV1/LV2 变体类或封闭平楼板。"), *GetPathName()); return false; }
+	// 旧模板只在旧适配器实际参与本轮时验证。正式规则只要求共享参数和规则配置。
 	if (LadderSelectionNoiseChannel.IsNone() || !FMath::IsFinite(BridgeWidth) || BridgeWidth <= 70.0 || BridgeWidth > 500.0
 		|| !FMath::IsFinite(FloorThickness) || FloorThickness <= 0.0 || !FMath::IsFinite(BarrierHeight) || BarrierHeight < 100.0)
 	{ Error = FString::Printf(TEXT("规则集 %s 的通道、桥宽、厚度或阻隔高度非法。"), *GetPathName()); return false; }
@@ -176,9 +260,17 @@ bool UCastlePCGRuleSetDataAsset::Solve(const FCastlePCGBoardQuery& Query, FCastl
 	for (const UCastleBuildingPCGRule* Rule : Rules)
 	{
 		if (Rule->GetStage() != Stage) { continue; }
-		if (!Rule->Evaluate(Query, Field, Error))
+		TOptional<FCastlePCGSemanticField> Previous;
+		if (Stage == ECastlePCGRuleStage::Detail) { Previous.Emplace(Field); }
+		if (!Rule->Evaluate(Query, Field, Error)
+			|| !ValidateDomains(Query, Field, Stage != ECastlePCGRuleStage::Topology || Rule->IsA<UCastlePCGPlanarRule>(), Error))
 		{
 			Error = FString::Printf(TEXT("规则 %s：%s"), *Rule->GetPathName(), *Error);
+			return false;
+		}
+		if (Previous.IsSet() && !DetailKeepsGameplay(Previous.GetValue(), Field))
+		{
+			Error = FString::Printf(TEXT("Detail 规则 %s 试图改变玩法语义。"), *Rule->GetPathName());
 			return false;
 		}
 		for (const auto& Entry : Field.Cells)

@@ -126,6 +126,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Building Merge|Playback")
 	bool StartChange(const TArray<AActor*>& Sources);
 
+	/** PCG 已独立提交功能几何时，只播放同一套视觉过渡，不登记导航变化。 */
+	bool StartVisualChange(const TArray<AActor*>& Sources);
+
 	/** PCG 变更前捕获旧件到瞬态无碰撞 Actor；调用者在 StartChange 抓取后立即销毁载体。 */
 	AActor* CreateVisualSnapshot(FString& Error) const;
 
@@ -143,6 +146,8 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** 两个入口共用捕获、参数检查和表现计划；只有普通入口观察导航。 */
+	bool StartChangeInternal(const TArray<AActor*>& Sources, bool bObserveNavigation);
 	/** 捕获阶段只有数据；来源销毁前将所需网格和材质复制到瞬态显示组件。 */
 	struct FPartSnapshot
 	{

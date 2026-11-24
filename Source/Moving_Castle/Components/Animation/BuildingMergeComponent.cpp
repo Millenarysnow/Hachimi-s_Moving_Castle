@@ -361,6 +361,16 @@ AActor* UBuildingMergeComponent::CreateVisualSnapshot(FString& Error) const
 
 bool UBuildingMergeComponent::StartChange(const TArray<AActor*>& Sources)
 {
+	return StartChangeInternal(Sources, true);
+}
+
+bool UBuildingMergeComponent::StartVisualChange(const TArray<AActor*>& Sources)
+{
+	return StartChangeInternal(Sources, false);
+}
+
+bool UBuildingMergeComponent::StartChangeInternal(const TArray<AActor*>& Sources, bool bObserveNavigation)
+{
 	ResetMerge();
 	LastError.Reset();
 	AActor* Owner = GetOwner();
@@ -401,10 +411,13 @@ bool UBuildingMergeComponent::StartChange(const TArray<AActor*>& Sources)
 	const FVector Origin = bUseSharedChangeOrigin ? ChangeOrigin
 		: (IncomingSourceActor ? IncomingSourceActor->GetActorLocation() : Owner->GetActorLocation());
 	if (!BuildPlan(SourceParts, TargetParts, Origin, Error)) { return FailMerge(Error); }
-	// 新旧建筑在完整重组结束后才提交导航；不改变现有模型、碰撞或动画行为。
-	if (UCastleNavigationSubsystem* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>())
+	// 常规合并由导航观察到重组结束；PCG 的玩法几何已经由独立事务提交。
+	if (bObserveNavigation)
 	{
-		Navigation->ObserveMerge(this);
+		if (UCastleNavigationSubsystem* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>())
+		{
+			Navigation->ObserveMerge(this);
+		}
 	}
 
 	// 所有计划和副本就绪后才提交显隐。结果碰撞始终有效，不阻断相邻放置、回收或再次升级。
