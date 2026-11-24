@@ -82,6 +82,12 @@ public:
 	/** 奖励专用免费整批换牌；失败时商品和正式随机流均保持不变。 */
 	bool TryRefreshOffersForReward(FText& OutFailureReason);
 
+	/** 闭店时配置教学货架及下一次刷新。空货架明确表示缺货，仍允许付费刷新。 */
+	bool SetScriptedOffers(TConstArrayView<FCastleBuildingDescriptor> Current,
+		TConstArrayView<FCastleBuildingDescriptor> OnRefresh, FText& OutReason);
+	/** 固定货架允许零至六张商品，普通货架仍完整填满。 */
+	bool UsesScriptedOffers() const { return bScriptedStock; }
+
 	/** 奖励事务：在临时状态中初始化（如需）、免费换批并打开，全部成功后才提交。 */
 	bool TryOpenForReward(UCastleEconomyComponent* InEconomy, ACastleBoard* InBoard, FText& OutFailureReason);
 
@@ -163,6 +169,10 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<FCastleShopOffer> Offers;
+	/** 教学货架与随机货架互斥，重复打开时保留售罄状态。 */
+	UPROPERTY(Transient) TArray<FCastleShopOffer> ScriptedRefreshOffers;
+	bool bScriptedStock = false;
+	bool bScriptedRefreshPending = false;
 
 	/** 临时生成成功后才推进此流，失败重试不会消耗随机结果。 */
 	FRandomStream RandomStream;

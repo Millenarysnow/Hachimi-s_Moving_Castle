@@ -4,8 +4,10 @@
 
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
+#include "Castle/Guide/CastleGuideSubsystem.h"
 #include "Castle/UI/Common/CastleBuildingDemolishMenuWidget.h"
 #include "Castle/UI/Common/CastleControlSettingsWidget.h"
+#include "Engine/GameInstance.h"
 #include "Interaction/CastlePatrolRoute.h"
 #include "Kismet/GameplayStatics.h"
 #include "Moving_Castle.h"
@@ -172,6 +174,13 @@ void ACastlePlayerController::HandleClosePopup()
 {
 	if (BuildingDemolishMenu) { CloseBuildingDemolishMenu(); }
 	else if (ControlSettings) { ToggleControlSettings(); }
+	else if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UCastleGuideSubsystem* Guide = GameInstance->GetSubsystem<UCastleGuideSubsystem>())
+		{
+			Guide->CloseCurrentModal();
+		}
+	}
 }
 
 void ACastlePlayerController::BeginTemporaryHUDPointer()

@@ -90,9 +90,16 @@ public:
 	/** B 键切换商店；首次打开初始化商品，关闭后恢复中心指针建造。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|商店")
 	void ToggleShop();
+	/** 只由教学导演设置，普通关卡继续采用原访问权限。 */
+	void SetTutorialShopAccess(bool bAllowed) { TutorialShopAccess = bAllowed; }
 
 	/** 导演界面与商店共用单一输入状态，避免 IgnoreInput 计数叠加或遗漏恢复。 */
 	void SetDirectorModalState(bool bRewardOpen, bool bGameOverOpen, UUserWidget* FocusWidget);
+	/** 对话、图文弹窗与教程奖励使用同一模态输入锁，关闭后按当前操作模式恢复。 */
+	void SetPresentationModalState(bool bOpen, UUserWidget* FocusWidget);
+	/** 已挂载的商店为上层教学模态关闭后的焦点接收者。 */
+	void RegisterShopFocusWidget(UUserWidget& Widget);
+	void UnregisterShopFocusWidget(const UUserWidget& Widget);
 	/** 正式导演启动时挂接道具 HUD；三个 WBP 全部绑定成功才加入视口。 */
 	bool MountDirectorItemHUD(UCastleBackpackComponent* Backpack, FText& OutReason);
 	/** 资产配置的交互键在导演完成启动校验时绑定。 */
@@ -103,6 +110,8 @@ public:
 	/** 查询可接收建造输入的已登记空岛，供控制器与 HUD 共用。 */
 	ACastleSkyIslandBase* GetInteractiveSkyIsland() const;
 	UFUNCTION(Exec) void CastleTestSkyIsland();
+	/** 清除当前游戏实例的 Shop、NPC 与 Gamble 首次登岛剧情记录。 */
+	UFUNCTION(Exec) void CastleResetSkyIslandDialogues();
 
 	/** 开战事务准备时立即清除高亮，避免等下一帧控制器 Tick 才撤下旧建造目标。 */
 	void HideDirectorEditingPresentation();
@@ -151,6 +160,9 @@ public:
 	void CastleEndTowerDispatch();
 
 protected:
+	/** 教学 PIE 验收通过正式拆除菜单确认并观察回收事务。 */
+	friend class FCastleTutorialPIEDriver;
+
 	/** 隐藏鼠标、锁定输入并创建指示器。 */
 	virtual void BeginPlay() override;
 
@@ -185,6 +197,8 @@ protected:
 	void InitializePopupClasses();
 	void RemoveBuildingDemolishWidget();
 	void RemoveControlSettingsWidget();
+	/** 地图切换清理 GameInstance 子系统持有的旧世界面板。 */
+	void CloseDialogueAndGuideForWorldEnd();
 
 	/** 数字键按当前背包顺序选牌，1 至 9、0 对应十个实际槽位。 */
 	void SelectPrototypeSlot1();
@@ -225,6 +239,7 @@ protected:
 
 	/** 从商店和导演界面最终状态计算鼠标、输入模式及忽略计数。 */
 	void RefreshModalInput(bool bForceRefresh = false);
+	TWeakObjectPtr<UUserWidget> ShopFocusWidget;
 
 	/** 徽章弹窗监听者在 WBP 刷新可见性后更新控制器的唯一输入锁。 */
 	UFUNCTION()
@@ -250,6 +265,7 @@ protected:
 	bool bModalInputActive = false;
 	bool bRewardInputActive = false;
 	bool bGameOverInputActive = false;
+	TOptional<bool> TutorialShopAccess;
 	/** 左 Alt 仅在经典模式临时释放 HUD 指针，模态结束后按真实按住状态恢复。 */
 	bool bHoldingTemporaryHUDPointer = false;
 	ECastleControlMode ControlMode = ECastleControlMode::Classic;
@@ -260,6 +276,8 @@ protected:
 	UPROPERTY(Transient) TObjectPtr<UCastleBuildingDemolishMenuWidget> BuildingDemolishMenu;
 	UPROPERTY(Transient)
 	TObjectPtr<UUserWidget> DirectorFocusWidget;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UUserWidget>> PresentationModals;
 	UPROPERTY(Transient) TArray<TObjectPtr<UUserWidget>> DirectorItemWidgets;
 	UPROPERTY(Transient) TObjectPtr<UCastleBadgeReplaceModalWidget> BadgeReplaceWidget;
 

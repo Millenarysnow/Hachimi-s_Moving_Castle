@@ -253,6 +253,7 @@ void UCastleShopWidget::NativeConstruct()
 	}
 
 	Shop = Controller->GetShop();
+	Controller->RegisterShopFocusWidget(*this);
 	Economy = Controller->GetEconomy();
 	Portraits = GetWorld() ? GetWorld()->GetSubsystem<UCastleCardPortraitSubsystem>() : nullptr;
 	Shop->OnShopChanged.AddUniqueDynamic(this, &UCastleShopWidget::RefreshShop);
@@ -262,6 +263,7 @@ void UCastleShopWidget::NativeConstruct()
 
 void UCastleShopWidget::NativeDestruct()
 {
+	if (auto* Controller = GetOwningPlayer<ACastlePlayerController>()) { Controller->UnregisterShopFocusWidget(*this); }
 	if (IsValid(Shop))
 	{
 		Shop->OnShopChanged.RemoveDynamic(this, &UCastleShopWidget::RefreshShop);
@@ -365,10 +367,10 @@ void UCastleShopWidget::RefreshShop()
 	RefreshBgStates->SetActiveWidgetIndex(0);
 	CloseBgStates->SetActiveWidgetIndex(0);
 
-	// 同步 6 个商品卡座。
+	// 仅教学货架支持空槽，保留常规商店六个商品的配置约束。
 	const TArray<FCastleShopOffer> Offers = Shop->GetOffers();
 	const auto OfferSlots = GetOfferSlots();
-	if (Offers.Num() != OfferSlots.Num())
+	if (Offers.Num() > OfferSlots.Num() || (!Shop->UsesScriptedOffers() && Offers.Num() != OfferSlots.Num()))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("商店商品数量 %d 与 WBP 固定槽位数 %d 不一致。"),
 			Offers.Num(), OfferSlots.Num());
@@ -378,11 +380,18 @@ void UCastleShopWidget::RefreshShop()
 	const bool bHasRoomAndBagCapacity = (OwnedRooms + 1 <= RoomLimit) && (BackpackItems.Num() < BackpackCapacity);
 	for (int32 Index = 0; Index < OfferSlots.Num(); ++Index)
 	{
+		const bool bHasOffer = Offers.IsValidIndex(Index);
+		OfferSlots[Index]->SetVisibility(bHasOffer ? ESlateVisibility::Visible : ESlateVisibility::Hidden);
+		if (!bHasOffer) { continue; }
 		const FCastleShopOffer& Offer = Offers[Index];
 		const bool bCanAfford = CurrentGold >= Offer.Price;
 		const int32 MatchingCount = CountMatchingLv1CardsInBackpack(BackpackItems, Offer.Descriptor);
 		OfferSlots[Index]->ConfigureOffer(*this, Index, Offer, BoundBoard,
 			bCanAfford, bHasRoomAndBagCapacity, bFoilPreview, MatchingCount);
+	}
+	if (Shop->UsesScriptedOffers() && Offers.IsEmpty())
+	{
+		RefreshLabel->SetText(INVTEXT("暂时缺货 · 刷新 [R]"));
 	}
 
 	// 同步 10 格备战席。
@@ -684,7 +693,7 @@ void UCastleShopWidget::HandleRefresh()
 	}
 	FText Reason;
 	const bool bSuccess = Shop->TryRefreshOffers(Reason);
-	ShowResult(bSuccess, TEXT("刷新成功，已换入 6 张全新建筑卡牌。"), Reason);
+	ShowResult(bSuccess, FString::Printf(TEXT("刷新成功，已上架 %d 张建筑卡牌。"), Shop->GetOffers().Num()), Reason);
 }
 
 void UCastleShopWidget::HandleRefreshPressed()

@@ -2,6 +2,8 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/PackageName.h"
 #include "Tests/AutomationCommon.h"
+#include "Castle/Dialogue/CastleDialogueScriptDataAsset.h"
+#include "Castle/Dialogue/CastleDialogueSubsystem.h"
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
@@ -19,6 +21,7 @@
 #include "CastleShopComponent.h"
 #include "Editor.h"
 #include "EngineUtils.h"
+#include "Engine/GameInstance.h"
 #include "FileHelpers.h"
 #include "GameFramework/Pawn.h"
 #include "HAL/IConsoleManager.h"
@@ -46,6 +49,9 @@ namespace
 		{ECastleSkyIslandType::NPC, TEXT("CastleEnterSkyIsland NPC"), &ACastlePinballNPCSkyIsland::StaticClass},
 		{ECastleSkyIslandType::Gamble, TEXT("CastleEnterSkyIsland Gamble"), &ACastleGambleSkyIsland::StaticClass}
 	};
+	// 三个奖励岛各重访一次，继续复用同一 GameInstance 验证已读标记。
+	constexpr int32 FirstVisitCount = UE_ARRAY_COUNT(Visits);
+	constexpr int32 TotalVisitCount = FirstVisitCount + 3;
 
 	/** 通过实际控制台、碰撞射线和 PIE Tick 联调，测试只提供可重复的交互目标和按键。 */
 	class FVisitSkyIslandsInPIE final : public IAutomationLatentCommand
@@ -90,18 +96,24 @@ namespace
 				}
 				VerifyReturn(*Director, *Controller, **Board);
 				Stage = EStage::Enter;
-				return ++VisitIndex == UE_ARRAY_COUNT(Visits);
+				return ++VisitIndex == TotalVisitCount;
 			}
 			return true;
 		}
 
 	private:
 		enum class EStage { Enter, PinballLaunch, PinballExit, Return };
+		const FIslandVisit& GetVisit() const
+		{
+			return Visits[VisitIndex < FirstVisitCount ? VisitIndex : VisitIndex - FirstVisitCount + 1];
+		}
 
 		bool Enter(UCastleDirectorSubsystem& Director, ACastlePlayerController& Controller, ACastleBoard& Board)
 		{
 			UWorld* World = Director.GetWorld();
-			const auto& Visit = Visits[VisitIndex];
+			const auto& Visit = GetVisit();
+			auto* Dialogue = World->GetGameInstance()->GetSubsystem<UCastleDialogueSubsystem>();
+			if (!Test.TestNotNull(TEXT("实际对话子系统"), Dialogue)) { return false; }
 			Test.TestEqual(TEXT("PIE 世界是正式 MainMap"), UWorld::RemovePIEPrefix(World->GetOutermost()->GetName()), FString(MainMapPath));
 			if (!Test.TestTrue(TEXT("导演使用磁盘正式配置"), Director.GetConfig()
 				&& Director.GetConfig()->GetPathName() == DirectorConfigPath))
@@ -118,6 +130,7 @@ namespace
 
 			if (VisitIndex == 0)
 			{
+				Controller.ConsoleCommand(TEXT("CastleResetSkyIslandDialogues"));
 				Test.AddExpectedError(TEXT("用法：CastleEnterSkyIsland"), EAutomationExpectedErrorFlags::Contains, 1);
 				RunCommand(*World, TEXT("CastleEnterSkyIsland Invalid"));
 				Test.TestEqual(TEXT("非法参数保留编辑阶段"), Director.GetPhase(), ECastleDirectorPhase::Editing);
@@ -146,6 +159,22 @@ namespace
 				RunCommand(*World, TEXT("CastleEnterSkyIsland Shop"));
 				Test.TestTrue(TEXT("岛上不能开启第二次访问"), ActiveIsland.IsValid()
 					&& Director.GetPhase() == ECastleDirectorPhase::SkyIsland && Director.GetClearedSteps() == 0);
+			}
+			if (Visit.Type == ECastleSkyIslandType::Rest || VisitIndex >= FirstVisitCount)
+			{
+				if (!Test.TestFalse(TEXT("休息岛或重访没有对话"), Dialogue->IsDialoguePlaying())) { return false; }
+				if (VisitIndex >= FirstVisitCount) { return RequestDeparture(Director, Controller); }
+			}
+			else
+			{
+				const auto* Expected = Director.GetConfig()->SkyIslandArrivalDialogues.FindRef(Visit.Type).Get();
+				if (!Test.TestTrue(TEXT("首次进岛播放对应剧本并锁定输入"), Expected
+					&& Dialogue->GetCurrentScript() == Expected && Controller.IsModalInputActive())) { return false; }
+				for (int32 Line = 0; Line < Expected->Lines.Num(); ++Line) { Dialogue->AdvanceDialogueForAutomation(); }
+				if (!Test.TestFalse(TEXT("完整推进剧情后恢复交互"), Dialogue->IsDialoguePlaying() || Controller.IsModalInputActive()))
+				{
+					return false;
+				}
 			}
 			return InteractWithIsland(Visit.Type, Director, Controller);
 		}
@@ -228,7 +257,7 @@ namespace
 
 		bool RequestDeparture(UCastleDirectorSubsystem& Director, ACastlePlayerController& Controller)
 		{
-			if (Visits[VisitIndex].Type == ECastleSkyIslandType::NPC) { SendKey(Controller, EKeys::E, IE_Released); }
+			if (GetVisit().Type == ECastleSkyIslandType::NPC) { SendKey(Controller, EKeys::E, IE_Released); }
 			if (!Test.TestTrue(TEXT("交互离开门时正式空岛仍存在"), ActiveIsland.IsValid())) { return false; }
 			if (!Interact(Director, ActiveIsland->FindComponentByClass<UCastleSkyIslandDepartureComponent>(),
 				TEXT("离开传送门"))) { return false; }
@@ -312,6 +341,7 @@ bool FCastleSkyIslandsEndToEndTest::RunTest(const FString&)
 	if (!TestNotNull(TEXT("可加载正式 DA_DirectorConfig"), Config)) { return false; }
 	TestFalse(TEXT("正式配置包没有未保存改动"), Config->GetOutermost()->IsDirty());
 	TestEqual(TEXT("正式配置恰好登记四类空岛"), Config->SkyIslandClasses.Num(), static_cast<int32>(UE_ARRAY_COUNT(Visits)));
+	TestEqual(TEXT("正式配置登记三类首访剧情"), Config->SkyIslandArrivalDialogues.Num(), 3);
 	for (const auto& Visit : Visits) { TestEqual(Visit.Command, Config->SkyIslandClasses.FindRef(Visit.Type).Get(), Visit.GetClass()); }
 	FText Reason;
 	const bool bValid = Config->ValidateConfig(Reason);

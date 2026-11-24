@@ -37,7 +37,7 @@ public class Moving_Castle : ModuleRules
 		// 几何身份在编辑器离线生成；正式游戏只读取目录，不依赖 MeshDescription 或 CPU 顶点。
 		if (Target.bBuildEditor)
 		{
-			PrivateDependencyModuleNames.AddRange(new string[] { "MeshDescription", "StaticMeshDescription", "Json", "UnrealEd", "AssetRegistry", "FBX", "UMGEditor" });
+			PrivateDependencyModuleNames.AddRange(new string[] { "MeshDescription", "StaticMeshDescription", "Json", "UnrealEd", "AssetRegistry", "FBX", "UMGEditor", "Kismet", "AssetTools" });
 		}
 
 		PublicIncludePaths.AddRange(new string[] {

@@ -47,6 +47,8 @@ public:
 
 	/** 仅准星的首次按下开始连续派兵；松开或移开后需重新按下。 */
 	bool BeginManualDispatch(FText& OutReason);
+	/** 真实派兵提交后提供 Mass 实体句柄，教程气泡据此跟随出塔单位。 */
+	TMulticastDelegate<void(const FCastleMassUnitHandle&)> OnNPCDispatched;
 	void StopManualDispatch();
 
 	bool BeginBattleDispatch(int32 TotalPoolCount);
@@ -74,6 +76,9 @@ private:
 	bool bSessionActive = false;
 	bool bEndingSession = false;
 	bool bAutoDispatchEnabled = false;
+	/** 教学战斗首次派兵必须由主塔点击提交，之后才开放自动循环。 */
+	bool bRequiresFirstManualDispatch = false;
+	bool bStartingManualDispatch = false;
 	bool bManualDispatchHeld = false;
 	double AutoDispatchElapsed = 0.0;
 	double HoldDispatchElapsed = 0.0;

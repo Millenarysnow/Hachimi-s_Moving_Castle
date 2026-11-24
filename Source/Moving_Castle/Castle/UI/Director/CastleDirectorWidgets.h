@@ -63,6 +63,8 @@ public:
 
 	/** 挂载前订阅本局主塔、导演与路径编辑入口并立即同步一次表现。 */
 	bool BindMainTowerHealth(UCastleMainTowerComponent* MainTower);
+	/** 教学导演发布商店权限，正式导演的开店规则照常处理。 */
+	void SetTutorialShopButtonEnabled(bool bEnabled);
 
 	/** 根据主塔真实生命计算 20 格心形点亮数量（满血 20、存活至少 1、归零 0）；非法值返回 false。 */
 	static bool ComputeFilledHearts(float CurrentHealth, float MaxHealth, int32& OutFilledCount);

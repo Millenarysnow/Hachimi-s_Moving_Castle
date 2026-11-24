@@ -24,6 +24,13 @@ public:
 	/** 允许本地玩家用 P 进入编辑，左键放点，Backspace 撤回，Enter 提交，Delete 清空。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="共享巡逻")
 	bool bAllowPlayerEditing = true;
+	/** 教程关卡允许使用同一个 P 键进入与提交，正式局继续使用既有按键。 */
+	UPROPERTY(EditAnywhere, Category="共享巡逻")
+	bool bSubmitDraftOnToggle = false;
+
+	/** 教学导演明确启用双门寻路，并在讲解弹窗期间保留正在编辑的草稿。 */
+	void ConfigureTutorialRoute() { bTutorialRoute = true; }
+	bool IsTutorialRoute() const { return bTutorialRoute; }
 
 	/** 只控制路点圆圈、悬浮编号和编辑状态提示；正式巡逻线由当前世界的可视化子系统控制。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="共享巡逻")
@@ -92,6 +99,7 @@ private:
 	TArray<FVector> DraftWaypoints;
 	bool bEditing = false;
 	bool bOwnsRoute = false;
+	bool bTutorialRoute = false;
 	void ToggleEditing();
 	bool CheckDraftWaypointCapacity(FText& OutReason) const;
 	bool TryAppendDraftWaypoint(FVector Point, FText& OutReason);
@@ -103,4 +111,6 @@ private:
 	void ShowMessage(const FString& Message, bool bSuccess) const;
 
 	friend class FCastleMainTowerWaypointLimitTest;
+	/** 教学 PIE 验收将确定的格心送进实际路径草稿，用 P 入口提交。 */
+	friend class FCastleTutorialPIEDriver;
 };

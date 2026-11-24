@@ -10,6 +10,10 @@
 #include "Castle/SkyIslands/CastleSkyIslandTestFixture.h"
 
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
+#include "Castle/Dialogue/CastleDialogueScriptDataAsset.h"
+#include "Castle/Dialogue/CastleDialogueSubsystem.h"
+#include "Castle/Dialogue/CastleDialogueWidget.h"
+#include "Engine/GameInstance.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/Director/CastleDirectorSettings.h"
 #include "CastleBoard.h"
@@ -491,6 +495,16 @@ bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirector
 		return Reject(FText::Format(INVTEXT("空岛类型 {0} 尚未配置具体玩法类，或已登记的类无效：{1}。"),
 			TypeName, FText::FromString(GetPathNameSafe(Class))));
 	}
+	// 首访剧情只属于正式地图。先校验依赖，避免因数据缺失而传送玩家或消耗访问机会。
+	const bool bRequiresDialogue = Type != ECastleSkyIslandType::Rest
+		&& UWorld::RemovePIEPrefix(GetWorld()->GetOutermost()->GetName()) == TEXT("/Game/MovingCastle/Maps/MainMap");
+	auto* GameInstance = GetWorld()->GetGameInstance();
+	auto* Dialogue = bRequiresDialogue && GameInstance ? GameInstance->GetSubsystem<UCastleDialogueSubsystem>() : nullptr;
+	UCastleDialogueScriptDataAsset* ArrivalScript = IslandConfig.SkyIslandArrivalDialogues.FindRef(Type).Get();
+	if (bRequiresDialogue && (!Dialogue || !IsValid(ArrivalScript)))
+	{
+		return Reject(INVTEXT("缺少对话子系统或空岛类型对应的 SkyIslandArrivalDialogues 剧本。"));
+	}
 	// 所有玩法依赖由空岛初始化验证。准备失败的岛立即销毁，玩家和当前节点留在主塔。
 	const FVector Origin = Tower->GetOwner()->GetActorLocation() + Board->GetActorForwardVector() * IslandConfig.SkyIslandSpawnDistance
 		+ FVector::UpVector * IslandConfig.SkyIslandHeightOffset;
@@ -505,11 +519,25 @@ bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirector
 		Island->Destroy();
 		return Reject(OutReason);
 	}
+	UCastleDialogueWidget* ArrivalWidget = nullptr;
+	if (bRequiresDialogue && !Dialogue->HasPlayedFirstVisitSkyIslandDialogue(Type))
+	{
+		// 校验台词、类和实际 BindWidget，并在传送前完成可失败的视口挂载。
+		ArrivalWidget = Dialogue->PrepareScript(ArrivalScript, Controller.Get(), OutReason);
+		if (!ArrivalWidget)
+		{
+			Island->Destroy();
+			FText RestoreReason;
+			if (!Board->SetPlacementSurfacePresentationHidden(false, RestoreReason)) { return Reject(RestoreReason); }
+			return Reject(OutReason);
+		}
+	}
 	const FTransform Arrival = Island->GetPlayerArrivalTransform();
 	const FTransform ReturnTransform = Pawn->GetActorTransform();
 	const FRotator ReturnControlRotation = Controller->GetControlRotation();
 	if (!Pawn->TeleportTo(Arrival.GetLocation(), Arrival.Rotator()))
 	{
+		if (ArrivalWidget) { ArrivalWidget->RemoveFromParent(); }
 		Island->Destroy();
 		FText RestoreReason;
 		if (!Board->SetPlacementSurfacePresentationHidden(false, RestoreReason)) { return Reject(RestoreReason); }
@@ -532,6 +560,7 @@ bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirector
 	PendingNode.Reset();
 	DestroyNodes();
 	SetPhase(ECastleDirectorPhase::SkyIsland);
+	if (ArrivalWidget) { Dialogue->StartPreparedSkyIslandDialogue(Type, *ArrivalScript, *Controller.Get(), *ArrivalWidget); }
 	ShowMessage(FText::Format(INVTEXT("已到达空岛。瞄准物件并按 {0} 交互。"), IslandConfig.SkyIslandInteractKey.GetDisplayName()), false);
 	UE_LOG(LogMoving_Castle, Display, TEXT("导演进入空岛 %s，第 %d 步。"), *Island->GetPathName(), GetNextStep());
 	return true;
