@@ -73,8 +73,11 @@ bool FCastlePCGSupportAssets::RunTest(const FString& Parameters)
 					TestTrue(Mesh->GetName() + TEXT(" 的 40.8 cm 标高覆盖铺面"),
 						WalkingSurface.IsValid && WalkingSurface.GetSize().X > 450.0 && WalkingSurface.GetSize().Y > 450.0);
 				}
-				TestTrue(FString::Printf(TEXT("%s 露台应接近 621×621 cm，实测 %s"), *Mesh->GetName(), *Bounds.GetSize().ToString()),
-					FMath::IsNearlyEqual(Bounds.GetSize().X, 621.0, 5.0) && FMath::IsNearlyEqual(Bounds.GetSize().Y, 621.0, 5.0));
+				// 六族作者边框在格底中心的 ±257.5 cm，角钉最高点为 42.4 cm。
+				TestTrue(FString::Printf(TEXT("%s 保留作者边框和角钉尺寸，实测 %s"), *Mesh->GetName(), *Bounds.ToString()),
+					FMath::IsNearlyEqual(Bounds.Min.X, -257.5, 0.1) && FMath::IsNearlyEqual(Bounds.Min.Y, -257.5, 0.1)
+					&& FMath::IsNearlyEqual(Bounds.Max.X, 257.5, 0.1) && FMath::IsNearlyEqual(Bounds.Max.Y, 257.5, 0.1)
+					&& FMath::IsNearlyEqual(Bounds.Max.Z, 42.4, 0.1));
 			}
 		}
 	};
