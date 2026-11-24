@@ -84,6 +84,7 @@ void UCastleDialogueSubsystem::StartPreparedScript(UCastleDialogueScriptDataAsse
 	Widget.SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 	Controller.SetPresentationModalState(true, &Widget);
 	Widget.SetKeyboardFocus();
+	OnDialogueActivityChanged.Broadcast();
 	UE_LOG(LogMoving_Castle, Display, TEXT("开始播放对话剧本 %s，共 %d 行。"), *Script.GetPathName(), Script.Lines.Num());
 }
 
@@ -216,5 +217,6 @@ void UCastleDialogueSubsystem::FinishDialogue(const bool bCompleted)
 	CurrentScript = nullptr;
 	CurrentController.Reset();
 	CurrentLineIndex = INDEX_NONE;
+	OnDialogueActivityChanged.Broadcast();
 	if (bCompleted) { OnDialogueFinished.Broadcast(); }
 }

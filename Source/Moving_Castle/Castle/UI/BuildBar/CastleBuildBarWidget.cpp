@@ -4,6 +4,7 @@
 
 #include "Blueprint/WidgetTree.h"
 #include "Castle/Combat/CastleCombatSubsystem.h"
+#include "Castle/Dialogue/CastleDialogueSubsystem.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
@@ -13,6 +14,7 @@
 #include "CastleShopComponent.h"
 #include "Components/Image.h"
 #include "Components/TextBlock.h"
+#include "Engine/GameInstance.h"
 #include "Kismet/GameplayStatics.h"
 #include "Moving_Castle.h"
 #include "Units/Navigation/Interaction/CastlePatrolRoute.h"
@@ -82,6 +84,11 @@ void UCastleBuildBarWidget::NativeDestruct()
 		Shop->OnShopChanged.RemoveDynamic(this, &UCastleBuildBarWidget::HandleShopChanged);
 		BoundShop.Reset();
 	}
+	if (UCastleDialogueSubsystem* Dialogue = BoundDialogue.Get())
+	{
+		Dialogue->OnDialogueActivityChanged.Remove(DialogueActivityHandle);
+		BoundDialogue.Reset();
+	}
 	Super::NativeDestruct();
 }
 
@@ -113,10 +120,28 @@ void UCastleBuildBarWidget::EnsureModeBindings()
 		BoundShop = Controller->GetShop();
 		BoundShop->OnShopChanged.AddUniqueDynamic(this, &UCastleBuildBarWidget::HandleShopChanged);
 	}
+	if (!BoundDialogue.IsValid())
+	{
+		// 折叠的 UMG 控件可能停止 Tick，显隐由对话开始、结束和取消事件直接驱动。
+		if (UGameInstance* GameInstance = World->GetGameInstance())
+		{
+			if (auto* Dialogue = GameInstance->GetSubsystem<UCastleDialogueSubsystem>())
+			{
+				BoundDialogue = Dialogue;
+				DialogueActivityHandle = Dialogue->OnDialogueActivityChanged.AddUObject(
+					this, &UCastleBuildBarWidget::RefreshScreenVisibility);
+			}
+		}
+	}
 }
 
 bool UCastleBuildBarWidget::ShouldDisplayInCurrentScreen() const
 {
+	// 对话与建造栏共用视口底部。对话结束时仍检查商店、路径和战斗状态。
+	if (BoundDialogue.IsValid() && BoundDialogue->IsDialoguePlaying())
+	{
+		return false;
+	}
 	// 透景房间商店打开时自带 10 格备战席，此时隐藏建造栏避免底部重影。
 	if (BoundShop.IsValid() && BoundShop->IsShopOpen())
 	{

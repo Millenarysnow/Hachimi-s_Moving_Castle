@@ -155,7 +155,7 @@ bool ACastleTutorialDirector::InitializeTutorial(FText& OutReason)
 	Objective = CreateWidget<UCastleTutorialTextWidget>(Controller, Configuration->ObjectiveClass);
 	if (!HUD || !Objective || !HUD->HasRequiredBindings() || !HUD->BindMainTowerHealth(Tower)
 		|| !Objective->SetTutorialText(FText::GetEmpty()) || !HUD->AddToPlayerScreen(10)
-		|| !Objective->AddToPlayerScreen(65) || !Controller->MountDirectorItemHUD(Backpack, OutReason))
+		|| !Objective->AddToPlayerScreen(65) || !Controller->MountDirectorItemHUD(Backpack, false, OutReason))
 	{
 		if (OutReason.IsEmpty()) { OutReason = INVTEXT("正式 HUD、教程提示或道具栏绑定和挂载失败。"); }
 		return false;

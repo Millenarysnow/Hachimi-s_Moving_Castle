@@ -862,34 +862,45 @@ void ACastlePlayerController::RetractIslandPlacement()
 	}
 }
 
-bool ACastlePlayerController::MountDirectorItemHUD(UCastleBackpackComponent* Backpack, FText& OutReason)
+bool ACastlePlayerController::MountDirectorItemHUD(UCastleBackpackComponent* Backpack, const bool bIncludeBadges, FText& OutReason)
 {
-	auto* Viewport = UGameViewportSubsystem::Get();
-	if (!Viewport)
+	OutReason = FText::GetEmpty();
+	const auto FailMount = [this, &OutReason](const FText& Reason)
 	{
-		OutReason = INVTEXT("无法挂载临时建筑栏、徽章栏或替换弹窗，视口子系统不可用。");
-		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s：%s"), *GetPathName(), *OutReason.ToString());
+		OutReason = Reason;
+		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s 挂载导演 HUD 失败：%s"), *GetPathName(), *OutReason.ToString());
 		return false;
+	};
+	auto* Viewport = UGameViewportSubsystem::Get();
+	if (!Viewport || !IsValid(Backpack))
+	{
+		return FailMount(INVTEXT("视口子系统或棋盘背包不可用。"));
 	}
 	UClass* TempClass = LoadClass<UCastleTempBuildBarWidget>(nullptr,
 		TEXT("/Game/MovingCastle/UI/Items/WBP_TempBuildBar.WBP_TempBuildBar_C"));
-	UClass* BadgeClass = LoadClass<UCastleBadgeBarWidget>(nullptr,
-		TEXT("/Game/MovingCastle/UI/Items/WBP_BadgeBar.WBP_BadgeBar_C"));
-	UClass* ReplaceClass = LoadClass<UCastleBadgeReplaceModalWidget>(nullptr,
-		TEXT("/Game/MovingCastle/UI/Items/WBP_BadgeReplaceModal.WBP_BadgeReplaceModal_C"));
-	UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
-	if (!TempClass || !BadgeClass || !ReplaceClass || !Badges || !IsValid(Backpack))
+	auto* Temp = TempClass ? CreateWidget<UCastleTempBuildBarWidget>(this, TempClass) : nullptr;
+	if (!Temp || !Temp->BindBackpack(Backpack))
 	{
-		OutReason = INVTEXT("临时建筑栏、徽章栏或替换弹窗的 WBP、背包或徽章源缺失。");
-		return false;
+		return FailMount(INVTEXT("WBP_TempBuildBar 无法加载或绑定背包。"));
 	}
-	auto* Temp = CreateWidget<UCastleTempBuildBarWidget>(this, TempClass);
-	auto* Bar = CreateWidget<UCastleBadgeBarWidget>(this, BadgeClass);
-	auto* Modal = CreateWidget<UCastleBadgeReplaceModalWidget>(this, ReplaceClass);
-	if (!Temp || !Bar || !Modal || !Temp->BindBackpack(Backpack) || !Bar->BindBadges(Badges) || !Modal->BindBadges(Badges))
+
+	UCastleBadgeSubsystem* Badges = nullptr;
+	UCastleBadgeBarWidget* Bar = nullptr;
+	UCastleBadgeReplaceModalWidget* Modal = nullptr;
+	if (bIncludeBadges)
 	{
-		OutReason = INVTEXT("临时建筑栏、徽章栏或替换弹窗的必需控件无法绑定。");
-		return false;
+		// 只有正式导演需要徽章资产与订阅，教程只展示临时建筑卡。
+		UClass* BadgeClass = LoadClass<UCastleBadgeBarWidget>(nullptr,
+			TEXT("/Game/MovingCastle/UI/Items/WBP_BadgeBar.WBP_BadgeBar_C"));
+		UClass* ReplaceClass = LoadClass<UCastleBadgeReplaceModalWidget>(nullptr,
+			TEXT("/Game/MovingCastle/UI/Items/WBP_BadgeReplaceModal.WBP_BadgeReplaceModal_C"));
+		Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
+		Bar = BadgeClass ? CreateWidget<UCastleBadgeBarWidget>(this, BadgeClass) : nullptr;
+		Modal = ReplaceClass ? CreateWidget<UCastleBadgeReplaceModalWidget>(this, ReplaceClass) : nullptr;
+		if (!Badges || !Bar || !Modal || !Bar->BindBadges(Badges) || !Modal->BindBadges(Badges))
+		{
+			return FailMount(INVTEXT("WBP_BadgeBar、WBP_BadgeReplaceModal 或徽章源无效，无法绑定徽章 HUD。"));
+		}
 	}
 	// 一次写入每个控件的槽位，保留 WBP 自身尺寸与 DPI 缩放。
 	const auto Mount = [Viewport](UUserWidget* Widget, FAnchors Anchors, FVector2D Alignment, FMargin Offsets, int32 ZOrder)
@@ -903,20 +914,23 @@ bool ACastlePlayerController::MountDirectorItemHUD(UCastleBackpackComponent* Bac
 		return Viewport->AddWidget(Widget, Slot);
 	};
 	if (!Mount(Temp, FAnchors(0.0f, 0.58f), FVector2D::ZeroVector, FMargin(24.0f, 0.0f, 0.0f, 0.0f), 20)
-		|| !Mount(Bar, FAnchors(0.0f, 0.12f), FVector2D::ZeroVector, FMargin(24.0f, 0.0f, 0.0f, 0.0f), 20)
-		|| !Mount(Modal, FAnchors(0.5f, 0.5f), FVector2D(0.5, 0.5), FMargin(0.0f), 55))
+		|| (bIncludeBadges && (!Mount(Bar, FAnchors(0.0f, 0.12f), FVector2D::ZeroVector, FMargin(24.0f, 0.0f, 0.0f, 0.0f), 20)
+			|| !Mount(Modal, FAnchors(0.5f, 0.5f), FVector2D(0.5, 0.5), FMargin(0.0f), 55))))
 	{
 		for (UUserWidget* Widget : {static_cast<UUserWidget*>(Temp), static_cast<UUserWidget*>(Bar), static_cast<UUserWidget*>(Modal)})
 		{
-			Widget->RemoveFromParent();
+			if (Widget) { Widget->RemoveFromParent(); }
 		}
-		OutReason = INVTEXT("临时建筑栏、徽章栏或替换弹窗无法加入玩家视口。");
-		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s：%s"), *GetPathName(), *OutReason.ToString());
-		return false;
+		return FailMount(INVTEXT("WBP_TempBuildBar 或所选徽章控件无法加入玩家视口。"));
 	}
-	DirectorItemWidgets = {Temp, Bar, Modal};
+	DirectorItemWidgets = {Temp};
 	BadgeReplaceWidget = Modal;
-	Badges->OnBadgesChanged.AddUniqueDynamic(this, &ACastlePlayerController::HandleItemBadgeChanged);
+	if (bIncludeBadges)
+	{
+		DirectorItemWidgets.Add(Bar);
+		DirectorItemWidgets.Add(Modal);
+		Badges->OnBadgesChanged.AddUniqueDynamic(this, &ACastlePlayerController::HandleItemBadgeChanged);
+	}
 	// 无待替换项时沿用 BeginPlay 已设置的游戏输入，避免再次捕获鼠标打断当前输入帧。
 	RefreshModalInput();
 	return true;

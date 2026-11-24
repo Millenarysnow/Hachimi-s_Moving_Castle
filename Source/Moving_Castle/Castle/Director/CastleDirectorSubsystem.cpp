@@ -160,7 +160,7 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 	if (!Controller->GetShop()->TrySetRoomLimit(Initial.RoomLimit, OutReason)
 		|| !Controller->GetShop()->TrySetOfferNumberRange(1, Initial.MaxShopNumber, OutReason)
 		|| !Tower->SetTowerBalloonTier(Initial.BalloonCount, Initial.BaseMaxHealth, true, OutReason)
-		|| !Controller->MountDirectorItemHUD(Board->PrototypeBackpack, OutReason))
+		|| !Controller->MountDirectorItemHUD(Board->PrototypeBackpack, true, OutReason))
 	{
 		for (ACastleDirectorNodeActor* Node : Candidates) { Node->Destroy(); }
 		return false;
