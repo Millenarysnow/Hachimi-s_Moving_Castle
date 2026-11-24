@@ -1,15 +1,15 @@
 #include "CastleHachimisV4PCG.h"
 
 #include "Castle/PCG/CastlePCGSemantics.h"
+#include "Castle/PCG/CastleBuildingPCGRule.h"
+#include "Castle/PCG/CastleLegacyPCGAdapter.h"
+#include "Castle/PCG/CastlePCGAttachmentKit.h"
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
 #include "BuildingMergeComponent.h"
 #include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
-#include "Misc/SecureHash.h"
-#include "NavigationSystem.h"
-#include "NavigationData.h"
 
 namespace CastleV4PCG
 {
@@ -24,28 +24,28 @@ namespace CastleV4PCG
 		return false;
 	}
 
-	bool CanTraverse(const ACastleBuildingBase& A, const ACastleBuildingBase& B)
+	/** 套件须明确声明两种空间归属；组合法性在任何装配之前检查。 */
+	bool ValidateLadderKit(const ACastleBuildingBase& Lower, const UCastleV4LadderKit& Kit, FString& Error)
 	{
-		return A.GetBuildingColor() == B.GetBuildingColor() || A.GetBuildingNumber() == B.GetBuildingNumber();
-	}
-
-	bool IsMainTowerDoorFace(const ACastleBoard& Board, const FIntVector& Cell, const FIntVector& BoardSide)
-	{
-		return Board.PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides
-			&& BoardSide.Y == 0 && BoardSide.Z == 0 && FMath::Abs(BoardSide.X) == 1
-			&& Cell + BoardSide == Board.GetBoardCenterCoordinate();
-	}
-
-	bool IsRoom(const ACastleBuildingBase* Building)
-	{
-		return Building && Building->IsNormalRoom() && Building->HachimisLayout;
-	}
-
-	FTransform CellFrame(const ACastleBoard& Board, const FIntVector& Cell)
-	{
-		const FVector BottomWorld = Board.GetGridWorldLocation(Cell)
-			- Board.GetActorTransform().TransformVector(FVector(0, 0, Board.LayerHeight * 0.5));
-		return FTransform(Board.GetActorQuat(), BottomWorld, Board.GetActorScale3D());
+		int32 LadderCount = 0;
+		int32 UpperFloorCount = 0;
+		for (const FCastleV4Part& Part : Kit.Parts)
+		{
+			const bool bLadder = Part.Group == TEXT("Ladder");
+			const bool bUpperFloor = Part.Group == TEXT("UpperFloor");
+			if ((!bLadder && !bUpperFloor) || !IsValid(Part.Mesh) || !Part.Local.IsValid())
+			{
+				return Reject(Lower, Error, FString::Printf(TEXT("套件 %s 的零件 %s 分组、网格或变换无效。"),
+					*Kit.GetPathName(), *Part.Node.ToString()));
+			}
+			LadderCount += bLadder;
+			UpperFloorCount += bUpperFloor;
+		}
+		if (LadderCount == 0 || UpperFloorCount == 0)
+		{
+			return Reject(Lower, Error, FString::Printf(TEXT("套件 %s 缺少 Ladder 或 UpperFloor 组。"), *Kit.GetPathName()));
+		}
+		return true;
 	}
 
 	bool MapCells(const ACastleBuildingBase& Building, const ACastleBoard& Board, TMap<FIntVector, FIntVector>& Out, FString& Error)
@@ -59,6 +59,7 @@ namespace CastleV4PCG
 		{
 			return Reject(Building, Error, Layout.GetPathName() + TEXT(" 的占格、标高或本族梯配置错误"));
 		}
+		if (!ValidateLadderKit(Building, *Layout.Ladder, Error)) { return false; }
 		TSet<FIntVector> Claimed;
 		for (int32 X = 0; X < Layout.Grid.X; ++X)
 		for (int32 Y = 0; Y < Layout.Grid.Y; ++Y)
@@ -117,6 +118,10 @@ namespace CastleV4PCG
 		{
 			// 飞入与合并会复制组件标签。只有 SCS 的作者原件可以声明持久槽位。
 			if (Component->CreationMethod != EComponentCreationMethod::SimpleConstructionScript) { continue; }
+			if (Component->ComponentTags.ContainsByPredicate([](const FName& Tag){ return Tag.ToString().StartsWith(TEXT("PCGRole")); }))
+			{
+				return Reject(Building, Error, Component->GetPathName() + TEXT(" 的 V4 原件不允许声明旧 PCGRole 标签"));
+			}
 			for (const FName& Tag : Component->ComponentTags)
 			{
 				const FString Text = Tag.ToString();
@@ -124,8 +129,7 @@ namespace CastleV4PCG
 				int32 Index = INDEX_NONE;
 				if (!LexTryParseString(Index, *Text.Mid(13)) || !Result.IsValidIndex(Index) || Result[Index].Component
 					|| !Layout.Parts[Index].Mesh || Component->GetStaticMesh() != Layout.Parts[Index].Mesh
-					|| UBuildingGameplayRootComponent::IsInGameplayHierarchy(Component)
-					|| Component->ComponentTags.ContainsByPredicate([](const FName& Name){ return Name.ToString().StartsWith(TEXT("PCGRole")); }))
+					|| UBuildingGameplayRootComponent::IsInGameplayHierarchy(Component))
 				{
 					return Reject(Building, Error, Component->GetPathName() + TEXT(" 的源节点索引、网格或语义标签无效"));
 				}
@@ -159,58 +163,52 @@ namespace CastleV4PCG
 		return true;
 	}
 
-	bool BuildStairs(const ACastleBoard& Board, const FOccupancy& Occupancy, const FTargets& Targets, const FRooms& Rooms, FStairs& Out, FString& Error)
+	bool BuildStairs(const ACastleBoard& Board, const FOccupancy& Occupancy, const FCastlePCGSemanticField& Field, FStairs& Out, FString& Error)
 	{
-		for (const auto& Entry : Targets)
+		for (const auto& Entry : Field.VerticalInterfaces)
 		{
-			const ACastleBuildingBase& Lower = *Entry.Key;
-			for (const auto& Top : Entry.Value.Ceilings)
+			const FCastlePCGVerticalSpec& Spec = Entry.Value;
+			if (Spec.State != ECastlePCGVertical::Ladder) { continue; }
+			const FIntVector Cell = Entry.Key;
+			const ACastleBuildingBase* Lower = Occupancy.FindRef(Cell);
+			const ACastleBuildingBase* Upper = Occupancy.FindRef(Cell + Up);
+			if (!Lower || !Upper)
 			{
-				if (Top.Value != 2) { continue; }
-				ACastleBuildingBase* Upper = Occupancy.FindRef(Top.Key + Up);
-				if (!Upper) { return Reject(Lower, Error, TEXT("通梯格没有对应的上层建筑")); }
-				if (!Lower.HachimisLayout && !Upper->HachimisLayout) { continue; }
-				if (!Targets.Contains(Upper))
-				{
-					return Reject(*Upper, Error, TEXT("上层旧模板没有可切换的楼板语义"));
-				}
-
-				FStairInterface& Interface = Out.Add(Top.Key);
-				Interface.WorldFrame = CellFrame(Board, Top.Key);
-				const double LowerWalk = Lower.HachimisLayout ? Lower.HachimisLayout->StandingHeight : 0.0;
-				const double UpperWalk = Upper->HachimisLayout ? Upper->HachimisLayout->StandingHeight : 0.0;
-				if (Lower.HachimisLayout)
-				{
-					Interface.Kit = Lower.HachimisLayout->Ladder;
-					if (!Interface.Kit || Interface.Kit->Family != Lower.HachimisLayout->Family || Interface.Kit->Parts.IsEmpty())
-					{
-						return Reject(Lower, Error, Lower.HachimisLayout->GetPathName() + TEXT(" 缺少本族楼板梯"));
-					}
-					Interface.Hatch = Interface.Kit->Hatch;
-					// 塔梯随下层作者框架转动。普通房造型只由格局决定。
-					if (!IsRoom(&Lower)) { Interface.WorldFrame.SetRotation(Lower.GetActorQuat()); }
-				}
-				else
-				{
-					// 点位沿用 BP_Variant_LV2，缺角取自 DaoDun/Variants/LV2/Mesh1 的 LOD0 顶面。
-					Interface.Hatch.BottomStand = FVector(-58.317, 40.0, 0.0);
-					Interface.Hatch.TopStand = FVector(40.0, 40.0, Board.LayerHeight);
-					Interface.Hatch.LadderBottom = FVector(-58.317, 150.0, 0.0);
-					Interface.Hatch.LadderTop = FVector(-58.317, 150.0, Board.LayerHeight);
-					Interface.Hatch.Opening = FBox(FVector(-205.0, 100.0, Board.LayerHeight - 31.55), FVector(-50.0, 205.0, Board.LayerHeight));
-				}
-				if (!Interface.Hatch.Opening.IsValid || Interface.Hatch.Opening.Min.ContainsNaN() || Interface.Hatch.Opening.Max.ContainsNaN())
-				{
-					return Reject(Lower, Error, TEXT("下层所属套件的梯井无效"));
-				}
-				// 只调整梯的垂直尺度，使两个原生站立面精确相接，XY 与作者梯口一致。
-				const double Scale = (Board.LayerHeight + UpperWalk - LowerWalk) / Board.LayerHeight;
-				Interface.WorldFrame.SetScale3D(Interface.WorldFrame.GetScale3D() * FVector(1, 1, Scale));
-				Interface.WorldFrame.AddToTranslation(Board.GetActorTransform().TransformVector(FVector(0, 0, LowerWalk * (1.0 - Scale))));
-				// 只调整普通房互接时的套件方向；混接保持下层系列的安装锚，格位选择不变。
-				if (IsRoom(&Lower) && IsRoom(Upper) && !OrientRoomStair(Board, Lower, *Upper,
-					Rooms.FindChecked(Top.Key).Frame, Rooms.FindChecked(Top.Key + Up).Frame, Interface, Error)) { return false; }
+				Error = FString::Printf(TEXT("梯位 %s 缺少已完成的上下层建筑。"), *Cell.ToString());
+				return false;
 			}
+			// 所有接梯的两侧共用同一井口，即使上下都是占位建筑也需要由上层切板。
+			FStairInterface& Interface = Out.Add(Cell);
+			Interface.WorldFrame = CellFrame(Board, Cell);
+			Interface.WorldFrame.SetRotation(Board.GetActorQuat() * FQuat(FVector::UpVector, FMath::DegreesToRadians(Spec.BoardYaw)));
+			if (Lower->HachimisLayout)
+			{
+				if (!IsValid(Spec.Kit) || Spec.Kit->Family != Lower->HachimisLayout->Family)
+				{
+					return Reject(*Lower, Error, FString::Printf(TEXT("层界 %s 缺少有效本族套件：%s。"),
+						*Cell.ToString(), *GetPathNameSafe(Spec.Kit)));
+				}
+				if (!ValidateLadderKit(*Lower, *Spec.Kit, Error)) { return false; }
+				Interface.Kit = Spec.Kit;
+				Interface.Hatch = Spec.Kit->Hatch;
+			}
+			else
+			{
+				Interface.Hatch = CastleLegacyPCG::LadderHatch(Board.LayerHeight);
+			}
+			const FCastleV4Hatch& Hatch = Interface.Hatch;
+			if (!Hatch.Opening.IsValid || Hatch.Opening.Min.ContainsNaN() || Hatch.Opening.Max.ContainsNaN()
+				|| Hatch.BottomStand.ContainsNaN() || Hatch.TopStand.ContainsNaN() || Hatch.LadderBottom.ContainsNaN()
+				|| Hatch.LadderTop.ContainsNaN() || !Interface.WorldFrame.IsValid())
+			{
+				return Reject(*Lower, Error, TEXT("层界套件 ") + GetPathNameSafe(Spec.Kit) + TEXT(" 的梯点、朝向或井口无效。"));
+			}
+			const double LowerWalk = Lower->HachimisLayout ? Lower->HachimisLayout->StandingHeight : 0.0;
+			const double UpperWalk = Upper->HachimisLayout ? Upper->HachimisLayout->StandingHeight : 0.0;
+			// 混接的两个行走面高差只改变梯的竖向尺度，井口仍和作者挂点共享 XY。
+			const double Scale = (Board.LayerHeight + UpperWalk - LowerWalk) / Board.LayerHeight;
+			Interface.WorldFrame.SetScale3D(Interface.WorldFrame.GetScale3D() * FVector(1, 1, Scale));
+			Interface.WorldFrame.AddToTranslation(Board.GetActorTransform().TransformVector(FVector(0, 0, LowerWalk * (1.0 - Scale))));
 		}
 		return true;
 	}
@@ -222,8 +220,10 @@ namespace CastleV4PCG
 		{
 			return Reject(Building, Error, Part.Node.ToString() + TEXT(" 的静态网格或装配变换非法"));
 		}
-		FCastlePCGMeshTemplate& Visual = Plan.Visuals.AddDefaulted_GetRef();
+		FCastlePCGMeshTemplate& Visual = Plan.Visual.Visuals.AddDefaulted_GetRef();
 		Visual.Mesh = Part.Mesh;
+		Visual.Node = Part.Node;
+		Visual.Group = Part.Group;
 		Visual.Relative = Part.Local * RelativeFrame;
 		Visual.bSelectable = true;
 		return true;
@@ -232,7 +232,7 @@ namespace CastleV4PCG
 	void AddBox(FCastlePCGApplyPlan& Plan, const FTransform& Frame, const FVector& Center, const FVector& Extent,
 		bool bIsNavigationBarrier, const FQuat& Rotation = FQuat::Identity)
 	{
-		Plan.FunctionalBoxes.Add({FTransform(Rotation, Center) * Frame, Extent, bIsNavigationBarrier});
+		Plan.Gameplay.FunctionalBoxes.Add({FTransform(Rotation, Center) * Frame, Extent, bIsNavigationBarrier});
 	}
 
 	/** 生成墙另一侧的通行约束。柱间外缘始终封住，两侧门洞采用作者最窄净宽。 */
@@ -254,46 +254,36 @@ namespace CastleV4PCG
 			FVector((Right - DoorHalf) * 0.5, WallHalfDepth, Height * 0.5), true);
 	}
 
-	void AddHeightTransition(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FIntVector& Cell,
-		const FIntVector& Side, const UCastlePCGRuleSetDataAsset& Rules, FCastlePCGApplyPlan& Plan)
-	{
-		constexpr double Run = 122.0;
-		const double Height = Building.HachimisLayout->StandingHeight;
-		const double Tilt = FMath::Atan2(-Height, Run);
-		const double Width = 140.0;
-		const FQuat Yaw = FVector(Side).ToOrientationQuat();
-		const FTransform Frame = CellFrame(Board, Cell).GetRelativeTransform(Building.GetActorTransform());
-		const FVector Edge = FVector(Side) * (Board.CellSize * 0.5);
-		const FVector SurfaceCenter = Edge + FVector(Side) * (Run * 0.5) + FVector(0, 0, Height * 0.5);
-		const FQuat Rotation = Yaw * FQuat(FVector::RightVector, -Tilt);
-		AddBox(Plan, Frame, SurfaceCenter - Rotation.GetUpVector() * (Rules.FloorThickness * 0.5),
-			FVector(FMath::Sqrt(Run * Run + Height * Height) * 0.5 + 2.0, Width * 0.5, Rules.FloorThickness * 0.5), false, Rotation);
-	}
-
 	const FCastleV4WallSlot* FindWall(const UCastleHachimisV4Layout& Layout, const FIntVector& Cell, const FIntVector& Direction)
 	{
 		return Layout.Walls.FindByPredicate([&](const FCastleV4WallSlot& Slot) { return Slot.Cell == Cell && Slot.Facing == Direction; });
 	}
 
 	bool PrepareWall(const ACastleBuildingBase& Building, const ACastleBoard& Board, const UCastlePCGRuleSetDataAsset& Rules,
-		const FOccupancy& Occupancy, const FCastleV4WallSlot& Slot, const FIntVector& Cell, const FIntVector& BoardSide,
+		const FCastlePCGSideFaceSpec& Face, const FCastleV4WallSlot& Slot,
 		TConstArrayView<FCastlePCGPartAnnotation> Original, FCastlePCGApplyPlan& Plan, FString& Error)
 	{
 		const UCastleHachimisV4Layout& Layout = *Building.HachimisLayout;
-		const ACastleBuildingBase* Neighbor = Occupancy.FindRef(Cell + BoardSide);
-		const bool bOpen = IsMainTowerDoorFace(Board, Cell, BoardSide) || (Neighbor && CanTraverse(Building, *Neighbor));
+		// 门洞状态只来自规则。开口几何由原墙槽的作者套件决定。
+		const bool bOpen = Face.IsDoor();
+		const bool bRemoveWall = !Face.bOwnsWall || Face.State == ECastlePCGSide::MergedOpen;
 		const UCastleV4WallKit& Kit = *Slot.Kit;
 		if (!FMath::IsFinite(Kit.Opening) || Kit.Opening < 150.0 || Kit.Open.IsEmpty() || Kit.Closed.IsEmpty())
 		{
 			return Reject(Building, Error, Kit.GetPathName() + TEXT(" 的墙状态或门宽无效"));
 		}
 		const FTransform Mount = Slot.Mount;
-		if (bOpen)
+		if (bOpen || bRemoveWall)
 		{
 			for (int32 Index = 0; Index < Layout.Parts.Num(); ++Index)
 			{
-				if (Layout.Parts[Index].Group == Slot.Node) { Plan.Hidden.Add(Original[Index].Component); }
+				if (Layout.Parts[Index].Group == Slot.Node) { Plan.Visual.Hidden.Add(Original[Index].Component); }
 			}
+		}
+		// 贯通面和归对侧的共享墙都不在本侧安装网格或阻隔功能盒。
+		if (bRemoveWall) { return true; }
+		if (bOpen)
+		{
 			for (const FCastleV4Part& Part : Kit.Open)
 			{
 				if (!AddPart(Building, Part, Mount, Plan, Error)) { return false; }
@@ -301,48 +291,24 @@ namespace CastleV4PCG
 		}
 		const double Tangent = Mount.InverseTransformPosition(Layout.CellBottom(Slot.Cell)).X;
 		AddWallCollision(Plan, Mount, Board.CellSize + 0.2, bOpen ? Kit.Opening : 0.0, Tangent, Layout.StandingHeight, Rules.BarrierHeight);
-		if (bOpen && Neighbor && !Neighbor->HachimisLayout) { AddHeightTransition(Board, Building, Cell, BoardSide, Rules, Plan); }
 		return true;
 	}
 
-	bool CutDeck(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FIntVector& Cell, const FIntVector& SourceCell,
-		const FStairInterface& Interface, FCastlePCGApplyPlan& Plan, FString& Error)
+	bool CutDeck(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FIntVector& Cell, double Walk,
+		UPrimitiveComponent& Floor, const FStairInterface& Interface, FCastlePCGApplyPlan& Plan, FString& Error)
 	{
 		const FTransform CellLocal = CellFrame(Board, Cell).GetRelativeTransform(Building.GetActorTransform());
 		const FTransform HatchLocal = Interface.WorldFrame.GetRelativeTransform(Building.GetActorTransform());
 		const FBox Opening = Interface.Hatch.Opening.TransformBy(HatchLocal.ToMatrixWithScale());
 		const FVector GridPosition = CellLocal.GetLocation();
 		const double Half = Board.CellSize * 0.5;
-		const double Walk = Building.HachimisLayout ? Building.HachimisLayout->StandingHeight : 0.0;
 		const FVector Low = GridPosition + FVector(-Half, -Half, Walk - 5.0);
 		const FVector High = GridPosition + FVector(Half, Half, Walk);
 		if (!Opening.IsValid || Opening.Min.X <= Low.X || Opening.Min.Y <= Low.Y || Opening.Max.X >= High.X || Opening.Max.Y >= High.Y)
 		{
 			return Reject(Building, Error, TEXT("梯井超出应切换的上层占格"));
 		}
-		TArray<UStaticMeshComponent*> Floors, Matches;
-		Building.GetComponents(Floors);
-		const FName FloorTag(*FString::Printf(TEXT("CastleV4Floor=%d,%d,%d"), SourceCell.X, SourceCell.Y, SourceCell.Z));
-		for (UStaticMeshComponent* Floor : Floors)
-		{
-			if (!UBuildingGameplayRootComponent::IsInGameplayHierarchy(Floor)) { continue; }
-			// 混接的旧造型仍使用旧 GameplayFloor，多格板原点与 V4 格心相差 3.75 cm。
-			// 从实际板面覆盖确定归属，既支持旋转建筑，也不会误关上层内部的楼板。
-			bool bLegacyCell = false;
-			if (!Building.HachimisLayout && Floor->CanEverAffectNavigation() && Floor->GetStaticMesh()
-				&& Floor->GetName().StartsWith(TEXT("GameplayFloor_")))
-			{
-				const FTransform FloorLocal = Floor->GetComponentTransform().GetRelativeTransform(Building.GetActorTransform());
-				const FBox Surface = Floor->GetStaticMesh()->GetBoundingBox().TransformBy(FloorLocal.ToMatrixWithScale());
-				bLegacyCell = Surface.IsInsideXY(GridPosition) && FMath::IsNearlyEqual(Surface.Max.Z, GridPosition.Z, PositionTolerance);
-			}
-			if (Floor->ComponentHasTag(FloorTag) || bLegacyCell) { Matches.Add(Floor); }
-		}
-		if (Matches.Num() != 1)
-		{
-			return Reject(Building, Error, FString::Printf(TEXT("梯井(%s)必须匹配一块原功能板，实际 %d 块"), *Cell.ToString(), Matches.Num()));
-		}
-		Plan.DisabledFloors.Add(Matches[0]);
+		Plan.Gameplay.DisabledFloors.Add(&Floor);
 		const FBox Rects[] = {
 			FBox(Low, FVector(Opening.Min.X, High.Y, High.Z)),
 			FBox(FVector(Opening.Max.X, Low.Y, Low.Z), High),
@@ -354,72 +320,117 @@ namespace CastleV4PCG
 
 	void AddLink(FCastlePCGApplyPlan& Plan, const FIntVector& Lower, const FTransform& Frame, const FCastleV4Hatch& Hatch)
 	{
-		Plan.LadderFrames.Add({Lower, Frame, Hatch.BottomStand, Hatch.TopStand, Hatch.LadderBottom, Hatch.LadderTop});
+		Plan.Gameplay.LadderFrames.Add({Lower, Frame, Hatch.BottomStand, Hatch.TopStand, Hatch.LadderBottom, Hatch.LadderTop});
 	}
 
-	/** 计划签名包含两个界面的几何。相同格局即使重新广播也不会重开局部动画。 */
-	void FinalizeKey(const FCastlePCGTarget& Target, FCastlePCGApplyPlan& Plan)
+	/** V4 原功能板按作者格标签定位，收集唯一命中后再生成上层四片 CutDeck。 */
+	bool PrepareIncomingDeck(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FIntVector& Cell,
+		const FIntVector& LocalCell, const FStairInterface& Stair, FCastlePCGApplyPlan& Plan, FString& Error)
 	{
-		TArray<FString> Keys;
-		for (const UPrimitiveComponent* Hidden : Plan.Hidden) { Keys.Add(TEXT("Hide/") + Hidden->GetName()); }
-		for (const FCastlePCGMeshTemplate& Part : Plan.Visuals)
+		TArray<UStaticMeshComponent*> Floors, Matches;
+		Building.GetComponents(Floors);
+		const FName Tag(*FString::Printf(TEXT("CastleV4Floor=%d,%d,%d"), LocalCell.X, LocalCell.Y, LocalCell.Z));
+		for (UStaticMeshComponent* Floor : Floors)
 		{
-			FString PartKey = Part.Mesh->GetPathName() + Part.Relative.ToString() + LexToString(Part.bSelectable);
-			for (const UMaterialInterface* Material : Part.Materials) { PartKey += GetPathNameSafe(Material); }
-			Keys.Add(MoveTemp(PartKey));
+			if (UBuildingGameplayRootComponent::IsInGameplayHierarchy(Floor) && Floor->ComponentHasTag(Tag))
+			{
+				Matches.Add(Floor);
+			}
 		}
-		Keys.Sort();
-		// 空键描述蓝图的原始美术。只接管功能面时不能截断原有的升级动画。
-		if (!Keys.IsEmpty()) { Plan.VisualKey = FMD5::HashAnsiString(*FString::Join(Keys, TEXT("|"))); }
-		Keys.Reset();
-		for (const UPrimitiveComponent* Floor : Plan.DisabledFloors) { Keys.Add(TEXT("Floor/") + Floor->GetName()); }
-		for (const FCastlePCGFunctionalBox& Box : Plan.FunctionalBoxes)
+		if (Matches.Num() != 1 || !IsValid(Matches[0]->GetStaticMesh()))
 		{
-			// 用途也是功能配置的一部分；几何相同、用途改变时必须重新应用组件标签。
-			Keys.Add((Box.bIsNavigationBarrier ? TEXT("Barrier/") : TEXT("Surface/")) + Box.Relative.ToString() + Box.Extent.ToString());
+			return Reject(Building, Error, FString::Printf(TEXT("格 %s 必须匹配一块有效 V4 原功能板，实际 %d 块。"),
+				*Cell.ToString(), Matches.Num()));
 		}
-		for (const FCastlePCGLadderPlan& Link : Plan.LadderFrames)
+		return CutDeck(Board, Building, Cell, Building.HachimisLayout->StandingHeight, *Matches[0], Stair, Plan, Error);
+	}
+
+	bool AddStairGroup(const ACastleBuildingBase& Building, const FStairInterface& Stair, FName Group,
+		FCastlePCGApplyPlan& Plan, FString& Error)
+	{
+		if (!IsValid(Stair.Kit))
 		{
-			Keys.Add(Link.LowerCell.ToString() + Link.Relative.ToString() + Link.BottomStand.ToString() + Link.TopStand.ToString()
-				+ Link.LadderBottom.ToString() + Link.LadderTop.ToString());
+			return Reject(Building, Error, TEXT("梯井组 ") + Group.ToString() + TEXT(" 缺少有效 V4 套件。"));
 		}
-		Keys.Sort();
-		Plan.Key = Target.StableKey() + Plan.VisualKey + FMD5::HashAnsiString(*FString::Join(Keys, TEXT("|")));
+		const FTransform Relative = Stair.WorldFrame.GetRelativeTransform(Building.GetActorTransform());
+		for (const FCastleV4Part& Part : Stair.Kit->Parts)
+		{
+			if (Part.Group == Group && !AddPart(Building, Part, Relative, Plan, Error)) { return false; }
+		}
+		return true;
+	}
+
+	bool AddAttachments(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FCastlePCGSemanticField& Field,
+		FCastlePCGApplyPlan& Plan, FString& Error)
+	{
+		auto AddKit = [&](const FIntVector& Cell, const FCastlePCGAttachmentSpec& Spec)
+		{
+			// 锚点和功能盒都在所占格底面坐标系中，建筑移动或旋转时自然随其组件。
+			const FTransform Anchor = Spec.AnchorTransform * CellFrame(Board, Cell).GetRelativeTransform(Building.GetActorTransform());
+			for (const FCastleV4Part& Part : Spec.Kit->Parts)
+			{
+				if (!AddPart(Building, Part, Anchor, Plan, Error)) { return false; }
+				Plan.Visual.Visuals.Last().bSelectable = Spec.bSelectable;
+			}
+			if (Spec.bAffectsNavigation)
+			{
+				Plan.Gameplay.FunctionalBoxes.Add({Anchor, Spec.NavigationExtent, true});
+			}
+			return true;
+		};
+		const auto& Cells = Building.GetOccupiedCoordinates();
+		for (const FIntVector& Cell : Cells)
+		{
+			const FCastlePCGCellSpec& Spec = Field.Cells.FindChecked(Cell);
+			if (Spec.Roof == ECastlePCGRoof::Override && !AddKit(Cell, Spec.RoofOverride)) { return false; }
+		}
+		for (const auto& Entry : Field.GetAttachments())
+		{
+			if (Cells.Contains(Entry.Key.OwnerCell) && !AddKit(Entry.Key.OwnerCell, Entry.Value)) { return false; }
+		}
+		return true;
 	}
 
 	bool Prepare(const ACastleBoard& Board, const ACastleBuildingBase& Building, const UCastlePCGRuleSetDataAsset& Rules,
-		const FOccupancy& Occupancy, const FRooms& Rooms, const FStairs& Stairs, const FCastlePCGTarget& Target,
+		const FCastlePCGSemanticField& Field, const FStairs& Stairs,
 		TConstArrayView<FCastlePCGPartAnnotation> Original, FCastlePCGApplyPlan& Plan, FString& Error)
 	{
 		const UCastleHachimisV4Layout& Layout = *Building.HachimisLayout;
 		TMap<FIntVector, FIntVector> Cells;
 		if (!MapCells(Building, Board, Cells, Error)) { return false; }
 		if (Original.Num() != Layout.Parts.Num()) { return Reject(Building, Error, Layout.GetPathName() + TEXT(" 的原始组件数不一致")); }
-		if (IsRoom(&Building))
+		const FIntVector FirstCell = Building.GetOccupiedCoordinates()[0];
+		if (Field.Cells.FindChecked(FirstCell).RoomDeck.Layout)
 		{
-			if (!PrepareRoom(Board, Building, Rules, Occupancy, Rooms, Stairs, Original, Plan, Error)) { return false; }
+			if (!PrepareRoom(Board, Building, Rules, Field, Original, Plan, Error)) { return false; }
 		}
 		else
 		{
 			for (const FCastleV4WallSlot& Slot : Layout.Walls)
 			{
-				if (!PrepareWall(Building, Board, Rules, Occupancy, Slot, Cells.FindChecked(Slot.Cell),
-					BoardDirection(Building, Board, Slot.Facing), Original, Plan, Error)) { return false; }
+				const ECastlePCGFace Face = FaceOf(BoardDirection(Building, Board, Slot.Facing));
+				const FCastlePCGSideFaceSpec& Side = Field.SideFaces.FindChecked({Cells.FindChecked(Slot.Cell), Face});
+				if (!PrepareWall(Building, Board, Rules, Side, Slot, Original, Plan, Error)) { return false; }
 			}
 			for (int32 Index = 0; Index < Layout.Parts.Num(); ++Index)
 			{
 				const FCastleV4Part& Part = Layout.Parts[Index];
 				if ((Part.Group == TEXT("Roof") || Part.Group == TEXT("RoofKeys")) && Part.Cells.ContainsByPredicate([&](const FIntVector& Cell)
 				{
-					return Target.Ceilings.Contains(Cells.FindChecked(Cell));
-				})) { Plan.Hidden.Add(Original[Index].Component); }
+					return Field.Cells.FindChecked(Cells.FindChecked(Cell)).Roof != ECastlePCGRoof::Keep;
+				})) { Plan.Visual.Hidden.Add(Original[Index].Component); }
 				if (Part.Group != TEXT("Foundation")) { continue; }
-				if (Part.Cells.ContainsByPredicate([&](const FIntVector& Cell){ return Stairs.Contains(Cells.FindChecked(Cell) - Up); }))
+				if (Part.Cells.ContainsByPredicate([&](const FIntVector& Cell){ return Field.Cells.FindChecked(Cells.FindChecked(Cell)).Deck == ECastlePCGDeck::Hatch; }))
 				{
-					Plan.Hidden.Add(Original[Index].Component);
+					Plan.Visual.Hidden.Add(Original[Index].Component);
 					for (const FCastleV4Part& Slice : Layout.FoundationSlices)
 					{
-						if (Slice.Node == Part.Node && !Stairs.Contains(Cells.FindChecked(Slice.Cells[0]) - Up)
+						if (Slice.Node != Part.Node) { continue; }
+						if (Slice.Cells.Num() != 1 || !Cells.Contains(Slice.Cells[0]))
+						{
+							return Reject(Building, Error, Slice.Node.ToString() + TEXT(" 的作者底盘切片归属非法。"));
+						}
+						if (Field.Cells.FindChecked(Cells.FindChecked(Slice.Cells[0])).Deck != ECastlePCGDeck::Hatch
 							&& !AddPart(Building, Slice, FTransform::Identity, Plan, Error)) { return false; }
 					}
 				}
@@ -436,29 +447,17 @@ namespace CastleV4PCG
 			const FIntVector Cell = Pair.Value;
 			if (const FStairInterface* Incoming = Stairs.Find(Cell - Up))
 			{
-				if (!CutDeck(Board, Building, Cell, Pair.Key, *Incoming, Plan, Error)) { return false; }
+				if (!PrepareIncomingDeck(Board, Building, Cell, Pair.Key, *Incoming, Plan, Error)) { return false; }
+				// V4 上层只接收共享井口的带洞楼板组；混接旧下层的楼板由旧适配器准备。
+				if (Incoming->Kit && !AddStairGroup(Building, *Incoming, TEXT("UpperFloor"), Plan, Error)) { return false; }
 			}
 			if (const FStairInterface* Outgoing = Stairs.Find(Cell))
 			{
-				if (!Outgoing->Kit || Outgoing->Kit->Parts.IsEmpty()) { return Reject(Building, Error, TEXT("缺少本族楼板梯资产")); }
+				if (!AddStairGroup(Building, *Outgoing, TEXT("Ladder"), Plan, Error)) { return false; }
 				const FTransform Relative = Outgoing->WorldFrame.GetRelativeTransform(Building.GetActorTransform());
-				for (const FCastleV4Part& Part : Outgoing->Kit->Parts)
-				{
-					if (!AddPart(Building, Part, Relative, Plan, Error)) { return false; }
-				}
 				AddLink(Plan, Cell, Relative, Outgoing->Hatch);
 			}
 		}
-		if (!Plan.LadderFrames.IsEmpty())
-		{
-			UNavigationSystemV1* Navigation = FNavigationSystem::GetCurrent<UNavigationSystemV1>(Building.GetWorld());
-			const ANavigationData* Data = Navigation ? Navigation->GetDefaultNavDataInstance(FNavigationSystem::DontCreate) : nullptr;
-			if (!Data || Data->GetRuntimeGenerationMode() != ERuntimeGenerationType::Dynamic)
-			{
-				return Reject(Building, Error, TEXT("楼层梯连接要求动态 Recast 数据"));
-			}
-		}
-		FinalizeKey(Target, Plan);
 		return true;
 	}
 }

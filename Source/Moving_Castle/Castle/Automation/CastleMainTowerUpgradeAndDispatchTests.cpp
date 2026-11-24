@@ -2,6 +2,7 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Castle/PCG/CastlePCGSemanticTestRules.h"
 #include "Castle/Components/CastleMainTowerComponent.h"
 #include "Castle/Actors/CastleBoard.h"
 #include "Castle/Actors/CastleBuildingBase.h"
@@ -140,9 +141,7 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("建立扩层棋盘"), Board)) { return false; }
 	CastleBuildingTests::ConfigureBoard(Board);
 	CastleBuildingTests::FScopedNativeBuildingModels BuildingModels(World);
-	if (!TestNotNull(TEXT("复制实际 PCG 规则资产"), Board->PCGRuleSet.Get())) { return false; }
-	Board->PCGRuleSet = DuplicateObject<UCastlePCGRuleSetDataAsset>(Board->PCGRuleSet, Board);
-	Board->PCGRuleSet->Rules = {NewObject<UCastlePCGPlanarRule>(Board->PCGRuleSet)};
+	if (!CastlePCGTests::ConfigurePlacementOnlyPCG(*Board, *this)) { return false; }
 	Board->GridSize = FIntVector(5, 5, 9);
 	Board->PlacementSurfaceMode = ECastlePlacementSurfaceMode::MainTowerSides;
 	Board->TowerSideSurfaceOffset = 290.0f;
@@ -201,8 +200,9 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("第一层以下超出高度"), Board->IsCoordinateWithinBoard(Center + FIntVector(1, 0, -1)));
 		const FVector LocalCrown = Board->MainTowerActor->GetActorTransform().InverseTransformPosition(Crown->GetComponentLocation());
 		// 正式塔身原件每段 500 cm，塔冠底面与当前最高可见段的顶面对齐。
-		constexpr double SourceSectionHeight = 500.0;
-		TestTrue(TEXT("塔冠落在当前最高塔身段顶面"), FMath::IsNearlyEqual(LocalCrown.Z + 5000.0, Layers * SourceSectionHeight, 0.01));
+		// 使用独立的作者预期值，避免 Unity 编译中与 CastleBoard 的实现符号重名。
+		constexpr double ExpectedTowerSectionHeight = 500.0;
+		TestTrue(TEXT("塔冠落在当前最高塔身段顶面"), FMath::IsNearlyEqual(LocalCrown.Z + 5000.0, Layers * ExpectedTowerSectionHeight, 0.01));
 		int32 VisibleBodyParts = 0;
 		int32 HiddenBodyParts = 0;
 		int32 CrownParts = 0;
@@ -224,7 +224,7 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("每层显示原蓝图的 42 件塔身"), VisibleBodyParts, 42 * Layers);
 		TestEqual(TEXT("未开放层及第十段仍隐藏"), HiddenBodyParts, 42 * (10 - Layers));
 		TestEqual(TEXT("塔冠完整保留 54 件"), CrownParts, 54);
-		const double HeightDelta = (Layers - 3) * SourceSectionHeight;
+		const double HeightDelta = (Layers - 3) * ExpectedTowerSectionHeight;
 		TestTrue(TEXT("塔尖上移与新增塔身段高度相等"), Crown->GetComponentLocation().Equals(InitialCrown + Up * HeightDelta, 0.1));
 		TestTrue(TEXT("气球跟随塔尖"), Balloons->GetComponentLocation().Equals(InitialBalloons + Up * HeightDelta, 0.1));
 		const auto* Cell = Board->FindTowerSideCell(Highest - FIntVector(1, 0, 0), ECastleGridFace::PositiveX);
