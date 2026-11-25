@@ -102,12 +102,8 @@ bool UCastlePCGRoofQuarterRule::ValidateKits(FString& Error) const
 bool UCastlePCGRoofQuarterRule::Evaluate(const FCastlePCGBoardQuery& Query, FCastlePCGSemanticField& Field, FString& Error) const
 {
 	using namespace CastlePCGRoofQuarters;
-	if (!FMath::IsNearlyEqual(Query.GetCellPitch(), UCastleHachimisV4Layout::CellPitch, 0.1)
-		|| !FMath::IsNearlyEqual(Query.GetLayerHeight(), UCastleHachimisV4Layout::StoryRise, 0.1))
-	{
-		Error = FString::Printf(TEXT("规则 %s 的棋盘节距或层高与四分屋顶资产不一致。"), *GetPathName());
-		return false;
-	}
+	const bool bGridMatchesRoof = FMath::IsNearlyEqual(Query.GetCellPitch(), UCastleHachimisV4Layout::CellPitch, 0.1)
+		&& FMath::IsNearlyEqual(Query.GetLayerHeight(), UCastleHachimisV4Layout::StoryRise, 0.1);
 	TSet<FIntVector> Replaced;
 	for (const FIntVector& Cell : Query.OrderedCells())
 	{
@@ -118,6 +114,12 @@ bool UCastlePCGRoofQuarterRule::Evaluate(const FCastlePCGBoardQuery& Query, FCas
 		const FCastlePCGRoomSample& Sample = Spec.RoomFrame;
 		const UCastleHachimisV4Layout* Layout = BoardCell.bRoom ? Sample.Layout : BoardCell.Layout;
 		if (!Layout || Layout->bChassisOnly) { continue; } // 单层普通房只提供底盘，不参与四分屋顶。
+		// 节距和层高用于 V4 格底换算。完全走旧适配器的棋盘没有四分屋顶需要校验。
+		if (!bGridMatchesRoof)
+		{
+			Error = FString::Printf(TEXT("规则 %s 的棋盘节距或层高与四分屋顶布局 %s 不一致。"), *GetPathName(), *Layout->GetPathName());
+			return false;
+		}
 		const FVector InBuilding = BoardCell.CellInBuilding.GetLocation();
 		const FIntVector LocalCell = BoardCell.bRoom ? Sample.Cell : FIntVector(
 			FMath::RoundToInt(InBuilding.X / Layout->CellPitch + (Layout->Grid.X - 1) * 0.5),
