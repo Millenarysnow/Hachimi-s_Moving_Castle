@@ -260,6 +260,8 @@ bool FCastlePCGOverhangStructure::RunTest(const FString& Parameters)
 	using enum ECastlePCGBraceKind;
 	const auto* Rules = LoadRules(*this);
 	if (!Rules) { return false; }
+	const auto* BraceRule = FindRule<UCastlePCGOverhangBraceRule>(*Rules);
+	if (!TestNotNull(TEXT("正式规则集包含斜撑规则"), BraceRule)) { return false; }
 	auto* Layout = NewObject<UCastleHachimisV4Layout>();
 	Layout->Family = TEXT("Archer");
 	const FIntVector X(1, 0, 0), Y(0, 1, 0);
@@ -276,8 +278,10 @@ bool FCastlePCGOverhangStructure::RunTest(const FString& Parameters)
 	{
 		FCastlePCGBoardQuery Query(MoveTemp(Cells), *Rules, nullptr, 0, C.Z - 1, Tower);
 		FCastlePCGSemanticField Field;
+		for (const FIntVector& Cell : Query.OrderedCells()) { Field.Cells.Add(Cell); }
 		FString Error;
-		if (!Rules->Solve(Query, Field, Error)) { AddError(Error); }
+		// 该夹具只声明斜撑所需的家族和占格，按单条规则验证其挂件数量。
+		if (!BraceRule->Evaluate(Query, Field, Error)) { AddError(Error); }
 		return Field;
 	};
 	const auto Check = [&](const FCastlePCGSemanticField& Field, ECastlePCGBraceKind Kind)

@@ -1,6 +1,7 @@
 #include "HachimisV4ImportCommandlet.h"
 
 #if WITH_EDITOR
+#include "Castle/PCG/Structure/CastlePCGRoofQuarterRule.h"
 #include "Castle/PCG/Structure/CastlePCGSupportRules.h"
 #include "CastleHachimisV4Layout.h"
 #include "Algo/Count.h"
@@ -102,6 +103,7 @@ namespace HachimisV4Import
 		bool RunQuadRoofDelivery();
 		/** 盾塔四件网格与专用调色板逐件预检后在同一事务中写入。 */
 		bool RunShieldQuadRoofDelivery();
+		bool RunRoofQuarterDelivery(const FString& DirectionalDirectory);
 
 	private:
 		FString Directory;
@@ -129,6 +131,7 @@ namespace HachimisV4Import
 		bool ReadQuadRoofPart(FName Family, FName Group, FPartSource& Out, FShieldRoofPaletteSource* ShieldPalette = nullptr);
 		bool StoreQuadRoofKit(FName Family, ECastlePCGQuadRoofKind Kind, FPartSource& Part, UMaterial& Material,
 			const FString& Folder, UCastlePCGQuadRoofOverlayRule& Rule, TArray<UObject*>& Assets);
+		bool ReadRoofQuarter(const FString& File, const FString& Name, FName Family, FPartSource& Out);
 	};
 
 	bool Fail(const FString& Object, const FString& Reason)
@@ -1090,6 +1093,254 @@ namespace HachimisV4Import
 		}
 	}
 
+	bool FImporter::ReadRoofQuarter(const FString& File, const FString& Name, FName Family, FPartSource& Out)
+	{
+		// 四分 FBX 的局部枢轴来自放置表。单网格节点自身只承载 FBX 轴转换。
+		FbxManager* Manager = FbxManager::Create();
+		ON_SCOPE_EXIT { Manager->Destroy(); };
+		Manager->SetIOSettings(FbxIOSettings::Create(Manager, IOSROOT));
+		auto* Loader = FbxImporter::Create(Manager, "RoofQuarter");
+		auto* Scene = FbxScene::Create(Manager, "RoofQuarter");
+		if (!Loader->Initialize(TCHAR_TO_UTF8(*File), -1, Manager->GetIOSettings()))
+		{
+			return Fail(File, UTF8_TO_TCHAR(Loader->GetStatus().GetErrorString()));
+		}
+		Manager->GetIOSettings()->SetBoolProp(IMP_FBX_EXTRACT_EMBEDDED_DATA, false);
+		if (!Loader->Import(Scene)) { return Fail(File, UTF8_TO_TCHAR(Loader->GetStatus().GetErrorString())); }
+		auto* Root = Scene->GetRootNode();
+		auto* Node = Root && Root->GetChildCount() == 1 ? Root->GetChild(0) : nullptr;
+		int32 UpSign = 0;
+		if (!Node || Name != UTF8_TO_TCHAR(Node->GetName()) || !Node->GetMesh() || Node->GetChildCount() != 0
+			|| !FMath::IsNearlyEqual(Scene->GetGlobalSettings().GetSystemUnit().GetScaleFactor(), CmPerMetre)
+			|| Scene->GetGlobalSettings().GetAxisSystem().GetUpVector(UpSign) != FbxAxisSystem::eZAxis || UpSign != 1)
+		{
+			return Fail(File, TEXT("屋角 FBX 须含唯一同名静态网格、米单位和 +Z 向上：") + Name);
+		}
+		FSceneSource Source;
+		if (!ReadNode(*Node, *Node, Source, File, TEXT("RoofQuarter"), true)) { return false; }
+		if (Source.Parts.Num() != 1 || Source.Parts[0].Triangles.IsEmpty()) { return Fail(File, TEXT("屋角无有效三角")); }
+		Out = MoveTemp(Source.Parts[0]);
+		const FString Materials = FString(AssetRoot) / (Family == TEXT("Shield") ? TEXT("Shield/Materials") : TEXT("Materials"));
+		for (int32 Index = 0; Index < Node->GetMaterialCount(); ++Index)
+		{
+			const auto* Slot = Node->GetMaterial(Index);
+			if (!Slot) { return Fail(File, FString::Printf(TEXT("缺少材质槽 %d"), Index)); }
+			const FString MaterialName = UTF8_TO_TCHAR(Slot->GetName());
+			const FString Path = Materials / MaterialName;
+			auto* Material = LoadObject<UMaterial>(nullptr, *(Path + TEXT(".") + MaterialName));
+			if (!Material) { return Fail(File, TEXT("缺少现有 V4 材质 ") + Path); }
+			Out.Materials.Add(Material);
+		}
+		return true;
+	}
+
+	/** 对称网格直接烘焙到顶点，奇数次反射同时修正绕序，运行时组件保持单位缩放。 */
+	FPartSource MirrorRoofQuarter(const FPartSource& Source, int32 X, int32 Y)
+	{
+		FPartSource Mesh = Source;
+		for (FTriangle& Triangle : Mesh.Triangles)
+		{
+			for (FCorner& Corner : Triangle.Corners)
+			{
+				Corner.Position.X *= X;
+				Corner.Position.Y *= Y;
+				Corner.Normal.X *= X;
+				Corner.Normal.Y *= Y;
+			}
+			if (X * Y < 0) { Swap(Triangle.Corners[1], Triangle.Corners[2]); }
+		}
+		return Mesh;
+	}
+
+	/** 在作者枢轴坐标中切到棋盘 Y=0，保留既有三角材质、法线与 UV。 */
+	FPartSource SliceFarmRoof(const FPartSource& Source, double PivotY, int32 Side)
+	{
+		FPartSource Result;
+		Result.Part = Source.Part;
+		Result.Materials = Source.Materials;
+		for (const FTriangle& Triangle : Source.Triangles)
+		{
+			TArray<FCorner> Polygon(Triangle.Corners, 3);
+			Clip(Polygon, FTransform::Identity, 1, -PivotY, Side);
+			for (int32 I = 1; I + 1 < Polygon.Num(); ++I)
+			{
+				const FVector3f Area = FVector3f::CrossProduct(Polygon[I].Position - Polygon[0].Position,
+					Polygon[I + 1].Position - Polygon[0].Position);
+				if (!Area.IsNearlyZero()) { Result.Triangles.Add({{Polygon[0], Polygon[I], Polygon[I + 1]}, Triangle.Material}); }
+			}
+		}
+		return Result;
+	}
+
+	bool FImporter::RunRoofQuarterDelivery(const FString& DirectionalDirectory)
+	{
+		using namespace CastlePCGRoofQuarters;
+		const FString ManifestFile = Directory / TEXT("PCG_屋顶放置表.json");
+		FString Json;
+		TSharedPtr<FJsonObject> Manifest;
+		const TSharedPtr<FJsonObject>* Rows = nullptr;
+		double Schema = 0.0;
+		double Pitch = 0.0;
+		const auto Keys = FormKeys();
+		if (!FFileHelper::LoadFileToString(Json, *ManifestFile)
+			|| !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), Manifest) || !Manifest
+			|| !Manifest->TryGetNumberField(TEXT("schema"), Schema) || Schema != 1
+			|| !Manifest->TryGetNumberField(TEXT("pitch_cm"), Pitch) || Pitch != UCastleHachimisV4Layout::CellPitch
+			|| !Manifest->TryGetObjectField(TEXT("forms"), Rows) || (*Rows)->Values.Num() != Keys.Num())
+		{
+			return Fail(ManifestFile, TEXT("四分屋顶放置表版本、节距或造型集合无效"));
+		}
+		const FString RuleSetPath = TEXT("/Game/MovingCastle/Data/DA_CastlePCGRuleSet.DA_CastlePCGRuleSet");
+		auto* RuleSet = LoadObject<UCastlePCGRuleSetDataAsset>(nullptr, *RuleSetPath);
+		if (!RuleSet) { return Fail(RuleSetPath, TEXT("正式规则集不可读取")); }
+		auto* Rule = NewObject<UCastlePCGRoofQuarterRule>(RuleSet);
+		TArray<UObject*> Assets;
+		double MaxError = 0.0;
+		int32 DirectionalMeshes = 0;
+		int32 SymmetricMeshes = 0;
+		for (const FName Key : Keys)
+		{
+			const FString Name = Key.ToString();
+			FString Family, FormName;
+			Name.Split(TEXT("_"), &Family, &FormName);
+			const TSharedPtr<FJsonObject>* Row = nullptr;
+			const TArray<TSharedPtr<FJsonValue>>* Coordinates = nullptr;
+			const TSharedPtr<FJsonObject>* Variants = nullptr;
+			FString DeclaredFamily, DeclaredForm, Selected;
+			FVector Pivot;
+			if (!(*Rows)->TryGetObjectField(Name, Row) || !(*Row)->TryGetStringField(TEXT("family"), DeclaredFamily)
+				|| !(*Row)->TryGetStringField(TEXT("form"), DeclaredForm) || DeclaredFamily != Family || DeclaredForm != FormName
+				|| !(*Row)->TryGetArrayField(TEXT("placement_anchor_blender_xyz_cm"), Coordinates) || Coordinates->Num() != 3
+				|| !(*Coordinates)[0]->TryGetNumber(Pivot.X) || !(*Coordinates)[1]->TryGetNumber(Pivot.Y)
+				|| !(*Coordinates)[2]->TryGetNumber(Pivot.Z) || Pivot.ContainsNaN()
+				|| !(*Row)->TryGetStringField(TEXT("selected_quadrant"), Selected)
+				|| !(*Row)->TryGetObjectField(TEXT("variants"), Variants))
+			{
+				return Fail(ManifestFile, Name + TEXT(" 的家族、造型、商品锚点或变体字段无效"));
+			}
+			Pivot.Y = -Pivot.Y;
+			const FString LayoutName = TEXT("DA_") + Name;
+			const FString LayoutPath = FString(AssetRoot) / Family / LayoutName;
+			auto* Layout = LoadObject<UCastleHachimisV4Layout>(nullptr, *(LayoutPath + TEXT(".") + LayoutName));
+			if (!Layout || FormKey(*Layout) != Key || Layout->bChassisOnly
+				|| Layout->Grid.X < 1 || Layout->Grid.X > 2 || Layout->Grid.Y < 1 || Layout->Grid.Y > 2
+				|| Layout->Grid.Z < 1 || Layout->Grid.Z > 2)
+			{
+				return Fail(LayoutPath, TEXT("缺少对应作者屋顶布局或尺寸无效"));
+			}
+			auto& Form = Rule->Forms.Add(Key);
+			Form.Layout = Layout;
+			const bool bDirectional = Family == TEXT("Farm") || Name == TEXT("Room_L4") || Name == TEXT("Shield_L5")
+				|| Name == TEXT("Balloon_L3H") || Name == TEXT("Balloon_L3V");
+			if (!bDirectional && Selected != TEXT("XP_YP")) { return Fail(ManifestFile, Name + TEXT(" 的对称代表片不在 XP_YP")); }
+			const FString Folder = FString(AssetRoot) / TEXT("RoofQuarters") / Family;
+			FBox Combined(ForceInit);
+			for (const int32 X : {1, -1})
+			for (const int32 Y : {-1, 1})
+			{
+				// 作者命名按 Blender Y 编号，归属和收檐方向都按换算后的 UE Y 决定。
+				const FString Quadrant = FString::Printf(TEXT("X%s_Y%s"), X > 0 ? TEXT("P") : TEXT("N"), Y < 0 ? TEXT("P") : TEXT("N"));
+				const bool bSplit = RequiresFarmSplit(Key) && Y > 0;
+				const int32 FirstPiece = Form.Pieces.Num();
+				for (int32 Section = 0; Section < (bSplit ? 2 : 1); ++Section)
+				{
+					const int32 OwnerY = bSplit && Section == 0 ? -1 : Y;
+					auto& Piece = Form.Pieces.AddDefaulted_GetRef();
+					Piece.Slot = FName(Quadrant + (bSplit ? (Section == 0 ? TEXT("_Back") : TEXT("_Front")) : TEXT("")));
+					Piece.Owner = FIntVector(X > 0 ? Layout->Grid.X - 1 : 0, OwnerY > 0 ? Layout->Grid.Y - 1 : 0, Layout->Grid.Z - 1);
+					Piece.Outward = FIntPoint(X, OwnerY);
+					Piece.PivotInOwner = Pivot - Layout->CellBottom(Piece.Owner);
+				}
+				for (uint8 Bits = 0; Bits < 4; ++Bits)
+				{
+					const auto State = static_cast<ECastlePCGRoofQuarterState>(Bits);
+					const TCHAR* StateText = StateName(State);
+					FString FbxName, File;
+					if (bDirectional)
+					{
+						FbxName = FString::Printf(TEXT("SM_RQ_%s_%s_%s"), *Name, *Quadrant, StateText);
+						File = DirectionalDirectory / (FbxName + TEXT(".fbx"));
+					}
+					else
+					{
+						const TSharedPtr<FJsonObject>* Variant = nullptr;
+						if (!(*Variants)->TryGetObjectField(StateText, Variant)
+							|| !(*Variant)->TryGetStringField(TEXT("mesh"), FbxName) || FbxName != FString::Printf(TEXT("SM_RQ_%s_%s"), *Name, StateText)
+							|| !(*Variant)->TryGetStringField(TEXT("file"), File)
+							|| File != FString::Printf(TEXT("FBX/%s/%s/%s.fbx"), *Family, *FormName, *FbxName))
+						{
+							return Fail(ManifestFile, Name + TEXT(" 的代表片路径非法：") + StateText);
+						}
+						File = Directory / File;
+					}
+					FPartSource Source;
+					if (!ReadRoofQuarter(File, FbxName, FName(Family), Source)) { return false; }
+					if (!bDirectional) { Source = MirrorRoofQuarter(Source, X, -Y); }
+					for (int32 Section = 0; Section < (bSplit ? 2 : 1); ++Section)
+					{
+						auto& Piece = Form.Pieces[FirstPiece + Section];
+						FPartSource Part = bSplit ? SliceFarmRoof(Source, Pivot.Y, Section == 0 ? -1 : 1) : MoveTemp(Source);
+						const FString Stem = FString::Printf(TEXT("%s_%s_%s"), *Name, *Piece.Slot.ToString(), StateText);
+						Part.Part.Node = FName(TEXT("SM_RQ_") + Stem);
+						const FBox World = Bounds(Part).ShiftBy(Pivot);
+						const auto Center = Layout->CellBottom(Piece.Owner);
+						const int32 YSide = Piece.Outward.Y;
+						if (Part.Triangles.IsEmpty() || ((Bits & 1) && (X > 0 ? World.Max.X - Center.X : Center.X - World.Min.X) > Pitch / 2.0 + 0.05)
+							|| ((Bits & 2) && (YSide > 0 ? World.Max.Y - Center.Y : Center.Y - World.Min.Y) > Pitch / 2.0 + 0.05))
+						{
+							return Fail(File, Stem + TEXT(" 没有有效几何或收檐边超过所属格边界"));
+						}
+						if (Bits == 0) { Combined += World; }
+						if (!StorePart(Part, Folder, Part.Part.Node.ToString())) { return false; }
+						const FString KitPath = Folder / (TEXT("DA_RQ_") + Stem + TEXT("Kit"));
+						auto* Kit = CreateOrLoad<UCastlePCGAttachmentKit>(KitPath);
+						if (!Kit) { return Fail(KitPath, TEXT("四分屋顶套件不可读取")); }
+						Assets.Add(Part.Part.Mesh.Get());
+						Kit->Parts = {MoveTemp(Part.Part)};
+						Assets.Add(Kit);
+						Piece.Variants.Add(State, Kit);
+						if (bDirectional) { ++DirectionalMeshes; }
+						else { ++SymmetricMeshes; }
+					}
+				}
+			}
+
+			// 原装屋面按源顶点变换后并集，避免旋转零件的 AABB 八角扩大装配包围盒。
+			FBox Original(ForceInit);
+			for (const auto& Part : Layout->Parts)
+			{
+				if (Part.Group != TEXT("Roof") && Part.Group != TEXT("RoofKeys")) { continue; }
+				const FMeshDescription* Mesh = Part.Mesh ? Part.Mesh->GetMeshDescription(0) : nullptr;
+				if (!Mesh) { return Fail(LayoutPath, Part.Node.ToString() + TEXT(" 的原屋面缺少网格描述")); }
+				const auto Positions = FStaticMeshConstAttributes(*Mesh).GetVertexPositions();
+				for (const FVertexID Vertex : Mesh->Vertices().GetElementIDs())
+				{
+					Original += Part.Local.TransformPosition(FVector(Positions[Vertex]));
+				}
+			}
+			const double Error = FMath::Max((Original.Min - Combined.Min).GetAbsMax(), (Original.Max - Combined.Max).GetAbsMax());
+			if (!Original.IsValid || !Combined.IsValid || Error > 0.5)
+			{
+				return Fail(LayoutPath, FString::Printf(TEXT("原位屋角六面误差 %.6f cm，原屋面 %s，新屋面 %s"),
+					Error, *Original.ToString(), *Combined.ToString()));
+			}
+			MaxError = FMath::Max(MaxError, Error);
+		}
+		const auto Previous = RuleSet->Rules;
+		RuleSet->Rules.RemoveAll([](const auto& Entry) { return Entry && Entry->template IsA<UCastlePCGRoofQuarterRule>(); });
+		RuleSet->Rules.Add(Rule);
+		bool bPublished = false;
+		ON_SCOPE_EXIT { if (!bPublished) { RuleSet->Rules = Previous; } };
+		FString Error;
+		if (!RuleSet->ValidateConfiguration(Error)) { return Fail(RuleSetPath, Error); }
+		Assets.Add(RuleSet);
+		if (!SaveSupportDelivery(Assets)) { return false; }
+		bPublished = true;
+		UE_LOG(LogHachimisV4, Display, TEXT("四分屋顶已发布：方向件 %d，对称件 %d，套件 %d，六面最大包围盒误差 %.6f cm。"),
+			DirectionalMeshes, SymmetricMeshes, DirectionalMeshes + SymmetricMeshes, MaxError);
+		return true;
+	}
+
 	bool FImporter::StoreSlices(const FPartSource& Source, UCastleHachimisV4Layout& Layout, const FString& Folder)
 	{
 		const double Half = UCastleHachimisV4Layout::CellPitch * 0.5;
@@ -1443,6 +1694,17 @@ namespace HachimisV4Import
 int32 UHachimisV4ImportCommandlet::Main(const FString& Params)
 {
 #if WITH_EDITOR
+	FString RoofQuarterSource, RoofQuarterDirectionalSource;
+	if (FParse::Value(*Params, TEXT("RoofQuarterSource="), RoofQuarterSource))
+	{
+		if (!FParse::Value(*Params, TEXT("RoofQuarterDirectionalSource="), RoofQuarterDirectionalSource))
+		{
+			HachimisV4Import::Fail(RoofQuarterSource, TEXT("需要 -RoofQuarterDirectionalSource= 真实方向件的临时 FBX 目录"));
+			return 1;
+		}
+		HachimisV4Import::FImporter Importer(RoofQuarterSource, FString(), false);
+		return Importer.RunRoofQuarterDelivery(RoofQuarterDirectionalSource) ? 0 : 1;
+	}
 	FString ShieldQuadRoofSource;
 	if (FParse::Value(*Params, TEXT("ShieldQuadRoofSource="), ShieldQuadRoofSource))
 	{

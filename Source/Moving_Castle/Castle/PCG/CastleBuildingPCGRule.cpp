@@ -4,6 +4,7 @@
 #include "Engine/StaticMesh.h"
 #include "HachimisV4/CastleHachimisV4Layout.h"
 #include "Moving_Castle.h"
+#include "Structure/CastlePCGRoofQuarterRule.h"
 #include "Structure/CastlePCGSupportRules.h"
 
 namespace
@@ -254,6 +255,7 @@ bool UCastlePCGRuleSetDataAsset::ValidateConfiguration(FString& Error) const
 	int32 BraceIndex = INDEX_NONE;
 	int32 StepIndex = INDEX_NONE;
 	int32 QuadRoofIndex = INDEX_NONE;
+	int32 RoofQuarterIndex = INDEX_NONE;
 	for (int32 Index = 0; Index < Rules.Num(); ++Index)
 	{
 		const UCastleBuildingPCGRule* Rule = Rules[Index];
@@ -301,6 +303,22 @@ bool UCastlePCGRuleSetDataAsset::ValidateConfiguration(FString& Error) const
 				return false;
 			}
 		}
+		if (const auto* RoofQuarter = Cast<UCastlePCGRoofQuarterRule>(Rule))
+		{
+			if (!Register(RoofQuarterIndex, ECastlePCGRuleStage::Structure) || !RoofQuarter->ValidateKits(Error))
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("%s：%s"), *GetPathName(), *Error);
+				return false;
+			}
+		}
+	}
+	// 常规屋角只能消费已完成的普通房样例和叠建屋面，不能反过来抢占这些覆写。
+	if (QuadRoofIndex == INDEX_NONE || RoofQuarterIndex == INDEX_NONE || RoofQuarterIndex <= RoomFormIndex
+		|| RoofQuarterIndex <= StepIndex || RoofQuarterIndex <= QuadRoofIndex)
+	{
+		Error = FString::Printf(TEXT("规则集 %s 须配齐 QuadRoofOverlay、RoofQuarter，且 RoofQuarter 须在 RoomForm、HorizontalLevel2Step 与 QuadRoofOverlay 之后。"), *GetPathName());
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *Error);
+		return false;
 	}
 	if (BraceIndex == INDEX_NONE || StepIndex == INDEX_NONE)
 	{
