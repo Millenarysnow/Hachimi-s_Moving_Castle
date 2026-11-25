@@ -164,6 +164,8 @@ bool UCastleItemGrantLibrary::TryPrepareRoomGroup(const UCastleRoomGroupDataAsse
 	{
 		return RejectGrant(Group, INVTEXT("房间组需要有效模板、名称和目标背包，且只能在游戏线程发放。"), OutFailureReason);
 	}
+	// 在解析候选或消耗随机流前拒绝漏填的稀有度。
+	if (!Group->ValidateRarity(OutFailureReason)) { return false; }
 	const ECastleRoomGroupType Type = Group->GroupType;
 	if (Group->bChooseInPicker && Type != ECastleRoomGroupType::HighNumberRoom && Type != ECastleRoomGroupType::NPCSpeedRoom)
 	{

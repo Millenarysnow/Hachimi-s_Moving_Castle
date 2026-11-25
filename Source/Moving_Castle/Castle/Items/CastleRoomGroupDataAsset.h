@@ -18,6 +18,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "房间组")
 	ECastleRoomGroupType GroupType = ECastleRoomGroupType::ThreeNumberFourArchers;
 
+	/** 正式房间组必须显式选择卡包稀有度，未配置的资产会被商店和发放入口拒绝。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "房间组")
+	ECastleRoomPackRarity Rarity = ECastleRoomPackRarity::None;
+
+	/** 供商店与发放共用校验；非法值记录房间组资产路径和具体数值。 */
+	bool ValidateRarity(FText& OutReason) const;
+
 	/** 模板使用的候选属性。模板固定的属性由类型约束，可用单一合法候选显式锁定。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "房间组")
 	FCastleWildcardRoomSpec RoomSpec;

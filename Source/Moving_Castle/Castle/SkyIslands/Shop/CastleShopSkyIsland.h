@@ -36,7 +36,8 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UCastleBadgeDataAsset> Badge;
 	UPROPERTY(Transient) TObjectPtr<UCastlePendingRoomReward> PendingReward;
 	UPROPERTY(Transient) TObjectPtr<UTextRenderComponent> Sign;
-	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> Tint;
+	/** 售罄时仅更新本货位材质，其他同档房间包不受影响。 */
+	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> OfferMaterialInstance;
 	FText ProductName;
 	FString DisplayLabel;
 	int32 Price = 0;
@@ -74,9 +75,8 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "商店空岛")
 	TSoftObjectPtr<UCastleShopSkyIslandDataAsset> ConfigAsset;
 	UPROPERTY(Transient) TObjectPtr<UCastleShopSkyIslandDataAsset> Config;
-	UPROPERTY() TObjectPtr<UStaticMesh> RoomGroupMesh;
 	UPROPERTY() TObjectPtr<UStaticMesh> BadgeMesh;
-	UPROPERTY() TObjectPtr<UMaterialInterface> OfferMaterial;
+	UPROPERTY() TObjectPtr<UMaterialInterface> BadgeMaterial;
 	UPROPERTY(Transient) TArray<TObjectPtr<UCastleShopSkyIslandOffer>> Offers;
 	UPROPERTY(Transient) TObjectPtr<UCastleShopSkyIslandOffer> OpenOffer;
 	TWeakObjectPtr<ACastleBoard> Board;
