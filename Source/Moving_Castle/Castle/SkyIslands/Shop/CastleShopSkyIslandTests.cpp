@@ -17,10 +17,16 @@
 #include "CastleBoard.h"
 #include "CastlePlayerController.h"
 #include "Components/PanelWidget.h"
+#include "Components/TextRenderComponent.h"
 #include "Editor.h"
 #include "Engine/Engine.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/Texture2D.h"
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialInstanceConstant.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 #include "Tests/AutomationEditorCommon.h"
@@ -29,6 +35,15 @@
 namespace
 {
 	constexpr TCHAR ShopAssetPath[] = TEXT("/Game/MovingCastle/Data/SkyIslands/DA_ShopSkyIsland.DA_ShopSkyIsland");
+	constexpr TCHAR RoomPackFolder[] = TEXT("/Game/MovingCastle/Model/Items/RoomPack");
+	const FName SoldAmountParameter(TEXT("SoldAmount"));
+
+	/** 用正式资产名验证引用关系，避免漏配后仍由别的有效资源凑齐数量。 */
+	template <typename AssetType>
+	AssetType* LoadRoomPackAsset(const FString& Name)
+	{
+		return LoadObject<AssetType>(nullptr, *FString::Printf(TEXT("%s/%s.%s"), RoomPackFolder, *Name, *Name));
+	}
 
 	template <typename WidgetType>
 	WidgetType* FindShopWidget(UWorld& World)
@@ -90,6 +105,49 @@ public:
 	}
 
 private:
+	void VerifyRoomPackDisplay(const ACastleShopSkyIsland& Island, const UCastleShopSkyIslandOffer& Offer)
+	{
+		Test.TestTrue(TEXT("房间组使用配置的卡包网格"), Offer.GetStaticMesh() == Island.Config->RoomPackMesh.Get());
+		if (Test.TestNotNull(TEXT("卡包货位具有独立动态材质"), Offer.OfferMaterialInstance.Get()))
+		{
+			const auto* Source = Island.Config->RoomPackMaterials.FindChecked(Offer.RoomGroup->Rarity).Get();
+			Test.TestTrue(TEXT("卡包动态材质使用商品稀有度对应的父材质"), Offer.OfferMaterialInstance->Parent.Get() == Source);
+			Test.TestTrue(TEXT("动态材质应用到包体材质槽"), Offer.GetMaterial(0) == Offer.OfferMaterialInstance.Get());
+		}
+		const FVector RelativeLocation = Offer.GetRelativeLocation();
+		const FBox Box = Offer.Bounds.GetBox();
+		const double FloorZ = Island.GetActorLocation().Z;
+		Test.TestTrue(TEXT("卡包包围盒底面贴地"), FMath::Abs(Box.Min.Z - FloorZ) <= 1.0);
+		Test.TestTrue(TEXT("卡包顶面在 180 至 200 cm"), Box.Max.Z - FloorZ >= 180.0 && Box.Max.Z - FloorZ <= 200.0);
+		Test.TestTrue(TEXT("卡包几何高度在 180 至 200 cm"), Box.GetSize().Z >= 180.0 && Box.GetSize().Z <= 200.0);
+		if (Test.TestNotNull(TEXT("卡包保留价格牌"), Offer.Sign.Get()))
+		{
+			Test.TestTrue(TEXT("卡包顶面低于独立价格牌"), Box.Max.Z < Offer.Sign->GetComponentLocation().Z);
+		}
+		// 用素材导入后实测的 +Y 正面轴，检查两侧货位均朝向中轴线。
+		const FVector Front = Offer.GetRelativeRotation().RotateVector(FVector::RightVector);
+		const FVector TowardAisle = RelativeLocation.Y < 0.0 ? FVector::RightVector : -FVector::RightVector;
+		Test.TestTrue(TEXT("卡包印字面正对中央通道"), Front.Equals(TowardAisle, 0.001));
+		Test.TestTrue(TEXT("卡包等比缩放 14.5 倍"), Offer.GetRelativeScale3D().Equals(FVector(14.5), 0.001));
+		Test.TestEqual(TEXT("卡包仅开启查询碰撞"), Offer.GetCollisionEnabled(), ECollisionEnabled::QueryOnly);
+		Test.TestFalse(TEXT("卡包组件禁用导航影响"), Offer.CanEverAffectNavigation());
+		if (RelativeLocation.Y < 0.0) { bCheckedLeftPack = true; }
+		else { bCheckedRightPack = true; }
+		Test.AddInfo(FString::Printf(TEXT("卡包货位 Y=%.0f，Yaw=%.0f°，实测世界包围盒尺寸 %s cm，底距地板 %.3f cm。"),
+			RelativeLocation.Y, Offer.GetRelativeRotation().Yaw, *Box.GetSize().ToString(), Box.Min.Z - FloorZ));
+	}
+
+	void VerifySoldAmount(const UCastleShopSkyIslandOffer& Offer, float Expected)
+	{
+		float SoldAmount = -1.0f;
+		if (Test.TestTrue(TEXT("卡包动态材质可读取 SoldAmount"), Offer.OfferMaterialInstance
+			&& Offer.OfferMaterialInstance->GetScalarParameterValue(SoldAmountParameter, SoldAmount)))
+		{
+			Test.TestEqual(TEXT("卡包售罄材质状态匹配交易结果"), SoldAmount, Expected);
+		}
+		Test.TestTrue(TEXT("卡包模型仍可见"), Offer.IsVisible());
+	}
+
 	bool PrepareAndEnter(UWorld& World, UCastleDirectorSubsystem& Director)
 	{
 		auto* Controller = Cast<ACastlePlayerController>(World.GetFirstPlayerController());
@@ -168,6 +226,11 @@ private:
 				const auto* Offer = Island->Offers[Index].Get();
 				bHasRoom |= Offer->RoomGroup != nullptr;
 				bHasBadge |= Offer->Badge != nullptr;
+				if (Offer->RoomGroup)
+				{
+					VerifyRoomPackDisplay(*Island, *Offer);
+					VerifySoldAmount(*Offer, 0.0f);
+				}
 				Names.Add(Offer->ProductName.ToString());
 				const FText Prompt = Offer->GetInteractPrompt();
 				if (Copy == 0) { Previous.Add(Prompt); }
@@ -213,9 +276,18 @@ private:
 		FText Reason;
 		const auto Interact = [&Director, &Reason](const UPrimitiveComponent& Target)
 		{
-			const FVector Center = Target.GetComponentLocation();
-			return Director.TryInteractWithSkyIsland(Center - FVector(0, 160, 0), Center, Reason);
+			// 包底轴心在地板上，从中央通道一侧瞄准世界包围盒中心才与玩家准星一致。
+			const FVector Center = Target.Bounds.Origin;
+			const double TowardAisle = Target.GetRelativeLocation().Y < 0.0 ? 160.0 : -160.0;
+			return Director.TryInteractWithSkyIsland(Center + FVector(0, TowardAisle, 0), Center, Reason);
 		};
+		for (const UCastleShopSkyIslandOffer* Pack : {Fixed, Wildcard})
+		{
+			VerifyRoomPackDisplay(**Island, *Pack);
+			VerifySoldAmount(*Pack, 0.0f);
+			Test.TestTrue(TEXT("在售准星显示 30 金币"), Pack->GetInteractPrompt().ToString().EndsWith(TEXT("　30 金币")));
+		}
+		Test.TestTrue(TEXT("真实 PIE 覆盖左右两侧的房间包朝向"), bCheckedLeftPack && bCheckedRightPack);
 		const auto CardCount = [&Backpack]() { return Backpack.GetItemCount() + Backpack.GetTempItemCount(); };
 		const int32 InitialCards = CardCount();
 		Test.TestTrue(TEXT("耗尽余额以验证交易拒绝"), Wallet.TrySpendGold(Wallet.GetGold(), Reason));
@@ -223,12 +295,17 @@ private:
 		Test.TestEqual(TEXT("拒绝后余额未变"), Wallet.GetGold(), 0);
 		Test.TestEqual(TEXT("拒绝后没有发牌"), CardCount(), InitialCards);
 		Test.TestFalse(TEXT("被拒绝商品仍在售"), Fixed->bSold);
+		VerifySoldAmount(*Fixed, 0.0f);
 		Test.TestTrue(TEXT("测试账户入账"), Wallet.TryAddGold(200, Reason));
 		Test.TestTrue(TEXT("购买确定房间组"), Interact(*Fixed));
 		Test.TestEqual(TEXT("房间组扣费"), Wallet.GetGold(), 200 - Fixed->Price);
 		Test.TestEqual(TEXT("三张确定卡牌入建筑栏或临时栏"), CardCount(), InitialCards + 3);
 		Test.TestTrue(TEXT("房间组台座售罄"), Fixed->bSold);
+		VerifySoldAmount(*Fixed, 1.0f);
+		Test.TestTrue(TEXT("售罄后价格牌更新"), Fixed->Sign && Fixed->Sign->Text.ToString().EndsWith(TEXT("SOLD OUT")));
 		Test.TestFalse(TEXT("售罄房间组拒绝重复购买"), Interact(*Fixed));
+		Test.TestEqual(TEXT("售罄房间包仍可被射线命中并返回提示"), Reason.ToString(),
+			Fixed->ProductName.ToString() + TEXT("（已售罄）"));
 
 		const int32 BeforeWildcard = Wallet.GetGold();
 		if (!Test.TestTrue(TEXT("首次购买打开万能卡弹窗"), Interact(*Wildcard))
@@ -239,6 +316,7 @@ private:
 		Test.TestEqual(TEXT("取消后金币不变"), Wallet.GetGold(), BeforeWildcard);
 		Test.TestEqual(TEXT("取消后没有写入建筑卡"), CardCount(), InitialCards + 3);
 		Test.TestFalse(TEXT("取消后商品仍在售"), Wildcard->bSold);
+		VerifySoldAmount(*Wildcard, 0.0f);
 		if (!Test.TestTrue(TEXT("取消后可重新打开同一商品"), Interact(*Wildcard))
 			|| !Test.TestTrue(TEXT("模拟弹窗期间余额减少"), Wallet.TrySpendGold(BeforeWildcard, Reason))
 			|| !PressPickerButton(World, TEXT("ConfirmButton")))
@@ -248,6 +326,7 @@ private:
 		Test.TestEqual(TEXT("确认检查最新余额"), Wallet.GetGold(), 0);
 		Test.TestEqual(TEXT("确认时余额不足不发牌"), CardCount(), InitialCards + 3);
 		Test.TestFalse(TEXT("确认被拒绝后仍有货"), Wildcard->bSold);
+		VerifySoldAmount(*Wildcard, 0.0f);
 
 		FCastleBuildingDescriptor Example;
 		if (!Test.TestTrue(TEXT("读取可用于填满背包的确定卡"), Backpack.TryGetItemAt(0, Example))) { return false; }
@@ -266,10 +345,12 @@ private:
 		Test.TestEqual(TEXT("发牌失败后退还扣款"), Wallet.GetGold(), BeforeWildcard);
 		Test.TestEqual(TEXT("发牌失败不追加临时栏"), Backpack.GetTempItemCount(), BeforeTemp);
 		Test.TestFalse(TEXT("发牌失败商品仍在售"), Wildcard->bSold);
+		VerifySoldAmount(*Wildcard, 0.0f);
 		if (!PressPickerButton(World, TEXT("ConfirmButton"))) { return false; }
 		Test.TestEqual(TEXT("确认后只扣一次房间组售价"), Wallet.GetGold(), BeforeWildcard - Wildcard->Price);
 		Test.TestEqual(TEXT("满栏时确认的万能卡进入临时栏"), Backpack.GetTempItemCount(), BeforeTemp + 1);
 		Test.TestTrue(TEXT("确认后万能卡台座售罄"), Wildcard->bSold);
+		VerifySoldAmount(*Wildcard, 1.0f);
 
 		auto* Badges = UCastleBadgeSubsystem::GetForWorld(&World);
 		if (!Test.TestNotNull(TEXT("本局徽章子系统"), Badges)) { return false; }
@@ -336,6 +417,8 @@ private:
 	TStrongObjectPtr<UCastleShopSkyIslandDataAsset> TradeConfig;
 	TWeakObjectPtr<UWorld> ConfiguredWorld;
 	FDelegateHandle SpawnHandle;
+	bool bCheckedLeftPack = false;
+	bool bCheckedRightPack = false;
 	int32 Stage = 0;
 	double WaitUntil = FPlatformTime::Seconds() + 30.0;
 };
@@ -392,18 +475,81 @@ bool FCastleShopSkyIslandAssetTest::RunTest(const FString& Parameters)
 	auto* Asset = LoadObject<UCastleShopSkyIslandDataAsset>(nullptr, ShopAssetPath);
 	if (!TestNotNull(TEXT("商店配置资产"), Asset)) { return false; }
 	FText Reason;
-	TestTrue(TEXT("正式配置通过校验"), Asset->Validate(Reason));
+	if (!TestTrue(TEXT("正式配置通过校验"), Asset->Validate(Reason))) { return false; }
 	TestEqual(TEXT("引用 8 个房间组"), Asset->RoomGroupPool.Num(), 8);
 	TestEqual(TEXT("引用 7 个徽章"), Asset->BadgePool.Num(), 7);
 	TestEqual(TEXT("默认货位数"), Asset->OfferCount, 4);
 	TestEqual(TEXT("房间组售价"), Asset->DefaultRoomGroupPrice, 30);
 	TestEqual(TEXT("徽章售价"), Asset->DefaultBadgePrice, 50);
+	TestTrue(TEXT("正式商店明确引用 SM_RoomPack"), Asset->RoomPackMesh.Get() == LoadRoomPackAsset<UStaticMesh>(TEXT("SM_RoomPack")));
+
+	// 核对正式房间组名称与用户确认的档位，池中任一漏配或错配都会被识别。
+	const TMap<FString, ECastleRoomPackRarity> ExpectedGroups{
+		{TEXT("DA_RoomGroup_CustomNormalRoom"), ECastleRoomPackRarity::White},
+		{TEXT("DA_RoomGroup_CustomColorNormalRoom"), ECastleRoomPackRarity::White},
+		{TEXT("DA_RoomGroup_NpcSpeedRoom"), ECastleRoomPackRarity::Blue},
+		{TEXT("DA_RoomGroup_ThreeConsecutiveFarms"), ECastleRoomPackRarity::Blue},
+		{TEXT("DA_RoomGroup_ThreeNumberFourArchers"), ECastleRoomPackRarity::Purple},
+		{TEXT("DA_RoomGroup_HighNumberRoom"), ECastleRoomPackRarity::Purple},
+		{TEXT("DA_RoomGroup_RandomFunctionCustomRoom"), ECastleRoomPackRarity::Gold},
+		{TEXT("DA_RoomGroup_FullyCustomRoom"), ECastleRoomPackRarity::Holo}
+	};
+	TSet<FString> VerifiedGroups;
+	for (const UCastleRoomGroupDataAsset* Group : Asset->RoomGroupPool)
+	{
+		const FString Name = Group->GetName();
+		const ECastleRoomPackRarity* Expected = ExpectedGroups.Find(Name);
+		if (TestNotNull(TEXT("房间组资产在正式档位表中") + Name, Expected))
+		{
+			TestEqual(Name, Group->Rarity, *Expected);
+			VerifiedGroups.Add(Name);
+		}
+	}
+	TestEqual(TEXT("八个正式房间组各自出现"), VerifiedGroups.Num(), ExpectedGroups.Num());
+
+	const UMaterial* Master = LoadRoomPackAsset<UMaterial>(TEXT("M_RoomPack_Master"));
+	TestNotNull(TEXT("共用房间包母材质"), Master);
+	const auto VerifyTexture = [this](const UTexture2D* Texture, const FString& Name, const bool bSRgb,
+		const TextureCompressionSettings Compression, const bool bFlipGreen)
+	{
+		if (!TestNotNull(Name, Texture)) { return; }
+		TestEqual(Name + TEXT(" 的 sRGB 设置"), static_cast<bool>(Texture->SRGB), bSRgb);
+		TestEqual(Name + TEXT(" 的压缩设置"), Texture->CompressionSettings.GetValue(), Compression);
+		TestEqual(Name + TEXT(" 的法线绿通道设置"), static_cast<bool>(Texture->bFlipGreenChannel), bFlipGreen);
+		TestEqual(Name + TEXT(" 的源图宽"), Texture->Source.GetSizeX(), int64{1024});
+		TestEqual(Name + TEXT(" 的源图高"), Texture->Source.GetSizeY(), int64{1024});
+	};
+	const TPair<ECastleRoomPackRarity, const TCHAR*> ExpectedMaterials[] = {
+		{ECastleRoomPackRarity::White, TEXT("01_White")}, {ECastleRoomPackRarity::Blue, TEXT("02_Blue")},
+		{ECastleRoomPackRarity::Purple, TEXT("03_Purple")}, {ECastleRoomPackRarity::Gold, TEXT("04_Gold")},
+		{ECastleRoomPackRarity::Holo, TEXT("05_Holo")}
+	};
+	for (const auto& Entry : ExpectedMaterials)
+	{
+		const FString Tier(Entry.Value);
+		const auto* Instance = LoadRoomPackAsset<UMaterialInstanceConstant>(TEXT("MI_RoomPack_") + Tier);
+		if (!TestNotNull(Tier, Instance)) { continue; }
+		TestTrue(Tier + TEXT(" 显式绑定对应实例"), Asset->RoomPackMaterials.FindChecked(Entry.Key).Get() == Instance);
+		TestTrue(Tier + TEXT(" 使用房间包母材质"), Instance->Parent.Get() == Master);
+		const FString ColorName = TEXT("T_RoomPack_") + Tier + TEXT("_BC");
+		const FString MaskName = TEXT("T_RoomPack_") + Tier + TEXT("_ORM");
+		const auto* BaseColor = LoadRoomPackAsset<UTexture2D>(ColorName);
+		const auto* Masks = LoadRoomPackAsset<UTexture2D>(MaskName);
+		VerifyTexture(BaseColor, ColorName, true, TC_Default, false);
+		VerifyTexture(Masks, MaskName, false, TC_Masks, false);
+		UTexture* Parameter = nullptr;
+		TestTrue(Tier + TEXT(" 使用该档基础色"), Instance->GetTextureParameterValue(FName(TEXT("PackBaseColor")), Parameter)
+			&& Parameter == BaseColor);
+		TestTrue(Tier + TEXT(" 使用该档 ORM"), Instance->GetTextureParameterValue(FName(TEXT("PackORM")), Parameter)
+			&& Parameter == Masks);
+	}
+	VerifyTexture(LoadRoomPackAsset<UTexture2D>(TEXT("T_RoomPack_Foil_N")), TEXT("T_RoomPack_Foil_N"), false, TC_Normalmap, true);
 
 	// 非法变体只改临时副本，编码预期错误并断言原配置不会被修正。
 	auto* Invalid = DuplicateObject(Asset, GetTransientPackage());
 	Invalid->OfferCount = 3;
 	TestTrue(TEXT("允许 3 个货位"), Invalid->Validate(Reason));
-	AddExpectedError(TEXT("商店空岛配置"), EAutomationExpectedErrorFlags::Contains, 4);
+	AddExpectedError(TEXT("商店空岛配置"), EAutomationExpectedErrorFlags::Contains, 7);
 	Invalid->OfferCount = 2;
 	TestFalse(TEXT("拒绝不足 3 个货位"), Invalid->Validate(Reason));
 	Invalid->OfferCount = 4;
@@ -415,6 +561,22 @@ bool FCastleShopSkyIslandAssetTest::RunTest(const FString& Parameters)
 	Invalid->RoomGroupPool = Asset->RoomGroupPool;
 	Invalid->BadgePool.Reset();
 	TestFalse(TEXT("拒绝空商品池"), Invalid->Validate(Reason));
+	Invalid->BadgePool = Asset->BadgePool;
+	Invalid->RoomPackMesh = nullptr;
+	TestFalse(TEXT("拒绝缺失房间包网格"), Invalid->Validate(Reason));
+	Invalid->RoomPackMesh = Asset->RoomPackMesh;
+	Invalid->RoomPackMaterials[ECastleRoomPackRarity::Gold] = nullptr;
+	TestFalse(TEXT("拒绝任一档材质缺失"), Invalid->Validate(Reason));
+	Invalid->RoomPackMaterials[ECastleRoomPackRarity::Gold] = UMaterial::GetDefaultMaterial(MD_Surface);
+	TestFalse(TEXT("拒绝材质没有售罄控制参数"), Invalid->Validate(Reason));
+	Invalid->RoomPackMaterials = Asset->RoomPackMaterials;
+	auto* InvalidGroup = DuplicateObject(Asset->RoomGroupPool[0].Get(), GetTransientPackage());
+	Invalid->RoomGroupPool[0] = InvalidGroup;
+	AddExpectedError(TEXT("的卡包稀有度无效"), EAutomationExpectedErrorFlags::Contains, 2);
+	InvalidGroup->Rarity = ECastleRoomPackRarity::None;
+	TestFalse(TEXT("拒绝房间组漏配稀有度"), Invalid->Validate(Reason));
+	InvalidGroup->Rarity = static_cast<ECastleRoomPackRarity>(255);
+	TestFalse(TEXT("拒绝房间组稀有度越界"), Invalid->Validate(Reason));
 	return true;
 }
 

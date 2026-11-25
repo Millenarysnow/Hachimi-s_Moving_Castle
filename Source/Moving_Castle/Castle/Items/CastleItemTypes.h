@@ -62,3 +62,15 @@ enum class ECastleRoomGroupType : uint8
 	FullyCustomRoom UMETA(DisplayName = "完全自定义房间"),
 	NPCSpeedRoom UMETA(DisplayName = "加速 NPC 房间")
 };
+
+/** 决定房间组卡包的陈列材质，发牌内容仍由房间组模板决定。 */
+UENUM(BlueprintType)
+enum class ECastleRoomPackRarity : uint8
+{
+	None UMETA(DisplayName = "未配置"),
+	White UMETA(DisplayName = "白"),
+	Blue UMETA(DisplayName = "蓝"),
+	Purple UMETA(DisplayName = "紫"),
+	Gold UMETA(DisplayName = "金"),
+	Holo UMETA(DisplayName = "炫彩")
+};

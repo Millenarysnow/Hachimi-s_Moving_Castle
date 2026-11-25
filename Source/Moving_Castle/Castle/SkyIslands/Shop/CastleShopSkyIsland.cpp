@@ -18,10 +18,18 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Moving_Castle.h"
+#include "PhysicsEngine/BodySetup.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
 {
+	constexpr double RoomPackUniformScale = 14.5;
+	const FName RoomPackSoldParameter(TEXT("SoldAmount"));
+	constexpr ECastleRoomPackRarity RoomPackRarities[] = {
+		ECastleRoomPackRarity::White, ECastleRoomPackRarity::Blue, ECastleRoomPackRarity::Purple,
+		ECastleRoomPackRarity::Gold, ECastleRoomPackRarity::Holo
+	};
+
 	/** 单个抽样条目只指向一种商品，可用同一随机流混合两个池。 */
 	struct FCastleShopIslandProduct
 	{
@@ -52,6 +60,39 @@ bool UCastleShopSkyIslandDataAsset::Validate(FText& OutReason) const
 	{
 		return Reject(INVTEXT("房间组和徽章商品池都必须配置。"));
 	}
+	// 拒绝没有可查询包体或会参与导航的网格，确保卡包按实物尺寸贴地陈列。
+	if (!IsValid(RoomPackMesh) || RoomPackMesh->GetNumTriangles(0) <= 0)
+	{
+		return Reject(FText::Format(INVTEXT("RoomPackMesh {0} 缺失或没有可用三角面。"),
+			FText::FromString(GetPathNameSafe(RoomPackMesh))));
+	}
+	const UBodySetup* BodySetup = RoomPackMesh->GetBodySetup();
+	const FBox MeshBounds = RoomPackMesh->GetBoundingBox();
+	const double DisplayHeight = MeshBounds.GetSize().Z * RoomPackUniformScale;
+	const double DisplayTop = MeshBounds.Max.Z * RoomPackUniformScale;
+	if (!BodySetup || (BodySetup->CollisionTraceFlag != CTF_UseComplexAsSimple && BodySetup->AggGeom.BoxElems.IsEmpty())
+		|| RoomPackMesh->bHasNavigationData || FMath::Abs(MeshBounds.Min.Z * RoomPackUniformScale) > 1.0
+		|| DisplayHeight < 180.0 || DisplayHeight > 200.0 || DisplayTop < 180.0 || DisplayTop > 200.0)
+	{
+		return Reject(FText::Format(INVTEXT("RoomPackMesh {0} 必须具备查询碰撞、禁用导航且缩放后贴地并高 180 至 200 cm。"),
+			FText::FromString(RoomPackMesh->GetPathName())));
+	}
+	// 逐档检查引用和售罄参数。多出的键也拒绝，防止错误的稀有度藏在完整配置中。
+	for (const ECastleRoomPackRarity Rarity : RoomPackRarities)
+	{
+		const UMaterialInterface* Material = RoomPackMaterials.FindRef(Rarity).Get();
+		float InitialSoldAmount;
+		if (!IsValid(Material) || !Material->GetScalarParameterValue(RoomPackSoldParameter, InitialSoldAmount) || InitialSoldAmount != 0.0f)
+		{
+			return Reject(FText::Format(INVTEXT("RoomPackMaterials 的 {0} 档材质 {1} 缺失，或没有初值为 0 的 SoldAmount 参数。"),
+				FText::FromString(StaticEnum<ECastleRoomPackRarity>()->GetNameStringByValue(static_cast<int64>(Rarity))),
+				FText::FromString(GetPathNameSafe(Material))));
+		}
+	}
+	if (RoomPackMaterials.Num() != UE_ARRAY_COUNT(RoomPackRarities))
+	{
+		return Reject(INVTEXT("RoomPackMaterials 只能配置白、蓝、紫、金和炫彩五个稀有度。"));
+	}
 	for (const UCastleRoomGroupDataAsset* RoomGroup : RoomGroupPool)
 	{
 		if (!IsValid(RoomGroup) || RoomGroup->DisplayName.IsEmpty() || RoomGroup->GroupType > ECastleRoomGroupType::NPCSpeedRoom)
@@ -59,6 +100,7 @@ bool UCastleShopSkyIslandDataAsset::Validate(FText& OutReason) const
 			return Reject(FText::Format(INVTEXT("房间组商品 {0} 的资产、名称或类型无效。"),
 				FText::FromString(GetPathNameSafe(RoomGroup))));
 		}
+		if (!RoomGroup->ValidateRarity(OutReason)) { return false; }
 	}
 	for (const UCastleBadgeDataAsset* Badge : BadgePool)
 	{
@@ -85,7 +127,7 @@ bool UCastleShopSkyIslandOffer::CanInteract(const FCastleSkyIslandInteractContex
 	OutReason = FText::GetEmpty();
 	const auto* Island = Cast<ACastleShopSkyIsland>(GetOwner());
 	if (!Island || Context.Island != Island || !Island->IsIslandController(Context.Controller)
-		|| Context.Hit.GetComponent() != this || !Tint || !Sign)
+		|| Context.Hit.GetComponent() != this || !OfferMaterialInstance || !Sign)
 	{
 		OutReason = INVTEXT("请用当前玩家的准星对准本岛已初始化的商品台。");
 		return false;
@@ -110,7 +152,15 @@ bool UCastleShopSkyIslandOffer::ExecuteInteract(const FCastleSkyIslandInteractCo
 void UCastleShopSkyIslandOffer::MarkSold()
 {
 	bSold = true;
-	Tint->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.23f, 0.23f, 0.23f));
+	// 保留原网格与准星查询碰撞。房间包由母材质压暗置灰，徽章沿用原有着色。
+	if (RoomGroup)
+	{
+		OfferMaterialInstance->SetScalarParameterValue(RoomPackSoldParameter, 1.0f);
+	}
+	else
+	{
+		OfferMaterialInstance->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.23f, 0.23f, 0.23f));
+	}
 	Sign->SetText(FText::FromString(DisplayLabel + TEXT("\nSOLD OUT")));
 }
 
@@ -118,12 +168,10 @@ ACastleShopSkyIsland::ACastleShopSkyIsland()
 {
 	ConfigAsset = TSoftObjectPtr<UCastleShopSkyIslandDataAsset>(FSoftObjectPath(
 		TEXT("/Game/MovingCastle/Data/SkyIslands/DA_ShopSkyIsland.DA_ShopSkyIsland")));
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> Sphere(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-	RoomGroupMesh = Cube.Object;
 	BadgeMesh = Sphere.Object;
-	OfferMaterial = Material.Object;
+	BadgeMaterial = Material.Object;
 }
 
 bool ACastleShopSkyIsland::IsIslandController(const ACastlePlayerController* Controller) const
@@ -135,10 +183,10 @@ bool ACastleShopSkyIsland::OnInitializeIsland(const FCastleSkyIslandContext& Con
 {
 	Config = ConfigAsset.LoadSynchronous();
 	FLinearColor MaterialTint;
-	if (Context.Type != ECastleSkyIslandType::Shop || !Config || !RoomGroupMesh || !BadgeMesh || !OfferMaterial
-		|| !OfferMaterial->GetVectorParameterValue(FName(TEXT("Color")), MaterialTint))
+	if (Context.Type != ECastleSkyIslandType::Shop || !Config || !BadgeMesh || !BadgeMaterial
+		|| !BadgeMaterial->GetVectorParameterValue(FName(TEXT("Color")), MaterialTint))
 	{
-		return RejectOffer(INVTEXT("商店空岛需要正确类型、配置资产及带颜色参数的商品网格与材质。"), OutReason);
+		return RejectOffer(INVTEXT("商店空岛需要正确类型、配置资产、徽章网格及带 Color 参数的徽章材质。"), OutReason);
 	}
 	if (!Config->Validate(OutReason)) { return false; }
 
@@ -192,14 +240,26 @@ bool ACastleShopSkyIsland::CreateOffer(UCastleRoomGroupDataAsset* RoomGroup, UCa
 {
 	// 台座排在入口两旁，中心始终留给去离开门的飞行路径。文本独立挂在根上以免随网格缩放。
 	const int32 Index = Offers.Num();
-	const FVector Location(-330.0 + 320.0 * (Index / 2), Index % 2 == 0 ? -570.0 : 570.0, 100.0);
+	const bool bLeftSide = Index % 2 == 0;
+	const FVector Location(-330.0 + 320.0 * (Index / 2), bLeftSide ? -570.0 : 570.0, RoomGroup ? 0.0 : 100.0);
 	const FName OfferName(*FString::Printf(TEXT("Offer%d"), Index + 1));
 	auto* Offer = NewObject<UCastleShopSkyIslandOffer>(this, OfferName);
 	AddInstanceComponent(Offer);
 	Offer->SetupAttachment(GetRootComponent());
-	Offer->SetStaticMesh(RoomGroup ? RoomGroupMesh.Get() : BadgeMesh.Get());
 	Offer->SetRelativeLocation(Location);
-	Offer->SetRelativeScale3D(FVector(1.6, 1.6, 2.0));
+	if (RoomGroup)
+	{
+		// 导入后印字面朝局部 +Y。左侧保持原向，右侧绕 Z 转半圈，包底轴心贴地。
+		Offer->SetStaticMesh(Config->RoomPackMesh);
+		Offer->SetRelativeRotation(FRotator(0.0, bLeftSide ? 0.0 : 180.0, 0.0));
+		Offer->SetRelativeScale3D(FVector(RoomPackUniformScale));
+		Offer->SetCanEverAffectNavigation(false);
+	}
+	else
+	{
+		Offer->SetStaticMesh(BadgeMesh);
+		Offer->SetRelativeScale3D(FVector(1.6, 1.6, 2.0));
+	}
 	Offer->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	Offer->SetCollisionResponseToAllChannels(ECR_Ignore);
 	Offer->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
@@ -211,20 +271,25 @@ bool ACastleShopSkyIsland::CreateOffer(UCastleRoomGroupDataAsset* RoomGroup, UCa
 	const FString TypeName = RoomGroup ? StaticEnum<ECastleRoomGroupType>()->GetNameStringByValue(static_cast<int64>(RoomGroup->GroupType))
 		: StaticEnum<ECastleBadgeType>()->GetNameStringByValue(static_cast<int64>(Badge->Badge.Type));
 	Offer->DisplayLabel = FName::NameToDisplayString(TypeName, false);
-	Offer->Tint = Offer->CreateDynamicMaterialInstance(0, OfferMaterial);
-	if (!Offer->Tint)
+	UMaterialInterface* Material = RoomGroup ? Config->RoomPackMaterials.FindChecked(RoomGroup->Rarity).Get() : BadgeMaterial.Get();
+	Offer->OfferMaterialInstance = Offer->CreateDynamicMaterialInstance(0, Material);
+	if (!Offer->OfferMaterialInstance)
 	{
-		return RejectOffer(INVTEXT("商品台无法创建占位材质。"), OutReason);
+		return RejectOffer(FText::Format(INVTEXT("商品 {0} 无法从材质 {1} 创建动态材质。"),
+			FText::FromString(GetPathNameSafe(RoomGroup ? static_cast<UObject*>(RoomGroup) : Badge)),
+			FText::FromString(GetPathNameSafe(Material))), OutReason);
 	}
-	Offer->Tint->SetVectorParameterValue(TEXT("Color"),
-		RoomGroup ? FLinearColor(0.13f, 0.62f, 0.92f) : FLinearColor(0.98f, 0.53f, 0.13f));
+	if (Badge)
+	{
+		Offer->OfferMaterialInstance->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.98f, 0.53f, 0.13f));
+	}
 	Offer->RegisterComponent();
 
 	const FName SignName(*FString::Printf(TEXT("OfferSign%d"), Index + 1));
 	Offer->Sign = NewObject<UTextRenderComponent>(this, SignName);
 	AddInstanceComponent(Offer->Sign);
 	Offer->Sign->SetupAttachment(GetRootComponent());
-	Offer->Sign->SetRelativeLocation(Location + FVector(-86.0, 0.0, 160.0));
+	Offer->Sign->SetRelativeLocation(FVector(Location.X - 86.0, Location.Y, 260.0));
 	Offer->Sign->SetRelativeRotation(FRotator(0, 180, 0));
 	Offer->Sign->SetHorizontalAlignment(EHTA_Center);
 	Offer->Sign->SetWorldSize(30.0f);

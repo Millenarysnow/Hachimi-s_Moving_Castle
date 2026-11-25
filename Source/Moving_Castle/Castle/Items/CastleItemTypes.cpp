@@ -1,9 +1,24 @@
 #include "Items/CastleItemTypes.h"
 
 #include "CastleBuildingDefinition.h"
+#include "Items/CastleRoomGroupDataAsset.h"
 #include "Moving_Castle.h"
 
 #define LOCTEXT_NAMESPACE "CastleItemTypes"
+
+bool UCastleRoomGroupDataAsset::ValidateRarity(FText& OutReason) const
+{
+	// 五档在枚举中连续排列。未配置哨兵和反序列化后越界的数值都不能进入业务流程。
+	if (Rarity >= ECastleRoomPackRarity::White && Rarity <= ECastleRoomPackRarity::Holo)
+	{
+		OutReason = FText::GetEmpty();
+		return true;
+	}
+	OutReason = FText::Format(INVTEXT("房间组 {0} 的卡包稀有度无效（{1}），必须配置为白、蓝、紫、金或炫彩。"),
+		FText::FromString(GetPathName()), FText::AsNumber(static_cast<uint8>(Rarity)));
+	UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+	return false;
+}
 
 TConstArrayView<ECastleTileColor> FCastleWildcardRoomSpec::GetLegalColors()
 {

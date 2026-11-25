@@ -222,12 +222,31 @@ bool FCastleRoomGroupItemTest::RunTest(const FString& Parameters)
 		Pool.Add(Definition);
 	}
 	FRandomStream Random(2704);
+	// 漏配和反序列化后越界的模板必须在准备牌面前失败，且保留调用方的随机流和库存。
+	auto* InvalidGroup = NewObject<UCastleRoomGroupDataAsset>();
+	InvalidGroup->DisplayName = INVTEXT("验证卡包稀有度");
+	auto* UnchangedBackpack = NewObject<UCastleBackpackComponent>();
+	const int32 SeedBeforeReject = Random.GetCurrentSeed();
+	UCastlePendingRoomReward* RejectedReward = nullptr;
+	FText InvalidReason;
+	AddExpectedError(TEXT("的卡包稀有度无效"), EAutomationExpectedErrorFlags::Contains, 2);
+	TestFalse(TEXT("未配置稀有度的房间组拒绝发放"), UCastleItemGrantLibrary::TryGrantRoomGroup(
+		InvalidGroup, UnchangedBackpack, Pool, Random, RejectedReward, InvalidReason));
+	TestTrue(TEXT("稀有度错误指出资产路径"), InvalidReason.ToString().Contains(InvalidGroup->GetPathName()));
+	InvalidGroup->Rarity = static_cast<ECastleRoomPackRarity>(255);
+	TestFalse(TEXT("越界稀有度的房间组拒绝发放"), UCastleItemGrantLibrary::TryGrantRoomGroup(
+		InvalidGroup, UnchangedBackpack, Pool, Random, RejectedReward, InvalidReason));
+	TestNull(TEXT("非法稀有度未创建待领奖励"), RejectedReward);
+	TestEqual(TEXT("非法稀有度未消耗随机流"), Random.GetCurrentSeed(), SeedBeforeReject);
+	TestEqual(TEXT("非法稀有度未发放卡牌"), UnchangedBackpack->GetItemCount() + UnchangedBackpack->GetTempItemCount(), 0);
 	for (int32 Template = 0; Template <= static_cast<int32>(ECastleRoomGroupType::NPCSpeedRoom); ++Template)
 	{
 		auto* Backpack = NewObject<UCastleBackpackComponent>();
 		auto* Group = NewObject<UCastleRoomGroupDataAsset>();
 		Group->DisplayName = FText::AsNumber(Template);
 		Group->GroupType = static_cast<ECastleRoomGroupType>(Template);
+		// 这些临时模板仅用于验证发牌语义，提供一个显式合法的展示档位。
+		Group->Rarity = ECastleRoomPackRarity::White;
 		UCastlePendingRoomReward* Pending = nullptr;
 		FText Reason;
 		if (!TestTrue(TEXT("从正式定义池发放房间组"), UCastleItemGrantLibrary::TryGrantRoomGroup(
