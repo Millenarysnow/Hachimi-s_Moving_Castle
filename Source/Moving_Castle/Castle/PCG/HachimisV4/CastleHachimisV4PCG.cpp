@@ -364,7 +364,7 @@ namespace CastleV4PCG
 	bool AddAttachments(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FCastlePCGSemanticField& Field,
 		FCastlePCGApplyPlan& Plan, FString& Error)
 	{
-		auto AddKit = [&](const FIntVector& Cell, const FCastlePCGAttachmentSpec& Spec, FName VisualGroup = NAME_None)
+		auto AddKit = [&](const FIntVector& Cell, const FCastlePCGAttachmentSpec& Spec)
 		{
 			// 锚点和功能盒都在所占格底面坐标系中，建筑移动或旋转时自然随其组件。
 			const FTransform Anchor = Spec.AnchorTransform * CellFrame(Board, Cell).GetRelativeTransform(Building.GetActorTransform());
@@ -373,7 +373,6 @@ namespace CastleV4PCG
 				if (!AddPart(Building, Part, Anchor, Plan, Error)) { return false; }
 				FCastlePCGMeshTemplate& Visual = Plan.Visual.Visuals.Last();
 				Visual.bSelectable = Spec.bSelectable;
-				if (!VisualGroup.IsNone()) { Visual.Group = VisualGroup; }
 			}
 			if (Spec.bAffectsNavigation)
 			{
@@ -388,15 +387,13 @@ namespace CastleV4PCG
 			if (Spec.Roof == ECastlePCGRoof::Override && !AddKit(Cell, Spec.RoofOverride)) { return false; }
 			if (Spec.DeckOverride.IsSet())
 			{
-				const bool bHatch = Spec.Deck == ECastlePCGDeck::Hatch;
-				if (!AddKit(Cell, Spec.DeckOverride.GetValue(), bHatch ? FName(TEXT("UpperFloor")) : NAME_None)) { return false; }
-				if (bHatch)
+				// 带孔楼板由层界套件提供。将实心覆写与梯洞混用会遮住本来可通行的井口。
+				if (Spec.Deck == ECastlePCGDeck::Hatch)
 				{
-					// D7 已授权的临时替代。功能层仍装配切洞板和双向梯链接。
-					UE_LOG(LogMoving_Castle, Warning,
-						TEXT("建筑 %s 格 %s：挖洞款宽边地板美术暂缺，视觉暂用无洞宽边 Deck 替代，切洞碰撞与爬梯保持开启"),
-						*Building.GetPathName(), *Cell.ToString());
+					return Reject(Building, Error, FString::Printf(TEXT("格 %s 的梯洞与底盘覆写套件 %s 冲突。"),
+						*Cell.ToString(), *GetPathNameSafe(Spec.DeckOverride->Kit)));
 				}
+				if (!AddKit(Cell, Spec.DeckOverride.GetValue())) { return false; }
 			}
 		}
 		for (const auto& Entry : Field.GetAttachments())
@@ -474,8 +471,7 @@ namespace CastleV4PCG
 			{
 				if (!PrepareIncomingDeck(Board, Building, Cell, Pair.Key, *Incoming, Plan, Error)) { return false; }
 				// V4 上层只接收共享井口的带洞楼板组；混接旧下层的楼板由旧适配器准备。
-				if (Incoming->Kit && !Field.Cells.FindChecked(Cell).DeckOverride.IsSet()
-					&& !AddStairGroup(Building, *Incoming, TEXT("UpperFloor"), Plan, Error)) { return false; }
+				if (Incoming->Kit && !AddStairGroup(Building, *Incoming, TEXT("UpperFloor"), Plan, Error)) { return false; }
 			}
 			if (const FStairInterface* Outgoing = Stairs.Find(Cell))
 			{

@@ -7,9 +7,14 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Dom/JsonObject.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/Texture2D.h"
 #include "HAL/FileManager.h"
 #include "HachimisV4MeshValidation.h"
+#include "ImageCore.h"
+#include "ImageUtils.h"
+#include "MaterialShared.h"
 #include "Materials/Material.h"
+#include "Materials/MaterialExpressionTextureSample.h"
 #include "MeshDescription.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
@@ -18,10 +23,12 @@
 #include "Misc/ScopeExit.h"
 #include "Misc/SecureHash.h"
 #include "PhysicsEngine/BodySetup.h"
+#include "ShaderCompiler.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "StaticMeshAttributes.h"
 #include "StaticMeshCompiler.h"
+#include "UObject/Linker.h"
 #include "UObject/SavePackage.h"
 
 THIRD_PARTY_INCLUDES_START
@@ -79,6 +86,8 @@ namespace HachimisV4Import
 		bool Run(const FJsonObject& Manifest);
 		/** 独立交付只写斜撑、坡顶、宽边地板与正式规则集。 */
 		bool RunSupportDelivery();
+		/** 独立交付四格屋面，已有斜撑、坡顶和梯井资源保持原引用。 */
+		bool RunQuadRoofDelivery();
 
 	private:
 		FString Directory;
@@ -103,6 +112,7 @@ namespace HachimisV4Import
 		UMaterial* ReadSupportMaterial(FbxSurfaceMaterial& Source, const FString& File);
 		bool ReadSupportScene(FName Family, FName Group, FSceneSource& Out, bool bPreflight);
 		bool ImportSupportPart(FName Family, FName Group, const FString& Folder, FCastleV4Part& Out);
+		bool ReadQuadRoofPart(FName Family, FName Group, FPartSource& Out);
 	};
 
 	bool Fail(const FString& Object, const FString& Reason)
@@ -171,6 +181,11 @@ namespace HachimisV4Import
 				}
 			}
 			if (!SaveTo(*Asset, Package.Pending)) { return false; }
+			if (!Package.Backup.IsEmpty())
+			{
+				// 原生序列化写暂存路径时不会释放正式文件的加载句柄，发布前需显式解除。
+				ResetLoaders(Asset->GetOutermost());
+			}
 		}
 		for (int32 Index = 0; Index < Packages.Num(); ++Index)
 		{
@@ -714,6 +729,179 @@ namespace HachimisV4Import
 		return true;
 	}
 
+	bool FImporter::ReadQuadRoofPart(FName Family, FName Group, FPartSource& Out)
+	{
+		const FString MeshName = TEXT("SM_HC515_L4H_") + Family.ToString() + TEXT("_") + Group.ToString();
+		const FString File = Directory / TEXT("FBX") / Family.ToString() / (MeshName + TEXT(".fbx"));
+		FbxManager* Manager = FbxManager::Create();
+		ON_SCOPE_EXIT { Manager->Destroy(); };
+		Manager->SetIOSettings(FbxIOSettings::Create(Manager, IOSROOT));
+		FbxImporter* Loader = FbxImporter::Create(Manager, "QuadRoofOverlay");
+		FbxScene* Scene = FbxScene::Create(Manager, "QuadRoofOverlay");
+		if (!Loader->Initialize(TCHAR_TO_UTF8(*File), -1, Manager->GetIOSettings()) || !Loader->Import(Scene))
+		{
+			return Fail(File, UTF8_TO_TCHAR(Loader->GetStatus().GetErrorString()));
+		}
+		int32 UpSign = 0;
+		if (!FMath::IsNearlyEqual(Scene->GetGlobalSettings().GetSystemUnit().GetScaleFactor(), CmPerMetre)
+			|| Scene->GetGlobalSettings().GetAxisSystem().GetUpVector(UpSign) != FbxAxisSystem::eZAxis || UpSign != 1)
+		{
+			return Fail(File, TEXT("四格叠层屋面应以米为单位、+Z 向上"));
+		}
+
+		// 此批次以 FBX 场景为根，视觉网格和 UCX 平级。UCX 专供外部建模，绝不能进入 UE 网格描述。
+		FbxNode& Root = *Scene->GetRootNode();
+		FbxNode* Visual = nullptr;
+		for (int32 Index = 0; Index < Root.GetChildCount(); ++Index)
+		{
+			FbxNode* Node = Root.GetChild(Index);
+			const FString Name = UTF8_TO_TCHAR(Node->GetName());
+			if (!Node->GetMesh() || Node->GetChildCount() != 0)
+			{
+				return Fail(File, Name + TEXT(" 应为场景根下的独立网格"));
+			}
+			if (Name.StartsWith(TEXT("UCX_"), ESearchCase::CaseSensitive)) { continue; }
+			if (Visual || Name != MeshName)
+			{
+				return Fail(File, Name + TEXT(" 不是唯一同名的作者视觉网格 ") + MeshName);
+			}
+			Visual = Node;
+		}
+		if (!Visual || Visual->GetMaterialCount() != 1 || !Visual->GetMaterial(0)
+			|| FString(UTF8_TO_TCHAR(Visual->GetMaterial(0)->GetName())) != TEXT("M_HC515_RoofPalette"))
+		{
+			return Fail(File, MeshName + TEXT(" 缺少唯一视觉网格及其共享调色板材质槽"));
+		}
+		// 视觉节点的控制点已经以四格中心为作者原点。以节点自身为根，去掉导出器写入的 Z 轴半圈，
+		// 再复用 V4 的 Y 镜像、绕序、法线与 UV 读取。共享调色板随后显式注入。
+		FSceneSource Source;
+		if (!ReadNode(*Visual, *Visual, Source, File, Group, true)) { return false; }
+		if (Source.Parts.Num() != 1 || Source.Parts[0].Triangles.IsEmpty())
+		{
+			return Fail(File, MeshName + TEXT(" 缺少非空视觉三角"));
+		}
+		Out = MoveTemp(Source.Parts[0]);
+		return true;
+	}
+
+	bool FImporter::RunQuadRoofDelivery()
+	{
+		const FName Shield(TEXT("Shield"));
+		const FName Archer(TEXT("Archer"));
+		const FString Folder = FString(AssetRoot) / TEXT("QuadRoofOverlay");
+		const FString RuleSetPath = TEXT("/Game/MovingCastle/Data/DA_CastlePCGRuleSet.DA_CastlePCGRuleSet");
+		const FString Names[] = {TEXT("T_HC515_Roof_BaseColor"), TEXT("T_HC515_Roof_ORM")};
+		FImage Images[2];
+		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Images); ++Index)
+		{
+			const FString File = Directory / TEXT("Textures") / (Names[Index] + TEXT(".png"));
+			if (!FImageUtils::LoadImage(*File, Images[Index]) || Images[Index].SizeX <= 0 || Images[Index].SizeY <= 0
+				|| Images[Index].NumSlices != 1 || Images[Index].RawData.IsEmpty())
+			{
+				return Fail(File, TEXT("调色板 PNG 缺失、无法解码或尺寸非法"));
+			}
+		}
+
+		// 正式资源只来自五族交付。预检完整批次后再创建或更新 UObject，盾塔引用在发布前单独绑定。
+		struct FRoofSource
+		{
+			FName Family;
+			ECastlePCGQuadRoofKind Kind;
+			FPartSource Part;
+		};
+		TArray<FRoofSource> Sources;
+		for (const FName Family : CastlePCGSupport::Families())
+		{
+			if (Family == Shield) { continue; }
+			for (const ECastlePCGQuadRoofKind Kind : CastlePCGSupport::QuadRoofKinds())
+			{
+				FRoofSource& Source = Sources.AddDefaulted_GetRef();
+				Source.Family = Family;
+				Source.Kind = Kind;
+				if (!ReadQuadRoofPart(Family, CastlePCGSupport::QuadRoofName(Kind), Source.Part)) { return false; }
+			}
+		}
+		auto* RuleSet = LoadObject<UCastlePCGRuleSetDataAsset>(nullptr, *RuleSetPath);
+		if (!RuleSet) { return Fail(RuleSetPath, TEXT("正式 PCG 规则集不可读")); }
+		auto* Rule = NewObject<UCastlePCGQuadRoofOverlayRule>(RuleSet);
+
+		TArray<UObject*> Assets;
+		UTexture2D* Textures[UE_ARRAY_COUNT(Images)] = {};
+		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Images); ++Index)
+		{
+			const FString Path = Folder / Names[Index];
+			UTexture2D* Texture = CreateOrLoad<UTexture2D>(Path);
+			if (!Texture) { return Fail(Path, TEXT("调色板贴图包不可读")); }
+			const FImageView Pixels(Images[Index], Images[Index].RawData.GetData());
+			Texture->Source.Init(Pixels);
+			// ORM 的每个字节都表示线性系数。只把基础色解释为 sRGB。
+			Texture->SRGB = Index == 0;
+			Texture->CompressionSettings = Index == 0 ? TC_Default : TC_Masks;
+			Texture->PostEditChange();
+			Textures[Index] = Texture;
+			Assets.Add(Texture);
+		}
+		const FString MaterialPath = Folder / TEXT("M_HC515_RoofPalette");
+		UMaterial* Material = CreateOrLoad<UMaterial>(MaterialPath);
+		if (!Material) { return Fail(MaterialPath, TEXT("屋面调色板材质包不可读")); }
+		FMaterialExpressionCollection& Expressions = Material->GetExpressionCollection();
+		Expressions.Empty();
+		auto* BaseColor = NewObject<UMaterialExpressionTextureSample>(Material);
+		BaseColor->Texture = Textures[0];
+		BaseColor->SamplerType = SAMPLERTYPE_Color;
+		Expressions.AddExpression(BaseColor);
+		auto* ORM = NewObject<UMaterialExpressionTextureSample>(Material);
+		ORM->Texture = Textures[1];
+		ORM->SamplerType = SAMPLERTYPE_Masks;
+		ORM->MaterialExpressionEditorY = 240;
+		Expressions.AddExpression(ORM);
+		UMaterialEditorOnlyData* Inputs = Material->GetEditorOnlyData();
+		Inputs->BaseColor.UseConstant = Inputs->AmbientOcclusion.UseConstant = Inputs->Roughness.UseConstant = Inputs->Metallic.UseConstant = false;
+		Inputs->BaseColor.Connect(0, BaseColor);
+		Inputs->AmbientOcclusion.Connect(1, ORM);
+		Inputs->Roughness.Connect(2, ORM);
+		Inputs->Metallic.Connect(3, ORM);
+		Material->PostEditChange();
+		if (GShaderCompilingManager) { GShaderCompilingManager->FinishAllCompilation(); }
+		// 按项目 Windows 默认目标 DX12 SM6 核对材质编译结果。
+		if (const FMaterialResource* Resource = Material->GetMaterialResource(SP_PCD3D_SM6);
+			Resource && !Resource->GetCompileErrors().IsEmpty())
+		{
+			return Fail(MaterialPath, FString::Join(Resource->GetCompileErrors(), TEXT("\n")));
+		}
+		Assets.Add(Material);
+
+		for (FRoofSource& Source : Sources)
+		{
+			Source.Part.Materials.Add(Material);
+			if (!StorePart(Source.Part, Folder, Source.Part.Part.Node.ToString())) { return false; }
+			const FName Group = Source.Part.Part.Group;
+			const FString KitPath = Folder / FString::Printf(TEXT("DA_%s_QuadRoof_%sKit"), *Source.Family.ToString(), *Group.ToString());
+			auto* Kit = CreateOrLoad<UCastlePCGAttachmentKit>(KitPath);
+			if (!Kit) { return Fail(KitPath, TEXT("四格屋面套件不可读")); }
+			Assets.Add(Source.Part.Part.Mesh.Get());
+			Kit->Parts.Reset(1);
+			Kit->Parts.Add(MoveTemp(Source.Part.Part));
+			Rule->FamilyKits.FindOrAdd(Source.Family).ByKind.Add(Source.Kind, Kit);
+			Assets.Add(Kit);
+		}
+		FCastlePCGQuadRoofKits ShieldKits = Rule->FamilyKits.FindChecked(Archer);
+		ShieldKits.bIsPlaceholder = true;
+		Rule->FamilyKits.Add(Shield, MoveTemp(ShieldKits));
+		// 重跑只替换同一屋面规则，所有新引用与规则集在同一批次序列化并发布。
+		RuleSet->Rules.RemoveAll([](const TObjectPtr<UCastleBuildingPCGRule>& Entry)
+		{
+			return Entry && Entry->IsA<UCastlePCGQuadRoofOverlayRule>();
+		});
+		RuleSet->Rules.Add(Rule);
+		FString Error;
+		if (!RuleSet->ValidateConfiguration(Error)) { return Fail(RuleSetPath, Error); }
+		Assets.Add(RuleSet);
+		if (!SaveSupportDelivery(Assets)) { return false; }
+		UE_LOG(LogHachimisV4, Display, TEXT("正式规则集已绑定 %d 套四格屋面和共享调色板，正式包共 %d 个。"), Sources.Num(), Assets.Num());
+		return true;
+	}
+
 	/** 剪切底盘时插值 UV 和法线。只出现在确实跨过格界的作者零件上。 */
 	void Clip(TArray<FCorner>& Polygon, const FTransform& Local, int32 Axis, double Boundary, double Sign)
 	{
@@ -1090,6 +1278,12 @@ namespace HachimisV4Import
 int32 UHachimisV4ImportCommandlet::Main(const FString& Params)
 {
 #if WITH_EDITOR
+	FString QuadRoofSource;
+	if (FParse::Value(*Params, TEXT("QuadRoofSource="), QuadRoofSource))
+	{
+		HachimisV4Import::FImporter Importer(QuadRoofSource, FString(), false);
+		return Importer.RunQuadRoofDelivery() ? 0 : 1;
+	}
 	FString SupportSource;
 	if (FParse::Value(*Params, TEXT("SupportSource="), SupportSource))
 	{

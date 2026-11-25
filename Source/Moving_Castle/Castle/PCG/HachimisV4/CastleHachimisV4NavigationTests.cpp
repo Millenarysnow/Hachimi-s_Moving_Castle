@@ -326,7 +326,9 @@ namespace CastleV4NavigationTests
 		void VerifyStepDeck(bool bHatch)
 		{
 			const FString MeshName = FString::Printf(TEXT("SM_HC515_%s_Deck"), *Lower->HachimisLayout->Family.ToString());
-			int32 Decks = 0;
+			const auto& LadderParts = Lower->HachimisLayout->Ladder->Parts;
+			int32 Decks = 0, Floors = 0, ExpectedFloors = 0;
+			for (const FCastleV4Part& Part : LadderParts) { ExpectedFloors += Part.Group == TEXT("UpperFloor"); }
 			for (const auto* Part : TInlineComponentArray<UStaticMeshComponent*>(Upper))
 			{
 				const UStaticMesh* Mesh = Part->GetStaticMesh();
@@ -334,19 +336,29 @@ namespace CastleV4NavigationTests
 				if (Mesh->GetName() == MeshName)
 				{
 					++Decks;
-					Test.TestEqual(TEXT("梯井宽边视觉板使用 UpperFloor 标签"), Part->ComponentHasTag(TEXT("CastlePCGGroup=UpperFloor")), bHatch);
+				}
+				const bool bFloor = Part->ComponentHasTag(TEXT("CastlePCGGroup=UpperFloor"));
+				if (bFloor)
+				{
+					++Floors;
+					Test.TestTrue(TEXT("带孔上层楼板来自下层本族正式梯具"), LadderParts.ContainsByPredicate([&](const FCastleV4Part& Floor)
+					{
+						return Floor.Group == TEXT("UpperFloor") && Floor.Mesh == Mesh
+							&& Part->ComponentHasTag(FName(TEXT("CastlePCGNode=") + Floor.Node.ToString()));
+					}));
+				}
+				if (bFloor || Mesh->GetName() == MeshName)
+				{
+					// 两种视觉楼板只负责选中，行走面由玩法碰撞提供。
 					Test.TestTrue(TEXT("上层宽边板只阻挡选中查询"), Part->GetCollisionResponseToChannel(ECC_Visibility) == ECR_Block
 						&& Part->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Ignore && !Part->CanEverAffectNavigation());
 				}
-				else
-				{
-					Test.TestFalse(TEXT("宽边视觉板接管窄版梯井板"), Part->ComponentHasTag(TEXT("CastlePCGGroup=UpperFloor")));
-				}
 			}
-			Test.TestEqual(TEXT("上层持有唯一一块下层家族宽边板"), Decks, 1);
+			Test.TestEqual(TEXT("无梯井时上层才持有一块本族实心宽边板"), Decks, bHatch ? 0 : 1);
+			Test.TestEqual(TEXT("有梯井时上层持有全部带孔楼板作者件"), Floors, bHatch ? ExpectedFloors : 0);
 			if (Scene == 8)
 			{
-				// 正式旧版加速房同号叠放。共用的唯一 UpperFloor 已在上方计数，原件必须处于隐藏状态。
+				// 正式旧版加速房同号叠放。正式带孔楼板已在上方计数，旧原装底板应隐藏。
 				Test.TestNull(TEXT("加速房来自旧版装配器"), Upper->HachimisLayout.Get());
 				const auto Original = TInlineComponentArray<UStaticMeshComponent*>(Upper);
 				const auto* OriginalDeck = Original.FindByPredicate([](const UStaticMeshComponent* Part)
@@ -541,9 +553,6 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleHachimisV4StackInterfaces, "MovingCastle
 
 bool FCastleHachimisV4StackInterfaces::RunTest(const FString& Parameters)
 {
-	// 实际重算或拆除同一场景的邻居时允许再次装配，匹配只接受指定的 Warning。
-	AddExpectedMessage(TEXT("挖洞款宽边地板美术暂缺，视觉暂用无洞宽边 Deck 替代，切洞碰撞与爬梯保持开启"),
-		ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 0, false);
 	ADD_LATENT_AUTOMATION_COMMAND(CastleV4NavigationTests::FStackCases(*this));
 	return true;
 }

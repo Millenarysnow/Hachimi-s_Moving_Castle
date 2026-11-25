@@ -253,8 +253,9 @@ bool CastleLegacyPCG::Prepare(const ACastleBoard& Board, const ACastleBuildingBa
 	const FVariants& Variants, const FCastlePCGSemanticField& Field, const CastleV4PCG::FStairs& Stairs,
 	TConstArrayView<FCastlePCGPartAnnotation> OriginalParts, FCastlePCGApplyPlan& Plan, FString& Error)
 {
-	FIntVector Minimum = Building.GetOccupiedCoordinates()[0];
-	for (const auto& Cell : Building.GetOccupiedCoordinates()) { Minimum = Minimum.ComponentMin(Cell); }
+	const auto& OccupiedCells = Building.GetOccupiedCoordinates();
+	FIntVector Minimum = OccupiedCells[0];
+	for (const auto& Cell : OccupiedCells) { Minimum = Minimum.ComponentMin(Cell); }
 	const FTransform BoardInverse = Board.GetActorTransform().Inverse();
 	// 这里的功能盒明确表达桥、封闭楼板或阻隔，不是缺少资产时使用的替代美术。
 	auto AddBox = [&](FVector Center, FVector Extent, bool bIsNavigationBarrier, FQuat Rotation = FQuat::Identity)
@@ -307,9 +308,11 @@ bool CastleLegacyPCG::Prepare(const ACastleBoard& Board, const ACastleBuildingBa
 	for (const FIntVector& Cell : Building.GetOccupiedCoordinates())
 	{
 		const bool bDeckOverride = Field.Cells.FindChecked(Cell).DeckOverride.IsSet();
-		if (bDeckOverride)
+		const CastleV4PCG::FStairInterface* Incoming = Stairs.Find(Cell - FCastlePCGBoardQuery::Up);
+		if (bDeckOverride || (OccupiedCells.Num() == 1 && Incoming && Incoming->Kit))
 		{
 			// 旧单格原型的 StaticMesh 是原装底板视觉，GameplayRoot 下的功能板由玩法阶段独立处理。
+			// 单格接入 V4 带孔楼板时隐藏原板。多格原型没有这个组件命名约定，仍按原流程逐格切功能板。
 			const FCastlePCGPartAnnotation* OriginalDeck = OriginalParts.FindByPredicate([&](const FCastlePCGPartAnnotation& Part)
 			{
 				return Part.LocalCellOffset == Cell - Minimum && Part.Component->GetFName() == TEXT("StaticMesh");
@@ -322,13 +325,11 @@ bool CastleLegacyPCG::Prepare(const ACastleBoard& Board, const ACastleBuildingBa
 			Plan.Visual.Hidden.Add(OriginalDeck->Component);
 		}
 		// 旧上层使用自身站立标高，来梯可来自 V4 套件或旧模板。
-		if (const CastleV4PCG::FStairInterface* Incoming = Stairs.Find(Cell - FCastlePCGBoardQuery::Up))
+		if (Incoming)
 		{
 			UStaticMeshComponent* Floor = FindLegacyFloor(Board, Building, Cell, Error);
 			if (!Floor || !CastleV4PCG::CutDeck(Board, Building, Cell, 0.0, *Floor, *Incoming, Plan, Error)) { return false; }
-			// 二级上叠时公共挂件阶段负责唯一的 UpperFloor 视觉件。
-			// 旧版接收层仍先切原功能板，保留下层套件提供的井口与竖梯通行。
-			if (bDeckOverride) { continue; }
+			// 带孔楼板与竖梯共用下层套件几何，上层仅持有 UpperFloor。
 			if (Incoming->Kit)
 			{
 				if (!CastleV4PCG::AddStairGroup(Building, *Incoming, TEXT("UpperFloor"), Plan, Error)) { return false; }
