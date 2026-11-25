@@ -24,6 +24,7 @@
 #include "MassProcessingContext.h"
 #include "Components/Building/Effects/CastleBuildingEffectComponent.h"
 #include "Components/Building/BuildingGameplayRootComponent.h"
+#include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Units/BuildingInteraction/Mass/CastleMassBuildingTriggerProcessor.h"
 #include "Engine/Engine.h"
@@ -289,17 +290,35 @@ namespace CastlePCGNavigationTests
 				+ FVector(0, 0, Layout.StandingHeight - Board->LayerHeight * 0.5);
 			const auto& Parts = Lower->HachimisLayout->Ladder->Parts;
 			const FCollisionQueryParams Query(SCENE_QUERY_STAT(StackedLevelTwoPatrolFloor), true);
-			// 此处为水平二级上叠一级，宽边视觉板接管上层组。压条仍由梯井玩法与本族梯套件提供。
+			// 水平二级上叠一级的通梯场景必须显示下层本族 FloorLadder 的带孔楼板。
+			int32 ExpectedFloorCount = 0;
+			for (const FCastleV4Part& Part : Parts) { ExpectedFloorCount += Part.Group == TEXT("UpperFloor"); }
 			int32 UpperFloorCount = 0;
 			const FString DeckName = FString::Printf(TEXT("SM_HC515_%s_Deck"), *Lower->HachimisLayout->Family.ToString());
 			for (const auto* Mesh : TInlineComponentArray<UStaticMeshComponent*>(Upper))
 			{
+				const UStaticMesh* StaticMesh = Mesh->GetStaticMesh();
+				Test->TestFalse(TEXT("上层没有遮住梯孔的实心宽边地板"), StaticMesh && StaticMesh->GetName() == DeckName);
 				if (!Mesh->ComponentHasTag(TEXT("CastlePCGGroup=UpperFloor"))) { continue; }
 				++UpperFloorCount;
-				Test->TestTrue(TEXT("上层梯井视觉使用下层家族的宽边板"), Mesh->GetStaticMesh()
-					&& Mesh->GetStaticMesh()->GetName() == DeckName);
+				Test->TestTrue(TEXT("上层梯井视觉使用下层本族带孔楼板的作者零件"), Parts.ContainsByPredicate([&](const FCastleV4Part& Part)
+				{
+					return Part.Group == TEXT("UpperFloor") && StaticMesh == Part.Mesh
+						&& Mesh->ComponentHasTag(FName(TEXT("CastlePCGNode=") + Part.Node.ToString()));
+				}));
 			}
-			Test->TestEqual(TEXT("唯一的梯井宽边板属于上层 Actor"), UpperFloorCount, 1);
+			Test->TestTrue(TEXT("上层 Actor 持有正式套件的全部带孔楼板件"), ExpectedFloorCount > 0 && UpperFloorCount == ExpectedFloorCount);
+			int32 CutDeckCount = 0;
+			for (const auto* Box : TInlineComponentArray<UBoxComponent*>(Upper))
+			{
+				// 切洞板是贴住行走面的 5 cm 薄盒，既阻挡 Pawn 又能参与 Recast。
+				const double SurfaceZ = Box->GetComponentLocation().Z + Box->GetScaledBoxExtent().Z;
+				CutDeckCount += Box->GetAttachParent() == Upper->GameplayRoot && Box->IsRegistered()
+					&& Box->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Block
+					&& FMath::IsNearlyEqual(Box->GetScaledBoxExtent().Z, 2.5, 0.1)
+					&& FMath::IsNearlyEqual(SurfaceZ, Expected.Z, 0.1);
+			}
+			Test->TestEqual(TEXT("梯洞四周的功能楼板恰好由四片 CutDeck 构成"), CutDeckCount, 4);
 			for (const FCastleV4Part& Part : Parts)
 			{
 				if (!Part.Node.ToString().Contains(TEXT("Hatch_SideLip"))) { continue; }

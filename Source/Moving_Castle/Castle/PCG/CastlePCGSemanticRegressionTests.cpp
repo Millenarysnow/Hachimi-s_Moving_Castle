@@ -12,6 +12,8 @@
 #include "CastleLegacyPCGAdapter.h"
 #include "Interaction/CastlePatrolRoute.h"
 #include "Algo/AllOf.h"
+#include "Components/BoxComponent.h"
+#include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -198,6 +200,73 @@ bool FCastlePCGStairOwnership::RunTest(const FString& Parameters)
 		AddInfo(FString::Printf(TEXT("%s：Ladder=%d UpperFloor=%d"), *Kit.GetName(), Ladders, Floors));
 		if (!Board->RemoveBuilding(Upper, Reason) || !Board->RemoveBuilding(Lower, Reason)) { AddError(Reason.ToString()); return false; }
 	}
+	return true;
+}
+
+/** 通过真实棋盘放置水平二级塔与上层普通房，验证楼板与切洞碰撞的空间归属。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePCGHorizontalStepHatch, "MovingCastle.Castle.PCG.HorizontalStepHatch",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FCastlePCGHorizontalStepHatch::RunTest(const FString& Parameters)
+{
+	using namespace CastlePCGTests;
+	UWorld* Fixture = World();
+	ON_SCOPE_EXIT { Fixture->DestroyWorld(false); GEngine->DestroyWorldContext(Fixture); };
+	auto* Board = Fixture->SpawnActor<ACastleBoard>();
+	ON_SCOPE_EXIT { RemoveFixtureBuildings(*this, *Board); };
+	Board->GridSize = FIntVector(4, 3, 3);
+	Board->PCGRuleSet = Rules(Board);
+	auto* Archer = LoadDefinition(TEXT("ArcherTower"));
+	auto* Room = LoadDefinition(TEXT("NormalRoom"));
+	if (!TestNotNull(TEXT("正式箭塔定义"), Archer) || !TestNotNull(TEXT("正式普通房定义"), Room)) { return false; }
+	Board->BuildingDefinitions = {Archer, Room};
+	FText Reason;
+	if (!SetGreenSevenGround(*Board, Reason)) { AddError(Reason.ToString()); return false; }
+	const FIntVector Base = Board->GridOrigin + FIntVector(1, 1, 0);
+	const FIntVector Above = Base + FCastlePCGBoardQuery::Up;
+	auto* Lower = Place(*this, *Board, *Archer, Base, 2, ECastleTileColor::Green);
+	auto* Upper = Place(*this, *Board, *Room, Above, 1, ECastleTileColor::Green);
+	if (!Lower || !Upper || !TestTrue(TEXT("底层为两格水平箭塔"), Lower->HachimisLayout
+		&& Lower->HachimisLayout->Grid == FIntVector(2, 1, 1) && Lower->GetOccupiedCoordinates().Num() == 2)) { return false; }
+	const auto* Kit = Lower->HachimisLayout->Ladder.Get();
+	const auto* Link = Lower->FindComponentByClass<UCastleLadderLinkComponent>();
+	if (!TestNotNull(TEXT("下层箭塔使用正式 FloorLadder 套件"), Kit)
+		|| !TestNotNull(TEXT("下层箭塔拥有实际梯链接"), Link) || !Upper->HachimisLayout) { return false; }
+	TestTrue(TEXT("下层梯链接已注册"), Link->GetId().IsValid());
+	TestEqual(TEXT("外露侧有箭塔斜坡屋顶"), CountVisibleParts(*Lower, TEXT("CastlePCGNode=SM_HC515_Archer_Slope")), 1);
+	TestEqual(TEXT("外露侧有箭塔墙裙"), CountVisibleParts(*Lower, TEXT("CastlePCGNode=SM_HC515_Archer_WallApron")), 1);
+	TestEqual(TEXT("上层没有箭塔无孔 Deck 覆写"), CountVisibleParts(*Upper, TEXT("CastlePCGNode=SM_HC515_Archer_Deck")), 0);
+	const double Walk = CastleV4PCG::CellFrame(*Board, Above).GetLocation().Z + Upper->HachimisLayout->StandingHeight;
+	FVector Opening = Link->GetComponentTransform().TransformPosition(Kit->Hatch.Opening.GetCenter());
+	Opening.Z = Walk;
+	const FVector Delta(0, 0, 18);
+	const FCollisionQueryParams Query(SCENE_QUERY_STAT(HorizontalStepHatchTrace), true);
+	int32 FloorParts = 0;
+	for (auto* Mesh : TInlineComponentArray<UStaticMeshComponent*>(Upper))
+	{
+		if (!Mesh->IsVisible() || !Mesh->ComponentHasTag(TEXT("CastlePCGGroup=UpperFloor"))) { continue; }
+		++FloorParts;
+		TestTrue(TEXT("上层带孔件与下层箭塔套件引用一致"), Kit->Parts.ContainsByPredicate([&](const FCastleV4Part& Part)
+		{
+			return Part.Group == TEXT("UpperFloor") && Mesh->GetStaticMesh() == Part.Mesh
+				&& Mesh->ComponentHasTag(FName(TEXT("CastlePCGNode=") + Part.Node.ToString()));
+		}));
+		FHitResult Hit;
+		TestFalse(TEXT("带孔视觉网格实际留出梯井中心"), Mesh->LineTraceComponent(Hit, Opening + Delta, Opening - Delta, Query));
+	}
+	TestTrue(TEXT("上层确实装配带孔楼板"), FloorParts > 0);
+	int32 CutDeckCount = 0;
+	for (const auto* Box : TInlineComponentArray<UBoxComponent*>(Upper))
+	{
+		// 四片切洞功能板的上表面与带孔楼板接驳标高一致。
+		const double Top = Box->GetComponentLocation().Z + Box->GetScaledBoxExtent().Z;
+		CutDeckCount += Box->GetAttachParent() == Upper->GameplayRoot && Box->IsRegistered()
+			&& Box->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Block
+			&& FMath::IsNearlyEqual(Box->GetScaledBoxExtent().Z, 2.5, 0.1) && FMath::IsNearlyEqual(Top, Walk, 0.1);
+	}
+	TestEqual(TEXT("上层梯井由四片 CutDeck 围出"), CutDeckCount, 4);
+	FHitResult Hit;
+	TestFalse(TEXT("功能切洞也允许射线穿过梯井中心"), Fixture->LineTraceSingleByChannel(Hit, Opening + Delta, Opening - Delta, ECC_Pawn, Query));
+	CheckHatchCursor(*this, *Board, *Upper, Above);
 	return true;
 }
 
