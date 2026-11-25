@@ -142,7 +142,8 @@ namespace CastleItemsDebug
 		GEngine->GameViewport->GetViewportSize(ViewportSize);
 		Present(*Temp, FVector2D(24.0, ViewportSize.Y * 0.60), 45);
 		Present(*Bar, FVector2D(24.0, 50.0), 45);
-		Present(*Modal, FVector2D(ViewportSize.X * 0.25, ViewportSize.Y * 0.22), 60);
+		// 替换弹窗和正式入口使用同一视口范围，居中与等比缩放由 WBP 自己决定。
+		Modal->AddToViewport(60);
 		Player->SetInputMode(FInputModeGameAndUI());
 		Player->SetShowMouseCursor(true);
 		UE_LOG(LogMoving_Castle, Display, TEXT("道具验收 HUD 已挂载，可用 Castle.Items.Group 与 Castle.Items.Badge 发放。"));
@@ -213,7 +214,8 @@ namespace CastleItemsDebug
 		{
 			return;
 		}
-		Present(*Picker, FVector2D(250.0, 155.0), 55);
+		// 保留整屏布局区域，使待领按钮进入工坊时能在实际视口中央展开。
+		Picker->AddToViewport(55);
 		Player->SetInputMode(FInputModeGameAndUI());
 		Player->SetShowMouseCursor(true);
 	}

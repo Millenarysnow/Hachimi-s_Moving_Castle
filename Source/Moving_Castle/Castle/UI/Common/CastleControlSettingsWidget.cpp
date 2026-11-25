@@ -11,7 +11,8 @@ bool UCastleControlSettingsWidget::BindController(ACastlePlayerController& Contr
 {
 	// 只有 WBP 结构完整时才关联委托，调用方据此决定是否加入玩家视口。
 	const TPair<const TCHAR*, UWidget*> Required[] = {{TEXT("ClassicButton"), ClassicButton.Get()},
-		{TEXT("DesignButton"), DesignButton.Get()}, {TEXT("ClassicKeys"), ClassicKeys.Get()}, {TEXT("DesignKeys"), DesignKeys.Get()}};
+		{TEXT("DesignButton"), DesignButton.Get()}, {TEXT("ClassicKeys"), ClassicKeys.Get()},
+		{TEXT("DesignKeys"), DesignKeys.Get()}, {TEXT("CloseButton"), CloseButton.Get()}};
 	for (const auto& Control : Required)
 	{
 		if (!IsValid(Control.Value))
@@ -23,6 +24,7 @@ bool UCastleControlSettingsWidget::BindController(ACastlePlayerController& Contr
 	SettingsController = &Controller;
 	ClassicButton->OnClicked.AddUniqueDynamic(this, &UCastleControlSettingsWidget::SelectClassic);
 	DesignButton->OnClicked.AddUniqueDynamic(this, &UCastleControlSettingsWidget::SelectDesign);
+	CloseButton->OnClicked.AddUniqueDynamic(this, &UCastleControlSettingsWidget::CloseSettings);
 	Controller.OnControlModeChanged.AddUObject(this, &UCastleControlSettingsWidget::RefreshMode);
 	RefreshMode(Controller.GetControlMode());
 	return true;
@@ -54,6 +56,17 @@ void UCastleControlSettingsWidget::SelectClassic()
 void UCastleControlSettingsWidget::SelectDesign()
 {
 	if (auto* Controller = SettingsController.Get()) { Controller->SetControlMode(ECastleControlMode::Design); }
+}
+
+void UCastleControlSettingsWidget::CloseSettings()
+{
+	// 与齿轮和 O 键复用关闭入口，让控制器按当前预设恢复输入焦点。
+	if (auto* Controller = SettingsController.Get())
+	{
+		Controller->ToggleControlSettings();
+		return;
+	}
+	UE_LOG(LogMoving_Castle, Error, TEXT("%s 无法关闭：设置控制器已失效。"), *GetPathName());
 }
 
 FReply UCastleControlSettingsWidget::NativeOnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& Event)

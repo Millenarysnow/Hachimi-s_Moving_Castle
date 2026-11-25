@@ -14,6 +14,7 @@
 
 ## 结构与依赖边界
 
+- **堡垒主题用于独立弹窗。** `CastleFortressUIPublisher` 在编辑器离线生成设置、三套领奖、结算及其他模态资产。共用的 UI 切图存放于 `UI/FortressKit`，保留源图透明留边。固定画布使用等比布局，可变长底框采用九宫格，避免边角变形。玩法层读取 WBP 绑定和按钮状态，导演继续管理领奖及结算时机。
 - **公共控件基类位于 `Source/Moving_Castle/Castle/UI/Common/CastleHUDControls.h/.cpp`，对应资产位于 `Content/MovingCastle/UI/Common/`。** `UCastleIconBarSlotWidget` 与 `UCastleIconBarWidget` 承载 20 格离散图标进度条（`WBP_HeartBar`、`WBP_SkullBar`）；`UCastleHUDIconButtonWidget` 承载标准按压、含灰态禁用和双态切换三类按钮（`WBP_Btn_*`）。
 - **主界面逻辑位于 `UCastleDirectorHUDWidget`（`WBP_DirectorHUD`），只读导演、战斗、主塔与巡逻入口状态。** `WBP_BuildBar`（`UCastleBuildBarWidget`）和 `WBP_EconomyHUD`（`UCastleEconomyHUDWidget`）仍由 `ACastleHUD` 独立挂载，前者订阅同一导演与路径编辑状态控制自身显隐。
 - **红线：缺失必需 `BindWidget` 或贴图资源/绘制尺寸为零时，必须报错并拒绝启动或挂载。** 禁止在 C++ 中动态拼树、回退默认笔刷或静默跳过缺失槽位，否则美术资源损坏会被伪装成正常界面运行。

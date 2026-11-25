@@ -7,6 +7,7 @@
 
 class UCastlePendingRoomReward;
 class UBorder;
+class USizeBox;
 class UTextBlock;
 class UWrapBox;
 
@@ -76,6 +77,19 @@ protected:
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UButton> CancelButton;
 
+	/** 右上角和页脚共用取消事务；预览槽与线稿层互斥显示。 */
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UButton> CloseButton;
+
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<USizeBox> PreviewCardSlot;
+
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UWidget> PreviewPlaceholder;
+
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UButton> ColorStyleTemplate;
+
 	/** 隐藏的 WBP 模板保留可替换的字体和按钮样式。 */
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UButton> OptionStyleTemplate;
@@ -95,6 +109,8 @@ private:
 
 	void AppendChoice(UWrapBox& Panel, const FText& Label, FSimpleDelegate Action);
 	void UpdateSelection();
+	bool RefreshCardPreview(const class ACastleBoard& Board, FText& OutFailureReason);
+	void ClearCardPreview();
 	void Finish(bool bClaimed);
 
 	UFUNCTION()
