@@ -77,6 +77,18 @@ namespace HachimisV4Import
 		FVector RoofAnchor = FVector::ZeroVector;
 	};
 
+	/** 保存直接从单份 FBX 读到的盾塔调色板。四款屋面必须提供同一份贴图和同样的材质参数。 */
+	struct FShieldRoofPaletteSource
+	{
+		TArray64<uint8> Png;
+		double Roughness = 0.0;
+		double Metallic = 0.0;
+		double Specular = 0.0;
+		FLinearColor Emissive = FLinearColor::Black;
+
+		bool operator==(const FShieldRoofPaletteSource&) const = default;
+	};
+
 	/** 单个导入事务记住新建资源和原始语义，跨 FBX 重复几何只生成一次。 */
 	class FImporter
 	{
@@ -88,6 +100,8 @@ namespace HachimisV4Import
 		bool RunSupportDelivery();
 		/** 独立交付四格屋面，已有斜撑、坡顶和梯井资源保持原引用。 */
 		bool RunQuadRoofDelivery();
+		/** 盾塔四件网格与专用调色板逐件预检后在同一事务中写入。 */
+		bool RunShieldQuadRoofDelivery();
 
 	private:
 		FString Directory;
@@ -112,7 +126,9 @@ namespace HachimisV4Import
 		UMaterial* ReadSupportMaterial(FbxSurfaceMaterial& Source, const FString& File);
 		bool ReadSupportScene(FName Family, FName Group, FSceneSource& Out, bool bPreflight);
 		bool ImportSupportPart(FName Family, FName Group, const FString& Folder, FCastleV4Part& Out);
-		bool ReadQuadRoofPart(FName Family, FName Group, FPartSource& Out);
+		bool ReadQuadRoofPart(FName Family, FName Group, FPartSource& Out, FShieldRoofPaletteSource* ShieldPalette = nullptr);
+		bool StoreQuadRoofKit(FName Family, ECastlePCGQuadRoofKind Kind, FPartSource& Part, UMaterial& Material,
+			const FString& Folder, UCastlePCGQuadRoofOverlayRule& Rule, TArray<UObject*>& Assets);
 	};
 
 	bool Fail(const FString& Object, const FString& Reason)
@@ -729,18 +745,46 @@ namespace HachimisV4Import
 		return true;
 	}
 
-	bool FImporter::ReadQuadRoofPart(FName Family, FName Group, FPartSource& Out)
+	/** 拦截 FBX SDK 的媒体提取，原始目录严格只读，意外的内嵌文件直接令此交付失败。 */
+	FbxCallback::State ReadShieldRoofImage(void* Owner, FbxClassId Type, const char* Name, const void* Bytes, size_t Size)
+	{
+		auto& Palette = *static_cast<FShieldRoofPaletteSource*>(Owner);
+		if (Type != FbxVideo::ClassId || !Name || FPaths::GetCleanFilename(UTF8_TO_TCHAR(Name)) != TEXT("T_HC515_ShieldRoof_BaseColor.png")
+			|| !Bytes || Size == 0 || !Palette.Png.IsEmpty())
+		{
+			return FbxCallback::eFailure;
+		}
+		Palette.Png.Append(static_cast<const uint8*>(Bytes), Size);
+		return FbxCallback::eHandled;
+	}
+
+	bool FImporter::ReadQuadRoofPart(FName Family, FName Group, FPartSource& Out, FShieldRoofPaletteSource* ShieldPalette)
 	{
 		const FString MeshName = TEXT("SM_HC515_L4H_") + Family.ToString() + TEXT("_") + Group.ToString();
-		const FString File = Directory / TEXT("FBX") / Family.ToString() / (MeshName + TEXT(".fbx"));
+		const FString SourceDir = ShieldPalette ? Directory : Directory / TEXT("FBX") / Family.ToString();
+		const FString File = SourceDir / (MeshName + TEXT(".fbx"));
 		FbxManager* Manager = FbxManager::Create();
 		ON_SCOPE_EXIT { Manager->Destroy(); };
 		Manager->SetIOSettings(FbxIOSettings::Create(Manager, IOSROOT));
 		FbxImporter* Loader = FbxImporter::Create(Manager, "QuadRoofOverlay");
 		FbxScene* Scene = FbxScene::Create(Manager, "QuadRoofOverlay");
-		if (!Loader->Initialize(TCHAR_TO_UTF8(*File), -1, Manager->GetIOSettings()) || !Loader->Import(Scene))
+		if (!Loader->Initialize(TCHAR_TO_UTF8(*File), -1, Manager->GetIOSettings()))
 		{
 			return Fail(File, UTF8_TO_TCHAR(Loader->GetStatus().GetErrorString()));
+		}
+		Manager->GetIOSettings()->SetBoolProp(IMP_FBX_EXTRACT_EMBEDDED_DATA, ShieldPalette != nullptr);
+		if (ShieldPalette)
+		{
+			auto* Callback = FbxEmbeddedFileCallback::Create(Manager, "ShieldRoofImage");
+			if (Callback->RegisterReadFunction(&ReadShieldRoofImage, ShieldPalette) < 0)
+			{
+				return Fail(File, TEXT("无法注册盾塔基础色内嵌贴图读取回调"));
+			}
+			Loader->SetEmbeddedFileReadCallback(Callback);
+		}
+		if (!Loader->Import(Scene))
+		{
+			return Fail(File, FString(TEXT("FBX 或内嵌媒体导入失败：")) + UTF8_TO_TCHAR(Loader->GetStatus().GetErrorString()));
 		}
 		int32 UpSign = 0;
 		if (!FMath::IsNearlyEqual(Scene->GetGlobalSettings().GetSystemUnit().GetScaleFactor(), CmPerMetre)
@@ -767,10 +811,33 @@ namespace HachimisV4Import
 			}
 			Visual = Node;
 		}
+		const TCHAR* ExpectedPalette = ShieldPalette ? TEXT("M_HC515_ShieldRoofPalette") : TEXT("M_HC515_RoofPalette");
 		if (!Visual || Visual->GetMaterialCount() != 1 || !Visual->GetMaterial(0)
-			|| FString(UTF8_TO_TCHAR(Visual->GetMaterial(0)->GetName())) != TEXT("M_HC515_RoofPalette"))
+			|| FString(UTF8_TO_TCHAR(Visual->GetMaterial(0)->GetName())) != ExpectedPalette)
 		{
-			return Fail(File, MeshName + TEXT(" 缺少唯一视觉网格及其共享调色板材质槽"));
+			return Fail(File, MeshName + TEXT(" 缺少唯一视觉网格或调色板材质槽 ") + ExpectedPalette);
+		}
+		if (ShieldPalette)
+		{
+			FbxSurfacePhong* Phong = FbxCast<FbxSurfacePhong>(Visual->GetMaterial(0));
+			if (!Phong || Phong->Diffuse.GetSrcObjectCount<FbxFileTexture>() != 1
+				|| Scene->GetTextureCount() != 1 || ShieldPalette->Png.IsEmpty())
+			{
+				return Fail(File, TEXT("盾塔调色板须为 Phong 且仅含一张内嵌基础色 PNG"));
+			}
+			// 反解 Blender FBX 导出器，与 V4 盾塔原材质的换算一致。
+			const double Shine = Phong->Shininess.Get();
+			ShieldPalette->Metallic = Phong->ReflectionFactor.Get();
+			ShieldPalette->Specular = Phong->SpecularFactor.Get() * 2.0;
+			const auto Glow = Phong->Emissive.Get();
+			const double Intensity = Phong->EmissiveFactor.Get();
+			ShieldPalette->Emissive = FLinearColor(Glow[0] * Intensity, Glow[1] * Intensity, Glow[2] * Intensity);
+			if (!(Shine >= 0.0 && Shine <= 100.0 && ShieldPalette->Metallic >= 0.0 && ShieldPalette->Metallic <= 1.0
+				&& ShieldPalette->Specular >= 0.0 && ShieldPalette->Specular <= 1.0 && Intensity == 0.0))
+			{
+				return Fail(File, TEXT("盾塔调色板的 Phong 光泽、高光、金属度或自发光与交付约定不符"));
+			}
+			ShieldPalette->Roughness = 1.0 - FMath::Sqrt(Shine) / 10.0;
 		}
 		// 视觉节点的控制点已经以四格中心为作者原点。以节点自身为根，去掉导出器写入的 Z 轴半圈，
 		// 再复用 V4 的 Y 镜像、绕序、法线与 UV 读取。共享调色板随后显式注入。
@@ -784,10 +851,113 @@ namespace HachimisV4Import
 		return true;
 	}
 
+	bool FImporter::StoreQuadRoofKit(FName Family, ECastlePCGQuadRoofKind Kind, FPartSource& Part, UMaterial& Material,
+		const FString& Folder, UCastlePCGQuadRoofOverlayRule& Rule, TArray<UObject*>& Assets)
+	{
+		// 套件只引用这个作者视觉节点，保留其局部原点用于旋转占格掩码。
+		Part.Materials.Add(&Material);
+		if (!StorePart(Part, Folder, Part.Part.Node.ToString())) { return false; }
+		const FString KitPath = Folder / FString::Printf(TEXT("DA_%s_QuadRoof_%sKit"), *Family.ToString(), *Part.Part.Group.ToString());
+		auto* Kit = CreateOrLoad<UCastlePCGAttachmentKit>(KitPath);
+		if (!Kit) { return Fail(KitPath, TEXT("四格屋面套件不可读")); }
+		Assets.Add(Part.Part.Mesh.Get());
+		Kit->Parts = {MoveTemp(Part.Part)};
+		Rule.FamilyKits.FindOrAdd(Family).ByKind.Add(Kind, Kit);
+		Assets.Add(Kit);
+		return true;
+	}
+
+	bool FImporter::RunShieldQuadRoofDelivery()
+	{
+		const FName Family(TEXT("Shield"));
+		const FString Folder = FString(AssetRoot) / TEXT("QuadRoofOverlay");
+		const FString RuleSetPath = TEXT("/Game/MovingCastle/Data/DA_CastlePCGRuleSet.DA_CastlePCGRuleSet");
+		FShieldRoofPaletteSource PaletteSource;
+		TMap<ECastlePCGQuadRoofKind, FPartSource> Sources;
+		for (const ECastlePCGQuadRoofKind Kind : CastlePCGSupport::QuadRoofKinds())
+		{
+			const FName Name = CastlePCGSupport::QuadRoofName(Kind);
+			FShieldRoofPaletteSource Current;
+			if (!ReadQuadRoofPart(Family, Name, Sources.Add(Kind), &Current)) { return false; }
+			if (PaletteSource.Png.IsEmpty()) { PaletteSource = MoveTemp(Current); }
+			else if (Current != PaletteSource)
+			{
+				return Fail(Directory / (TEXT("SM_HC515_L4H_Shield_") + Name.ToString() + TEXT(".fbx")),
+					TEXT("盾塔四款 FBX 的内嵌 PNG 或材质参数不一致"));
+			}
+		}
+		FImage BaseImage;
+		if (!FImageUtils::DecompressImage(PaletteSource.Png.GetData(), PaletteSource.Png.Num(), BaseImage) || BaseImage.SizeX != 1024
+			|| BaseImage.SizeY != 512 || BaseImage.NumSlices != 1 || BaseImage.RawData.IsEmpty())
+		{
+			return Fail(Directory / TEXT("T_HC515_ShieldRoof_BaseColor.png"), TEXT("无法解码四个盾塔 FBX 内嵌的 1024×512 PNG"));
+		}
+		auto* RuleSet = LoadObject<UCastlePCGRuleSetDataAsset>(nullptr, *RuleSetPath);
+		if (!RuleSet) { return Fail(RuleSetPath, TEXT("正式 PCG 规则集不可读")); }
+		const int32 RuleIndex = RuleSet->Rules.IndexOfByPredicate([](const auto& Rule)
+		{
+			return Rule && Rule->template IsA<UCastlePCGQuadRoofOverlayRule>();
+		});
+		if (RuleIndex == INDEX_NONE) { return Fail(RuleSetPath, TEXT("缺少需安装盾塔套件的四格叠层规则")); }
+		auto* PreviousRule = CastChecked<UCastlePCGQuadRoofOverlayRule>(RuleSet->Rules[RuleIndex].Get());
+		auto* Rule = NewObject<UCastlePCGQuadRoofOverlayRule>(RuleSet);
+		Rule->FamilyKits = PreviousRule->FamilyKits;
+
+		const FString TexturePath = Folder / TEXT("T_HC515_ShieldRoof_BaseColor");
+		const FString MaterialPath = Folder / TEXT("M_HC515_ShieldRoofPalette");
+		auto* Texture = CreateOrLoad<UTexture2D>(TexturePath);
+		auto* Material = CreateOrLoad<UMaterial>(MaterialPath);
+		if (!Texture || !Material) { return Fail(MaterialPath, TEXT("盾塔调色板材质或贴图资源不可读")); }
+		Texture->Source.Init(FImageView(BaseImage, BaseImage.RawData.GetData()));
+		Texture->SRGB = true;
+		Texture->CompressionSettings = TC_Default;
+		Texture->PostEditChange();
+
+		// 交付只有颜色图集，光泽、高光、金属度及自发光使用已验证的作者参数。
+		FMaterialExpressionCollection& Expressions = Material->GetExpressionCollection();
+		Expressions.Empty();
+		auto* BaseColor = NewObject<UMaterialExpressionTextureSample>(Material);
+		BaseColor->Texture = Texture;
+		BaseColor->SamplerType = SAMPLERTYPE_Color;
+		Expressions.AddExpression(BaseColor);
+		UMaterialEditorOnlyData* Inputs = Material->GetEditorOnlyData();
+		Inputs->BaseColor.UseConstant = false;
+		Inputs->BaseColor.Connect(0, BaseColor);
+		Inputs->Roughness.UseConstant = Inputs->Metallic.UseConstant = Inputs->Specular.UseConstant = Inputs->EmissiveColor.UseConstant = true;
+		Inputs->Roughness.Constant = PaletteSource.Roughness;
+		Inputs->Metallic.Constant = PaletteSource.Metallic;
+		Inputs->Specular.Constant = PaletteSource.Specular;
+		Inputs->EmissiveColor.Constant = PaletteSource.Emissive.ToFColorSRGB();
+		Material->PostEditChange();
+		if (GShaderCompilingManager) { GShaderCompilingManager->FinishAllCompilation(); }
+		if (const FMaterialResource* Resource = Material->GetMaterialResource(SP_PCD3D_SM6);
+			Resource && !Resource->GetCompileErrors().IsEmpty())
+		{
+			return Fail(MaterialPath, FString::Join(Resource->GetCompileErrors(), TEXT("\n")));
+		}
+
+		TArray<UObject*> Assets = {Texture, Material};
+		Rule->FamilyKits.Remove(Family);
+		for (const ECastlePCGQuadRoofKind Kind : CastlePCGSupport::QuadRoofKinds())
+		{
+			if (!StoreQuadRoofKit(Family, Kind, Sources.FindChecked(Kind), *Material, Folder, *Rule, Assets)) { return false; }
+		}
+		// 原子发布保留规则插槽和其他家族的引用。失败时恢复编辑器中的原规则引用。
+		RuleSet->Rules[RuleIndex] = Rule;
+		bool bPublished = false;
+		ON_SCOPE_EXIT { if (!bPublished) { RuleSet->Rules[RuleIndex] = PreviousRule; } };
+		FString Error;
+		if (!RuleSet->ValidateConfiguration(Error)) { return Fail(RuleSetPath, Error); }
+		Assets.Add(RuleSet);
+		if (!SaveSupportDelivery(Assets)) { return false; }
+		bPublished = true;
+		UE_LOG(LogHachimisV4, Display, TEXT("已发布 4 款盾塔四格叠层屋面、基础色图集、专用调色板及规则集。"));
+		return true;
+	}
+
 	bool FImporter::RunQuadRoofDelivery()
 	{
 		const FName Shield(TEXT("Shield"));
-		const FName Archer(TEXT("Archer"));
 		const FString Folder = FString(AssetRoot) / TEXT("QuadRoofOverlay");
 		const FString RuleSetPath = TEXT("/Game/MovingCastle/Data/DA_CastlePCGRuleSet.DA_CastlePCGRuleSet");
 		const FString Names[] = {TEXT("T_HC515_Roof_BaseColor"), TEXT("T_HC515_Roof_ORM")};
@@ -802,7 +972,7 @@ namespace HachimisV4Import
 			}
 		}
 
-		// 正式资源只来自五族交付。预检完整批次后再创建或更新 UObject，盾塔引用在发布前单独绑定。
+		// 共享调色板交付只迭代这五族，盾塔套件从现有正式规则保留。
 		struct FRoofSource
 		{
 			FName Family;
@@ -823,7 +993,16 @@ namespace HachimisV4Import
 		}
 		auto* RuleSet = LoadObject<UCastlePCGRuleSetDataAsset>(nullptr, *RuleSetPath);
 		if (!RuleSet) { return Fail(RuleSetPath, TEXT("正式 PCG 规则集不可读")); }
+		const int32 RuleIndex = RuleSet->Rules.IndexOfByPredicate([](const auto& Rule)
+		{
+			return Rule && Rule->template IsA<UCastlePCGQuadRoofOverlayRule>();
+		});
+		if (RuleIndex == INDEX_NONE) { return Fail(RuleSetPath, TEXT("缺少正式四格叠层屋面规则")); }
+		auto* PreviousRule = CastChecked<UCastlePCGQuadRoofOverlayRule>(RuleSet->Rules[RuleIndex].Get());
+		const auto* ShieldKits = PreviousRule->FamilyKits.Find(Shield);
+		if (!ShieldKits) { return Fail(RuleSetPath, TEXT("缺少应保留的盾塔专用四格屋面套件")); }
 		auto* Rule = NewObject<UCastlePCGQuadRoofOverlayRule>(RuleSet);
+		Rule->FamilyKits.Add(Shield, *ShieldKits);
 
 		TArray<UObject*> Assets;
 		UTexture2D* Textures[UE_ARRAY_COUNT(Images)] = {};
@@ -873,31 +1052,17 @@ namespace HachimisV4Import
 
 		for (FRoofSource& Source : Sources)
 		{
-			Source.Part.Materials.Add(Material);
-			if (!StorePart(Source.Part, Folder, Source.Part.Part.Node.ToString())) { return false; }
-			const FName Group = Source.Part.Part.Group;
-			const FString KitPath = Folder / FString::Printf(TEXT("DA_%s_QuadRoof_%sKit"), *Source.Family.ToString(), *Group.ToString());
-			auto* Kit = CreateOrLoad<UCastlePCGAttachmentKit>(KitPath);
-			if (!Kit) { return Fail(KitPath, TEXT("四格屋面套件不可读")); }
-			Assets.Add(Source.Part.Part.Mesh.Get());
-			Kit->Parts.Reset(1);
-			Kit->Parts.Add(MoveTemp(Source.Part.Part));
-			Rule->FamilyKits.FindOrAdd(Source.Family).ByKind.Add(Source.Kind, Kit);
-			Assets.Add(Kit);
+			if (!StoreQuadRoofKit(Source.Family, Source.Kind, Source.Part, *Material, Folder, *Rule, Assets)) { return false; }
 		}
-		FCastlePCGQuadRoofKits ShieldKits = Rule->FamilyKits.FindChecked(Archer);
-		ShieldKits.bIsPlaceholder = true;
-		Rule->FamilyKits.Add(Shield, MoveTemp(ShieldKits));
-		// 重跑只替换同一屋面规则，所有新引用与规则集在同一批次序列化并发布。
-		RuleSet->Rules.RemoveAll([](const TObjectPtr<UCastleBuildingPCGRule>& Entry)
-		{
-			return Entry && Entry->IsA<UCastlePCGQuadRoofOverlayRule>();
-		});
-		RuleSet->Rules.Add(Rule);
+		// 更新规则集中的原插槽，保留其他结构规则的执行顺序。
+		RuleSet->Rules[RuleIndex] = Rule;
+		bool bPublished = false;
+		ON_SCOPE_EXIT { if (!bPublished) { RuleSet->Rules[RuleIndex] = PreviousRule; } };
 		FString Error;
 		if (!RuleSet->ValidateConfiguration(Error)) { return Fail(RuleSetPath, Error); }
 		Assets.Add(RuleSet);
 		if (!SaveSupportDelivery(Assets)) { return false; }
+		bPublished = true;
 		UE_LOG(LogHachimisV4, Display, TEXT("正式规则集已绑定 %d 套四格屋面和共享调色板，正式包共 %d 个。"), Sources.Num(), Assets.Num());
 		return true;
 	}
@@ -1278,6 +1443,12 @@ namespace HachimisV4Import
 int32 UHachimisV4ImportCommandlet::Main(const FString& Params)
 {
 #if WITH_EDITOR
+	FString ShieldQuadRoofSource;
+	if (FParse::Value(*Params, TEXT("ShieldQuadRoofSource="), ShieldQuadRoofSource))
+	{
+		HachimisV4Import::FImporter Importer(ShieldQuadRoofSource, FString(), false);
+		return Importer.RunShieldQuadRoofDelivery() ? 0 : 1;
+	}
 	FString QuadRoofSource;
 	if (FParse::Value(*Params, TEXT("QuadRoofSource="), QuadRoofSource))
 	{

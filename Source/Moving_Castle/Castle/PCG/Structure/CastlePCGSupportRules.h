@@ -56,10 +56,6 @@ struct FCastlePCGQuadRoofKits
 	/** 每种标准朝向独立引用一个套件，棋盘上的其他朝向由规则旋转。 */
 	UPROPERTY(EditAnywhere, Category="建筑PCG")
 	TMap<ECastlePCGQuadRoofKind, TObjectPtr<UCastlePCGAttachmentKit>> ByKind;
-
-	/** 盾塔明确引用箭塔交付时启用。未声明的跨族引用一律非法。 */
-	UPROPERTY(EditAnywhere, Category="建筑PCG")
-	bool bIsPlaceholder = false;
 };
 
 namespace CastlePCGSupport

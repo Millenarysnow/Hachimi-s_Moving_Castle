@@ -3,6 +3,7 @@
 #include "CastlePCGSupportRules.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/Texture2D.h"
+#include "Castle/PCG/HachimisV4/HachimisV4MeshValidation.h"
 #include "Interfaces/Interface_CollisionDataProvider.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialExpressionTextureSample.h"
@@ -195,21 +196,29 @@ bool FCastlePCGSupportAssets::RunTest(const FString& Parameters)
 		&& Inputs->AmbientOcclusion.OutputIndex == 1 && Inputs->Roughness.Expression == ORMSample && Inputs->Roughness.OutputIndex == 2
 		&& Inputs->Metallic.Expression == ORMSample && Inputs->Metallic.OutputIndex == 3
 		&& !Inputs->AmbientOcclusion.UseConstant && !Inputs->Roughness.UseConstant && !Inputs->Metallic.UseConstant);
+	// 盾塔交付仅内嵌基础色。其余输入恢复 Blender 写入 FBX 前的表面参数。
+	const auto* ShieldPalette = LoadObject<UMaterial>(nullptr, *AssetPath(TEXT("M_HC515_ShieldRoofPalette")));
+	const auto* ShieldColor = LoadObject<UTexture2D>(nullptr, *AssetPath(TEXT("T_HC515_ShieldRoof_BaseColor")));
+	if (!TestNotNull(TEXT("盾塔调色板可重载"), ShieldPalette) || !TestNotNull(TEXT("盾塔图集可重载"), ShieldColor)) { return false; }
+	const UMaterialEditorOnlyData* ShieldInputs = ShieldPalette->GetEditorOnlyData();
+	const auto* ShieldSample = Cast<UMaterialExpressionTextureSample>(ShieldInputs->BaseColor.Expression);
+	TestTrue(TEXT("盾塔调色板使用 1024×512 sRGB 源图集"), ShieldSample && ShieldSample->Texture == ShieldColor
+		&& !ShieldInputs->BaseColor.UseConstant && ShieldColor->SRGB && ShieldColor->Source.IsValid()
+		&& ShieldColor->Source.GetSizeX() == 1024 && ShieldColor->Source.GetSizeY() == 512);
+	TestTrue(TEXT("盾塔粗糙度 0.5、金属度 0、高光 0.5、无自发光"), ShieldInputs->Roughness.UseConstant
+		&& ShieldInputs->Roughness.Constant == 0.5f && ShieldInputs->Metallic.UseConstant
+		&& ShieldInputs->Metallic.Constant == 0.0f && ShieldInputs->Specular.UseConstant
+		&& ShieldInputs->Specular.Constant == 0.5f && ShieldInputs->EmissiveColor.UseConstant
+		&& ShieldInputs->EmissiveColor.Constant == FColor::Black);
 	Meshes.Reset();
 	Kits.Reset();
 	for (const FName Family : CastlePCGSupport::Families())
 	{
 		const FCastlePCGQuadRoofKits& FamilyKits = QuadRoof->FamilyKits.FindChecked(Family);
-		const bool bShield = Family == TEXT("Shield");
-		TestEqual(Family.ToString() + TEXT(" 的显式占位声明"), FamilyKits.bIsPlaceholder, bShield);
+		const UMaterial* ExpectedPalette = Family == TEXT("Shield") ? ShieldPalette : Palette;
 		for (const ECastlePCGQuadRoofKind Kind : CastlePCGSupport::QuadRoofKinds())
 		{
 			const UCastlePCGAttachmentKit* Kit = FamilyKits.ByKind.FindChecked(Kind);
-			if (bShield)
-			{
-				TestTrue(TEXT("盾塔引用箭塔同款正式套件"), Kit == QuadRoof->FamilyKits.FindChecked(TEXT("Archer")).ByKind.FindChecked(Kind).Get());
-				continue;
-			}
 			const FString KindName = CastlePCGSupport::QuadRoofName(Kind).ToString();
 			const FString MeshName = FString::Printf(TEXT("SM_HC515_L4H_%s_%s"), *Family.ToString(), *KindName);
 			const FString KitName = FString::Printf(TEXT("DA_%s_QuadRoof_%sKit"), *Family.ToString(), *KindName);
@@ -219,7 +228,10 @@ bool FCastlePCGSupportAssets::RunTest(const FString& Parameters)
 			auto* Mesh = Part.Mesh.Get();
 			TestEqual(MeshName + TEXT(" 的正式对象路径"), Mesh->GetPathName(), AssetPath(MeshName));
 			TestEqual(MeshName + TEXT(" 来自唯一同名作者视觉节点"), Part.Node.ToString(), MeshName);
-			TestTrue(MeshName + TEXT(" 只引用共享材质"), Mesh->GetStaticMaterials().Num() == 1 && Mesh->GetMaterial(0) == Palette);
+			TestTrue(MeshName + TEXT(" 只引用对应调色板"), Mesh->GetStaticMaterials().Num() == 1 && Mesh->GetMaterial(0) == ExpectedPalette);
+			FString Reason;
+			const bool bMeshValid = HachimisV4MeshValidation::Verify(*Mesh, Reason);
+			TestTrue(MeshName + TEXT(" 通过渲染与距离场校验 ") + Reason, bMeshValid);
 			if (const FMeshDescription* Source = Mesh->GetMeshDescription(0);
 				TestNotNull(MeshName + TEXT(" 的持久化网格源"), Source))
 			{
@@ -234,8 +246,8 @@ bool FCastlePCGSupportAssets::RunTest(const FString& Parameters)
 			Kits.Add(Kit);
 		}
 	}
-	TestEqual(TEXT("五族各四种屋面，合计 20 网格、20 套件"), Meshes.Num(), 20);
-	TestEqual(TEXT("不为普通房和盾塔制造额外套件"), Kits.Num(), 20);
+	TestEqual(TEXT("六族各四种屋面，合计 24 独立网格"), Meshes.Num(), 24);
+	TestEqual(TEXT("六族各四种屋面，合计 24 独立套件"), Kits.Num(), 24);
 	return true;
 }
 
@@ -389,7 +401,6 @@ bool FCastlePCGQuadRoofGeometry::RunTest(const FString& Parameters)
 	for (const int32 Layers : {1, 2})
 	for (const FName Family : CastlePCGSupport::Families())
 	{
-		if (Family == TEXT("Shield")) { continue; } // 正式盾塔引用的同一批箭塔几何已覆盖，日志另测。
 		for (uint8 Mask = 1; Mask <= 14; ++Mask)
 		{
 			const FString Case = FString::Printf(TEXT("%s %d 层掩码 %d"), *Family.ToString(), Layers, Mask);
@@ -487,18 +498,25 @@ bool FCastlePCGQuadRoofEligibility::RunTest(const FString& Parameters)
 	CheckInactive(FQuadRoofFixture::Query(*Rules, TEXT("Archer"), FIntVector(2, 1, 2), 1), TEXT("竖向三级无四格顶面"));
 	CheckInactive(FQuadRoofFixture::Query(*Rules, TEXT("Archer"), FIntVector(1, 2, 2), 1), TEXT("旋转的竖向三级无四格顶面"));
 
-	// 占位只在实际命中时记一条 Warning，未命中的盾塔保持已有显隐。
-	CheckInactive(FQuadRoofFixture::Query(*Rules, TEXT("Shield"), FIntVector(2, 2, 2), 1, false, true), TEXT("盾塔悬挑遮挡停用占位"));
-	const auto Shield = FQuadRoofFixture::Query(*Rules, TEXT("Shield"), FIntVector(2, 2, 2), 1);
-	FCastlePCGSemanticField Field = FQuadRoofFixture::Field(Shield);
-	const auto* Archer = Rule->FamilyKits.FindChecked(TEXT("Archer")).ByKind.FindChecked(ECastlePCGQuadRoofKind::Corner).Get();
-	const FString ExpectedWarning = FString::Printf(TEXT("盾塔建筑 %s：专用四格叠层屋面尚未交付，使用箭塔屋面套件 %s 占位。"),
-		*FQuadRoofFixture::Root.ToString(), *Archer->GetPathName());
-	AddExpectedMessage(ExpectedWarning, ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
-	FString Error;
-	if (!Rule->Evaluate(Shield, Field, Error)) { AddError(Error); return false; }
-	const auto& Owner = Field.Cells.FindChecked(FQuadRoofFixture::Root + Shield.Up);
-	TestTrue(TEXT("盾塔实际使用箭塔转角套件"), Owner.Roof == ECastlePCGRoof::Override && Owner.RoofOverride.Kit == Archer);
+	// 同一套触发边界适用于盾塔，全部有效掩码均应进入正式屋面，不产生占位日志。
+	for (const int32 Layers : {1, 2})
+	{
+		const FIntVector Grid(2, 2, Layers);
+		CheckInactive(FQuadRoofFixture::Query(*Rules, TEXT("Shield"), Grid, 0), TEXT("盾塔全空不触发四格叠层屋面"));
+		CheckInactive(FQuadRoofFixture::Query(*Rules, TEXT("Shield"), Grid, 15), TEXT("盾塔全满不触发四格叠层屋面"));
+		CheckInactive(FQuadRoofFixture::Query(*Rules, TEXT("Shield"), Grid, 1, false, true), TEXT("盾塔隔层悬挑遮挡不触发四格叠层屋面"));
+		for (uint8 Mask = 1; Mask <= 14; ++Mask)
+		{
+			const auto Shield = FQuadRoofFixture::Query(*Rules, TEXT("Shield"), Grid, Mask);
+			FCastlePCGSemanticField Field = FQuadRoofFixture::Field(Shield);
+			FString Error;
+			if (!Rule->Evaluate(Shield, Field, Error)) { AddError(Error); return false; }
+			const auto& Owner = Field.Cells.FindChecked(FQuadRoofFixture::Root + Shield.Up * (Layers - 1));
+			TestTrue(FString::Printf(TEXT("盾塔 %d 层占格 %d 使用本族套件"), Layers, Mask),
+				Owner.Roof == ECastlePCGRoof::Override && Owner.RoofOverride.Kit
+				&& Owner.RoofOverride.Kit->GetName().StartsWith(TEXT("DA_Shield_QuadRoof_")));
+		}
+	}
 	return true;
 }
 
