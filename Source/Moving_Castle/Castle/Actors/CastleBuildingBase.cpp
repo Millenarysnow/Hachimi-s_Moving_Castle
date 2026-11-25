@@ -16,9 +16,12 @@
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/World.h"
+#include "MaterialShared.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Moving_Castle.h"
+#include "SceneInterface.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Units/BuildingInteraction/CastleBuildingTriggerSubsystem.h"
 
@@ -268,6 +271,10 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 	GetComponents<UPrimitiveComponent>(Primitives);
 	for (UPrimitiveComponent* Primitive : Primitives)
 	{
+		// 摄影只使用直接照明，预览组件无需参与关卡阴影、间接光或光追加速结构。
+		Primitive->SetCastShadow(false);
+		Primitive->SetAffectDynamicIndirectLighting(false);
+		Primitive->SetVisibleInRayTracing(false);
 		if (UBuildingGameplayRootComponent::IsInGameplayHierarchy(Primitive))
 		{
 			continue;
@@ -343,6 +350,10 @@ void ACastleBuildingBase::PrepareForPreview()
 	PrototypeLabelPlate->SetVisibility(false);
 	TArray<UPrimitiveComponent*> Primitives;
 	GetComponents<UPrimitiveComponent>(Primitives);
+#if WITH_EDITOR
+	TSet<UMaterialInterface*> QueuedMaterials;
+	const FSceneInterface* Scene = GetWorld()->Scene;
+#endif
 	for (UPrimitiveComponent* Primitive : Primitives)
 	{
 		if (UBuildingGameplayRootComponent::IsInGameplayHierarchy(Primitive))
@@ -353,6 +364,61 @@ void ACastleBuildingBase::PrepareForPreview()
 		}
 		Primitive->SetVisibleInSceneCaptureOnly(true);
 		Primitive->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		Primitive->SetCastShadow(false);
+#if WITH_EDITOR
+		if (const UStaticMeshComponent* Mesh = Cast<UStaticMeshComponent>(Primitive); Scene && Mesh && Mesh->IsVisible())
+		{
+			for (UMaterialInterface* Material : Mesh->GetMaterials())
+			{
+				if (!IsValid(Material) || QueuedMaterials.Contains(Material)) { continue; }
+				QueuedMaterials.Add(Material);
+				// 按需着色器必须先提交实际取景所需的编译任务，摄影 Tick 只观察完成状态。
+				if (FMaterialResource* Resource = Material->GetMaterialResource(Scene->GetShaderPlatform());
+					Resource && !Resource->IsGameThreadShaderMapComplete())
+				{
+					Resource->SubmitCompileJobs_GameThread(EShaderCompileJobPriority::High);
+				}
+			}
+		}
+#endif
 	}
+}
+
+bool ACastleBuildingBase::ArePreviewRenderResourcesReady(FText& OutFailureReason) const
+{
+	OutFailureReason = FText::GetEmpty();
+	const FSceneInterface* Scene = GetWorld()->Scene;
+	if (!Scene)
+	{
+		OutFailureReason = INVTEXT("预览模型没有可供摄影的渲染场景。");
+		return false;
+	}
+	TArray<UStaticMeshComponent*> Meshes;
+	GetComponents<UStaticMeshComponent>(Meshes);
+	TSet<UMaterialInterface*> CheckedMaterials;
+	bool bReady = true;
+	for (const UStaticMeshComponent* Component : Meshes)
+	{
+		// 隐藏的功能几何与号牌从不入镜，摄影只对实际绘制的资产作资源检查。
+		if (!Component->IsVisible()) { continue; }
+		const UStaticMesh* Mesh = Component->GetStaticMesh();
+		if (!IsValid(Mesh))
+		{
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("美术组件 %s 缺少预览网格。"), *Component->GetPathName()));
+			return false;
+		}
+		bReady &= !Mesh->IsCompiling() && !Mesh->HasPendingRenderResourceInitialization() && Component->IsRenderStateCreated();
+		for (UMaterialInterface* Material : Component->GetMaterials())
+		{
+			if (!IsValid(Material))
+			{
+				OutFailureReason = FText::FromString(FString::Printf(TEXT("美术组件 %s 缺少预览材质。"), *Component->GetPathName()));
+				return false;
+			}
+			if (CheckedMaterials.Contains(Material)) { continue; }
+			CheckedMaterials.Add(Material);
+			const FMaterialResource* Resource = Material->GetMaterialResource(Scene->GetShaderPlatform());
+			bReady &= Material->IsComplete() && Resource && Resource->IsGameThreadShaderMapComplete();
+		}
+	}
+	return bReady;
 }

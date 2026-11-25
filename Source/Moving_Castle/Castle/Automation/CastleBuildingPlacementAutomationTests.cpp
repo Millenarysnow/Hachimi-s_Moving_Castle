@@ -226,9 +226,9 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	if (!Definition->CreateDescriptor(2, ECastleTileColor::Red, 3, WideCard, Reason)) { return false; }
 	TestTrue(TEXT("有匹配面允许双格建筑部分悬空"), Board->CanPlaceBuildingAtCursor(TopTarget, WideCard, Reason));
 	TestTrue(TEXT("坐标入口只需锚点下方匹配，不要求完整底面支撑"), Board->CanPlaceBuilding(TopTarget.AdjacentCell, WideCard, Reason));
-	if (!Board->PrototypeBackpack->TryAddItem(WideCard, CardIndex, Reason)) { return false; }
-	ACastleBuildingBase* FloatingWide = Board->PlaceBackpackBuildingAtCursor(TopTarget, CardIndex, Reason);
-	if (!TestNotNull(TEXT("背包实际放置部分悬空的双格建筑"), FloatingWide)) { AddError(Reason.ToString()); return false; }
+	// 多格描述仍可按光标高亮面直接生成。本用例验证该几何行为，背包只接收一级。
+	ACastleBuildingBase* FloatingWide = Board->PlaceBuildingAtCursor(TopTarget, WideCard, false, Reason);
+	if (!TestNotNull(TEXT("直接生成部分悬空的双格建筑"), FloatingWide)) { AddError(Reason.ToString()); return false; }
 	if (!CastleBuildingTests::CompletePlacement(FloatingWide)) { return false; }
 	// 从公开建筑列表检查实际三维占格，不为测试开放棋盘内部的受保护索引查询。
 	const auto HasPlacedCell = [Board](const FIntVector& Cell)
@@ -241,7 +241,7 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("悬空部分保留实际占格"), FloatingWide->GetOccupiedCoordinates().Contains(FIntVector(1, 1, 1)));
 	TestEqual(TEXT("双格建筑正确登记两格占用"), Board->GetOccupiedRoomCellCount(), 4);
 	TestFalse(TEXT("双格建筑第二格正下方确实为空"), HasPlacedCell(Destination));
-	TestEqual(TEXT("悬空放置成功正常扣牌"), Board->PrototypeBackpack->GetItemCount(), 0);
+	TestEqual(TEXT("直接生成不变更背包库存"), Board->PrototypeBackpack->GetItemCount(), 0);
 
 	// 从已完成的上层建筑真实侧面解析光标，再走背包入口生成下方完全没有建筑的普通房间。
 	FCastleGridCursorTarget FloatingSide;

@@ -100,12 +100,16 @@ bool FCastleShopTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("出售释放背包容量"), Board->PrototypeBackpack->GetItemCount(), 0);
 	TestFalse(TEXT("无效槽位不能重复卖"), Shop->TrySellBackpackItem(0, Reason));
 
-	// 二级合成卡按两个格子计入全局额度，不能因为只占一个背包槽而多买。
+	// 全局房间额度和背包槽位容量是两套限制，两张一级卡可先占满测试设定的房间额度。
 	int32 AddedIndex = INDEX_NONE;
 	Board->PrototypeBackpack->TrySetCapacity(10, Reason);
-	Board->PrototypeBackpack->TryAddBuilding(Board->FindBuildingDefinition(ECastleBuildingType::ArcherTower), 2, ECastleTileColor::Red, 3, AddedIndex, Reason);
+	for (int32 Index = 0; Index < 2; ++Index)
+	{
+		TestTrue(TEXT("向建筑栏添加一张一级卡"), Board->PrototypeBackpack->TryAddBuilding(
+			Board->FindBuildingDefinition(ECastleBuildingType::ArcherTower), 1, ECastleTileColor::Red, 3, AddedIndex, Reason));
+	}
 	Shop->RoomLimit = 2;
-	TestEqual(TEXT("合成卡按实际格数计入总量"), Shop->GetOwnedRoomCount(), 2);
+	TestEqual(TEXT("库存两张一级卡计入全局房间总量"), Shop->GetOwnedRoomCount(), 2);
 	TestFalse(TEXT("全局上限拒绝新购买"), Shop->TryBuyOffer(1, Reason));
 	Shop->RoomLimit = 30;
 	const int32 GoldBeforeRefresh = Economy->GetGold();
@@ -122,7 +126,7 @@ bool FCastleShopTest::RunTest(const FString& Parameters)
 	// 即使卖出能释放容量，也必须先保证收款不会溢出，不能先删除卡牌再发现无法入账。
 	Economy->TryAddGold(MAX_int32 - Economy->GetGold(), Reason);
 	TestFalse(TEXT("金币已满时出售失败"), Shop->TrySellBackpackItem(0, Reason));
-	TestEqual(TEXT("出售失败保留卡牌"), Board->PrototypeBackpack->GetItemCount(), 1);
+	TestEqual(TEXT("出售失败保留所有卡牌"), Board->PrototypeBackpack->GetItemCount(), 2);
 	TestEqual(TEXT("出售失败保留余额"), Economy->GetGold(), MAX_int32);
 	return true;
 }

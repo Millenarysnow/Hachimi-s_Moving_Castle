@@ -16,6 +16,7 @@
 #include "Components/Overlay.h"
 #include "Components/OverlaySlot.h"
 #include "Components/ScaleBox.h"
+#include "Components/ScaleBoxSlot.h"
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
@@ -85,16 +86,21 @@ namespace
 			Slot->SetAutoSize(bAutoSize);
 		}
 
-		void Portrait(UCanvasPanel& Canvas, FName Name, const FAnchors& Anchors)
+		void Portrait(UCanvasPanel& Canvas, FName Name, FName SlotName, const FAnchors& Anchors, EHorizontalAlignment Side)
 		{
-			auto* Scale = Add<UScaleBox>();
+			// 在锚定范围内缩放正方形，等比贴合面板上沿和靠外一侧。
+			auto* Scale = Add<UScaleBox>(SlotName);
 			Scale->SetStretch(EStretch::ScaleToFit);
 			Scale->SetVisibility(ESlateVisibility::HitTestInvisible);
 			auto* Square = Add<USizeBox>();
-			Square->SetWidthOverride(480);
-			Square->SetHeightOverride(480);
-			Square->SetContent(Add<UImage>(Name));
-			Scale->SetContent(Square);
+			Square->SetWidthOverride(380);
+			Square->SetHeightOverride(380);
+			auto* Image = Add<UImage>(Name);
+			Image->SetVisibility(ESlateVisibility::HitTestInvisible);
+			Square->SetContent(Image);
+			auto* PortraitSlot = CastChecked<UScaleBoxSlot>(Scale->AddChild(Square));
+			PortraitSlot->SetHorizontalAlignment(Side);
+			PortraitSlot->SetVerticalAlignment(VAlign_Bottom);
 			Anchor(Canvas, *Scale, Anchors, FMargin(0));
 		}
 	};
@@ -105,6 +111,7 @@ namespace
 		const FString Path = FString(TEXT("/Game/MovingCastle/UI/Dialogue/")) + Name;
 		auto* Package = CreatePackage(*Path);
 		auto* Asset = LoadObject<UWidgetBlueprint>(nullptr, *(Path + TEXT(".") + Name), nullptr, LOAD_NoWarn | LOAD_Quiet);
+		TSet<FName> PreviousWidgets;
 		if (!Asset)
 		{
 			Asset = CastChecked<UWidgetBlueprint>(FKismetEditorUtilities::CreateBlueprint(&Parent, Package, FName(Name),
@@ -114,11 +121,20 @@ namespace
 		else
 		{
 			// 重新生成时让编译器使用新的 WidgetTree，不在旧树中积累同名绑定控件。
+			Asset->ForEachSourceWidget([&](UWidget* Widget) { PreviousWidgets.Add(Widget->GetFName()); });
 			Asset->WidgetTree->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
 			Asset->WidgetTree = NewObject<UWidgetTree>(Asset, TEXT("WidgetTree"), RF_Transactional);
 		}
 		FLayout Layout{*Asset->WidgetTree, Font};
 		Build(Layout);
+		// 与 UMG 设计器的增删操作一致：保留原有绑定名 GUID，只登记新增名字并删除已移除的名字。
+		Asset->ForEachSourceWidget([&](UWidget* Widget)
+		{
+			const FName WidgetName = Widget->GetFName();
+			PreviousWidgets.Remove(WidgetName);
+			if (!Asset->WidgetVariableNameToGuidMap.Contains(WidgetName)) { Asset->OnVariableAdded(WidgetName); }
+		});
+		for (const FName OldName : PreviousWidgets) { Asset->OnVariableRemoved(OldName); }
 		FKismetEditorUtilities::CompileBlueprint(Asset);
 		if (Asset->Status == BS_Error)
 		{
@@ -129,42 +145,70 @@ namespace
 		const FString Filename = FPackageName::LongPackageNameToFilename(Path, FPackageName::GetAssetPackageExtension());
 		FSavePackageArgs Args;
 		Args.TopLevelFlags = RF_Public | RF_Standalone;
-		return UPackage::SavePackage(Package, Asset, *Filename, Args) ? Asset->GeneratedClass : nullptr;
+		if (!UPackage::SavePackage(Package, Asset, *Filename, Args))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("教程布局 %s 保存失败，目标 %s。"), *Path, *Filename);
+			return nullptr;
+		}
+		return Asset->GeneratedClass;
 	}
+
+	UFont* LoadTutorialLayoutFont()
+	{
+		auto* Font = LoadObject<UFont>(nullptr, TEXT("/Game/MovingCastle/Fonts/MicrosoftYaHei_Font.MicrosoftYaHei_Font"));
+		if (!Font) { UE_LOG(LogMoving_Castle, Error, TEXT("教程布局缺少 MicrosoftYaHei_Font。")); }
+		return Font;
+	}
+
+	UClass* PublishDialogueWidget(UFont& Font)
+	{
+		return PublishWidget(TEXT("WBP_CastleDialogue"), *UCastleDialogueWidget::StaticClass(), Font, [](FLayout& L)
+		{
+			auto* Root = L.Add<UCanvasPanel>();
+			L.Tree.RootWidget = Root;
+			L.Portrait(*Root, TEXT("LeftPortrait"), TEXT("LeftPortraitSlot"), FAnchors(.08f, .35f, .30f, .72f), HAlign_Left);
+			L.Portrait(*Root, TEXT("RightPortrait"), TEXT("RightPortraitSlot"), FAnchors(.70f, .35f, .92f, .72f), HAlign_Right);
+
+			auto* Overlay = L.Add<UOverlay>(TEXT("DialoguePanel"));
+			auto* Lines = L.Add<UVerticalBox>();
+			auto* Speaker = L.Text(TEXT("SpeakerName"), 24, TEXT(""), Accent);
+			Speaker->SetAutoWrapText(false);
+			Lines->AddChildToVerticalBox(Speaker)->SetPadding(FMargin(0, 0, 0, 4));
+			Lines->AddChildToVerticalBox(L.Text(TEXT("DialogueBody"), 22))->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+			auto* Hint = L.Text(TEXT("ContinueHint"), 16, TEXT("点击继续"), Accent);
+			Hint->SetAutoWrapText(false);
+			Lines->AddChildToVerticalBox(Hint)->SetHorizontalAlignment(HAlign_Right);
+			auto* PanelSlot = Overlay->AddChildToOverlay(L.Panel(*Lines, FMargin(28, 10)));
+			PanelSlot->SetHorizontalAlignment(HAlign_Fill);
+			PanelSlot->SetVerticalAlignment(VAlign_Fill);
+
+			// 点击区是底板的兄弟节点，UButtonSlot 的默认居中不再限制正文宽度。
+			auto* Continue = L.Add<UButton>(TEXT("ContinueButton"));
+			const auto* Focusable = FindFProperty<FBoolProperty>(UButton::StaticClass(), TEXT("IsFocusable"));
+			check(Focusable);
+			Focusable->SetPropertyValue_InContainer(Continue, false);
+			Continue->SetBackgroundColor(FLinearColor::Transparent);
+			auto* ClickSlot = Overlay->AddChildToOverlay(Continue);
+			ClickSlot->SetHorizontalAlignment(HAlign_Fill);
+			ClickSlot->SetVerticalAlignment(VAlign_Fill);
+			L.Anchor(*Root, *Overlay, FAnchors(.08f, .72f, .92f, .94f), FMargin(0));
+			auto* Choices = L.Add<UVerticalBox>(TEXT("ChoiceContainer"));
+			L.Anchor(*Root, *Choices, FAnchors(.31f, .44f, .69f, .70f), FMargin(0));
+		});
+	}
+}
+
+bool BuildCastleDialogueWidget()
+{
+	UFont* Font = LoadTutorialLayoutFont();
+	return Font && PublishDialogueWidget(*Font);
 }
 
 bool BuildCastleTutorialWidgets(UCastleTutorialConfigDataAsset& Config)
 {
-	auto* Font = LoadObject<UFont>(nullptr, TEXT("/Game/MovingCastle/Fonts/MicrosoftYaHei_Font.MicrosoftYaHei_Font"));
-	if (!Font)
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("教程布局缺少 MicrosoftYaHei_Font。"));
-		return false;
-	}
-	auto* Dialogue = PublishWidget(TEXT("WBP_CastleDialogue"), *UCastleDialogueWidget::StaticClass(), *Font, [](FLayout& L)
-	{
-		auto* Root = L.Add<UCanvasPanel>();
-		L.Tree.RootWidget = Root;
-		L.Portrait(*Root, TEXT("LeftPortrait"), FAnchors(.055f, .12f, .45f, .73f));
-		L.Portrait(*Root, TEXT("RightPortrait"), FAnchors(.55f, .12f, .945f, .73f));
-
-		auto* Lines = L.Add<UVerticalBox>();
-		Lines->AddChildToVerticalBox(L.Text(TEXT("SpeakerName"), 24, TEXT(""), Accent))->SetPadding(FMargin(0, 0, 0, 10));
-		Lines->AddChildToVerticalBox(L.Text(TEXT("DialogueBody"), 22));
-		auto* Body = L.Add<USizeBox>();
-		Body->SetMinDesiredHeight(138);
-		Body->SetContent(L.Panel(*Lines, FMargin(30, 20)));
-		auto* Continue = L.Add<UButton>(TEXT("ContinueButton"));
-		// 与设计器属性一致；装饰性推进按钮不截走对话根控件的确认键。
-		const auto* Focusable = FindFProperty<FBoolProperty>(UButton::StaticClass(), TEXT("IsFocusable"));
-		check(Focusable);
-		Focusable->SetPropertyValue_InContainer(Continue, false);
-		Continue->SetBackgroundColor(FLinearColor::Transparent);
-		Continue->SetContent(Body);
-		L.Anchor(*Root, *Continue, FAnchors(.11f, .73f, .89f, .96f), FMargin(0));
-		auto* Choices = L.Add<UVerticalBox>(TEXT("ChoiceContainer"));
-		L.Anchor(*Root, *Choices, FAnchors(.26f, .50f, .74f, .72f), FMargin(0));
-	});
+	UFont* Font = LoadTutorialLayoutFont();
+	if (!Font) { return false; }
+	UClass* Dialogue = PublishDialogueWidget(*Font);
 
 	// 百科和首次说明共用版面，只有百科具备独立翻页和空状态绑定。
 	const auto Guide = [&](bool bBook) -> UClass*

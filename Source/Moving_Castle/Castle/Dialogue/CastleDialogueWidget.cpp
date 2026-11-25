@@ -2,10 +2,13 @@
 
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Dialogue/CastleDialogueSubsystem.h"
+#include "Brushes/SlateColorBrush.h"
 #include "Components/Button.h"
+#include "Components/ButtonSlot.h"
 #include "Components/Image.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
+#include "Components/VerticalBoxSlot.h"
 #include "Engine/Texture2D.h"
 #include "Input/Reply.h"
 #include "Moving_Castle.h"
@@ -156,6 +159,7 @@ void UCastleDialogueWidget::Choose(const FName TargetLineId)
 void UCastleDialogueWidget::RebuildChoiceButtons()
 {
 	ChoiceContainer->ClearChildren();
+	ChoiceContainer->SetVisibility(ESlateVisibility::Collapsed);
 	if (CurrentLine.Choices.IsEmpty())
 	{
 		ChoiceContainer->SetVisibility(ESlateVisibility::Collapsed);
@@ -173,11 +177,20 @@ void UCastleDialogueWidget::RebuildChoiceButtons()
 		}
 		ChoiceLabel->SetText(Choice.Text);
 		ChoiceLabel->SetFont(DialogueBody->GetFont());
-		ChoiceButton->AddChild(ChoiceLabel);
+		ChoiceLabel->SetAutoWrapText(true);
+		ChoiceLabel->SetColorAndOpacity(FSlateColor(FLinearColor(0.95f, 0.95f, 0.89f)));
+		// 分支按钮保持深色底板，鼠标状态只改变底板亮度，左右立绘不截获选项输入。
+		FButtonStyle Style = ChoiceButton->GetStyle();
+		Style.SetNormal(FSlateColorBrush(FLinearColor(0.047f, 0.075f, 0.089f, 0.98f)));
+		Style.SetHovered(FSlateColorBrush(FLinearColor(0.10f, 0.19f, 0.21f)));
+		Style.SetPressed(FSlateColorBrush(FLinearColor(0.06f, 0.13f, 0.14f)));
+		ChoiceButton->SetStyle(Style);
+		auto* LabelSlot = CastChecked<UButtonSlot>(ChoiceButton->AddChild(ChoiceLabel));
+		LabelSlot->SetPadding(FMargin(18, 9));
+		LabelSlot->SetHorizontalAlignment(HAlign_Fill);
 		ChoiceButton->BindChoice(*this, Choice.TargetLineId);
-		ChoiceContainer->AddChildToVerticalBox(ChoiceButton);
+		ChoiceContainer->AddChildToVerticalBox(ChoiceButton)->SetPadding(FMargin(0, 0, 0, 8));
 	}
-	ChoiceContainer->SetVisibility(ESlateVisibility::Collapsed);
 }
 
 void UCastleDialogueWidget::UpdatePresentedText()
@@ -198,8 +211,9 @@ void UCastleDialogueWidget::UpdateFocusTint()
 			Image->SetVisibility(ESlateVisibility::Collapsed);
 			return;
 		}
-		Image->SetVisibility(ESlateVisibility::Visible);
-		Image->SetBrushFromTexture(Texture, true);
+		// 缩放框提供固定基准，原始贴图像素不参与布局，立绘也不拦截鼠标。
+		Image->SetVisibility(ESlateVisibility::HitTestInvisible);
+		Image->SetBrushFromTexture(Texture, false);
 		const float Brightness = Focus == Side ? 1.0f : 0.45f;
 		Image->SetColorAndOpacity(FLinearColor(Brightness, Brightness, Brightness, 1.0f));
 	};

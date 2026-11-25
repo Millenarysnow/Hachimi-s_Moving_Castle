@@ -308,9 +308,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|棋盘")
 	bool RemoveBuilding(ACastleBuildingBase* Building, FText& OutFailureReason);
 
-	/** 移除场上建筑并将其当前描述放回背包，背包满时整个操作失败。 */
+	/** 无目标格的旧入口仅允许单格建筑，多格建筑必须明确指定拆除坐标。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|棋盘")
 	bool RemoveBuildingToBackpack(ACastleBuildingBase* Building, UCastleBackpackComponent* Backpack, FText& OutFailureReason);
+
+	/** 按棋盘局部格宽、层高归一化选择命中点所属占格，同距时取字典序最小值。 */
+	bool TryResolveBuildingCell(const ACastleBuildingBase& Building, const FVector& WorldImpactPoint, FIntVector& OutCell) const;
+
+	/** 原子回收一格为一级牌，落定同属性剩余建筑，随后提交一次棋盘布局。 */
+	bool DemolishBuildingCellToBackpack(ACastleBuildingBase* Building, const FIntVector& TargetCell,
+		UCastleBackpackComponent* Backpack, FText& OutFailureReason);
 
 	/** 返回当前场上独立建筑 Actor 的数量，合成建筑只计一个 Actor。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
@@ -465,6 +472,9 @@ protected:
 
 	/** 校验两个建筑的联合占用坐标是否符合当前等级规定的形状。 */
 	bool BuildMergedFootprint(const ACastleBuildingBase* First, const ACastleBuildingBase* Second, TArray<FIntVector>& OutFootprint) const;
+
+	/** 合成与拆除共用合法形状表；同级顺序也是降级拆分的轴向优先级。 */
+	static TConstArrayView<FIntVector> GetMergedShapeDimensions(int32 ResultLevel);
 
 	/** 生成高一级 Actor 并替换坐标索引；旧 Actor 由整次连续合成抓取视觉后统一销毁。 */
 	ACastleBuildingBase* MergeBuildings(ACastleBuildingBase* First, ACastleBuildingBase* Second, const TArray<FIntVector>& MergedFootprint, FText& OutFailureReason);

@@ -87,8 +87,12 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("导演未运行时允许旧商店"), Director->IsShopAccessAllowed(Reason));
 	Director->ConfigureForAutomation(Config, Board, Controller, Tower);
 	int32 AddedIndex = INDEX_NONE;
-	TestTrue(TEXT("为HUD计数显式配置两格卡"), Board->PrototypeBackpack->TryAddBuilding(
-		Board->FindBuildingDefinition(ECastleBuildingType::ArcherTower), 2, ECastleTileColor::Red, 3, AddedIndex, Reason));
+	// 以两张一级卡验证 HUD 独立于商店的数据来源，保持期望的总占格数。
+	for (int32 Index = 0; Index < 2; ++Index)
+	{
+		TestTrue(TEXT("为 HUD 计数配置一张一级卡"), Board->PrototypeBackpack->TryAddBuilding(
+			Board->FindBuildingDefinition(ECastleBuildingType::ArcherTower), 1, ECastleTileColor::Red, 3, AddedIndex, Reason));
+	}
 	TestFalse(TEXT("HUD读取不提前初始化商店"), Controller->GetShop()->IsInitialized());
 	TestTrue(TEXT("商店未初始化时HUD已有正确占用格数"), Director->GetHUDSummary().Contains(TEXT("房间 2/150")));
 	TestTrue(TEXT("开局编辑可用"), Director->IsEditingAllowed(Reason));

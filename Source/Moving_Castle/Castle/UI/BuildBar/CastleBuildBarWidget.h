@@ -13,6 +13,7 @@ class ACastlePlayerController;
 class UCastleBackpackComponent;
 class UCastleBuildBarSlotWidget;
 class UCastleDirectorSubsystem;
+class UCastleDialogueSubsystem;
 class UCastleShopComponent;
 class UTextBlock;
 enum class ECastleDirectorPhase : uint8;
@@ -66,8 +67,10 @@ private:
 	TWeakObjectPtr<UCastleDirectorSubsystem> BoundDirector;
 	TWeakObjectPtr<ACastlePatrolRoute> BoundPatrolRoute;
 	TWeakObjectPtr<UCastleShopComponent> BoundShop;
+	TWeakObjectPtr<UCastleDialogueSubsystem> BoundDialogue;
 	FDelegateHandle DirectorPhaseHandle;
 	FDelegateHandle PatrolEditingHandle;
+	FDelegateHandle DialogueActivityHandle;
 
 	/** 对比所有会影响渲染的字段，避免切换选择时刷新模型。 */
 	UPROPERTY(Transient)

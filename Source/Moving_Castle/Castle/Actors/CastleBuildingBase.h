@@ -134,6 +134,9 @@ public:
 	/** 预览模式下只允许 SceneCapture 看见模型，且关闭碰撞和阴影。 */
 	void PrepareForPreview();
 
+	/** 等待摄影实际可见的网格和材质。失败原因只在配置无效时给出，异步准备期间保持为空。 */
+	bool ArePreviewRenderResourcesReady(FText& OutFailureReason) const;
+
 	/** 判断当前建筑是否属于固定一级的普通房间。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
 	bool IsNormalRoom() const

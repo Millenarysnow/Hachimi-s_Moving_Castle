@@ -61,10 +61,11 @@ namespace
 		return false;
 	}
 
-	/** 主塔按柱列承托，其他支撑必须来自实际完成放置的侧下格。 */
+	/** 主塔按柱列承托，普通房只有楼板，其他承托立面必须来自落定的侧下方功能建筑。 */
 	bool HasBearing(const FCastlePCGBoardQuery& Query, const FIntVector& Cell, const FIntVector& Wall)
 	{
-		return Query.IsMainTowerColumn(Cell + Wall) || Query.Find(Cell + Wall - Query.Up) != nullptr;
+		const FCastlePCGBoardCell* Bearing = Query.Find(Cell + Wall - Query.Up);
+		return Query.IsMainTowerColumn(Cell + Wall) || (Bearing && !Bearing->bRoom);
 	}
 
 	bool HasOppositeBearings(const FCastlePCGBoardQuery& Query, const FIntVector& Cell, const FIntVector& Axis)

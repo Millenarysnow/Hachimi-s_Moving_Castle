@@ -177,7 +177,7 @@ bool UCastleShopCardWidget::Configure(UCastleShopWidget& InShop, const FCastleBu
 
 bool UCastleShopCardWidget::ConfigureStandalone(const FCastleBuildingDescriptor& Descriptor, const ACastleBoard* Board)
 {
-	// 与商品走同一取景、文字与材质流程；没有商店所有者，卡面始终保持只读。
+	// 与商品共用同一取景和拖拽手感，独立牌面只浏览建筑，点击不产生购买意图。
 	return ConfigurePresentation(nullptr, Descriptor, Board, false);
 }
 
@@ -279,7 +279,7 @@ bool UCastleShopCardWidget::ConfigurePresentation(UCastleShopWidget* InShop, con
 	ShopOwner = InShop;
 	DisplayedDescriptor = Descriptor;
 	bIsSold = bSold;
-	bCanInspect = InShop && !bSold;
+	bCanInspect = !bSold;
 	RefreshPortrait();
 	ApplyFaceState();
 	return true;
@@ -472,12 +472,12 @@ FReply UCastleShopCardWidget::NativeOnMouseButtonDown(const FGeometry& MyGeometr
 	}
 	UCastleShopWidget* Shop = ShopOwner.Get();
 	const TSharedPtr<SWidget> Captor = GetCachedWidget();
-	if (Shop == nullptr || !Captor.IsValid())
+	if ((!Shop && ShopOwner.IsStale()) || !Captor.IsValid())
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("建筑卡牌 %s 无法抓取：商店或 Slate 接收控件已经失效。"), *GetPathName());
 		return FReply::Unhandled();
 	}
-	Shop->ActivateCardInspection(*this);
+	if (Shop) { Shop->ActivateCardInspection(*this); }
 	// 重新抓住同一张正在回正的牌时，从此刻的姿态接着拖，且直接视为拖拽态不误触短点购买。
 	bReturning = false;
 	const bool bResumingTilt = !InspectionOffset.IsZero();
@@ -532,7 +532,7 @@ FReply UCastleShopCardWidget::NativeOnMouseButtonUp(const FGeometry& MyGeometry,
 	{
 		FinishInspection();
 		const FReply Reply = FReply::Handled().ReleaseMouseCapture();
-		OnCardClicked.Broadcast(*this);
+		if (ShopOwner.IsValid()) { OnCardClicked.Broadcast(*this); }
 		return Reply;
 	}
 	if (InspectionOffset == FVector2D::ZeroVector)
@@ -578,8 +578,19 @@ void UCastleShopCardWidget::NativeTick(const FGeometry& MyGeometry, float InDelt
 	RefreshPortrait();
 }
 
+void UCastleShopCardWidget::NativeConstruct()
+{
+	Super::NativeConstruct();
+	// 菜单先完成卡牌配置再挂载，因此只有实际进入视口的独立牌驱动摄影。
+	if (Portraits && Portrait && !ShopOwner.IsValid())
+	{
+		Portraits->SetStandalonePortraitVisible(this, Portrait, true);
+	}
+}
+
 void UCastleShopCardWidget::NativeDestruct()
 {
 	CancelInspection();
+	if (Portraits) { Portraits->SetStandalonePortraitVisible(this, Portrait, false); }
 	Super::NativeDestruct();
 }

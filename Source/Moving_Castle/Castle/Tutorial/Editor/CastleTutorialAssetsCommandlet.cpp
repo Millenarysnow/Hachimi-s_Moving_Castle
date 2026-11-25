@@ -355,6 +355,13 @@ namespace
 int32 UCastleTutorialAssetsCommandlet::Main(const FString& Params)
 {
 #if WITH_EDITOR
+	// 布局改版只写对话组件，避免重新导入立绘或另外改写教程配置、地图和剧本。
+	if (FParse::Param(*Params, TEXT("OnlyDialogueWidget")))
+	{
+		if (!BuildCastleDialogueWidget()) { return 1; }
+		UE_LOG(LogMoving_Castle, Display, TEXT("已编译保存 WBP_CastleDialogue。"));
+		return 0;
+	}
 	FString PortraitSource;
 	if (!FParse::Value(*Params, TEXT("PortraitSource="), PortraitSource) || PortraitSource.IsEmpty())
 	{

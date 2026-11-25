@@ -46,7 +46,7 @@ public:
 	bool Configure(UCastleShopWidget& InShop, const FCastleBuildingDescriptor& Descriptor, const ACastleBoard* Board,
 		bool bSold);
 
-	/** 场上建筑使用同一牌面及摄影服务，独立展示时没有商店的购买和动态摄影权限。 */
+	/** 场上建筑使用同一静态和互动摄影服务，独立展示的短点不触发购买。 */
 	bool ConfigureStandalone(const FCastleBuildingDescriptor& Descriptor, const ACastleBoard* Board);
 
 	/** 普通与箔光是同一张牌的表现状态，不触发重新成像。 */
@@ -69,6 +69,7 @@ public:
 
 protected:
 	virtual void NativeOnInitialized() override;
+	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 	virtual void NativeOnMouseEnter(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;

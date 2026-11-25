@@ -10,6 +10,7 @@ class UCastleDialogueScriptDataAsset;
 class UCastleDialogueWidget;
 
 DECLARE_MULTICAST_DELEGATE(FCastleDialogueFinished);
+DECLARE_MULTICAST_DELEGATE(FCastleDialogueActivityChanged);
 
 /** 管理当前唯一对话、剧本行跳转和同一游戏实例内的空岛首次到达记录。 */
 UCLASS()
@@ -27,6 +28,8 @@ public:
 	/** 台词和非模态教程目标共用控制器当前的语义键显示名。 */
 	static FText ResolveInputText(const FText& Template, const ACastlePlayerController& Controller);
 	FCastleDialogueFinished OnDialogueFinished;
+	/** 对话挂载、完成和取消均通知 HUD；取消仍不推进教程。 */
+	FCastleDialogueActivityChanged OnDialogueActivityChanged;
 
 	/** 提前完成全部可失败的剧本及 WBP 准备，提交前界面保持折叠且不占用输入。 */
 	UCastleDialogueWidget* PrepareScript(UCastleDialogueScriptDataAsset* Script, ACastlePlayerController* Controller, FText& OutReason);

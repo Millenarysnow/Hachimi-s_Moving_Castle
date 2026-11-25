@@ -29,7 +29,7 @@ ACastleBoard（仅发布占用与布局提交事件）
 
 代码位于 `Source/Moving_Castle/Castle/PCG/` 及其 `HachimisV4/` 子目录，规则集资产为 `DA_CastlePCGRuleSet`。
 
-- **棋盘不知道任何具体 PCG 规则。** `ACastleBoard` 只维护占用并广播 `OnLayoutCommitted`，`UCastleBuildingPCGSubsystem` 订阅该事件。违反后棋盘会与特定造型或规则强耦合，无法独立测试和替换规则集。
+- **棋盘只向 PCG 发布最终布局。** `ACastleBoard` 更新占用后广播 `OnLayoutCommitted`，`UCastleBuildingPCGSubsystem` 订阅该事件并运行规则。单格拆除的剩余格重组与相邻合并一起提交，避免求解器读到多格建筑暂时注销、剩余格尚未注册的中间态。
 - **规则层只读写纯数据，严禁接触组件、动画或导航。** `UCastleBuildingPCGRule` 子类只能读取 `FCastlePCGBoardQuery` 与 `ICastlePCGNoiseProvider`，并向 `FCastlePCGSemanticField` 写入语义结论。违反后规则将依赖 Actor 状态与求值顺序，破坏幂等性与无世界单元测试能力。
 - **装配层只消费语义场，严禁重复判定业务连通或自行选梯。** 功能塔墙面、普通房墙面与梯井装配都必须直接读取语义场的结论，不得再自行调用 `CanTraverse`、判断主塔双门或按字典序另选梯格。违反后规则资产与噪声开关会失效，同一格面可能出现视觉与碰撞口径分裂。
 - **空间归属红线：落在哪一格空间内的组件，归占据该格的建筑 Actor 所有。** 任何跨格或跨层交界不得把属于上层格的楼板网格挂在下层 Actor 下。违反会产生三类连锁故障：孤立单格普通房压在梯井上变成 0 可见网格空壳导致动画失败、建造准星瞄准上层地板却落到下层格、巡逻放点射线命中与功能楼板所属 Actor 错层。
@@ -73,7 +73,7 @@ ACastleBoard（仅发布占用与布局提交事件）
 - 垂直梯组按“下层水平可通行普通房连通分量 × 上层水平可通行普通房连通分量”配对，每对只启用唯一梯格；上下皆为普通房时，梯井朝向在四个正交方向中挑选不与两层作者家具包围盒相交的方向，全部受阻则报错拒绝。
 
 **悬挑斜撑与水平二级上堆一级规则均以纯语义与独立套件接入 Stage 2。**
-- **悬挑斜撑（`UCastlePCGOverhangBraceRule`）** 仅对 6 类功能塔的悬空格判定承托墙。格位高于地面层且正下方无建筑时，正交方向紧邻主塔柱列或侧下方 `(dx, dy, -1)` 存在已放置建筑即可承托。单格按单向、相邻双向、对向双向分别挂载本族 `Cantilever`、`CornerFan`、`ThroughArch`。双格悬挑按单端或双端承托由近墙首格挂载本族 `DeepCorbel` 或 `OpposedSpan`。挂点位于承托墙沿的楼板底面中点，导入后的局部 `+Y` 沿悬挑向外。斜撑只提供视觉效果，选中射线和 Recast 都忽略它。
+- **悬挑斜撑（`UCastlePCGOverhangBraceRule`）** 仅对 6 类功能塔的悬空格判定承托墙。格位高于地面层且正下方无建筑时，主塔柱列或侧下方 `(dx, dy, -1)` 已落定的功能建筑提供承托立面。普通房格的 `bRoom` 为真且只有楼板，用它承托会把斜撑挂在半空。单格按单向、相邻双向、对向双向分别挂载本族 `Cantilever`、`CornerFan`、`ThroughArch`。双格悬挑按单端或双端承托由近墙首格挂载本族 `DeepCorbel` 或 `OpposedSpan`。挂点位于承托墙沿的楼板底面中点，导入后的局部 `+Y` 沿悬挑向外。斜撑只提供视觉效果，选中射线和 Recast 都忽略它。
 - **水平二级上堆一级（`UCastlePCGHorizontalLevel2StepRule`）** 在下层水平二级功能塔 A 恰有一格正上方放置单格建筑 B，且另一格所在列上方没有建筑遮挡时触发。A 隐藏原装屋面，在外露格顶面挂载同族的 `Slope + WallApron`，高边朝 B，滴水檐朝外。B 的底盘视觉使用 A 同族的套件地板 `Deck`。导入保留作者几何，边框为 `515 × 515 cm`，铺面高 `40.8 cm`，角钉顶高 `42.4 cm`。当 A 与 B 之间形成梯井时，`CutDeck` 与双向 `UCastleLadderLinkComponent` 继续提供通行。挖洞款套件地板交付前，视觉暂用无洞 `Deck` 并输出 `Warning`，待补齐挖洞款后替换套件资产。
 
 **非 V4 占位建筑走隔离适配器，不污染 V4 主干。** 当前仅无 `HachimisLayout` 的占位建筑（如 `BP_SpeedRoom_lv1`）与极简测试夹具走独立的 `LegacyAdapter`，提供水平功能桥/阻隔与 40.8 cm/0 cm 高度过渡斜面；常态全 V4 棋盘不实例化旧版 `BP_Variant_LV1/LV2` 模板 Actor，待全部正式建筑迁入 V4 后可整体移除该适配器。

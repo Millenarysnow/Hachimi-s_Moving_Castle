@@ -101,7 +101,8 @@ public:
 	void RegisterShopFocusWidget(UUserWidget& Widget);
 	void UnregisterShopFocusWidget(const UUserWidget& Widget);
 	/** 正式导演启动时挂接道具 HUD；三个 WBP 全部绑定成功才加入视口。 */
-	bool MountDirectorItemHUD(UCastleBackpackComponent* Backpack, FText& OutReason);
+	/** 临时建筑栏总是挂载，徽章栏与替换弹窗由调用方按关卡显式选择。 */
+	bool MountDirectorItemHUD(UCastleBackpackComponent* Backpack, bool bIncludeBadges, FText& OutReason);
 	/** 资产配置的交互键在导演完成启动校验时绑定。 */
 	bool BindSkyIslandInput(const FKey& Key, FText& OutReason);
 	/** 空岛完成初始化才接管当前岛引用，销毁时按实例注销。 */
@@ -191,8 +192,9 @@ protected:
 	void EndTemporaryHUDPointer();
 	bool CanUseBuildingDemolishMenu(FText& OutReason) const;
 	bool IsDemolishableBuilding(const ACastleBuildingBase* Building) const;
-	ACastleBuildingBase* FindDemolishTargetAt(FVector2D ScreenPosition) const;
-	bool OpenBuildingDemolishMenu(ACastleBuildingBase& Building, FVector2D ScreenPosition);
+	/** 从实际射线命中解析建筑与占格，菜单和确认操作共用这一明确的目标。 */
+	ACastleBuildingBase* FindDemolishTargetAt(FVector2D ScreenPosition, FIntVector& OutCell) const;
+	bool OpenBuildingDemolishMenu(ACastleBuildingBase& Building, const FIntVector& TargetCell, FVector2D ScreenPosition);
 	void HandleDemolishOutsideClick(FKey Key, FVector2D ScreenPosition);
 	void InitializePopupClasses();
 	void RemoveBuildingDemolishWidget();
