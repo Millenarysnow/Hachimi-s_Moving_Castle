@@ -2,7 +2,6 @@
 
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Dialogue/CastleDialogueSubsystem.h"
-#include "Brushes/SlateColorBrush.h"
 #include "Components/Button.h"
 #include "Components/ButtonSlot.h"
 #include "Components/Image.h"
@@ -29,10 +28,10 @@ void UCastleDialogueChoiceButton::HandleClicked()
 bool UCastleDialogueWidget::HasRequiredBindings() const
 {
 	const bool bValid = IsValid(LeftPortrait) && IsValid(RightPortrait) && IsValid(SpeakerName)
-		&& IsValid(DialogueBody) && IsValid(ChoiceContainer) && IsValid(ContinueButton);
+		&& IsValid(DialogueBody) && IsValid(ChoiceContainer) && IsValid(ContinueButton) && IsValid(ChoiceButtonTemplate);
 	if (!bValid)
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("对话 WBP %s 缺少 LeftPortrait、RightPortrait、SpeakerName、DialogueBody、ChoiceContainer 或 ContinueButton。"),
+		UE_LOG(LogMoving_Castle, Error, TEXT("对话 WBP %s 缺少立绘、正文、分支容器、分支样式模板或继续按钮。"),
 			*GetClass()->GetPathName());
 	}
 	return bValid;
@@ -179,12 +178,8 @@ void UCastleDialogueWidget::RebuildChoiceButtons()
 		ChoiceLabel->SetFont(DialogueBody->GetFont());
 		ChoiceLabel->SetAutoWrapText(true);
 		ChoiceLabel->SetColorAndOpacity(FSlateColor(FLinearColor(0.95f, 0.95f, 0.89f)));
-		// 分支按钮保持深色底板，鼠标状态只改变底板亮度，左右立绘不截获选项输入。
-		FButtonStyle Style = ChoiceButton->GetStyle();
-		Style.SetNormal(FSlateColorBrush(FLinearColor(0.047f, 0.075f, 0.089f, 0.98f)));
-		Style.SetHovered(FSlateColorBrush(FLinearColor(0.10f, 0.19f, 0.21f)));
-		Style.SetPressed(FSlateColorBrush(FLinearColor(0.06f, 0.13f, 0.14f)));
-		ChoiceButton->SetStyle(Style);
+		// 分支按钮直接继承资产中的三态切图，立绘结构和点击层保持原布局。
+		ChoiceButton->SetStyle(ChoiceButtonTemplate->GetStyle());
 		auto* LabelSlot = CastChecked<UButtonSlot>(ChoiceButton->AddChild(ChoiceLabel));
 		LabelSlot->SetPadding(FMargin(18, 9));
 		LabelSlot->SetHorizontalAlignment(HAlign_Fill);

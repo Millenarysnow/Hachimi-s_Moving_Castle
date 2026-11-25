@@ -56,6 +56,8 @@ protected:
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UTextBlock> DialogueBody;
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UVerticalBox> ChoiceContainer;
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UButton> ContinueButton;
+	/** 动态分支按钮使用同一套常态、悬停与按下切图。 */
+	UPROPERTY(meta = (BindWidget)) TObjectPtr<UButton> ChoiceButtonTemplate;
 
 private:
 	UFUNCTION() void HandleContinueClicked();

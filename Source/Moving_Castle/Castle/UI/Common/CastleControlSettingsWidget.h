@@ -27,10 +27,13 @@ private:
 	void RefreshMode(ECastleControlMode Mode);
 	UFUNCTION() void SelectClassic();
 	UFUNCTION() void SelectDesign();
+	UFUNCTION() void CloseSettings();
 
 	UPROPERTY(meta=(BindWidget)) TObjectPtr<UButton> ClassicButton;
 	UPROPERTY(meta=(BindWidget)) TObjectPtr<UButton> DesignButton;
 	UPROPERTY(meta=(BindWidget)) TObjectPtr<UTextBlock> ClassicKeys;
 	UPROPERTY(meta=(BindWidget)) TObjectPtr<UTextBlock> DesignKeys;
+	/** 编辑器可加载未生成的旧资产，正式面板挂载仍由 BindController 严格检查。 */
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UButton> CloseButton;
 	TWeakObjectPtr<ACastlePlayerController> SettingsController;
 };
