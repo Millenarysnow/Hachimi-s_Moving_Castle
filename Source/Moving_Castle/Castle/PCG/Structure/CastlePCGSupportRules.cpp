@@ -151,24 +151,26 @@ bool UCastlePCGHorizontalLevel2StepRule::ValidateKits(FString& Error) const
 
 bool UCastlePCGQuadRoofOverlayRule::ValidateKits(FString& Error) const
 {
-	static const FName Shield(TEXT("Shield"));
-	static const FName Archer(TEXT("Archer"));
+	if (FamilyKits.Num() != CastlePCGSupport::Families().Num())
+	{
+		Error = FString::Printf(TEXT("规则 %s 的四格屋面须覆盖六族功能塔。"), *GetPathName());
+		return false;
+	}
 	for (const FName Family : CastlePCGSupport::Families())
 	{
 		const FCastlePCGQuadRoofKits* Kits = FamilyKits.Find(Family);
-		if (!Kits || Kits->ByKind.Num() != CastlePCGSupport::QuadRoofKinds().Num()
-			|| (Kits->bIsPlaceholder && Family != Shield))
+		if (!Kits || Kits->ByKind.Num() != CastlePCGSupport::QuadRoofKinds().Num())
 		{
-			Error = FString::Printf(TEXT("规则 %s 的 %s 家族须配置四款屋面，只有盾塔可声明箭塔占位。"),
+			Error = FString::Printf(TEXT("规则 %s 的 %s 家族须配置本族四款屋面。"),
 				*GetPathName(), *Family.ToString());
 			return false;
 		}
-		// 因家族校验顺序固定，盾塔检查时箭塔四款引用均已验证。
-		const FName MeshFamily = Kits->bIsPlaceholder ? Archer : Family;
+		// 盾塔使用自己的基础色图集，其余家族共用原调色板。
+		const FName Palette = Family == TEXT("Shield") ? TEXT("M_HC515_ShieldRoofPalette") : TEXT("M_HC515_RoofPalette");
 		for (const ECastlePCGQuadRoofKind Kind : CastlePCGSupport::QuadRoofKinds())
 		{
 			const FName Group = CastlePCGSupport::QuadRoofName(Kind);
-			const FString MeshName = FString::Printf(TEXT("SM_HC515_L4H_%s_%s"), *MeshFamily.ToString(), *Group.ToString());
+			const FString MeshName = FString::Printf(TEXT("SM_HC515_L4H_%s_%s"), *Family.ToString(), *Group.ToString());
 			const auto* KitRef = Kits->ByKind.Find(Kind);
 			const UCastlePCGAttachmentKit* Kit = KitRef ? KitRef->Get() : nullptr;
 			FCastlePCGAttachmentSpec Spec;
@@ -179,16 +181,15 @@ bool UCastlePCGQuadRoofOverlayRule::ValidateKits(FString& Error) const
 				const FCastleV4Part& Part = Kit->Parts[0];
 				const auto& Materials = Part.Mesh->GetStaticMaterials();
 				const bool bPaletteValid = Materials.Num() == 1 && IsValid(Materials[0].MaterialInterface)
-					&& Materials[0].MaterialInterface->GetFName() == TEXT("M_HC515_RoofPalette");
-				const bool bReferenceValid = !Kits->bIsPlaceholder || Kit == FamilyKits.FindChecked(Archer).ByKind.FindChecked(Kind);
+					&& Materials[0].MaterialInterface->GetFName() == Palette;
 				if (Part.Group == Group && Part.Mesh->GetName() == MeshName && Part.Mesh->GetNumTriangles(0) > 0
-					&& bPaletteValid && bReferenceValid)
+					&& bPaletteValid)
 				{
 					continue;
 				}
 			}
-			Error = FString::Printf(TEXT("规则 %s 的 %s 家族 %s 屋面套件 %s 无效，预期网格 %s 与共享调色板。%s"),
-				*GetPathName(), *Family.ToString(), *Group.ToString(), *GetPathNameSafe(Kit), *MeshName, *Reason);
+			Error = FString::Printf(TEXT("规则 %s 的 %s 家族 %s 屋面套件 %s 无效，预期网格 %s 与材质 %s。%s"),
+				*GetPathName(), *Family.ToString(), *Group.ToString(), *GetPathNameSafe(Kit), *MeshName, *Palette.ToString(), *Reason);
 			return false;
 		}
 	}
@@ -395,11 +396,6 @@ bool UCastlePCGQuadRoofOverlayRule::Evaluate(const FCastlePCGBoardQuery& Query, 
 			FVector(HalfPitch, HalfPitch, Query.GetLayerHeight()));
 		Owner.RoofOverride.bSelectable = true;
 		Owner.RoofOverride.bAffectsNavigation = false;
-		if (Kits->bIsPlaceholder)
-		{
-			UE_LOG(LogMoving_Castle, Warning, TEXT("盾塔建筑 %s：专用四格叠层屋面尚未交付，使用箭塔屋面套件 %s 占位。"),
-				*Root.ToString(), *(*KitRef)->GetPathName());
-		}
 	}
 	return true;
 }

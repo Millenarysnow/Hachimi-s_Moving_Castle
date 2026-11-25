@@ -547,7 +547,63 @@ bool FCastlePCGStructureExtensions::RunTest(const FString& Parameters)
 	TestEqual(TEXT("直接支撑到位后卸下正式斜撑"), CountVisibleParts(*Tower, BraceTag), 0);
 	TestEqual(TEXT("补齐支撑后移除斜撑"), CountVisibleParts(*Tower, TEXT("CastlePCGNode=RegressionBrace")), 0);
 	TestEqual(TEXT("补齐支撑后移除覆写"), CountVisibleParts(*Tower, TEXT("CastlePCGNode=RegressionRoof")), 0);
-	TestTrue(TEXT("作者屋顶精确恢复"), OriginalRoof->IsVisible());
+	// 扩展规则退出后回到常规四分屋面，作者原装屋面仍由四分规则隐藏。
+	TestFalse(TEXT("原装屋顶继续隐藏"), OriginalRoof->IsVisible());
+	TestEqual(TEXT("正式常规屋面四片恢复"), CountVisibleParts(*Tower, TEXT("CastlePCGGroup=RoofQuarter")), 4);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePCGRoofQuarterReversible, "MovingCastle.Castle.PCG.Structure.RoofQuarterReversible",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastlePCGRoofQuarterReversible::RunTest(const FString& Parameters)
+{
+	using namespace CastlePCGTests;
+	UWorld* Fixture = World();
+	ON_SCOPE_EXIT { Fixture->DestroyWorld(false); GEngine->DestroyWorldContext(Fixture); };
+	auto* Board = Fixture->SpawnActor<ACastleBoard>();
+	ON_SCOPE_EXIT { RemoveFixtureBuildings(*this, *Board); };
+	Board->GridSize = FIntVector(5, 4, 4);
+	Board->PCGRuleSet = Rules(Board);
+	auto* Archer = LoadDefinition(TEXT("ArcherTower"));
+	auto* Room = LoadDefinition(TEXT("NormalRoom"));
+	if (!TestNotNull(TEXT("正式箭塔"), Archer) || !TestNotNull(TEXT("正式普通房"), Room)) { return false; }
+	Board->BuildingDefinitions = {Archer, Room};
+	FText Reason;
+	if (!SetGreenSevenGround(*Board, Reason)) { AddError(Reason.ToString()); return false; }
+
+	// 从相隔两列的上层房朝箭塔侧悬挑建造，箭塔同层邻位始终为空。
+	const FIntVector Cell = Board->GridOrigin + FIntVector(1, 1, 1);
+	const FIntVector Side(1, 0, 0);
+	const FIntVector Up = FCastlePCGBoardQuery::Up;
+	if (!Place(*this, *Board, *Room, Cell - Up, 1, ECastleTileColor::Green)
+		|| !Place(*this, *Board, *Room, Cell + Side * 2 - Up, 1, ECastleTileColor::Green)
+		|| !Place(*this, *Board, *Room, Cell + Side * 2, 1, ECastleTileColor::Green)
+		|| !Place(*this, *Board, *Room, Cell + Side * 2 + Up, 1, ECastleTileColor::Green)) { return false; }
+	auto* Tower = Place(*this, *Board, *Archer, Cell, 1, ECastleTileColor::Green);
+	if (!Tower) { return false; }
+	const FString Visual = Tower->BuildingPCG->GetAppliedVisualKey();
+	const FString Gameplay = Tower->BuildingPCG->GetAppliedGameplayKey();
+	const FName RoofTag(TEXT("CastlePCGGroup=RoofQuarter"));
+	TestEqual(TEXT("初始四片常规屋面"), CountVisibleParts(*Tower, RoofTag), 4);
+	FCastleBuildingDescriptor Card;
+	if (!Archer->CreateDescriptor(1, ECastleTileColor::Green, 7, Card, Reason)) { AddError(Reason.ToString()); return false; }
+	FCastleGridCursorTarget Cursor;
+	Cursor.bValid = true;
+	Cursor.Surface = ECastleGridCursorSurface::Building;
+	Cursor.Cell = Cell + Side * 2 + Up;
+	Cursor.Face = ECastleGridFace::NegativeX;
+	Cursor.AdjacentCell = Cell + Side + Up;
+	auto* Upper = Board->PlaceBuildingAtCursor(Cursor, Card, false, Reason);
+	if (!Upper) { AddError(Reason.ToString()); return false; }
+	for (auto* Building : Board->GetPlacedBuildings()) { Complete(Building); }
+	TestNotEqual(TEXT("增加侧上方邻居切换视觉签名"), Tower->BuildingPCG->GetAppliedVisualKey(), Visual);
+	TestEqual(TEXT("侧上方邻居不改变被收檐塔的玩法签名"), Tower->BuildingPCG->GetAppliedGameplayKey(), Gameplay);
+	TestEqual(TEXT("收檐后仍显示四片"), CountVisibleParts(*Tower, RoofTag), 4);
+	if (!Board->RemoveBuilding(Upper, Reason)) { AddError(Reason.ToString()); return false; }
+	Complete(Tower);
+	TestEqual(TEXT("删除邻居恢复先前屋面视觉"), Tower->BuildingPCG->GetAppliedVisualKey(), Visual);
+	TestEqual(TEXT("删除邻居保持玩法签名"), Tower->BuildingPCG->GetAppliedGameplayKey(), Gameplay);
 	return true;
 }
 
@@ -560,7 +616,6 @@ namespace CastlePCGTests
 		ACastleBuildingBase* Top = nullptr;
 		ACastleBuildingBase* Archer = nullptr;
 		ACastleBuildingBase* Corner = nullptr;
-		TArray<UPrimitiveComponent*> FarmRoof;
 		FIntVector Base;
 		FIntVector TopCell;
 		FIntVector ArcherStart;
@@ -589,10 +644,6 @@ namespace CastlePCGTests
 			{
 				return false;
 			}
-			for (const auto& Part : Farm->BuildingPCG->GetOriginalParts())
-			{
-				if (Part.Role == ECastlePCGPartRole::Roof && Part.Component->IsVisible()) { FarmRoof.Add(Part.Component); }
-			}
 			Top = Place(Test, Board, *Room, TopCell, 1, ECastleTileColor::Green);
 			Archer = Place(Test, Board, *ArcherDefinition, ArcherStart, 2, ECastleTileColor::Purple);
 			Corner = Place(Test, Board, *Room, CornerCell, 1, ECastleTileColor::Purple);
@@ -616,8 +667,7 @@ namespace CastlePCGTests
 			FText Reason;
 			if (!Board.RemoveBuilding(Top, Reason)) { Test.AddError(Reason.ToString()); return false; }
 			Complete(Farm);
-			Test.TestTrue(TEXT("撤除上层房后农田原屋顶复原"), !FarmRoof.IsEmpty()
-				&& Algo::AllOf(FarmRoof, [](const UPrimitiveComponent* Piece) { return Piece->IsVisible(); }));
+			Test.TestEqual(TEXT("撤除上层房后农田恢复四分屋面"), CountVisibleParts(*Farm, TEXT("CastlePCGGroup=RoofQuarter")), 4);
 			TArray<FCastleActiveLadderConnection> Links;
 			Board.GetWorld()->GetSubsystem<UCastleBuildingPCGSubsystem>()->GetActiveLadderConnections(&Board, Links);
 			Test.TestEqual(TEXT("撤除独立房后仅保留农田本身的内梯"), Links.Num(), 1);

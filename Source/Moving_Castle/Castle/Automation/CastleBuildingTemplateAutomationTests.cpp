@@ -158,7 +158,9 @@ bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 					const USceneComponent* Group = Mesh->GetAttachParent();
 					TestTrue(TEXT("每个美术拆件经 BuildingMeshGroup 挂在视觉根下"), Group != nullptr
 						&& Group->GetFName() == TEXT("BuildingMeshGroup") && Group->GetAttachParent() == Building->GetRootComponent());
-					TestEqual(TEXT("美术只参与选中查询"), Mesh->GetCollisionEnabled(), ECollisionEnabled::QueryOnly);
+					// 四分规则隐藏原装屋顶时也撤掉它的射线碰撞，避免射线命中已经收掉的屋檐。
+					TestEqual(TEXT("可见美术用于选中，隐藏原件关闭碰撞"), Mesh->GetCollisionEnabled(),
+						Mesh->IsVisible() ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
 					TestEqual(TEXT("美术阻挡选中射线"), Mesh->GetCollisionResponseToChannel(ECC_Visibility), ECR_Block);
 					TestEqual(TEXT("美术不阻挡 Pawn"), Mesh->GetCollisionResponseToChannel(ECC_Pawn), ECR_Ignore);
 					TestFalse(TEXT("表现组件不参与导航"), Mesh->CanEverAffectNavigation());
