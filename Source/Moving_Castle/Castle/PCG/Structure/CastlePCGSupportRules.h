@@ -38,12 +38,40 @@ struct FCastlePCGStepKits
 	TObjectPtr<UCastlePCGAttachmentKit> Deck = nullptr;
 };
 
+/** 以顶面被占象限的数量和相对位置区分作者屋面款式。 */
+UENUM()
+enum class ECastlePCGQuadRoofKind : uint8
+{
+	Corner,
+	Row,
+	Diagonal,
+	LastBay
+};
+
+USTRUCT()
+struct FCastlePCGQuadRoofKits
+{
+	GENERATED_BODY()
+
+	/** 每种标准朝向独立引用一个套件，棋盘上的其他朝向由规则旋转。 */
+	UPROPERTY(EditAnywhere, Category="建筑PCG")
+	TMap<ECastlePCGQuadRoofKind, TObjectPtr<UCastlePCGAttachmentKit>> ByKind;
+
+	/** 盾塔明确引用箭塔交付时启用。未声明的跨族引用一律非法。 */
+	UPROPERTY(EditAnywhere, Category="建筑PCG")
+	bool bIsPlaceholder = false;
+};
+
 namespace CastlePCGSupport
 {
 	/** 导入和完整性校验共用正式功能塔家族名单。 */
 	TConstArrayView<FName> Families();
 	TConstArrayView<ECastlePCGBraceKind> BraceKinds();
 	FName BraceName(ECastlePCGBraceKind Kind);
+
+	/** 导入、校验和映射共用四种屋面款式的正式名称。 */
+	TConstArrayView<ECastlePCGQuadRoofKind> QuadRoofKinds();
+	FName QuadRoofName(ECastlePCGQuadRoofKind Kind);
 
 	/** 作者网格局部 +Y 朝外，棋盘正交方向提供匹配的纯旋转。 */
 	FQuat OutwardRotation(const FIntVector& Direction);
@@ -71,6 +99,20 @@ class MOVING_CASTLE_API UCastlePCGHorizontalLevel2StepRule : public UCastleBuild
 public:
 	UPROPERTY(EditAnywhere, Category="建筑PCG")
 	TMap<FName, FCastlePCGStepKits> FamilyKits;
+
+	virtual ECastlePCGRuleStage GetStage() const override { return ECastlePCGRuleStage::Structure; }
+	virtual bool Evaluate(const FCastlePCGBoardQuery& Query, FCastlePCGSemanticField& Field, FString& Error) const override;
+	bool ValidateKits(FString& Error) const;
+};
+
+/** 六族功能塔共用的四格叠层屋面规则，替换整个顶面且只挂载一个套件。 */
+UCLASS(EditInlineNew)
+class MOVING_CASTLE_API UCastlePCGQuadRoofOverlayRule : public UCastleBuildingPCGRule
+{
+	GENERATED_BODY()
+public:
+	UPROPERTY(EditAnywhere, Category="建筑PCG")
+	TMap<FName, FCastlePCGQuadRoofKits> FamilyKits;
 
 	virtual ECastlePCGRuleStage GetStage() const override { return ECastlePCGRuleStage::Structure; }
 	virtual bool Evaluate(const FCastlePCGBoardQuery& Query, FCastlePCGSemanticField& Field, FString& Error) const override;

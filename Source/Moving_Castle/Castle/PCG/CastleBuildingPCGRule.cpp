@@ -253,6 +253,7 @@ bool UCastlePCGRuleSetDataAsset::ValidateConfiguration(FString& Error) const
 	int32 RoomFormIndex = INDEX_NONE;
 	int32 BraceIndex = INDEX_NONE;
 	int32 StepIndex = INDEX_NONE;
+	int32 QuadRoofIndex = INDEX_NONE;
 	for (int32 Index = 0; Index < Rules.Num(); ++Index)
 	{
 		const UCastleBuildingPCGRule* Rule = Rules[Index];
@@ -275,7 +276,7 @@ bool UCastlePCGRuleSetDataAsset::ValidateConfiguration(FString& Error) const
 		if (Rule->IsA<UCastlePCGPlanarRule>() && !Register(PlanarIndex, ECastlePCGRuleStage::Topology)) { return false; }
 		if (Rule->IsA<UCastlePCGVerticalRule>() && !Register(VerticalIndex, ECastlePCGRuleStage::Topology)) { return false; }
 		if (Rule->IsA<UCastlePCGRoomFormRule>() && !Register(RoomFormIndex, ECastlePCGRuleStage::Structure)) { return false; }
-		// 两条规则各自负责完整套件校验，与本轮棋盘是否用到该家族无关。
+		// 结构规则各自负责完整套件校验，与本轮棋盘是否用到该家族无关。
 		if (const auto* Brace = Cast<UCastlePCGOverhangBraceRule>(Rule))
 		{
 			if (!Register(BraceIndex, ECastlePCGRuleStage::Structure) || !Brace->ValidateKits(Error))
@@ -287,6 +288,14 @@ bool UCastlePCGRuleSetDataAsset::ValidateConfiguration(FString& Error) const
 		if (const auto* Step = Cast<UCastlePCGHorizontalLevel2StepRule>(Rule))
 		{
 			if (!Register(StepIndex, ECastlePCGRuleStage::Structure) || !Step->ValidateKits(Error))
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("%s：%s"), *GetPathName(), *Error);
+				return false;
+			}
+		}
+		if (const auto* QuadRoof = Cast<UCastlePCGQuadRoofOverlayRule>(Rule))
+		{
+			if (!Register(QuadRoofIndex, ECastlePCGRuleStage::Structure) || !QuadRoof->ValidateKits(Error))
 			{
 				UE_LOG(LogMoving_Castle, Error, TEXT("%s：%s"), *GetPathName(), *Error);
 				return false;
