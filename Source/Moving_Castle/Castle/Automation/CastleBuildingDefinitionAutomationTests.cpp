@@ -273,8 +273,9 @@ bool FCastleDirectBuildingBlueprintTest::RunTest(const FString& Parameters)
 	Level4Building->GetComponents<UStaticMeshComponent>(Level4Meshes);
 	const int32 Level4PartCount = Level4Meshes.FilterByPredicate([](const UStaticMeshComponent* Component)
 	{
-		// 以新版资源的精确目录识别美术零件，组件可编辑名称和隐藏功能网格不应影响计数。
-		return Component->GetStaticMesh() != nullptr && Component->GetStaticMesh()->GetPathName().StartsWith(
+		// 独立统计蓝图作者节点。运行时 PCG 可用同目录网格重建其他视觉部件。
+		return Component->CreationMethod == EComponentCreationMethod::SimpleConstructionScript
+			&& Component->GetStaticMesh() != nullptr && Component->GetStaticMesh()->GetPathName().StartsWith(
 			TEXT("/Game/MovingCastle/Model/Buildings/HachimisV4/Archer/Parts/"));
 	}).Num();
 	if (!TestNotNull(TEXT("四级有 V4 作者装配"), Level4Building->HachimisLayout.Get())) { return false; }
