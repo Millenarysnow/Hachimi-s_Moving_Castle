@@ -352,6 +352,28 @@ bool FCastleDemolitionNoBadgeRewardTest::RunTest(const FString&)
 	TestFalse(TEXT("允许溢出的入口也拒绝多格卡"), Backpack->TryAddItemAllowOverflow(Level2, bOverflow, Index, Reason));
 	AddExpectedError(TEXT("拒绝无坐标回收建筑"), EAutomationExpectedErrorFlags::Contains, 1);
 	TestFalse(TEXT("无坐标回收整栋接口拒绝多格建筑"), Board->RemoveBuildingToBackpack(Original, Backpack, Reason));
+	// 刻意用只有一格的五级测试建筑覆盖 D9，验证按格数进入兼容接口也无法退成一级牌。
+	FCastleBuildingDescriptor Level5;
+	if (!Definition->CreateDescriptor(5, ECastleTileColor::Red, 3, Level5, Reason))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	const FIntVector HighLevelCell = Target + FIntVector(0, 2, 0);
+	auto* HighLevel = Board->PlaceBuilding(HighLevelCell, Level5, false, Reason);
+	if (!CastleBuildingTests::CompletePlacement(HighLevel)
+		|| !TestTrue(TEXT("五级夹具已落定并且只占目标格"), IsValid(HighLevel)
+			&& HighLevel->GetBuildingLevel() == 5 && HighLevel->CanReceiveBuildingTrigger()
+			&& HighLevel->GetOccupiedCoordinates().Num() == 1 && Board->GetBuildingAt(HighLevelCell) == HighLevel))
+	{
+		AddError(FString::Printf(TEXT("无法建立单格五级拆除夹具：%s"), *Reason.ToString()));
+		return false;
+	}
+	AddExpectedError(TEXT("拆除只支持一级至四级建筑"), EAutomationExpectedErrorFlags::Contains, 2);
+	TestFalse(TEXT("指定格拆除拒绝单格五级建筑"), Board->DemolishBuildingCellToBackpack(HighLevel, HighLevelCell, Backpack, Reason));
+	TestFalse(TEXT("无坐标回收拒绝单格五级建筑"), Board->RemoveBuildingToBackpack(HighLevel, Backpack, Reason));
+	TestTrue(TEXT("单格五级拒绝后保留占格和空背包"), Board->GetBuildingAt(HighLevelCell) == HighLevel
+		&& Backpack->GetItemCount() == 0 && Backpack->GetTempItemCount() == 0);
 	if (!Backpack->TrySetCapacity(1, Reason) || !Backpack->TryAddItem(Level1, Index, Reason))
 	{
 		AddError(Reason.ToString());

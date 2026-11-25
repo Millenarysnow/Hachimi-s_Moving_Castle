@@ -76,8 +76,19 @@ bool ACastlePlayerController::CanUseBuildingDemolishMenu(FText& OutReason) const
 bool ACastlePlayerController::IsDemolishableBuilding(const ACastleBuildingBase* Building) const
 {
 	// 飞入组装和卡牌摄影预览都不是已落定棋盘建筑。最终归属使用棋盘自己的查询。
-	return IsValid(ActiveBoard) && IsValid(Building) && Building->CanReceiveBuildingTrigger()
-		&& ACastleBoard::FindBoardForBuilding(Building) == ActiveBoard;
+	if (!IsValid(ActiveBoard) || !IsValid(Building) || !Building->CanReceiveBuildingTrigger()
+		|| ACastleBoard::FindBoardForBuilding(Building) != ActiveBoard)
+	{
+		return false;
+	}
+	// 即使超阶建筑只占一格，也不为它打开一级回收菜单。
+	if (Building->GetBuildingLevel() > 4)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s 拒绝拆除建筑 %s（等级 %d）：拆除只支持一级至四级建筑。"),
+			*GetPathName(), *Building->GetPathName(), Building->GetBuildingLevel());
+		return false;
+	}
+	return true;
 }
 
 ACastleBuildingBase* ACastlePlayerController::FindDemolishTargetAt(FVector2D ScreenPosition, FIntVector& OutCell) const

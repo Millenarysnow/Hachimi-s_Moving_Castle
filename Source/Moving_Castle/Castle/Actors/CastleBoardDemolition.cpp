@@ -124,6 +124,15 @@ bool ACastleBoard::DemolishBuildingCellToBackpack(ACastleBuildingBase* Building,
 			*GetPathName(), *GetPathNameSafe(Building), *TargetCell.ToString(), *OutFailureReason.ToString());
 		return false;
 	}
+	// 五级建筑也可能只有一个占格，不能仅凭格数将其作为一级卡回收。
+	const int32 OriginalLevel = Building->GetBuildingLevel();
+	if (OriginalLevel > 4)
+	{
+		OutFailureReason = INVTEXT("拆除只支持一级至四级建筑。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 拒绝拆除建筑 %s（等级 %d）：%s"),
+			*GetPathName(), *Building->GetPathName(), OriginalLevel, *OutFailureReason.ToString());
+		return false;
+	}
 	if (!Backpack->HasFreeSlots())
 	{
 		OutFailureReason = INVTEXT("建筑栏已满，无法回收拆除。");
@@ -135,7 +144,6 @@ bool ACastleBoard::DemolishBuildingCellToBackpack(ACastleBuildingBase* Building,
 	const FString BuildingPath = Building->GetPathName();
 	const FVector ChangeOrigin = GetGridWorldLocation(TargetCell);
 	FCastleBuildingDescriptor Recovered = Building->GetBuildingDescriptor();
-	const int32 OriginalLevel = Recovered.Level;
 	Recovered.Level = 1;
 	TArray<FIntVector> Remaining = Building->GetOccupiedCoordinates();
 	if (Remaining.Num() != ACastleBuildingBase::GetExpectedFootprintCellCount(OriginalLevel)
