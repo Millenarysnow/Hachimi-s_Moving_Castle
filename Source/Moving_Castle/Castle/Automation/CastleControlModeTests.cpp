@@ -95,7 +95,10 @@ namespace
 				Test.TestTrue(TEXT("设计模式即时生效"), Player->GetControlMode() == ECastleControlMode::Design
 					&& Player->GetPrimaryPlaceInteractKey() == EKeys::LeftMouseButton
 					&& Player->GetDemolishKey() == EKeys::RightMouseButton);
-				Settings->OnButtonClicked.Broadcast();
+				auto* Close = Cast<UButton>(Panel->GetWidgetFromName(TEXT("CloseButton")));
+				if (!Test.TestNotNull(TEXT("返回游戏按钮已绑定"), Close)) { return true; }
+				Test.TestFalse(TEXT("当前设计模式按钮使用禁用选中画刷"), Design->GetIsEnabled());
+				Close->OnClicked.Broadcast();
 				return false;
 			}
 			case 2:

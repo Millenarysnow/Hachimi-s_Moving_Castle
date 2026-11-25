@@ -1,4 +1,5 @@
 #if WITH_EDITOR && WITH_DEV_AUTOMATION_TESTS && !UE_BUILD_SHIPPING
+#include "Castle/Automation/CastlePIEAutomation.h"
 #include "Blueprint/SlateBlueprintLibrary.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Castle/Dialogue/CastleDialogueScriptDataAsset.h"
@@ -12,9 +13,12 @@
 #include "Castle/Tutorial/CastleTutorialDirector.h"
 #include "Castle/Tutorial/CastleTutorialWidgets.h"
 #include "Castle/UI/BuildBar/CastleBuildBarWidget.h"
+#include "Castle/UI/Cards/CastleShopCardWidget.h"
+#include "Castle/UI/Common/CastleControlSettingsWidget.h"
 #include "Castle/UI/Common/CastleHUDControls.h"
 #include "Castle/UI/Director/CastleDirectorWidgets.h"
 #include "Castle/UI/Items/CastleBadgeBarWidget.h"
+#include "Castle/UI/Items/CastleWildcardRoomPickerWidget.h"
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
@@ -25,6 +29,7 @@
 #include "CastleShopWidget.h"
 #include "CastleTowerDispatchSubsystem.h"
 #include "Components/Image.h"
+#include "Components/PanelWidget.h"
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
@@ -32,16 +37,15 @@
 #include "Engine/GameInstance.h"
 #include "Engine/GameViewportClient.h"
 #include "EngineUtils.h"
-#include "FileHelpers.h"
 #include "Interaction/CastlePatrolRoute.h"
 #include "MassEntityConfigAsset.h"
 #include "Misc/AutomationTest.h"
-#include "Misc/PackageName.h"
-#include "PlayInEditorDataTypes.h"
-#include "Settings/LevelEditorPlaySettings.h"
 #include "Slate/SceneViewport.h"
 #include "Tests/AutomationCommon.h"
 #include "Widgets/SWindow.h"
+
+using CastlePIEAutomation::StartPIE;
+using CastlePIEAutomation::StopPIE;
 
 namespace
 {
@@ -61,48 +65,6 @@ namespace
 		return true;
 	}
 
-	bool StartPIE(FAutomationTestBase& Test, const TCHAR* Map, const FIntPoint ViewportSize = FIntPoint::ZeroValue)
-	{
-		const FString Filename = FPackageName::LongPackageNameToFilename(Map, FPackageName::GetMapPackageExtension());
-		// 通用 PIE 测试可能把地图留在上一个用例中。原生地图加载会关闭该 PIE 后再重新创建实例。
-		if (!Test.TestTrue(TEXT("载入磁盘上的正式地图"), FEditorFileUtils::LoadMap(Filename, false, false)))
-		{
-			return false;
-		}
-		auto* Settings = DuplicateObject(GetDefault<ULevelEditorPlaySettings>(), GetTransientPackage());
-		Settings->SetPlayNetMode(PIE_Standalone);
-		Settings->SetPlayNumberOfClients(1);
-		Settings->SetRunUnderOneProcess(true);
-		if (ViewportSize != FIntPoint::ZeroValue)
-		{
-			// 独立 PIE 窗口保持测试指定的实际像素尺寸，避免借用编辑器布局中的任意小视口。
-			Settings->NewWindowWidth = ViewportSize.X;
-			Settings->NewWindowHeight = ViewportSize.Y;
-		}
-		FRequestPlaySessionParams Params;
-		Params.EditorPlaySettings = Settings;
-		Params.bAllowOnlineSubsystem = false;
-		GEditor->RequestPlaySession(Params);
-		return true;
-	}
-
-	FFunctionLatentCommand StopPIE()
-	{
-		return FFunctionLatentCommand([bRequested = false]() mutable
-		{
-			if (!GEditor->PlayWorld)
-			{
-				if (!bRequested) { GEditor->CancelRequestPlaySession(); }
-				return true;
-			}
-			if (!bRequested)
-			{
-				GEditor->RequestEndPlayMap();
-				bRequested = true;
-			}
-			return false;
-		});
-	}
 }
 
 /** 通过真实棋盘、商店、路径与战斗驱动 S1–S14，不直接改写编排器阶段。 */
@@ -455,8 +417,10 @@ bool FCastleTutorialDialogueViewportTest::RunTest(const FString&)
 		Player->GetViewportSize(ViewportWidth, ViewportHeight);
 		const FVector2D Panel = PanelMax - PanelMin, LeftSlot = LeftSlotMax - LeftSlotMin, RightSlot = RightSlotMax - RightSlotMin;
 		const FVector2D Left = LeftMax - LeftMin, Right = RightMax - RightMin;
-		AddInfo(FString::Printf(TEXT("DialogueViewport %dx%d px: panel %.2fx%.2f, left slot %.2fx%.2f, right slot %.2fx%.2f, left image %.2fx%.2f, right image %.2fx%.2f"),
-			ViewportWidth, ViewportHeight, Panel.X, Panel.Y, LeftSlot.X, LeftSlot.Y, RightSlot.X, RightSlot.Y, Left.X, Left.Y, Right.X, Right.Y));
+		AddInfo(FString::Printf(TEXT("FORTRESS_BOUNDS WBP_CastleDialogue [%0.2f,%0.2f]–[%0.2f,%0.2f] %.2fx%.2f"),
+			PanelMin.X, PanelMin.Y, PanelMax.X, PanelMax.Y, Panel.X, Panel.Y));
+		TestTrue(TEXT("双立绘槽位有实测尺寸"), LeftSlot.X > 0 && LeftSlot.Y > 0 && RightSlot.X > 0 && RightSlot.Y > 0);
+		TestTrue(TEXT("两张立绘均已绘制"), Left.X > 0 && Left.Y > 0 && Right.X > 0 && Right.Y > 0);
 		TestEqual(TEXT("独立 PIE 视口为 1280×720"), FIntPoint(ViewportWidth, ViewportHeight), FIntPoint(1280, 720));
 		TestTrue(TEXT("面板实际覆盖超过视口宽度的 75%"), Panel.X > ViewportWidth * 0.75);
 		TestTrue(TEXT("两张立绘底边均贴合对话面板上沿"), FMath::IsNearlyEqual(LeftMax.Y, PanelMin.Y, 2.0)
@@ -477,6 +441,100 @@ bool FCastleTutorialDialogueViewportTest::RunTest(const FString&)
 		}
 		TestFalse(TEXT("开场对话已播放完成"), Dialogue->IsDialoguePlaying());
 		TestEqual(TEXT("对话结束立即恢复底部建造栏"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		return true;
+	}));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(StopPIE()));
+	return true;
+}
+
+/** 在与教程对话相同的真实 PIE 渲染目标中测量三个全屏弹窗。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleFortressPopupViewportTest, "MovingCastle.UI.FortressKit.MainViewportLayout",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleFortressPopupViewportTest::RunTest(const FString&)
+{
+	if (!StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"), FIntPoint(1280, 720))) { return false; }
+	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([this, Deadline = FPlatformTime::Seconds() + 45.0,
+		Frames = 0, RewardPreview = TWeakObjectPtr<UCastleRewardChoiceWidget>()]() mutable
+	{
+		UWorld* World = GEditor->PlayWorld;
+		auto* Player = World ? Cast<ACastlePlayerController>(World->GetFirstPlayerController()) : nullptr;
+		if (!Player || !Player->GetPawn())
+		{
+			if (FPlatformTime::Seconds() < Deadline) { return false; }
+			AddError(TEXT("主地图没有完成 PIE 初始化。"));
+			return true;
+		}
+		if (Frames++ == 0)
+		{
+			auto* Client = World->GetGameViewport();
+			auto* Viewport = Client ? Client->GetGameViewport() : nullptr;
+			const auto Window = Client ? Client->GetWindow() : nullptr;
+			if (!Viewport || !Window)
+			{
+				AddError(TEXT("主地图缺少真实视口窗口。"));
+				return true;
+			}
+			Window->Resize(FVector2D(1280, 720));
+			Viewport->SetViewportSize(1280, 720);
+			Viewport->SetFixedViewportSize(1280, 720);
+			Player->ToggleControlSettings();
+			Player->ConsoleCommand(TEXT("Castle.Items.Group 7"));
+			auto* Picker = FindScreenWidget<UCastleWildcardRoomPickerWidget>(*World);
+			if (!TestTrue(TEXT("调试入口挂载万能卡并正常展开工坊"), Picker && Click(*Picker, TEXT("ClaimButton"))))
+			{
+				return true;
+			}
+			const auto Select = [&](FName Name, int32 Index)
+			{
+				const auto* Choices = Cast<UPanelWidget>(Picker->GetWidgetFromName(Name));
+				auto* Button = Choices && Index < Choices->GetChildrenCount() ? Cast<UButton>(Choices->GetChildAt(Index)) : nullptr;
+				if (!TestNotNull(Name.ToString(), Button)) { return false; }
+				Button->OnClicked.Broadcast();
+				return true;
+			};
+			auto* CardSlot = Cast<USizeBox>(Picker->GetWidgetFromName(TEXT("PreviewCardSlot")));
+			if (!TestNotNull(TEXT("工坊卡牌槽"), CardSlot)) { return true; }
+			TestNull(TEXT("完全自定义房打开时没有默认预览"), CardSlot->GetContent());
+			if (!Select(TEXT("DefinitionChoices"), 0) || !Select(TEXT("ColorChoices"), 3)) { return true; }
+			TestNull(TEXT("仍缺数字时保持线稿"), CardSlot->GetContent());
+			if (!Select(TEXT("NumberChoices"), 2)) { return true; }
+			const auto* Card = Cast<UCastleShopCardWidget>(CardSlot->GetContent());
+			if (!TestNotNull(TEXT("完全自定义房三项选齐后挂载实际卡牌"), Card)) { return true; }
+			TestEqual(TEXT("完全自定义房显示黄色"), Card->GetDescriptor().Color, ECastleTileColor::Yellow);
+			TestEqual(TEXT("完全自定义房显示选中数字"), Card->GetDescriptor().Number, 3);
+			const auto Class = LoadClass<UCastleRewardChoiceWidget>(nullptr,
+				TEXT("/Game/MovingCastle/UI/Director/WBP_RewardChoice.WBP_RewardChoice_C"));
+			// 独立挂载同一个正式奖励界面来测几何，奖励事务仍由导演端到端用例覆盖。
+			auto* Choice = Class ? CreateWidget<UCastleRewardChoiceWidget>(Player, Class) : nullptr;
+			if (!TestNotNull(TEXT("可测量正式奖励界面"), Choice)) { return true; }
+			Choice->AddToViewport(58);
+			RewardPreview = Choice;
+			return false;
+		}
+		if (Frames <= 6) { return false; }
+
+		const auto Measure = [&](const UUserWidget* Widget, FName Name, const TCHAR* Label)
+		{
+			const UWidget* Panel = Widget ? Widget->GetWidgetFromName(Name) : nullptr;
+			if (!TestNotNull(FString::Printf(TEXT("%s 的面板"), Label), Panel)) { return; }
+			const FGeometry& Geometry = Panel->GetCachedGeometry();
+			FVector2D Min, Max, Unused;
+			USlateBlueprintLibrary::LocalToViewport(World, Geometry, FVector2D::ZeroVector, Min, Unused);
+			USlateBlueprintLibrary::LocalToViewport(World, Geometry, Geometry.GetLocalSize(), Max, Unused);
+			const FVector2D Size = Max - Min;
+			AddInfo(FString::Printf(TEXT("FORTRESS_BOUNDS %s [%.2f,%.2f]–[%.2f,%.2f] %.2fx%.2f"),
+				Label, Min.X, Min.Y, Max.X, Max.Y, Size.X, Size.Y));
+			TestTrue(FString::Printf(TEXT("%s 在视口内使用完整弹窗空间"), Label),
+				Size.X > 400 && Size.Y > 350 && Min.X >= 0 && Min.Y >= 0 && Max.X <= 1281 && Max.Y <= 721);
+		};
+		int32 Width, Height;
+		Player->GetViewportSize(Width, Height);
+		TestEqual(TEXT("主地图使用 1280×720 渲染目标"), FIntPoint(Width, Height), FIntPoint(1280, 720));
+		Measure(FindScreenWidget<UCastleWildcardRoomPickerWidget>(*World), TEXT("PickerPanel"), TEXT("WBP_WildcardRoomPicker"));
+		Measure(FindScreenWidget<UCastleControlSettingsWidget>(*World), TEXT("FortressPanel"), TEXT("WBP_ControlSettings"));
+		Measure(RewardPreview.Get(), TEXT("FortressPanel"), TEXT("WBP_RewardChoice"));
+		if (auto* Reward = RewardPreview.Get()) { Reward->RemoveFromParent(); }
 		return true;
 	}));
 	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(StopPIE()));

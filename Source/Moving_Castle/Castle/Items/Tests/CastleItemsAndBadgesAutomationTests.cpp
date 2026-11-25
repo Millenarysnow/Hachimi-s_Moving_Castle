@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
+#include "Castle/Automation/CastlePIEAutomation.h"
 #include "Blueprint/WidgetBlueprintGeneratedClass.h"
 #include "Blueprint/WidgetTree.h"
 #include "CastleBackpackComponent.h"
@@ -13,10 +14,13 @@
 #include "Components/Building/Effects/CastleSpeedRoomEffectComponent.h"
 #include "Components/Button.h"
 #include "Components/PanelWidget.h"
+#include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
 #include "Items/CastleBadgeSubsystem.h"
 #include "Items/CastleItemGrantLibrary.h"
 #include "Items/CastlePendingRoomReward.h"
@@ -25,10 +29,12 @@
 #include "MassEntitySubsystem.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
+#include "Tests/AutomationCommon.h"
 #include "UI/Items/CastleBadgeBarWidget.h"
 #include "UI/Items/CastleBadgeReplaceModalWidget.h"
 #include "UI/Items/CastleTempBuildBarWidget.h"
 #include "UI/Items/CastleWildcardRoomPickerWidget.h"
+#include "UI/Cards/CastleShopCardWidget.h"
 
 namespace CastleItemTests
 {
@@ -553,101 +559,115 @@ bool FCastleItemWidgetAssetTest::RunTest(const FString& Parameters)
 	Verify(TEXT("WBP_WildcardRoomPicker"), UCastleWildcardRoomPickerWidget::StaticClass(),
 		{TEXT("ClaimButton"), TEXT("ClaimLabel"), TEXT("PickerPanel"), TEXT("RewardTitle"), TEXT("StatusText"),
 		TEXT("DefinitionChoices"), TEXT("ColorChoices"), TEXT("NumberChoices"), TEXT("ConfirmButton"), TEXT("CancelButton"),
-		TEXT("OptionStyleTemplate"), TEXT("OptionTextTemplate")});
+		TEXT("CloseButton"), TEXT("OptionStyleTemplate"), TEXT("OptionTextTemplate"), TEXT("ColorStyleTemplate"),
+		TEXT("PreviewCardSlot"), TEXT("PreviewPlaceholder")});
 
-	// 实例化已保存的 WBP 并触发实际按钮的委托，覆盖原生 BindWidget 与用户可见状态。
-	UGameInstance* Instance = NewObject<UGameInstance>(GEngine);
-	Instance->InitializeStandalone();
-	UWorld* World = Instance->GetWorld();
-	ON_SCOPE_EXIT
+	// 卡牌初始化依赖本地玩家视口，采用主地图真实棋盘与玩家上下文。
+	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
+	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([this, Deadline = FPlatformTime::Seconds() + 45.0]()
 	{
-		Instance->Shutdown();
-		GEngine->DestroyWorldContext(World);
-		World->DestroyWorld(false);
-	};
-	auto* Definition = CastleItemTests::LoadDefinition(TEXT("NormalRoom"));
-	auto* Backpack = NewObject<UCastleBackpackComponent>(Instance);
-	const auto PickerClass = LoadClass<UCastleWildcardRoomPickerWidget>(nullptr,
-		TEXT("/Game/MovingCastle/UI/Items/WBP_WildcardRoomPicker.WBP_WildcardRoomPicker_C"));
-	const auto TempClass = LoadClass<UCastleTempBuildBarWidget>(nullptr,
-		TEXT("/Game/MovingCastle/UI/Items/WBP_TempBuildBar.WBP_TempBuildBar_C"));
-	if (!Definition || !PickerClass || !TempClass)
-	{
-		AddError(TEXT("缺少验收使用的普通房间或已保存的 WBP 类。"));
-		return false;
-	}
-	auto* Picker = CreateWidget<UCastleWildcardRoomPickerWidget>(Instance, PickerClass);
-	auto* Temp = CreateWidget<UCastleTempBuildBarWidget>(Instance, TempClass);
-	FText Reason;
-	if (!TestNotNull(TEXT("实例化 WBP 万能卡"), Picker) || !TestNotNull(TEXT("实例化 WBP 临时栏"), Temp)
-		|| !TestTrue(TEXT("WBP 临时栏的完整绑定"), Temp->BindBackpack(Backpack))
-		|| !TestTrue(TEXT("建筑栏填满十张"), CastleItemTests::FillBackpack(*Backpack, *Definition, Reason)))
-	{
-		return false;
-	}
-	TestEqual(TEXT("没有临时卡时折叠"), Temp->GetVisibility(), ESlateVisibility::Collapsed);
+		UWorld* World = GEditor->PlayWorld;
+		auto* Player = World ? World->GetFirstPlayerController() : nullptr;
+		if (!Player && FPlatformTime::Seconds() < Deadline) { return false; }
+		const auto* Board = World ? Cast<ACastleBoard>(UGameplayStatics::GetActorOfClass(World, ACastleBoard::StaticClass())) : nullptr;
+		if (!TestNotNull(TEXT("万能卡摄影棋盘"), Board) || !TestNotNull(TEXT("万能卡本地玩家"), Player)) { return true; }
+		auto* Definition = CastleItemTests::LoadDefinition(TEXT("NormalRoom"));
+		auto* Backpack = NewObject<UCastleBackpackComponent>(World->GetGameInstance());
+		const auto PickerClass = LoadClass<UCastleWildcardRoomPickerWidget>(nullptr,
+			TEXT("/Game/MovingCastle/UI/Items/WBP_WildcardRoomPicker.WBP_WildcardRoomPicker_C"));
+		const auto TempClass = LoadClass<UCastleTempBuildBarWidget>(nullptr,
+			TEXT("/Game/MovingCastle/UI/Items/WBP_TempBuildBar.WBP_TempBuildBar_C"));
+		if (!Definition || !PickerClass || !TempClass)
+		{
+			AddError(TEXT("缺少验收使用的普通房间或已保存的 WBP 类。"));
+			return true;
+		}
+		auto* Picker = CreateWidget<UCastleWildcardRoomPickerWidget>(Player, PickerClass);
+		auto* Temp = CreateWidget<UCastleTempBuildBarWidget>(Player, TempClass);
+		FText Reason;
+		if (!TestNotNull(TEXT("实例化 WBP 万能卡"), Picker) || !TestNotNull(TEXT("实例化 WBP 临时栏"), Temp)
+			|| !TestTrue(TEXT("WBP 临时栏的完整绑定"), Temp->BindBackpack(Backpack))
+			|| !TestTrue(TEXT("建筑栏填满十张"), CastleItemTests::FillBackpack(*Backpack, *Definition, Reason)))
+		{
+			return true;
+		}
+		TestEqual(TEXT("没有临时卡时折叠"), Temp->GetVisibility(), ESlateVisibility::Collapsed);
 
-	FCastleWildcardRoomSpec Spec;
-	Spec.AllowedNumbers = {7};
-	const TArray<TObjectPtr<UCastleBuildingDefinition>> Pool{Definition};
-	UCastlePendingRoomReward* Reward = nullptr;
-	if (!TestTrue(TEXT("准备颜色待选，建筑与数字固定的万能卡"),
-		UCastleItemGrantLibrary::TryCreateWildcardReward(INVTEXT("颜色房间"), Spec, Backpack, Pool, Reward, Reason))
-		|| !TestTrue(TEXT("WBP 万能卡的完整绑定"), Picker->BindReward(Reward, Reason)))
-	{
-		return false;
-	}
-	auto* Claim = Cast<UButton>(Picker->GetWidgetFromName(TEXT("ClaimButton")));
-	auto* Confirm = Cast<UButton>(Picker->GetWidgetFromName(TEXT("ConfirmButton")));
-	auto* Cancel = Cast<UButton>(Picker->GetWidgetFromName(TEXT("CancelButton")));
-	auto* Panel = Picker->GetWidgetFromName(TEXT("PickerPanel"));
-	auto* Definitions = Cast<UPanelWidget>(Picker->GetWidgetFromName(TEXT("DefinitionChoices")));
-	auto* Colors = Cast<UPanelWidget>(Picker->GetWidgetFromName(TEXT("ColorChoices")));
-	auto* Numbers = Cast<UPanelWidget>(Picker->GetWidgetFromName(TEXT("NumberChoices")));
-	if (!Claim || !Confirm || !Cancel || !Panel || !Definitions || !Colors || !Numbers)
-	{
-		AddError(TEXT("实例化的万能卡 WBP 缺少必需的布局或按钮。"));
-		return false;
-	}
-	TestEqual(TEXT("点击获取前 WBP 属性面板折叠"), Panel->GetVisibility(), ESlateVisibility::Collapsed);
-	Claim->OnClicked.Broadcast();
-	TestEqual(TEXT("点击获取后显示 WBP 属性面板"), Panel->GetVisibility(), ESlateVisibility::Visible);
-	TestFalse(TEXT("未选颜色时禁用确认"), Confirm->GetIsEnabled());
-	if (!TestEqual(TEXT("固定定义只生成一个按钮"), Definitions->GetChildrenCount(), 1)
-		|| !TestEqual(TEXT("固定数字只生成一个按钮"), Numbers->GetChildrenCount(), 1)
-		|| !TestEqual(TEXT("只开放五种颜色"), Colors->GetChildrenCount(), 5))
-	{
-		return false;
-	}
-	TestFalse(TEXT("唯一建筑按钮自动锁定"), Definitions->GetChildAt(0)->GetIsEnabled());
-	TestFalse(TEXT("唯一数字按钮自动锁定"), Numbers->GetChildAt(0)->GetIsEnabled());
-	Cancel->OnClicked.Broadcast();
-	TestEqual(TEXT("取消后回到获取"), Claim->GetVisibility(), ESlateVisibility::Visible);
-	TestEqual(TEXT("取消后无卡进入临时栏"), Backpack->GetTempItemCount(), 0);
-	Claim->OnClicked.Broadcast();
-	UButton* Blue = Cast<UButton>(Colors->GetChildAt(1));
-	if (!TestNotNull(TEXT("第二个选项是可点击颜色按钮"), Blue))
-	{
-		return false;
-	}
-	Blue->OnClicked.Broadcast();
-	TestTrue(TEXT("选完颜色后允许确认"), Confirm->GetIsEnabled());
-	Confirm->OnClicked.Broadcast();
-	TestTrue(TEXT("WBP 确认后奖励已领取"), Reward->IsClaimed());
-	if (TestEqual(TEXT("满包时 WBP 确认发入临时栏"), Backpack->GetTempItemCount(), 1))
-	{
-		const FCastleBuildingDescriptor Card = Backpack->GetTempItems()[0];
-		TestEqual(TEXT("颜色选项提交实际牌面"), Card.Color, ECastleTileColor::Blue);
-		TestEqual(TEXT("入库数字保留锁定值"), Card.Number, 7);
-	}
-	TestEqual(TEXT("临时栏收到事件后显示"), Temp->GetVisibility(), ESlateVisibility::HitTestInvisible);
-	if (auto* Count = Cast<UTextBlock>(Temp->GetWidgetFromName(TEXT("StackCount"))))
-	{
-		TestEqual(TEXT("叠牌文本显示当前数量"), Count->GetText().ToString(), FString(TEXT("临时建筑栏 (1)")));
-	}
-	FCastleBuildingDescriptor Removed;
-	TestTrue(TEXT("单步消费自动补位"), Backpack->TryConsumeItemAt(0, Removed, Reason));
-	TestEqual(TEXT("队列清空后 WBP 恢复隐藏"), Temp->GetVisibility(), ESlateVisibility::Collapsed);
+		FCastleWildcardRoomSpec Spec;
+		Spec.AllowedNumbers = {7};
+		const TArray<TObjectPtr<UCastleBuildingDefinition>> Pool{Definition};
+		UCastlePendingRoomReward* Reward = nullptr;
+		if (!TestTrue(TEXT("准备颜色待选，建筑与数字固定的万能卡"),
+			UCastleItemGrantLibrary::TryCreateWildcardReward(INVTEXT("颜色房间"), Spec, Backpack, Pool, Reward, Reason))
+			|| !TestTrue(TEXT("WBP 万能卡的完整绑定"), Picker->BindReward(Reward, Reason)))
+		{
+			return true;
+		}
+		auto* Claim = Cast<UButton>(Picker->GetWidgetFromName(TEXT("ClaimButton")));
+		auto* Confirm = Cast<UButton>(Picker->GetWidgetFromName(TEXT("ConfirmButton")));
+		auto* Close = Cast<UButton>(Picker->GetWidgetFromName(TEXT("CloseButton")));
+		auto* Panel = Picker->GetWidgetFromName(TEXT("PickerPanel"));
+		auto* PreviewSlot = Cast<USizeBox>(Picker->GetWidgetFromName(TEXT("PreviewCardSlot")));
+		auto* Placeholder = Picker->GetWidgetFromName(TEXT("PreviewPlaceholder"));
+		auto* Definitions = Cast<UPanelWidget>(Picker->GetWidgetFromName(TEXT("DefinitionChoices")));
+		auto* Colors = Cast<UPanelWidget>(Picker->GetWidgetFromName(TEXT("ColorChoices")));
+		auto* Numbers = Cast<UPanelWidget>(Picker->GetWidgetFromName(TEXT("NumberChoices")));
+		if (!Claim || !Confirm || !Close || !Panel || !PreviewSlot || !Placeholder || !Definitions || !Colors || !Numbers)
+		{
+			AddError(TEXT("实例化的万能卡 WBP 缺少必需的布局或按钮。"));
+			return true;
+		}
+		TestEqual(TEXT("点击获取前 WBP 属性面板折叠"), Panel->GetVisibility(), ESlateVisibility::Collapsed);
+		Claim->OnClicked.Broadcast();
+		TestEqual(TEXT("点击获取后显示 WBP 属性面板"), Panel->GetVisibility(), ESlateVisibility::Visible);
+		TestFalse(TEXT("未选颜色时禁用确认"), Confirm->GetIsEnabled());
+		TestNull(TEXT("未选齐时没有实例化预览卡"), PreviewSlot->GetContent());
+		TestEqual(TEXT("未选齐时显示线稿"), Placeholder->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		if (!TestEqual(TEXT("固定定义只生成一个按钮"), Definitions->GetChildrenCount(), 1)
+			|| !TestEqual(TEXT("固定数字只生成一个按钮"), Numbers->GetChildrenCount(), 1)
+			|| !TestEqual(TEXT("只开放五种颜色"), Colors->GetChildrenCount(), 5))
+		{
+			return true;
+		}
+		TestFalse(TEXT("唯一建筑按钮自动锁定"), Definitions->GetChildAt(0)->GetIsEnabled());
+		TestFalse(TEXT("唯一数字按钮自动锁定"), Numbers->GetChildAt(0)->GetIsEnabled());
+		Close->OnClicked.Broadcast();
+		TestEqual(TEXT("右上关闭取消本次选择"), Claim->GetVisibility(), ESlateVisibility::Visible);
+		TestEqual(TEXT("取消后无卡进入临时栏"), Backpack->GetTempItemCount(), 0);
+		Claim->OnClicked.Broadcast();
+		UButton* Yellow = Cast<UButton>(Colors->GetChildAt(3));
+		if (!TestNotNull(TEXT("第四个选项是可点击颜色按钮"), Yellow))
+		{
+			return true;
+		}
+		Yellow->OnClicked.Broadcast();
+		TestTrue(TEXT("选完颜色后允许确认"), Confirm->GetIsEnabled());
+		auto* CardPreview = Cast<UCastleShopCardWidget>(PreviewSlot->GetContent());
+		if (!TestNotNull(TEXT("选择黄色后已挂载正式 3D 卡牌"), CardPreview)) { return true; }
+		TestEqual(TEXT("预览建筑与唯一候选一致"), CardPreview->GetDescriptor().Definition.Get(), Definition);
+		TestEqual(TEXT("预览卡应用黄色"), CardPreview->GetDescriptor().Color, ECastleTileColor::Yellow);
+		TestEqual(TEXT("预览卡保留锁定数字"), CardPreview->GetDescriptor().Number, 7);
+		TestEqual(TEXT("真实预览替代线稿"), Placeholder->GetVisibility(), ESlateVisibility::Collapsed);
+		Confirm->OnClicked.Broadcast();
+		TestTrue(TEXT("WBP 确认后奖励已领取"), Reward->IsClaimed());
+		TestNull(TEXT("领取后释放预览卡"), PreviewSlot->GetContent());
+		if (TestEqual(TEXT("满包时 WBP 确认发入临时栏"), Backpack->GetTempItemCount(), 1))
+		{
+			const FCastleBuildingDescriptor Card = Backpack->GetTempItems()[0];
+			TestEqual(TEXT("颜色选项提交实际牌面"), Card.Color, ECastleTileColor::Yellow);
+			TestEqual(TEXT("入库数字保留锁定值"), Card.Number, 7);
+		}
+		TestEqual(TEXT("临时栏收到事件后显示"), Temp->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		if (auto* Count = Cast<UTextBlock>(Temp->GetWidgetFromName(TEXT("StackCount"))))
+		{
+			TestEqual(TEXT("叠牌文本显示当前数量"), Count->GetText().ToString(), FString(TEXT("临时建筑栏 (1)")));
+		}
+		FCastleBuildingDescriptor Removed;
+		TestTrue(TEXT("单步消费自动补位"), Backpack->TryConsumeItemAt(0, Removed, Reason));
+		TestEqual(TEXT("队列清空后 WBP 恢复隐藏"), Temp->GetVisibility(), ESlateVisibility::Collapsed);
+		return true;
+	}));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
 	return true;
 }
 
