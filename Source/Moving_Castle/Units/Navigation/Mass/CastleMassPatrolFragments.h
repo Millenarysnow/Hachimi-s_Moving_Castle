@@ -17,12 +17,13 @@ struct MOVING_CASTLE_API FCastleMassPatrolFragment : public FMassFragment
 	bool bTowerDispatched = false;
 	/** 由单圈临时派遣设置，回收和累计圈数都与正式士兵分开处理。 */
 	bool bTemporaryOneLap = false;
-	/** 手动模式到门 B 后保持停止，直到调度器在 Mass 安全边界提交回收。 */
+	/** 手动派遣及临时单圈兵到门 B 后停止，等待调度器在 Mass 安全边界提交回收。 */
 	bool bReachedDispatchEntrance = false;
 	bool bBlocked = false;
 	int32 PathRevision = INDEX_NONE;
 	int32 RouteRevision = INDEX_NONE;
 	int32 Leg = 0;
+	/** 自动回环和抵达门 B 都计一圈。临时兵的圈数只供本实体使用，不计入正式队伍。 */
 	int64 CompletedLaps = 0;
 	double Distance = 0.0;
 	double Speed = 0.0;

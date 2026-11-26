@@ -17,7 +17,7 @@
 #include "MassExecutionContext.h"
 #include "Moving_Castle.h"
 
-bool UCastleSupportTowerSubsystem::QueueLaunch(ACastleBuildingBase& Source)
+bool UCastleSupportTowerSubsystem::QueueLaunch(ACastleBuildingBase& Source, const int64 NumberBonus)
 {
 	const UCastleBuildingDefinition* Definition = Source.GetBuildingDefinition();
 	FText Failure;
@@ -29,7 +29,7 @@ bool UCastleSupportTowerSubsystem::QueueLaunch(ACastleBuildingBase& Source)
 		return false;
 	}
 	// 同一人员反复进入仍是独立请求；不能为同一座塔做全帧去重。
-	PendingLaunches.Add(&Source);
+	PendingLaunches.Add({&Source, NumberBonus});
 	return true;
 }
 
@@ -72,7 +72,7 @@ bool UCastleSupportTowerSubsystem::GatherUnits(FMassEntityManager& Manager, cons
 	return bValid;
 }
 
-void UCastleSupportTowerSubsystem::Launch(ACastleBuildingBase& Source)
+void UCastleSupportTowerSubsystem::Launch(ACastleBuildingBase& Source, const int64 NumberBonus)
 {
 	ACastleBoard* Board = ACastleBoard::FindBoardForBuilding(&Source);
 	const UCastleBuildingDefinition* Definition = Source.GetBuildingDefinition();
@@ -84,15 +84,16 @@ void UCastleSupportTowerSubsystem::Launch(ACastleBuildingBase& Source)
 			*Source.GetPathName(), *GetPathNameSafe(Data), *Reason.ToString());
 		return;
 	}
+	const int64 Number = Source.GetEffectiveBuildingNumber() + NumberBonus;
 	if (Source.GetBuildingType() == ECastleBuildingType::BalloonTower)
 	{
-		LaunchBalloon(Source, *Board, *Data);
+		LaunchBalloon(Source, *Board, *Data, Number);
 		return;
 	}
 	FSwarm Batch;
 	Batch.Source = Batch.Home = &Source;
 	Batch.Level = Source.GetBuildingLevel();
-	const int64 Count = Source.GetEffectiveBuildingNumber() * Source.GetOccupiedCoordinates().Num();
+	const int64 Count = Number * Source.GetOccupiedCoordinates().Num();
 	if (Count > MAX_int32)
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("蜂巢塔 %s 的结算蜂数 %lld 超出批次容量。"), *Source.GetPathName(), Count);
@@ -108,7 +109,7 @@ void UCastleSupportTowerSubsystem::Launch(ACastleBuildingBase& Source)
 	if (Batch.Level >= 3)
 	{
 		Batch.Schedule = MakeShared<FBeeSchedule>();
-		if (!BuildHiveSchedule(*Board, Source, *Batch.Schedule)) { return; }
+		if (!BuildHiveSchedule(*Board, Source, Number, *Batch.Schedule)) { return; }
 	}
 	const FVector Start = Batch.HomeLocation;
 	LaunchSwarm(MoveTemp(Batch), Start, *Data);
@@ -127,8 +128,11 @@ void UCastleSupportTowerSubsystem::Tick(const float DeltaTime)
 	const auto Launches = MoveTemp(PendingLaunches);
 	for (const auto& Request : Launches)
 	{
-		if (ACastleBuildingBase* Source = Request.Get(); Source && Source->CanReceiveBuildingTrigger()) { Launch(*Source); }
-		else { UE_LOG(LogMoving_Castle, Display, TEXT("支援塔 %s 已撤回，本次未发射。"), *GetPathNameSafe(Request.GetEvenIfUnreachable())); }
+		if (ACastleBuildingBase* Source = Request.Source.Get(); Source && Source->CanReceiveBuildingTrigger())
+		{
+			Launch(*Source, Request.NumberBonus);
+		}
+		else { UE_LOG(LogMoving_Castle, Display, TEXT("支援塔 %s 已撤回，本次未发射。"), *GetPathNameSafe(Request.Source.GetEvenIfUnreachable())); }
 	}
 	if (!Swarms.IsEmpty() || !Balloons.IsEmpty())
 	{
@@ -180,7 +184,8 @@ float UCastleSupportTowerSubsystem::GetTowerDamageMultiplier(const ACastleBuildi
 	{
 		if (Entry.Tower.Get() == &Tower && Entry.Expires > Now) { Result = FMath::Max(Result, Entry.Multiplier); }
 	}
-	return Result;
+	const auto* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
+	return Badges ? static_cast<float>(Result * Badges->GetFriendlyDamageMultiplier()) : Result;
 }
 
 float UCastleSupportTowerSubsystem::GetArcherRateMultiplier(const ACastleBuildingBase& Tower) const

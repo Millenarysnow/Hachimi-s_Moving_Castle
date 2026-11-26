@@ -1,4 +1,6 @@
 #include "CastleSupportTowerSubsystem.h"
+#include "Items/CastleBadgeRuntimeSubsystem.h"
+#include "Items/CastleBadgeSubsystem.h"
 
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
@@ -147,6 +149,9 @@ bool UCastleSupportTowerSubsystem::RecruitNPCs(FMassEntityManager& Manager, ACas
 void UCastleSupportTowerSubsystem::TickJourneys(FMassEntityManager& Manager, const float DeltaTime)
 {
 	if (Journeys.IsEmpty()) { return; }
+	const auto* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
+	const auto* Runtime = GetWorld()->GetSubsystem<UCastleBadgeRuntimeSubsystem>();
+	const double Now = GetWorld()->GetTimeSeconds();
 	const auto* Nav = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
 	const auto Shared = Nav->AcquireSharedPath();
 	UCastleBuildingTriggerSubsystem* Triggers = GetWorld()->GetSubsystem<UCastleBuildingTriggerSubsystem>();
@@ -176,10 +181,24 @@ void UCastleSupportTowerSubsystem::TickJourneys(FMassEntityManager& Manager, con
 		}
 		FCastleMassMovementSettings Settings = Manager.GetConstSharedFragmentDataChecked<FCastleMassMovementParameters>(Entity).Settings;
 		Settings.MaxSpeed *= Unit.SupportMovementMultiplier;
-		double Travel = 0.0;
-		if (!CastlePatrolMovement::Advance(Journey.Path, Settings, Journey.Distance, DeltaTime, Journey.Speed, Travel, true))
+		// 调动不推进共享巡逻圈数；已有后手优势保留原圈倍率，梯速与限时徽章仍按各自来源相乘。
+		if (Badges)
 		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("空投塔 %s 的人员 %d 梯子速度配置非法，调动失败并停在原地。"),
+			Settings.LadderSpeedMultiplier *= Badges->GetQuickLadderSpeedMultiplier();
+			if (Badges->HasBadge(ECastleBadgeType::LateAdvantage))
+			{
+				Settings.MaxSpeed *= UCastleBadgeSubsystem::CalculateLateAdvantageSpeedMultiplier(Patrol.CompletedLaps);
+			}
+		}
+		if (const FCastleBadgeNPCMovement* Movement = Runtime ? Runtime->FindNPCMovement(Entity) : nullptr)
+		{
+			Settings.MaxSpeed *= Movement->At(Now);
+		}
+		double Travel = 0.0;
+		if (!FMath::IsFinite(Settings.MaxSpeed)
+			|| !CastlePatrolMovement::Advance(Journey.Path, Settings, Journey.Distance, DeltaTime, Journey.Speed, Travel, true))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("空投塔 %s 的人员 %d 有效移速或梯速配置非法，调动失败并停在原地。"),
 				*GetPathNameSafe(Journey.Source.Get()), Entity.Index);
 			Patrol.bSupportJourney = false;
 			Patrol.bEnabled = false;

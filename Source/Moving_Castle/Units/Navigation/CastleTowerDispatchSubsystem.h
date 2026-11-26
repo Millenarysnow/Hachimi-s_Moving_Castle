@@ -74,6 +74,8 @@ private:
 		bool bDespawnRequested = false;
 	};
 	TArray<FActiveNPC> ActiveNPCs;
+	/** 独立拥有临时实体的生命周期；正式待命池只与 ActiveNPCs 守恒。 */
+	TArray<FActiveNPC> TemporaryNPCs;
 	int32 ReserveCount = 0;
 	int32 SessionTotalNPCs = 0;
 	bool bSessionActive = false;
@@ -87,6 +89,7 @@ private:
 	double HoldDispatchElapsed = 0.0;
 
 	void ReclaimFinishedNPCs();
+	bool DispatchNPC(bool bTemporaryOneLap, FText& OutReason);
 	bool Reject(FText& OutReason, const FString& Detail, bool bConfigurationError) const;
 	void ShowMessage(const FText& Message, bool bSuccess) const;
 	friend class FCastleMainTowerDispatchTest;

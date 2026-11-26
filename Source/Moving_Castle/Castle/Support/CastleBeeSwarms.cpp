@@ -7,6 +7,7 @@
 #include "CastleSupportFlightActors.h"
 #include "CastleSupportTowerData.h"
 #include "Engine/World.h"
+#include "Items/CastleBadgeRuntimeSubsystem.h"
 #include "Moving_Castle.h"
 
 namespace
@@ -27,7 +28,7 @@ namespace
 }
 
 bool UCastleSupportTowerSubsystem::BuildHiveSchedule(const ACastleBoard& Board, const ACastleBuildingBase& Source,
-	FBeeSchedule& OutSchedule) const
+	const int64 SourceNumber, FBeeSchedule& OutSchedule) const
 {
 	struct FVisit { const ACastleBuildingBase* Building; int32 Step; };
 	TArray<FVisit> Queue{{ &Source, 0 }};
@@ -44,7 +45,8 @@ bool UCastleSupportTowerSubsystem::BuildHiveSchedule(const ACastleBoard& Board, 
 		for (ACastleBuildingBase* Neighbor : Neighbors)
 		{
 			if (Neighbor == &Source) { continue; }
-			const int64 Difference = Neighbor->GetEffectiveBuildingNumber() - Visit.Building->GetEffectiveBuildingNumber();
+			const int64 CurrentNumber = Visit.Building == &Source ? SourceNumber : Visit.Building->GetEffectiveBuildingNumber();
+			const int64 Difference = Neighbor->GetEffectiveBuildingNumber() - CurrentNumber;
 			// 只有主巢接出口允许同号；进入备用链后不能再经过同号或改变递增/递减方向。
 			if (Visit.Building == &Source ? FMath::Abs(Difference) > 1
 				: (FMath::Abs(Difference) != 1 || (Visit.Step != 0 && Difference != Visit.Step))) { continue; }
@@ -90,6 +92,12 @@ void UCastleSupportTowerSubsystem::TickSwarms(const float DeltaTime, TArray<FCas
 {
 	if (Swarms.IsEmpty()) { return; }
 	UCastleMassUnitSubsystem* Units = GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>();
+	auto* Runtime = GetWorld()->GetSubsystem<UCastleBadgeRuntimeSubsystem>();
+	if (!Runtime)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("蜂群世界 %s 缺少本局徽章子系统，无法结算攻击。"), *GetPathNameSafe(GetWorld()));
+		return;
+	}
 	TMap<FMassEntityHandle, FCastleSupportUnit*> ByHandle;
 	for (auto& Enemy : Enemies) { ByHandle.Add(Enemy.Handle.Entity, &Enemy); }
 	TMap<FMassEntityHandle, int64> AttachedCount;
@@ -202,6 +210,8 @@ void UCastleSupportTowerSubsystem::TickSwarms(const float DeltaTime, TArray<FCas
 			}
 			Target->Health = FMath::Max(0.0f, Target->Health - Damage);
 			Batch.HitProgress -= 1.0;
+			// 同帧下一批蜂群已看到零生命，无法重复领取本次真实击杀的玩法金币。
+			if (Target->Health == 0.0f && !Runtime->TryAwardBeeKill()) { return; }
 			if (Target->Health == 0.0f && Batch.Level == 4 && Batch.Count >= 2)
 			{
 				// 一次实际致死只繁殖一次，产生位置取被杀实体，而不是塔中心或蜂群视觉中心。

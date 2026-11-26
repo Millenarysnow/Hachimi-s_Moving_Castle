@@ -12,4 +12,8 @@ struct MOVING_CASTLE_API FCastleMassHomingProjectileFragment : public FMassFragm
 	/** 只在专用批量生成入口写入一次，不重新索敌；序列号防止伤害复用槽位的新单位。 */
 	UPROPERTY()
 	FMassEntityHandle Target;
+
+	/** 由箭塔完成发射时设置。炮塔、空投联动弹及其他追踪弹均不具有虹吸资格。 */
+	UPROPERTY()
+	bool bArcherTowerArrow = false;
 };

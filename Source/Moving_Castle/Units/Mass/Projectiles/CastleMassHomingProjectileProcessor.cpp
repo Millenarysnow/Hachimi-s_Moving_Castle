@@ -1,8 +1,11 @@
 #include "CastleMassHomingProjectileProcessor.h"
 
+#include "CastleMainTowerComponent.h"
 #include "CastleMassFragments.h"
 #include "CastleMassHomingProjectileFragments.h"
 #include "CastleMassProcessors.h"
+#include "Engine/World.h"
+#include "Items/CastleBadgeSubsystem.h"
 #include "MassCommonFragments.h"
 #include "MassCommonTypes.h"
 #include "MassExecutionContext.h"
@@ -26,6 +29,8 @@ UCastleMassHomingProjectileProcessor::UCastleMassHomingProjectileProcessor()
 	ExecutionFlags = static_cast<int32>(EProcessorExecutionFlags::All);
 	ExecutionOrder.ExecuteInGroup = UE::Mass::ProcessorGroupNames::Movement;
 	ExecutionOrder.ExecuteAfter.Add(UCastleMassMovementProcessor::StaticClass()->GetFName());
+	// 命中循环只读数值并累计吸血基数；在游戏线程离开查询后才访问主塔与生命委托。
+	bRequiresGameThreadExecution = true;
 }
 
 void UCastleMassHomingProjectileProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
@@ -55,6 +60,9 @@ void UCastleMassHomingProjectileProcessor::Execute(FMassEntityManager& EntityMan
 		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 追踪子弹处理失败：世界 %s 的帧时间无效（%f）。"), *GetNameSafe(GetWorld()), DeltaTime);
 		return;
 	}
+	const auto* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
+	const float LifestealFraction = Badges ? Badges->GetSiphonArrowFraction() : 0.0f;
+	double ArrowHitDamage = 0.0;
 
 	// 目标快照按实体句柄索引，避免每发子弹重新遍历所有敌人；生命保留指针以读取本帧最新结算。
 	TMap<FMassEntityHandle, FEnemyState> Enemies;
@@ -69,7 +77,7 @@ void UCastleMassHomingProjectileProcessor::Execute(FMassEntityManager& EntityMan
 		}
 	});
 
-	ProjectileQuery.ForEachEntityChunk(Context, [&Enemies, &EntityManager, DeltaTime](FMassExecutionContext& Chunk)
+	ProjectileQuery.ForEachEntityChunk(Context, [&Enemies, &EntityManager, DeltaTime, LifestealFraction, &ArrowHitDamage](FMassExecutionContext& Chunk)
 	{
 		const auto Homings = Chunk.GetFragmentView<FCastleMassHomingProjectileFragment>();
 		const auto Projectiles = Chunk.GetMutableFragmentView<FCastleMassProjectileFragment>();
@@ -133,6 +141,8 @@ void UCastleMassHomingProjectileProcessor::Execute(FMassEntityManager& EntityMan
 			const double HitRadius = static_cast<double>(Radii[It].Radius) + Enemy->Radius;
 			if (FMath::PointDistToSegmentSquared(Enemy->Location, Projectile.PreviousLocation, Transform.GetLocation()) <= FMath::Square(HitRadius))
 			{
+				// 只计对存活目标的真实命中，吸血按本发有效面板伤害计算，包括超出目标剩余生命的部分。
+				if (Homings[It].bArcherTowerArrow && LifestealFraction > 0.0f) { ArrowHitDamage += Projectile.Damage; }
 				// 复用生命归零的死亡约定；比较后减法避免负生命，也不通过上限夹紧修正输入伤害。
 				Enemy->Unit->Health = Projectile.Damage >= Enemy->Unit->Health ? 0.0f : Enemy->Unit->Health - Projectile.Damage;
 				Units[It].Health = 0.0f;
@@ -140,4 +150,25 @@ void UCastleMassHomingProjectileProcessor::Execute(FMassEntityManager& EntityMan
 			}
 		}
 	});
+	if (ArrowHitDamage > 0.0)
+	{
+		const auto* Towers = GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>();
+		UCastleMainTowerComponent* Tower = Towers ? Towers->GetRegisteredMainTower() : nullptr;
+		if (!IsValid(Tower))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("世界 %s 的虹吸箭簇结算失败：没有已登记的主塔。"), *GetPathNameSafe(GetWorld()));
+			return;
+		}
+		const double MissingHealth = static_cast<double>(Tower->MaxHealth) - Tower->CurrentHealth;
+		if (Tower->IsAlive() && MissingHealth > 0.0)
+		{
+			const double Healing = ArrowHitDamage * LifestealFraction;
+			if (!FMath::IsFinite(Healing))
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("主塔 %s 的虹吸箭簇回血不是有限数。"), *Tower->GetPathName());
+				return;
+			}
+			Tower->ApplyHealing(static_cast<float>(FMath::Min(Healing, MissingHealth)));
+		}
+	}
 }

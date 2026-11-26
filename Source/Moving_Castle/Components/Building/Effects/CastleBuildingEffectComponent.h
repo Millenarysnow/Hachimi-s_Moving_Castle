@@ -22,7 +22,7 @@ public:
 	UCastleBuildingEffectComponent();
 
 	/** 建筑接口的唯一转发目标；校验失败明确返回 false，不自动补建组件或更换来源。 */
-	bool Trigger(const FCastleBuildingTriggerContext& Context);
+	bool Trigger(const FCastleBuildingTriggerContext& Context, bool bIndirectTrigger = false);
 
 	/** 棋盘完成真实占用登记后通知效果；构造或 BeginPlay 时占用尚未提交，不能提前监听联动。 */
 	virtual void OnBoardRegistered(ACastleBoard& Board) {}
@@ -42,6 +42,8 @@ public:
 	FCastleBuildingEffectTriggered OnEffectTriggered;
 
 protected:
+	/** 只对当前效果的主人应用本次临时数字，其他建筑照常读取各自有效数字。 */
+	int64 GetTriggeredBuildingNumber(const FCastleBuildingTriggerContext& Context) const;
 	/** 具体效果的 C++ 扩展点。基础版本只提供计数，不偷偷赋予道路或塔未经设计的收益。 */
 	virtual bool ExecuteEffect(const FCastleBuildingTriggerContext& Context);
 };

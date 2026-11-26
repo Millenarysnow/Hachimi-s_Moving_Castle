@@ -54,6 +54,7 @@ private:
 #if WITH_DEV_AUTOMATION_TESTS
 	/** 仅自动化测试直接推进组件计时；生产逻辑仍只由正常组件 Tick 驱动。 */
 	friend class FCastleTowerAttackQueueTest;
+	friend class FCastleBadgesFullProjectilesTest;
 #endif
 
 	/** 建筑结束生命周期时清理待射状态和冷却时刻。 */

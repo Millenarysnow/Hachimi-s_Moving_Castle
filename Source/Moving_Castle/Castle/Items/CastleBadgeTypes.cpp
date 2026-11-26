@@ -54,20 +54,28 @@ bool FCastleBadgeDefinition::Validate(FText& OutFailureReason) const
 		OutFailureReason = LOCTEXT("InvalidBadge", "徽章类型必须有效，效果数值必须为有限正数。");
 		return false;
 	}
-	if (Type == ECastleBadgeType::BlueAbacus || Type == ECastleBadgeType::WorkshopRefund)
+	if (Type == ECastleBadgeType::BlueAbacus || Type == ECastleBadgeType::WorkshopRefund
+		|| Type == ECastleBadgeType::StartingFunds || Type == ECastleBadgeType::DoubleDoorPass
+		|| Type == ECastleBadgeType::SpareBowstring || Type == ECastleBadgeType::ShopRebate
+		|| Type == ECastleBadgeType::BerserkBee)
 	{
 		// 牌面数字和张数属于整数契约。先用 double 比较上限，再检验整数性，避免 float 容量边界舍入。
 		const double Count = Magnitude;
 		if (Count > MAX_int32 || Count != static_cast<int32>(Count))
 		{
-			OutFailureReason = LOCTEXT("NonIntegralBadge", "蓝色房间数字加成与升级赠牌数量必须为正整数。");
+			OutFailureReason = LOCTEXT("NonIntegralBadge", "徽章的房间数字、赠牌数或金币数必须是 int32 范围内的正整数。");
 			return false;
 		}
 	}
-	if ((Type == ECastleBadgeType::BurstAlarm || Type == ECastleBadgeType::EmergencyBallast)
+	// 次数、门槛和指定倍率属于玩法规则。拒绝配置成界面显示一套、结算使用另一套的数值。
+	if ((Type == ECastleBadgeType::BurstAlarm || Type == ECastleBadgeType::EmergencyBallast
+		|| Type == ECastleBadgeType::FreeRefresh || Type == ECastleBadgeType::LoopPurchase
+		|| Type == ECastleBadgeType::LateAdvantage || Type == ECastleBadgeType::ChainReaction
+		|| Type == ECastleBadgeType::LapReassignment || Type == ECastleBadgeType::LastBalloonClasp
+		|| Type == ECastleBadgeType::ShopDiscount || Type == ECastleBadgeType::CoinPurse)
 		&& Magnitude != Standard.Magnitude)
 	{
-		OutFailureReason = LOCTEXT("FixedMagnitudeBadge", "触发式徽章须使用对应的固定倍率。");
+		OutFailureReason = LOCTEXT("FixedMagnitudeBadge", "该徽章必须使用规则表规定的固定数值。");
 		return false;
 	}
 	return true;
@@ -123,6 +131,47 @@ FText FCastleBadgeDefinition::GetEffectSummary() const
 		return LOCTEXT("FirstMainTowerDamageSummary", "本场主塔首次掉血后，所有房间射速与召唤物移速翻倍");
 	case ECastleBadgeType::EmergencyBallast:
 		return LOCTEXT("LowMainTowerHealthSummary", "主塔生命剩余 20% 或更少时，敌人攻速降低 50%");
+	case ECastleBadgeType::FirepowerCard:
+		return FText::Format(LOCTEXT("FirepowerCardSummary", "全体我方伤害 +{0}"), FText::AsPercent(static_cast<double>(Magnitude)));
+	case ECastleBadgeType::CoinPurse:
+		return LOCTEXT("CoinPurseSummary", "玩法产出的金币增加 10%，向上取整");
+	case ECastleBadgeType::StartingFunds:
+		return FText::Format(LOCTEXT("StartingFundsSummary", "新开局额外获得 {0} 金币"), FText::AsNumber(Magnitude));
+	case ECastleBadgeType::DoubleDoorPass:
+		return FText::Format(LOCTEXT("DoubleDoorPassSummary", "巡逻路线长度超过 10 格时，清场获得 {0} 金币"), FText::AsNumber(Magnitude));
+	case ECastleBadgeType::SpareBowstring:
+		return FText::Format(LOCTEXT("SpareBowstringSummary", "每波首次有士兵进入功能塔时，本次触发数字 +{0}"), FText::AsNumber(Magnitude));
+	case ECastleBadgeType::ShopDiscount:
+		return LOCTEXT("ShopDiscountSummary", "普通商店买牌价乘 85%，正价最低 1 金币");
+	case ECastleBadgeType::ShopRebate:
+		return FText::Format(LOCTEXT("ShopRebateSummary", "在普通商店每购买 10 次，获得 {0} 张随机房间卡"), FText::AsNumber(Magnitude));
+	case ECastleBadgeType::ShiftWhistle:
+		return FText::Format(LOCTEXT("ShiftWhistleSummary", "每波每名士兵首次进功能塔时移速 +{0}，持续 4 秒，每波最多惠及 3 人"),
+			FText::AsPercent(static_cast<double>(Magnitude)));
+	case ECastleBadgeType::StringGlove:
+		return FText::Format(LOCTEXT("StringGloveSummary", "手动点破空投气球时，落地伤害和减速半径扩大 {0} 格"), FText::AsNumber(Magnitude));
+	case ECastleBadgeType::FreeRefresh:
+		return LOCTEXT("FreeRefreshSummary", "每次进入编辑阶段获得 3 次普通商店免费刷新机会");
+	case ECastleBadgeType::QuickLadder:
+		return FText::Format(LOCTEXT("QuickLadderSummary", "士兵在梯子上的移速 +{0}"), FText::AsPercent(static_cast<double>(Magnitude)));
+	case ECastleBadgeType::LoopPurchase:
+		return LOCTEXT("LoopPurchaseSummary", "普通商店每刷新 10 次，首件商品数字与主建筑栏首张牌相同");
+	case ECastleBadgeType::LateAdvantage:
+		return LOCTEXT("LateAdvantageSummary", "士兵首圈移速减半，第二圈起每已完成一圈，移速在基础值上增加 20%");
+	case ECastleBadgeType::SiphonArrow:
+		return FText::Format(LOCTEXT("SiphonArrowSummary", "箭塔追踪箭命中后，为存活主塔恢复相当于伤害 {0} 的生命"),
+			FText::AsPercent(static_cast<double>(Magnitude)));
+	case ECastleBadgeType::RapidMarch:
+		return FText::Format(LOCTEXT("RapidMarchSummary", "士兵进入功能塔后，按塔的每级获得 {0} 移速加成，持续 3 秒"),
+			FText::AsPercent(static_cast<double>(Magnitude)));
+	case ECastleBadgeType::BerserkBee:
+		return FText::Format(LOCTEXT("BerserkBeeSummary", "蜂群每击杀一个敌人获得 {0} 金币"), FText::AsNumber(Magnitude));
+	case ECastleBadgeType::ChainReaction:
+		return LOCTEXT("ChainReactionSummary", "功能塔触发时，同类型、颜色和数字的其他功能塔各触发一次");
+	case ECastleBadgeType::LapReassignment:
+		return LOCTEXT("LapReassignmentSummary", "本场正式士兵每累计完成 10 圈，从门 A 派出一名走完一圈即离场的临时士兵");
+	case ECastleBadgeType::LastBalloonClasp:
+		return LOCTEXT("LastBalloonClaspSummary", "每局一次，敌方攻击将摧毁主塔时，耗尽剩余次数最多的护盾并保留最后一颗气球");
 	default:
 		return FText::GetEmpty();
 	}
