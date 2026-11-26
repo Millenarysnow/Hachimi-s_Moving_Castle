@@ -1689,6 +1689,11 @@ ACastleBuildingBase* ACastleBoard::SpawnBuildingActor(const FCastleBuildingDescr
 		NewBuilding->Destroy();
 		return nullptr;
 	}
+	if (!NewBuilding->ConfigureFloorDecals(*this, OutFailureReason))
+	{
+		NewBuilding->Destroy();
+		return nullptr;
+	}
 
 	return NewBuilding;
 }

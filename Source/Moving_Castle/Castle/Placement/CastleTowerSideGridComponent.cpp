@@ -4,7 +4,6 @@
 
 #include "Castle/PCG/CastleDeterministicPCGNoise.h"
 #include "Components/StaticMeshComponent.h"
-#include "Components/TextRenderComponent.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/Actor.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -34,7 +33,7 @@ UCastleTowerSideGridComponent::UCastleTowerSideGridComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> Mesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Game/ART/Material/MI_Tower.MI_Tower"));
 	PanelMesh = Mesh.Object;
 	PanelMaterial = Material.Object;
 }
@@ -51,8 +50,9 @@ bool UCastleTowerSideGridComponent::Initialize(const FIntVector& BaseCell, const
 		|| SurfaceOffset <= CellWidth * 0.5f || SurfaceOffset >= CellWidth)
 	{
 		OutReason = FText::FromString(FString::Printf(
-			TEXT("主塔 %s 侧格初始化失败：塔根、板材资源（Cube / BasicShapeMaterial）、层数或侧面距离不合法；侧面距离须处于半格至一格之间。"),
+			TEXT("主塔 %s 侧格初始化失败：塔根、Cube 网格、材质 /Game/ART/Material/MI_Tower、层数或侧面距离无效；侧面距离须处于半格至一格之间。"),
 			*GetPathNameSafe(Tower)));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
 	}
 
@@ -96,7 +96,6 @@ bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, F
 		for (const FCastleTowerSideCell& Added : Pending)
 		{
 			if (Added.Panel) { Added.Panel->DestroyComponent(); }
-			if (Added.Label) { Added.Label->DestroyComponent(); }
 		}
 		return false;
 	};
@@ -129,15 +128,19 @@ bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, F
 			const FRotator Rotation = FRotationMatrix::MakeFromXZ(Outward, FVector::UpVector).Rotator();
 			const FVector Center = Outward * TowerSurfaceOffset + FVector(0, 0, (Layer + 0.5) * TowerLayerHeight);
 			UStaticMeshComponent* Panel = NewObject<UStaticMeshComponent>(Tower);
-			UTextRenderComponent* Label = NewObject<UTextRenderComponent>(Tower);
 			Cell.Panel = Panel;
-			Cell.Label = Label;
-			UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(PanelMaterial, Panel);
-			if (!Panel || !Label || !Material)
+			if (!Panel)
 			{
-				return Reject(Cell, TEXT("无法创建面板、数字或动态材质。"));
+				return Reject(Cell, TEXT("无法创建格面组件。"));
 			}
+			UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(PanelMaterial, Panel);
+			if (!Material)
+			{
+				return Reject(Cell, TEXT("无法基于 MI_Tower 创建格面动态材质。"));
+			}
+			// 3×3 图集帧从零编号，格面数字 1～9 映射到帧 0～8。
 			Material->SetVectorParameterValue(TEXT("Color"), PanelTint);
+			Material->SetScalarParameterValue(TEXT("Frame (S)"), static_cast<float>(Cell.Number - 1));
 
 			// 先配置碰撞和导航资格再注册，避免短暂暴露建造面为实体障碍或行走几何。
 			Panel->SetupAttachment(Root);
@@ -153,25 +156,11 @@ bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, F
 			Panel->SetStaticMesh(PanelMesh);
 			Panel->SetMaterial(0, Material);
 
-			// 文字与面板分别挂到塔根，保持数字直立，不继承薄片的压扁缩放。
-			Label->SetupAttachment(Root);
-			Label->SetRelativeLocationAndRotation(Center + Outward * (PanelThickness * 0.5f + 3.0f), Rotation);
-			Label->SetCanEverAffectNavigation(false);
-			Label->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-			Label->SetHorizontalAlignment(EHTA_Center);
-			Label->SetVerticalAlignment(EVRTA_TextCenter);
-			Label->SetTextRenderColor(FColor::White);
-			Label->SetWorldSize(PanelWidth * 0.50f);
-			Label->SetText(FText::AsNumber(Cell.Number));
-			Label->SetVisibility(!bPresentationHidden);
-
 			Tower->AddInstanceComponent(Panel);
-			Tower->AddInstanceComponent(Label);
 			Panel->RegisterComponent();
-			Label->RegisterComponent();
-			if (!Panel->IsRegistered() || !Label->IsRegistered())
+			if (!Panel->IsRegistered())
 			{
-				return Reject(Cell, TEXT("无法注册面板或数字组件。"));
+				return Reject(Cell, TEXT("无法注册纹理格面组件。"));
 			}
 		}
 	}
@@ -190,10 +179,21 @@ bool UCastleTowerSideGridComponent::ValidatePresentation(FText& OutReason) const
 	}
 	for (const FCastleTowerSideCell& Cell : Cells)
 	{
-		if (!IsValid(Cell.Panel) || !Cell.Panel->IsRegistered() || !IsValid(Cell.Label) || !Cell.Label->IsRegistered())
+		UMaterialInstanceDynamic* Material = IsValid(Cell.Panel)
+			? Cast<UMaterialInstanceDynamic>(Cell.Panel->GetMaterial(0)) : nullptr;
+		FLinearColor ExpectedTint;
+		const bool bHasValidAttributes = CastleTileColors::TryGetGridTint(Cell.Color, ExpectedTint)
+			&& Cell.Number >= 1 && Cell.Number <= 9;
+		const bool bFrameMatches = Material && FMath::IsNearlyEqual(
+			Material->K2_GetScalarParameterValue(TEXT("Frame (S)")), static_cast<float>(Cell.Number - 1));
+		const bool bTintMatches = Material && bHasValidAttributes
+			&& Material->K2_GetVectorParameterValue(TEXT("Color")).Equals(ExpectedTint, 0.001f);
+		if (!IsValid(Cell.Panel) || !Cell.Panel->IsRegistered() || !Material || !bHasValidAttributes
+			|| !bFrameMatches || !bTintMatches)
 		{
-			OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 侧格 %s 面 %d 的面板或数字未注册。"),
+			OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 侧格 %s 面 %d 的纹理面板、颜色或数字帧无效。"),
 				*GetPathNameSafe(GetOwner()), *Cell.TowerCell.ToString(), static_cast<int32>(Cell.Face)));
+			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 			return false;
 		}
 	}
@@ -202,7 +202,7 @@ bool UCastleTowerSideGridComponent::ValidatePresentation(FText& OutReason) const
 
 bool UCastleTowerSideGridComponent::SetPresentationHidden(const bool bHidden, FText& OutReason)
 {
-	// 先核对整组面板再更改，避免只隐藏其中一面后才发现组件失效。
+	// 先核对整组纹理面板再更改，避免只隐藏其中一面后才发现组件或属性贴图失效。
 	if (!ValidatePresentation(OutReason)) { return false; }
 	if (bPresentationHidden != bHidden)
 	{
@@ -210,7 +210,6 @@ bool UCastleTowerSideGridComponent::SetPresentationHidden(const bool bHidden, FT
 		{
 			Cell.Panel->SetVisibility(!bHidden);
 			Cell.Panel->SetCollisionResponseToChannel(ECC_Visibility, bHidden ? ECR_Ignore : ECR_Block);
-			Cell.Label->SetVisibility(!bHidden);
 		}
 		bPresentationHidden = bHidden;
 	}

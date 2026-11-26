@@ -11,6 +11,7 @@
 #include "AssemblyFlightComponent.h"
 #include "Castle/PCG/HachimisV4/CastleHachimisV4Layout.h"
 #include "Components/Building/BuildingGameplayRootComponent.h"
+#include "Components/DecalComponent.h"
 #include "Components/Building/Effects/CastleBuildingEffectComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
@@ -53,8 +54,10 @@ ACastleBuildingBase::ACastleBuildingBase(const FObjectInitializer& ObjectInitial
 	// 引擎基础资源只用于数字底牌；建筑美术必须由等级蓝图显式配置。
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> FloorMaterial(TEXT("/Game/ART/Material/MI_Floor.MI_Floor"));
 	LabelPlateMesh = Cube.Object;
 	LabelPlateMaterial = Material.Object;
+	FloorDecalMaterial = FloorMaterial.Object;
 
 	// 标签只在 ConfigureBuildingVisual 成功后显示，避免生成中间状态被玩家看见。
 	PrototypeLabel = CreateDefaultSubobject<UTextRenderComponent>(TEXT("PrototypeLabel"));
@@ -101,6 +104,10 @@ void ACastleBuildingBase::SetPlacementComplete(const bool bComplete)
 	bHasCompletedPlacement = bComplete;
 	PrototypeLabel->SetVisibility(bComplete, false);
 	PrototypeLabelPlate->SetVisibility(bComplete, false);
+	for (UDecalComponent* Decal : FloorDecals)
+	{
+		if (IsValid(Decal)) { Decal->SetVisibility(bComplete, false); }
+	}
 }
 
 void ACastleBuildingBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -358,6 +365,119 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 	PrototypeLabel->SetTextRenderColor(LabelColors[static_cast<int32>(Color)]);
 	PrototypeLabel->SetVisibility(true);
 	PrototypeLabelPlate->SetVisibility(true);
+	return true;
+}
+
+bool ACastleBuildingBase::ConfigureFloorDecals(const ACastleBoard& Board, FText& OutFailureReason)
+{
+	OutFailureReason = FText::GetEmpty();
+	TArray<UDecalComponent*> PendingDecals;
+	const auto Reject = [this, &OutFailureReason, &PendingDecals](const FString& Cause)
+	{
+		OutFailureReason = FText::FromString(FString::Printf(TEXT("建筑 %s 地板贴花初始化失败：%s"), *GetPathName(), *Cause));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
+		for (UDecalComponent* Decal : PendingDecals)
+		{
+			if (IsValid(Decal)) { Decal->DestroyComponent(); }
+		}
+		return false;
+	};
+
+	if (!IsValid(FloorDecalMaterial) || !IsValid(GameplayRoot) || OccupiedCoordinates.IsEmpty()
+		|| !FloorDecals.IsEmpty() || !FMath::IsFinite(Board.GroundTileSize) || Board.GroundTileSize <= 0.0f
+		|| !FMath::IsFinite(Board.GroundTileGap) || Board.GroundTileGap < 0.0f
+		|| !FMath::IsFinite(Board.CellSize) || Board.CellSize <= 0.0f
+		|| !FMath::IsFinite(Board.LayerHeight) || Board.LayerHeight <= 0.0f
+		|| Board.GetActorTransform().ContainsNaN())
+	{
+		return Reject(FString::Printf(TEXT("楼板材质 /Game/ART/Material/MI_Floor、功能根节点、占格或棋盘尺寸无效。材质=%s。"),
+			*GetPathNameSafe(FloorDecalMaterial)));
+	}
+
+	FLinearColor DecalTint;
+	if (!CastleTileColors::TryGetGridTint(Color, DecalTint) || Number < 1 || Number > 9)
+	{
+		return Reject(FString::Printf(TEXT("卡牌属性无效：颜色 %d、数字 %d，无法设置材质颜色和图集帧。"),
+			static_cast<int32>(Color), Number));
+	}
+
+	const bool bHasV4Layout = IsValid(HachimisLayout);
+	// V4 楼板使用布局记录的作者站立高度；无 V4 布局的旧功能楼板契约位于格底，保持原有标高。
+	const double StandingHeight = bHasV4Layout ? HachimisLayout->StandingHeight : 0.0;
+	if (bHasV4Layout && (!FMath::IsFinite(StandingHeight) || StandingHeight <= 0.0 || StandingHeight >= Board.LayerHeight))
+	{
+		return Reject(FString::Printf(TEXT("V4 布局 %s 的作者站立高度 %.3f 超出楼层范围。"),
+			*HachimisLayout->GetPathName(), StandingHeight));
+	}
+
+	const FTransform& BoardTransform = Board.GetActorTransform();
+	// Decal 局部 +X 轴朝向楼板，投影深度保持短距离，避免纹理落到楼板附近的墙面。
+	const FQuat DecalRotation = BoardTransform.GetRotation() * FRotator(-90.0f, 0.0f, 0.0f).Quaternion();
+	PendingDecals.Reserve(OccupiedCoordinates.Num());
+	for (const FIntVector& Coordinate : OccupiedCoordinates)
+	{
+		// 旧功能楼板按单格边长并仅向同建筑邻格延伸半缝；V4 楼板按作者完整格距铺设。
+		const float NegativeXExtension = !bHasV4Layout && OccupiedCoordinates.Contains(Coordinate + FIntVector(-1, 0, 0))
+			? Board.GroundTileGap * 0.5f : 0.0f;
+		const float PositiveXExtension = !bHasV4Layout && OccupiedCoordinates.Contains(Coordinate + FIntVector(1, 0, 0))
+			? Board.GroundTileGap * 0.5f : 0.0f;
+		const float NegativeYExtension = !bHasV4Layout && OccupiedCoordinates.Contains(Coordinate + FIntVector(0, -1, 0))
+			? Board.GroundTileGap * 0.5f : 0.0f;
+		const float PositiveYExtension = !bHasV4Layout && OccupiedCoordinates.Contains(Coordinate + FIntVector(0, 1, 0))
+			? Board.GroundTileGap * 0.5f : 0.0f;
+		const float FloorWidth = bHasV4Layout ? Board.CellSize
+			: Board.GroundTileSize + NegativeXExtension + PositiveXExtension;
+		const float FloorDepth = bHasV4Layout ? Board.CellSize
+			: Board.GroundTileSize + NegativeYExtension + PositiveYExtension;
+		const FVector LocalSurfaceOffset(
+			(PositiveXExtension - NegativeXExtension) * 0.5f,
+			(PositiveYExtension - NegativeYExtension) * 0.5f,
+			-Board.LayerHeight * 0.5f + static_cast<float>(StandingHeight));
+		// 格心先落到对应占格的楼板顶面，再应用棋盘完整变换，支持旋转、缩放和竖向占格。
+		const FVector WorldLocation = Board.GetGridWorldLocation(Coordinate)
+			+ BoardTransform.TransformVector(LocalSurfaceOffset);
+		const FTransform DecalWorldTransform(DecalRotation, WorldLocation, BoardTransform.GetScale3D());
+		if (DecalWorldTransform.ContainsNaN() || !FMath::IsFinite(FloorWidth) || FloorWidth <= 0.0f
+			|| !FMath::IsFinite(FloorDepth) || FloorDepth <= 0.0f)
+		{
+			return Reject(FString::Printf(TEXT("占格 %s 的楼板贴花变换或投影尺寸无效。"), *Coordinate.ToString()));
+		}
+
+		UDecalComponent* Decal = NewObject<UDecalComponent>(this);
+		if (!Decal)
+		{
+			return Reject(FString::Printf(TEXT("占格 %s 无法创建贴花组件。"), *Coordinate.ToString()));
+		}
+		PendingDecals.Add(Decal);
+		UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(FloorDecalMaterial, Decal);
+		if (!Material)
+		{
+			return Reject(FString::Printf(TEXT("占格 %s 无法从材质 %s 创建动态实例。"),
+				*Coordinate.ToString(), *FloorDecalMaterial->GetPathName()));
+		}
+		// 3×3 图集帧从零编号，建筑数字 1～9 映射到帧 0～8。
+		Material->SetVectorParameterValue(TEXT("Color"), DecalTint);
+		Material->SetScalarParameterValue(TEXT("Frame (S)"), static_cast<float>(Number - 1));
+
+		Decal->SetupAttachment(GameplayRoot);
+		Decal->SetWorldTransform(DecalWorldTransform);
+		Decal->DecalSize = FVector(12.0f, FloorDepth * 0.5f, FloorWidth * 0.5f);
+		Decal->SetDecalMaterial(Material);
+		Decal->SetCanEverAffectNavigation(false);
+		Decal->SetVisibility(bHasCompletedPlacement, false);
+		Decal->ComponentTags.Add(TEXT("CastleBuildingFloorDecal"));
+	}
+
+	for (UDecalComponent* Decal : PendingDecals)
+	{
+		AddInstanceComponent(Decal);
+		Decal->RegisterComponent();
+		if (!Decal->IsRegistered())
+		{
+			return Reject(FString::Printf(TEXT("占格贴花组件 %s 无法注册。"), *GetNameSafe(Decal)));
+		}
+	}
+	for (UDecalComponent* Decal : PendingDecals) { FloorDecals.Add(Decal); }
 	return true;
 }
 
