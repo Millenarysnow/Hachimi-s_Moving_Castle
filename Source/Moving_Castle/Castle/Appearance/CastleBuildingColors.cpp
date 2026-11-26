@@ -13,23 +13,29 @@ namespace CastleBuildingColors
 
 	/** 精确匹配作者命名的主体，不扩大到同一材质制作的家具、铆钉、柱脚或屋顶饰边。 */
 	static const TSet<FName> StructuralNodes = {
-		TEXT("FullHeightTimber"), TEXT("FreestonePier"), TEXT("StoneCourse"), TEXT("BasaltPier"),
+		TEXT("FullHeightTimber"), TEXT("TwinTenonPost"), TEXT("FreestonePier"), TEXT("StoneCourse"), TEXT("BasaltPier"),
 		TEXT("PatinaPost"), TEXT("FrontTrellisPost"), TEXT("TrellisPostCap"), TEXT("LaunchTrussLeg"),
 		TEXT("LaunchPortalLeg"), TEXT("AdobePier"), TEXT("GlazedPierBelt"), TEXT("GlazedColumnGirdle"),
-		TEXT("FlaredClayCapital"), TEXT("ShieldPier_ChamferPier"), TEXT("ShieldFrame_BeltInlay"),
-		TEXT("ShieldFrame_ContinuousBelt")
+		TEXT("FlaredClayCapital"), TEXT("RoyalCornerFillet"), TEXT("Wall_JunctionPier"),
+		TEXT("ShieldPier_ChamferPier"), TEXT("ShieldPier_ClusterPier"), TEXT("ShieldPier_CollaredPier"),
+		TEXT("ShieldPier_CrownedPier"), TEXT("ShieldPier_ForkedRibPier"), TEXT("ShieldPier_BundleRib"),
+		TEXT("ShieldPier_Collar"), TEXT("HonedBlueInlay"), TEXT("FoundryArmorInsert"), TEXT("ShieldWall_GlazedInset")
 	};
 
 	static FName NodeStem(FName Node)
 	{
-		// FBX 保留构件名末尾的三位摆放序号。只拆最后一段数字，避免把柱脚等近似名称认作柱身。
-		FString Name = Node.ToString();
-		int32 Separator;
-		if (Name.FindLastChar(TEXT('_'), Separator) && Name.Mid(Separator + 1).IsNumeric())
+		// 原始 FBX 名为“构件_三位序号”。闭墙实例还会追加如 _Front1F1 的位置后缀；
+		// 独立墙套件使用原名。两者都以序号作为分界，保留 ShieldPier_ChamferPier 等完整构件名。
+		const FString Name = Node.ToString();
+		for (int32 I = 0; I + 3 < Name.Len(); ++I)
 		{
-			Name.LeftInline(Separator);
+			if (Name[I] == TEXT('_') && FChar::IsDigit(Name[I+1]) && FChar::IsDigit(Name[I+2])
+				&& FChar::IsDigit(Name[I+3]) && (I+4 == Name.Len() || Name[I+4] == TEXT('_')))
+			{
+				return FName(*Name.Left(I));
+			}
 		}
-		return FName(Name);
+		return Node;
 	}
 
 	void Apply(UStaticMeshComponent& Component, ECastleTileColor Color, ECastleBuildingType Type, FName Node, FName Group)

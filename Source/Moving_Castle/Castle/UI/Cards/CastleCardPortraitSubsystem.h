@@ -58,7 +58,7 @@ class MOVING_CASTLE_API UCastleCardPortraitSubsystem : public UTickableWorldSubs
 	GENERATED_BODY()
 
 public:
-	/** 以正式棋盘上的格子尺寸生成预览，同定义、等级和尺度的卡共享静止结果。 */
+	/** 以正式棋盘的尺寸取景，同定义、等级、属性色和尺度的卡共享静止照片。 */
 	UCastleCardPortrait* RequestPortrait(const FCastleBuildingDescriptor& Descriptor, const ACastleBoard* Board,
 		FText& OutFailureReason);
 

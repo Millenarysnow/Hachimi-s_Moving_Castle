@@ -1055,7 +1055,7 @@ namespace HachimisV4Import
 		{
 			return Fail(MaterialPath, FString::Join(Resource->GetCompileErrors(), TEXT("\n")));
 		}
-		Assets.Add(Material);
+		Assets.AddUnique(Material);
 
 		for (FRoofSource& Source : Sources)
 		{

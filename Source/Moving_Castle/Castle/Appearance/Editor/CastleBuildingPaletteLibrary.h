@@ -17,7 +17,7 @@ public:
 	static bool RebuildBuildingPalettes();
 
 	/** 同一套接线也用于 FBX 再导入，防止更新模型时清掉属性色。 */
-	static bool BindSolid(UMaterial& Material);
+	static bool BindSolid(UMaterial& Material, bool* Changed = nullptr);
 	static bool BindAtlas(UMaterial& Material, UTexture2D& Source, bool bShield, TArray<UObject*>& Assets);
 #endif
 };

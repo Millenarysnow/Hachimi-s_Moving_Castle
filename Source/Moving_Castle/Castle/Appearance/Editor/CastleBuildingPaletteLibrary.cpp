@@ -61,7 +61,12 @@ namespace CastlePalette
 			}
 			for (const FString Family : {TEXT("Archer"), TEXT("Cannon"), TEXT("Farm"), TEXT("Balloon"), TEXT("Hive"), TEXT("Shield")})
 			{
-				for (int32 N = 0; N < 5; ++N) { T.Add(Materials + FString::Printf(TEXT("M_HC515_%s_%d"), *Family, N), {Tiles[N], Surface}); }
+				// HC515 坡顶交付按用途排槽，0 为瓦面、1 为浅瓦、2 为瓦底暗色。
+				// 3 是支座，4 是檐珠、肋或泛水包边；盾塔的 4 就是金檐，须使用作者原材质。
+				const FString Prefix = Materials + TEXT("M_HC515_") + Family;
+				T.Add(Prefix + TEXT("_0"), {0.f, Surface});
+				T.Add(Prefix + TEXT("_1"), {.32f, Surface});
+				T.Add(Prefix + TEXT("_2"), {-.41f, Surface});
 			}
 			for (int32 N = 0; N < 4; ++N) { T.Add(Materials + FString::Printf(TEXT("M_TealSail%d"), N), {Cloth[N], Surface}); }
 			for (int32 N = 0; N < 5; ++N) { T.Add(Shield + FString::Printf(TEXT("M_ShieldCeramic%d"), N), {Ceramic[N], Surface}); }
@@ -72,11 +77,12 @@ namespace CastlePalette
 			for (const TPair<FString, float>& Pair : TMap<FString,float>{
 				{TEXT("M_BlueStone"), -.24f}, {TEXT("M_Basalt"), -.44f}, {TEXT("M_Patina"), -.22f},
 				{TEXT("M_SteelTeal"), -.33f}, {TEXT("M_Adobe"), .06f}, {TEXT("M_ClaySlip"), -.22f},
-				{TEXT("M_ClayGlaze"), .16f}, {TEXT("M_PostOak"), -.30f}, {TEXT("M_BeamOak"), -.10f}, {TEXT("M_StoneTrim"), -.25f}})
+				{TEXT("M_ClayGlaze"), .16f}, {TEXT("M_PostOak"), -.30f}, {TEXT("M_BracketOak"), -.34f},
+				{TEXT("M_BeamOak"), -.10f}, {TEXT("M_StoneTrim"), -.25f}})
 			{
 				T.Add(Materials + Pair.Key, {Pair.Value, Structure});
 			}
-			T.Add(Shield + TEXT("M_ShieldCharcoalStone"), {-.42f, Structure});
+			T.Add(Shield + TEXT("M_ShieldPearl"), {.22f, Structure});
 			T.Add(Shield + TEXT("M_ShieldStoneFace"), {-.18f, Structure});
 			return T;
 		}();
@@ -145,9 +151,10 @@ namespace CastlePalette
 	}
 }
 
-bool UCastleBuildingPaletteLibrary::BindSolid(UMaterial& Material)
+bool UCastleBuildingPaletteLibrary::BindSolid(UMaterial& Material, bool* Changed)
 {
 	using namespace CastlePalette;
+	if (Changed) { *Changed = false; }
 	const FSwatch* Definition = Solids().Find(Material.GetOutermost()->GetName());
 	if (!Definition) { return true; } // 配色只对上表中明确授权的材质生效，装饰维持原图。
 	auto& Base = Material.GetEditorOnlyData()->BaseColor;
@@ -172,7 +179,14 @@ bool UCastleBuildingPaletteLibrary::BindSolid(UMaterial& Material)
 		const FLinearColor C(Index == 0 ? Base.Constant : Shade(Index, Definition->Tone));
 		Values.Add(FString::Printf(TEXT("float3(%.9f,%.9f,%.9f)"), C.R,C.G,C.B));
 	}
-	Colors->Code = TEXT("const float3 palette[5] = {") + FString::Join(Values,TEXT(",")) + TEXT("};\nreturn palette[(uint)ColorIndex];");
+	const FString Code = TEXT("const float3 palette[5] = {") + FString::Join(Values,TEXT(",")) + TEXT("};\nreturn palette[(uint)ColorIndex];");
+	const auto* Index = Colors->Inputs.Num() == 1 ? Cast<UMaterialExpressionScalarParameter>(Colors->Inputs[0].Input.Expression) : nullptr;
+	if (!Index || !Index->bUseCustomPrimitiveData || Index->PrimitiveDataIndex != Definition->Channel)
+	{
+		return PaletteError(Material,TEXT("材质内的实例色号通道与构件配置不匹配"));
+	}
+	if (Changed) { *Changed = Colors->Code != Code || Base.Expression != Colors || Base.UseConstant; }
+	Colors->Code = Code;
 	Base.Connect(0, Colors);
 	Base.UseConstant = false;
 	return true;
@@ -223,12 +237,20 @@ bool UCastleBuildingPaletteLibrary::BindAtlas(UMaterial& Material, UTexture2D& S
 		FAssetRegistryModule::AssetCreated(Array);
 	}
 	if (!Array) { return PaletteError(Source,TEXT("无法创建或读取颜色数组 ") + Path); }
-	Array->PreEditChange(nullptr);
-	Array->Source.Init(1024,512,UE_ARRAY_COUNT(Bases),1,TSF_BGRA8,reinterpret_cast<const uint8*>(Layers.GetData()));
-	Array->SRGB = true;
-	Array->CompressionSettings = Source.CompressionSettings;
-	Array->PostEditChange();
-	Assets.Add(Array);
+	FImage Existing;
+	const bool bSamePixels = Array->Source.IsValid() && Array->Source.GetMipImage(Existing,0)
+		&& Existing.SizeX == Image.SizeX && Existing.SizeY == Image.SizeY && Existing.NumSlices == UE_ARRAY_COUNT(Bases)
+		&& Existing.Format == ERawImageFormat::BGRA8 && Existing.RawData.Num() == Layers.Num()*sizeof(FColor)
+		&& FMemory::Memcmp(Existing.RawData.GetData(),Layers.GetData(),Existing.RawData.Num()) == 0;
+	if (!bSamePixels || !Array->SRGB || Array->CompressionSettings != Source.CompressionSettings)
+	{
+		Array->PreEditChange(nullptr);
+		Array->Source.Init(1024,512,UE_ARRAY_COUNT(Bases),1,TSF_BGRA8,reinterpret_cast<const uint8*>(Layers.GetData()));
+		Array->SRGB = true;
+		Array->CompressionSettings = Source.CompressionSettings;
+		Array->PostEditChange();
+		Assets.Add(Array);
+	}
 	auto& Base = Material.GetEditorOnlyData()->BaseColor;
 	auto* Sample = Cast<UMaterialExpressionTextureSample>(Base.Expression);
 	if (!Sample || (Sample->Texture != &Source && Sample->Texture != Array)) { return PaletteError(Material,TEXT("无法识别作者基础色采样")); }
@@ -238,8 +260,9 @@ bool UCastleBuildingPaletteLibrary::BindAtlas(UMaterial& Material, UTexture2D& S
 		Coordinates->A.Connect(0,Add<UMaterialExpressionTextureCoordinate>(Material,-650,-50));
 		Coordinates->B.Connect(0,Selector(Material,Surface));
 		Sample->Coordinates.Connect(0,Coordinates);
+		Sample->Texture = Array;
+		Assets.AddUnique(&Material);
 	}
-	Sample->Texture = Array;
 	return true;
 }
 
@@ -251,9 +274,13 @@ bool UCastleBuildingPaletteLibrary::RebuildBuildingPalettes()
 	{
 		UMaterial* M = LoadObject<UMaterial>(nullptr,*Pair.Key);
 		if (!M) { UE_LOG(LogMoving_Castle,Error,TEXT("找不到建筑配色材质 %s"),*Pair.Key); return false; }
-		if (!BindSolid(*M)) { return false; }
-		M->PostEditChange();
-		Assets.Add(M);
+		bool bChanged;
+		if (!BindSolid(*M,&bChanged)) { return false; }
+		if (bChanged)
+		{
+			M->PostEditChange();
+			Assets.Add(M);
+		}
 	}
 	for (const bool bShield : {false,true})
 	{
@@ -263,8 +290,7 @@ bool UCastleBuildingPaletteLibrary::RebuildBuildingPalettes()
 		auto* Texture = LoadObject<UTexture2D>(nullptr,*(Prefix + TEXT("T_HC515_") + Family + TEXT("_BaseColor")));
 		if (!M || !Texture) { UE_LOG(LogMoving_Castle,Error,TEXT("找不到 %s 的叠层屋面材质或源图"),*Family); return false; }
 		if (!BindAtlas(*M,*Texture,bShield,Assets)) { return false; }
-		M->PostEditChange();
-		Assets.Add(M);
+		if (Assets.Contains(M)) { M->PostEditChange(); }
 	}
 	// 加速房只有单一美术外壳，直接绑定已有的房间中间色档，使该 BP 的硬引用也进入烘焙。
 	auto* Speed = LoadObject<UBlueprint>(nullptr,TEXT("/Game/MovingCastle/BP/BP_SpeedRoom_lv1"));
@@ -273,10 +299,13 @@ bool UCastleBuildingPaletteLibrary::RebuildBuildingPalettes()
 	auto* Node = Speed->SimpleConstructionScript->FindSCSNode(TEXT("StaticMesh"));
 	auto* Shell = Node ? Cast<UStaticMeshComponent>(Node->ComponentTemplate) : nullptr;
 	if (!Shell || Shell->GetNumMaterials()!=1) { return PaletteError(*Speed,TEXT("StaticMesh 外壳必须有一个材质槽")); }
-	Shell->SetMaterial(0,Mid);
-	FKismetEditorUtilities::CompileBlueprint(Speed);
-	if (Speed->Status == BS_Error) { return PaletteError(*Speed,TEXT("加速房蓝图编译失败")); }
-	Assets.Add(Speed);
+	if (Shell->GetMaterial(0) != Mid)
+	{
+		Shell->SetMaterial(0,Mid);
+		FKismetEditorUtilities::CompileBlueprint(Speed);
+		if (Speed->Status == BS_Error) { return PaletteError(*Speed,TEXT("加速房蓝图编译失败")); }
+		Assets.Add(Speed);
+	}
 	if (GShaderCompilingManager) { GShaderCompilingManager->FinishAllCompilation(); }
 	// 编译错误在保存前检查；待发布资产全部验证完毕才开始写盘。
 	for (UObject* Asset : Assets)
