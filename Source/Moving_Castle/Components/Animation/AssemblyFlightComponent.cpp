@@ -204,6 +204,8 @@ bool UAssemblyFlightComponent::CreateFlightVisual(FFlightPart& Part)
 		Visual->SetMaterial(MaterialIndex, Source->GetMaterial(MaterialIndex));
 	}
 	Visual->SetCastShadow(Source->CastShadow);
+	// 同网格、同材质可属于不同颜色的建筑，起飞时保留源组件的实例材质数据。
+	Visual->SetCustomPrimitiveDataFloatArray(0, Source->GetCustomPrimitiveData().Data);
 	Visual->SetRenderCustomDepth(Source->bRenderCustomDepth);
 	Visual->SetCustomDepthStencilValue(Source->CustomDepthStencilValue);
 	Visual->SetReceivesDecals(Source->bReceivesDecals);

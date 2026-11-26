@@ -290,6 +290,16 @@ bool ACastleBoard::SpawnMainTower(FText& OutFailureReason)
 		TowerComponent->MaxHealth = TowerHealthPerBalloon * TowerComponent->MaxBalloons;
 	}
 	TowerComponent->TargetHeightOffset = CombatData->MainTowerTargetHeightOffset;
+	const int32 TowerLayerCount = UsesProgressiveTowerLayers() ? InitialUnlockedLayers : 3;
+	const float TowerShaftHeight = static_cast<float>(TowerLayerCount) * LayerHeight;
+	FString TowerGeometryFailure;
+	if (!TowerComponent->SetTowerShaftDimensions(FCastleTowerPrism::DefaultShaftWidth,
+		TowerShaftHeight, TowerGeometryFailure))
+	{
+		TowerActor->Destroy();
+		OutFailureReason = FText::FromString(FString::Printf(TEXT("主塔战斗塔身几何初始化失败：%s"), *TowerGeometryFailure));
+		return false;
+	}
 	if (!TowerComponent->InitializeHealth())
 	{
 		TowerActor->Destroy();
@@ -413,8 +423,16 @@ bool ACastleBoard::ExpandMainTowerLayers(const int32 TargetLayerCount, FText& Ou
 	{
 		return Reject(TEXT("目标层数必须严格大于当前开放层数且不得超过最大主塔层数"));
 	}
-	const auto* Health = MainTowerActor->FindComponentByClass<UCastleMainTowerComponent>();
+	UCastleMainTowerComponent* Health = MainTowerActor->FindComponentByClass<UCastleMainTowerComponent>();
 	if (!IsValid(Health)) { return Reject(TEXT("主塔生命组件缺失")); }
+	const float NewShaftHeight = static_cast<float>(TargetLayerCount) * LayerHeight;
+	FCastleTowerPrism ValidatedPrism;
+	FString GeometryFailure;
+	if (!FCastleTowerPrism::Build(MainTowerActor->GetActorTransform(),
+		FCastleTowerPrism::DefaultShaftWidth, NewShaftHeight, ValidatedPrism, GeometryFailure))
+	{
+		return Reject(*FString::Printf(TEXT("目标塔身几何无效：%s"), *GeometryFailure));
+	}
 
 	// 先注册隐藏吊挂，再追加侧格。任一步失败都保留原等级网格、吊挂及旧房间索引。
 	if (!TowerPresentation->PrepareTier(TargetLayerCount, OutReason)) { return false; }
@@ -422,6 +440,11 @@ bool ACastleBoard::ExpandMainTowerLayers(const int32 TargetLayerCount, FText& Ou
 	{
 		TowerPresentation->DiscardPreparedTier();
 		return false;
+	}
+	if (!Health->SetTowerShaftDimensions(FCastleTowerPrism::DefaultShaftWidth, NewShaftHeight, GeometryFailure))
+	{
+		TowerPresentation->DiscardPreparedTier();
+		return Reject(*FString::Printf(TEXT("提交主塔战斗塔身几何失败：%s"), *GeometryFailure));
 	}
 
 	FScopedCastleNavigationChange GeometryChange(GetWorld(), this);

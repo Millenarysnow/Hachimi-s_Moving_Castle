@@ -1,6 +1,7 @@
 #include "HachimisV4ImportCommandlet.h"
 
 #if WITH_EDITOR
+#include "Castle/Appearance/Editor/CastleBuildingPaletteLibrary.h"
 #include "Castle/PCG/Structure/CastlePCGRoofQuarterRule.h"
 #include "Castle/PCG/Structure/CastlePCGSupportRules.h"
 #include "CastleHachimisV4Layout.h"
@@ -369,6 +370,7 @@ namespace HachimisV4Import
 			Data->Specular.Constant = Specular;
 			Data->EmissiveColor.Constant = Emissive;
 		}
+		if (!UCastleBuildingPaletteLibrary::BindSolid(*Material)) { return nullptr; }
 		Material->PostEditChange();
 		if (!bDeferSave && !Save(*Material)) { return nullptr; }
 		Palette.Add(*Name, Material);
@@ -931,6 +933,8 @@ namespace HachimisV4Import
 		Inputs->Metallic.Constant = PaletteSource.Metallic;
 		Inputs->Specular.Constant = PaletteSource.Specular;
 		Inputs->EmissiveColor.Constant = PaletteSource.Emissive.ToFColorSRGB();
+		TArray<UObject*> Assets = {Texture, Material};
+		if (!UCastleBuildingPaletteLibrary::BindAtlas(*Material,*Texture,true,Assets)) { return false; }
 		Material->PostEditChange();
 		if (GShaderCompilingManager) { GShaderCompilingManager->FinishAllCompilation(); }
 		if (const FMaterialResource* Resource = Material->GetMaterialResource(SP_PCD3D_SM6);
@@ -939,7 +943,6 @@ namespace HachimisV4Import
 			return Fail(MaterialPath, FString::Join(Resource->GetCompileErrors(), TEXT("\n")));
 		}
 
-		TArray<UObject*> Assets = {Texture, Material};
 		Rule->FamilyKits.Remove(Family);
 		for (const ECastlePCGQuadRoofKind Kind : CastlePCGSupport::QuadRoofKinds())
 		{
@@ -1043,6 +1046,7 @@ namespace HachimisV4Import
 		Inputs->AmbientOcclusion.Connect(1, ORM);
 		Inputs->Roughness.Connect(2, ORM);
 		Inputs->Metallic.Connect(3, ORM);
+		if (!UCastleBuildingPaletteLibrary::BindAtlas(*Material,*Textures[0],false,Assets)) { return false; }
 		Material->PostEditChange();
 		if (GShaderCompilingManager) { GShaderCompilingManager->FinishAllCompilation(); }
 		// 按项目 Windows 默认目标 DX12 SM6 核对材质编译结果。
@@ -1051,7 +1055,7 @@ namespace HachimisV4Import
 		{
 			return Fail(MaterialPath, FString::Join(Resource->GetCompileErrors(), TEXT("\n")));
 		}
-		Assets.Add(Material);
+		Assets.AddUnique(Material);
 
 		for (FRoofSource& Source : Sources)
 		{

@@ -68,9 +68,9 @@ UCastleCardPortrait* UCastleCardPortraitSubsystem::RequestPortrait(const FCastle
 		OutFailureReason = FText::FromString(FString::Printf(TEXT("棋盘 %s 无法提供有效的建筑取景尺寸。"), *GetNameSafe(Board)));
 		return nullptr;
 	}
-	// 正式材质不读取玩法色号，箔光也只属于卡面；不为这些值重复建立摄影缓存。
-	const FString Key = FString::Printf(TEXT("%s:%d:%.9g:%.9g"), *Descriptor.Definition->GetPathName(),
-		Descriptor.Level, Board->CellSize, Board->LayerHeight);
+	// 屋面与柱身会读本张卡的色号。数字和箔光由卡面合成，仍可共享同一张模型照片。
+	const FString Key = FString::Printf(TEXT("%s:%d:%d:%.9g:%.9g"), *Descriptor.Definition->GetPathName(),
+		Descriptor.Level, static_cast<int32>(Descriptor.Color), Board->CellSize, Board->LayerHeight);
 	if (const TObjectPtr<UCastleCardPortrait>* Found = Portraits.Find(Key))
 	{
 		return Found->Get();

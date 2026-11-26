@@ -8,6 +8,7 @@
 #include "CastleMassFragments.h"
 #include "CastleMassProcessors.h"
 #include "CastleMassUnitSubsystem.h"
+#include "Enemies/Flight/CastleMassFlightTargeting.h"
 #include "Engine/World.h"
 #include "MassCommonFragments.h"
 #include "MassCommonTypes.h"
@@ -30,8 +31,9 @@ void UCastleMassEnemyLaserAttackProcessor::ConfigureQueries(const TSharedRef<FMa
 {
 	Query.AddTagRequirement<FCastleMassEnemyTag>(EMassFragmentPresence::All);
 	Query.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadWrite);
-	Query.AddRequirement<FMassVelocityFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassMoveTargetFragment>(EMassFragmentAccess::ReadWrite);
+	Query.AddRequirement<FCastleMassFlightIntentFragment>(EMassFragmentAccess::ReadWrite);
+	Query.AddRequirement<FAgentRadiusFragment>(EMassFragmentAccess::ReadOnly);
 	Query.AddRequirement<FCastleMassUnitFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassSpawnBurstFragment>(EMassFragmentAccess::None, EMassFragmentPresence::None);
 	Query.AddRequirement<FCastleMassEnemyLaserAttackFragment>(EMassFragmentAccess::ReadWrite);
@@ -60,8 +62,9 @@ void UCastleMassEnemyLaserAttackProcessor::Execute(FMassEntityManager& EntityMan
 	{
 		const float DeltaTime = FMath::Max(0.0f, Chunk.GetDeltaTimeSeconds());
 		const auto Transforms = Chunk.GetMutableFragmentView<FTransformFragment>();
-		const auto Velocities = Chunk.GetMutableFragmentView<FMassVelocityFragment>();
 		const auto Targets = Chunk.GetMutableFragmentView<FCastleMassMoveTargetFragment>();
+		const auto FlightIntents = Chunk.GetMutableFragmentView<FCastleMassFlightIntentFragment>();
+		const auto Radii = Chunk.GetFragmentView<FAgentRadiusFragment>();
 		const auto Units = Chunk.GetMutableFragmentView<FCastleMassUnitFragment>();
 		const auto Attacks = Chunk.GetMutableFragmentView<FCastleMassEnemyLaserAttackFragment>();
 		const auto Animations = Chunk.GetMutableFragmentView<FCastleMassAttackAnimationFragment>();
@@ -88,25 +91,44 @@ void UCastleMassEnemyLaserAttackProcessor::Execute(FMassEntityManager& EntityMan
 				bAnyMissingTarget = true;
 				Attack.bInAttackRange = false;
 				Attack.AttackCooldown = 0.0;
-				Targets[It] = FCastleMassMoveTargetFragment();
-				Velocities[It].Value = FVector::ZeroVector;
+				CastleMassFlightTargeting::SetStopIntent(Targets[It], FlightIntents[It]);
 				if (!Animations.IsEmpty()) { Animations[It].bInAttackState = false; }
 				continue;
 			}
-			Attack.bInAttackRange = FVector::DistSquared(Origin, TargetLocation) <= FMath::Square(static_cast<double>(Attack.AttackRange));
+			FVector AttackPoint = TargetLocation;
+			if (bTowerTarget)
+			{
+				const float EffectiveRadius = Radii[It].Radius * Transform.GetScale3D().GetAbsMax();
+				const float IdealStandOff = FMath::Max(EffectiveRadius + 20.0f, Attack.AttackRange - 40.0f);
+				float SurfaceDistance = 0.0f;
+				if (!CastleMassFlightTargeting::SetMainTowerTarget(Main, Transform, Radii[It].Radius,
+					Attack.AttackRange, IdealStandOff, Chunk.GetEntity(It).Index, Targets[It],
+					FlightIntents[It], AttackPoint, SurfaceDistance))
+				{
+					bAnyMissingTarget = true;
+					Attack.bInAttackRange = false;
+					Attack.AttackCooldown = 0.0;
+					CastleMassFlightTargeting::SetStopIntent(Targets[It], FlightIntents[It]);
+					if (!Animations.IsEmpty()) { Animations[It].bInAttackState = false; }
+					continue;
+				}
+				Attack.bInAttackRange = FlightIntents[It].bInAttackRange;
+			}
+			else
+			{
+				Attack.bInAttackRange = FVector::DistSquared(Origin, TargetLocation)
+					<= FMath::Square(static_cast<double>(Attack.AttackRange));
+				CastleMassFlightTargeting::SetAlternateTarget(TargetLocation, Attack.AttackRange,
+					Attack.bInAttackRange, Targets[It], FlightIntents[It]);
+			}
 			if (!Attack.bInAttackRange)
 			{
 				// 再次进入射程视为新的引导，首次伤害立即发生。
 				Attack.AttackCooldown = 0.0;
-				Targets[It].Target = TargetLocation;
-				Targets[It].DesiredVelocity = FVector::ZeroVector;
-				Targets[It].bHasTarget = true;
 				if (!Animations.IsEmpty()) { Animations[It].bInAttackState = false; }
 				continue;
 			}
-			Targets[It] = FCastleMassMoveTargetFragment();
-			Velocities[It].Value = FVector::ZeroVector;
-			FVector Facing = TargetLocation - Origin;
+			FVector Facing = AttackPoint - Origin;
 			Facing.Z = 0.0f;
 			if (!Facing.IsNearlyZero()) { Transform.SetRotation(Facing.Rotation().Quaternion()); }
 			if (!Animations.IsEmpty()) { Animations[It].bInAttackState = true; }
@@ -117,7 +139,7 @@ void UCastleMassEnemyLaserAttackProcessor::Execute(FMassEntityManager& EntityMan
 				continue;
 			}
 			Attack.BeamStart = Muzzle;
-			Attack.BeamEnd = TargetLocation;
+			Attack.BeamEnd = AttackPoint;
 
 			Attack.AttackCooldown = FMath::Max(0.0, Attack.AttackCooldown - DeltaTime);
 			if (Attack.AttackCooldown > 0.0f) { continue; }

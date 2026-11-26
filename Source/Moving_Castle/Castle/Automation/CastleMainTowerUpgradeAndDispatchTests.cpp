@@ -233,6 +233,7 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 	const FIntVector Center = Board->GetBoardCenterCoordinate();
 	auto* Health = Board->MainTowerActor->FindComponentByClass<UCastleMainTowerComponent>();
 	if (!TestNotNull(TEXT("主塔生命组件已登记"), Health)) { return false; }
+	TestEqual(TEXT("三层主塔战斗几何使用 1680 cm 实际塔高"), Health->TowerShaftHeight, 3.0f * Board->LayerHeight);
 	auto* LiftPresentation = Board->MainTowerActor->FindComponentByClass<UCastleMainTowerBalloonComponent>();
 	if (!TestNotNull(TEXT("主塔吊挂组件已登记"), LiftPresentation)) { return false; }
 	USceneComponent* Crown = nullptr;
@@ -290,6 +291,16 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 		}
 		if (Layers != 3 && !TestTrue(TEXT("扩层提交成功"), Board->ExpandMainTowerLayers(Layers, Reason))) { return false; }
 		TestEqual(TEXT("棋盘发布实际层数"), Board->GetUnlockedLayerCount(), Layers);
+		TestEqual(TEXT("扩层同步更新主塔战斗几何高度"), Health->TowerShaftHeight, static_cast<float>(Layers) * Board->LayerHeight);
+		FCastleTowerPrism TowerPrism;
+		FString TowerGeometryFailure;
+		if (!TestTrue(TEXT("扩层后可读取当前真实塔身几何"), Health->GetTowerShaftPrism(TowerPrism, TowerGeometryFailure)))
+		{
+			AddError(TowerGeometryFailure);
+			return false;
+		}
+		TestTrue(TEXT("扩层几何高度与开放层数相符"),
+			FMath::IsNearlyEqual(TowerPrism.HalfSize.Z, Layers * Board->LayerHeight * FMath::Abs(Health->GetOwner()->GetActorScale3D().Z)));
 		for (const auto& Room : PlacedRooms)
 		{
 			TestTrue(TEXT("旧层房间保持原实例与占用"), Board->GetBuildingAt(Room.Key) == Room.Value && IsValid(Room.Value));

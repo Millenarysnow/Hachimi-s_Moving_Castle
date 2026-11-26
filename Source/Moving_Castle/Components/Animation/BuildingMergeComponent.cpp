@@ -162,6 +162,8 @@ bool UBuildingMergeComponent::CreateVisual(FMergePart& Part, UStaticMeshComponen
 		Visual->SetMaterial(Index, Template->GetMaterial(Index));
 	}
 	Visual->SetCastShadow(Template->CastShadow);
+	// 合并和 PCG 局部动画的飞行件按目标模板的整套实例材质参数显示。
+	Visual->SetCustomPrimitiveDataFloatArray(0, Template->GetCustomPrimitiveData().Data);
 	Visual->SetReceivesDecals(Template->bReceivesDecals);
 	Visual->SetVisibility(false, false);
 	Visual->RegisterComponent();
@@ -220,7 +222,8 @@ bool UBuildingMergeComponent::BuildPlan(const TArray<FPartSnapshot>& Sources,
 			const bool bSamePose = FVector::Distance(StartCenter, Target.Center) <= KeepPositionTolerance
 				&& StartRotation.AngularDistance(Target.WorldTransform.GetRotation()) <= FMath::DegreesToRadians(0.2)
 				&& (Source->LocalSize * StartScale).Equals(Target.LocalSize * Target.WorldTransform.GetScale3D(), KeepPositionTolerance)
-				&& Source->ShapeIdentity == Target.ShapeIdentity && bSameMaterials;
+				&& Source->ShapeIdentity == Target.ShapeIdentity && bSameMaterials
+				&& Source->Mesh->GetCustomPrimitiveData().Data == Target.Mesh->GetCustomPrimitiveData().Data;
 			if (!Source->bIncoming && !Source->bPendingArrival && bSamePose)
 			{
 				Part.Motion = EPartMotion::Keep;
@@ -343,6 +346,8 @@ AActor* UBuildingMergeComponent::CreateVisualSnapshot(FString& Error) const
 		Copy->ComponentTags = Snapshot.Mesh->ComponentTags;
 		for (int32 Index = 0; Index < Snapshot.Mesh->GetNumMaterials(); ++Index) { Copy->SetMaterial(Index, Snapshot.Mesh->GetMaterial(Index)); }
 		Copy->SetCastShadow(Snapshot.Mesh->CastShadow);
+		// 旧 Actor 会在换代时销毁，快照要独立持有其颜色直到动画结束。
+		Copy->SetCustomPrimitiveDataFloatArray(0, Snapshot.Mesh->GetCustomPrimitiveData().Data);
 		Carrier->AddInstanceComponent(Copy);
 		Copy->RegisterComponent();
 		Copy->SetWorldTransform(Snapshot.WorldTransform);

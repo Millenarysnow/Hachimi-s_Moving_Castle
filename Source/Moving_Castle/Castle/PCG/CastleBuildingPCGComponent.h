@@ -9,6 +9,7 @@ class ACastleBoard;
 class UStaticMeshComponent;
 class UStaticMesh;
 class UMaterialInterface;
+class FCastleMenuModelBuilder;
 
 /** 从显式配置的变体 Actor 模板抓取的静态美术件；不把模板 Actor 留在关卡。 */
 struct FCastlePCGMeshTemplate
@@ -88,6 +89,8 @@ public:
 	void UpdateAppliedKey();
 	/** 只返回当前已激活的梯子，不返回等待动画的临时美术件。 */
 	void GetLadders(TArray<FCastleActiveLadderConnection>& Out) const;
+	/** 只采集语义系统已提交的战斗美术目标件，合并和飞入副本均不在这两份集合中。 */
+	bool CollectMenuParts(FCastleMenuModelBuilder& Builder, const FTransform& TowerFrame, FString& Error) const;
 	const TArray<FCastlePCGPartAnnotation>& GetOriginalParts() const { return OriginalParts; }
 	const FString& GetAppliedKey() const { return AppliedKey; }
 	const FString& GetAppliedGameplayKey() const { return AppliedGameplayKey; }

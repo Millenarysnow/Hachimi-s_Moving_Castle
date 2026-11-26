@@ -125,9 +125,12 @@ namespace CastleWaveCombatTests
 		Overrides.DamageMultiplier = 1.5f;
 		Overrides.AttackIntervalMultiplier = 2.0f;
 		Overrides.ScaleMultiplier = 1.5f;
-		const FTransform SpawnTransform(FQuat::Identity, FVector(40, 0, 0), FVector(1.25));
+		int32 SpawnIndex = 0;
 		const auto Spawn = [&](const FCastleMassEnemyAttributeOverrides& Attributes, TArray<FCastleMassUnitHandle>& Out)
 		{
+			// 三个实例沿塔外同一射线隔开，避免测试移速倍率时引入主塔投影与 Boids 分离力。
+			const FVector SpawnLocation(-600.0f - static_cast<float>(SpawnIndex++) * 1200.0f, 0.0f, 50.0f);
+			const FTransform SpawnTransform(FQuat::Identity, SpawnLocation, FVector(1.25));
 			if (Scope.Units().SpawnEnemies(Config, {SpawnTransform}, Attributes, Out, Failure) && Out.Num() == 1) { return true; }
 			Test.AddError(FString::Printf(TEXT("%s：生成失败或数量不符。%s"), Path, *Failure.ToString()));
 			return false;
@@ -164,7 +167,7 @@ namespace CastleWaveCombatTests
 		Test.TestEqual(TEXT("共享模板攻击间隔未变"), AfterState->AttackInterval, BeforeState->AttackInterval);
 
 		Manager.GetFragmentDataChecked<FCastleMassUnitFragment>(Elite[0].Entity).SupportMovementMultiplier = 0.5f;
-		Scope.Units().MoveUnitsTo({Before[0], Elite[0], After[0]}, FVector(100000, 0, 0));
+		Scope.Units().MoveUnitsTo({Before[0], Elite[0], After[0]}, FVector(-100000, 0, 50));
 		Scope.Step<UCastleMassMovementProcessor>(2.0f);
 		Scope.Units().GetUnitSnapshot(Before[0], BaseSnapshot);
 		Scope.Units().GetUnitSnapshot(Elite[0], EliteSnapshot);
@@ -176,7 +179,7 @@ namespace CastleWaveCombatTests
 		// 将所有实例置于攻击距离内；经过实际攻击处理器和远程安全发射边界后读取冷却。
 		for (const FMassEntityHandle Entity : {Before[0].Entity, Elite[0].Entity, After[0].Entity})
 		{
-			Manager.GetFragmentDataChecked<FTransformFragment>(Entity).GetMutableTransform().SetLocation(FVector(40, 0, 0));
+			Manager.GetFragmentDataChecked<FTransformFragment>(Entity).GetMutableTransform().SetLocation(FVector(350, 0, 0));
 		}
 		Test.TestTrue(TEXT("本世界可接受攻速 0.5"), Scope.Units().SetGlobalEnemyAttackSpeedMultiplier(0.5f));
 		Scope.Step<TProcessor>(0.0f);

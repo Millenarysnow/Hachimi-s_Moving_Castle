@@ -1,4 +1,6 @@
 #include "CastleBuildingPCGComponent.h"
+#include "Castle/MainMenu/CastleMenuModel.h"
+#include "Castle/Appearance/CastleBuildingColors.h"
 
 #include "CastlePCGSemantics.h"
 #include "CastleBoard.h"
@@ -245,6 +247,8 @@ void UCastleBuildingPCGComponent::ApplyVisual(const ACastleBoard& Board, const F
 		if (!Visual.Group.IsNone()) { Mesh->ComponentTags.Add(FName(TEXT("CastlePCGGroup=") + Visual.Group.ToString())); }
 		Mesh->SetStaticMesh(Visual.Mesh);
 		for (int32 M = 0; M < Visual.Materials.Num(); ++M) { Mesh->SetMaterial(M, Visual.Materials[M]); }
+		// 动态墙和屋角由当前 Actor 持有，在注册前应用同一张卡的属性色。
+		CastleBuildingColors::Apply(*Mesh, Building->GetBuildingColor(), Building->GetBuildingType(), Visual.Node, Visual.Group);
 		Mesh->SetRelativeTransform(Visual.Relative);
 		Building->AddInstanceComponent(Mesh);
 		Mesh->RegisterComponent();
@@ -271,6 +275,21 @@ void UCastleBuildingPCGComponent::ApplyVisual(const ACastleBoard& Board, const F
 void UCastleBuildingPCGComponent::UpdateAppliedKey()
 {
 	AppliedKey = AppliedGameplayKey + TEXT("|") + AppliedVisualKey;
+}
+
+bool UCastleBuildingPCGComponent::CollectMenuParts(FCastleMenuModelBuilder& Builder, const FTransform& TowerFrame, FString& Error) const
+{
+	const auto* Building = CastChecked<ACastleBuildingBase>(GetOwner());
+	auto AddVisible = [&](USceneComponent* Component)
+	{
+		auto* Part = Cast<UStaticMeshComponent>(Component);
+		if (!IsValid(Part)) { Error = GetPathName() + TEXT(" 包含无效的目标网格组件。"); return false; }
+		// 语义隐藏的原件属于已拆除的墙面。动画临时隐藏的目标件仍按稳定终态显示。
+		return !Building->BuildingMerge->GetStableVisibility(Part) || Builder.AddComponent(*Part, TowerFrame, Error);
+	};
+	for (const FCastlePCGPartAnnotation& Original : OriginalParts) { if (!AddVisible(Original.Component)) { return false; } }
+	for (USceneComponent* Dynamic : DynamicVisuals) { if (!AddVisible(Dynamic)) { return false; } }
+	return true;
 }
 
 void UCastleBuildingPCGComponent::GetLadders(TArray<FCastleActiveLadderConnection>& Out) const

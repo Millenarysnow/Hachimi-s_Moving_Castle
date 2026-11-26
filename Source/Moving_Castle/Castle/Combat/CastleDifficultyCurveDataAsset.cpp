@@ -93,23 +93,23 @@ bool UCastleDifficultyCurveDataAsset::ValidateConfiguration(FText& OutFailureRea
 	return true;
 }
 
-bool UCastleDifficultyCurveDataAsset::BuildBattlePlan(const ECastleBattleKind Kind, const int32 KindOrdinal,
+bool UCastleDifficultyCurveDataAsset::BuildBattlePlan(const ECastleBattleKind Kind, const int32 TableOrdinal,
 	TArray<FCastleCombatWaveDefinition>& OutWaves, FText& OutFailureReason) const
 {
 	OutWaves.Reset();
 	if (!ValidateConfiguration(OutFailureReason)) { return false; }
-	if ((Kind != ECastleBattleKind::Normal && Kind != ECastleBattleKind::Elite) || KindOrdinal < 1)
+	if ((Kind != ECastleBattleKind::Normal && Kind != ECastleBattleKind::Elite) || TableOrdinal < 1)
 	{
-		OutFailureReason = FText::FromString(FString::Printf(TEXT("难度曲线 %s：Kind/KindOrdinal 无效，序号必须从 1 开始。"), *GetPathName()));
+		OutFailureReason = FText::FromString(FString::Printf(TEXT("难度曲线 %s：战斗类型无效或表项序号小于 1。"), *GetPathName()));
 		return false;
 	}
 	const auto& Table = Kind == ECastleBattleKind::Normal ? NormalBattles : EliteBattles;
-	const int32 BaseIndex = KindOrdinal <= Table.Num() ? KindOrdinal - 1 : Table.Num() - 1;
+	const int32 BaseIndex = TableOrdinal <= Table.Num() ? TableOrdinal - 1 : Table.Num() - 1;
 	TArray<FCastleCombatWaveDefinition> Plan = Table[BaseIndex].Waves;
-	if (KindOrdinal > Table.Num())
+	if (TableOrdinal > Table.Num())
 	{
 		// 始终从末场原值外推突袭数量；虫群另外按连续波次曲线计算，时间与覆写从原表复制。
-		const double Scale = 1.0 + static_cast<double>(CountGrowthPerOrdinal) * (KindOrdinal - Table.Num());
+		const double Scale = 1.0 + static_cast<double>(CountGrowthPerOrdinal) * (TableOrdinal - Table.Num());
 		for (int32 WaveIndex = 0; WaveIndex < Plan.Num(); ++WaveIndex)
 		{
 			auto& Raids = Plan[WaveIndex].RaidEntries;
@@ -119,9 +119,9 @@ bool UCastleDifficultyCurveDataAsset::BuildBattlePlan(const ECastleBattleKind Ki
 				if (!FMath::IsFinite(Count) || Count > MAX_int32)
 				{
 					OutFailureReason = FText::FromString(FString::Printf(
-						TEXT("难度曲线 %s：%s[%d].Waves[%d].RaidEntries[%d].Count 外推溢出，KindOrdinal=%d。"),
+						TEXT("难度曲线 %s：%s[%d].Waves[%d].RaidEntries[%d].Count 外推溢出，TableOrdinal=%d。"),
 						*GetPathName(), Kind == ECastleBattleKind::Normal ? TEXT("NormalBattles") : TEXT("EliteBattles"),
-						BaseIndex, WaveIndex, RaidIndex, KindOrdinal));
+						BaseIndex, WaveIndex, RaidIndex, TableOrdinal));
 					return false;
 				}
 				Raids[RaidIndex].Count = static_cast<int32>(Count);

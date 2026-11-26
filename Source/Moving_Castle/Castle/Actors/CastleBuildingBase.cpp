@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleBuildingBase.h"
+#include "Castle/Appearance/CastleBuildingColors.h"
 #include "Castle/Items/CastleBadgeSubsystem.h"
 
 #include "CastleBuildingDefinition.h"
@@ -251,6 +252,38 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 
 	if (HachimisLayout)
 	{
+		// 蓝图原件的索引由导入器写入。场外摄影也从正式布局读节点与分组，因此不依赖棋盘 PCG。
+		TBitArray<> Seen(false, HachimisLayout->Parts.Num());
+		for (UStaticMeshComponent* Component : StaticMeshes)
+		{
+			if (Component->CreationMethod == EComponentCreationMethod::SimpleConstructionScript)
+			{
+				for (FName Tag : Component->ComponentTags)
+				{
+					FString IndexText = Tag.ToString();
+					if (IndexText.RemoveFromStart(TEXT("CastleV4Part=")))
+					{
+						int32 Index;
+						if (!LexTryParseString(Index, *IndexText) || !HachimisLayout->Parts.IsValidIndex(Index) || Seen[Index]
+							|| !Component->GetStaticMesh() || Component->GetStaticMesh() != HachimisLayout->Parts[Index].Mesh)
+						{
+							OutFailureReason = FText::FromString(Component->GetPathName() + TEXT(" 配色索引或源网格与布局不符。"));
+							UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
+							return false;
+						}
+						Seen[Index] = true;
+						const auto& Part = HachimisLayout->Parts[Index];
+						CastleBuildingColors::Apply(*Component, Color, BuildingType, Part.Node, Part.Group);
+					}
+				}
+			}
+		}
+		if (Seen.Contains(false))
+		{
+			OutFailureReason = FText::FromString(HachimisLayout->GetPathName() + TEXT(" 缺少作者组件 ") + HachimisLayout->Parts[Seen.Find(false)].Node.ToString());
+			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
+			return false;
+		}
 		// V4 的瓦、板、榫等独立节点密度更高，仍在各等级原飞入窗口内依次发射。
 		// 窗口按原造型节点数和既有每件间隔计算，飞行时长及完成回调仍由原组件负责。
 		static constexpr int32 LegacyVisualCounts[] = {9, 18, 29, 71, 71};
@@ -263,6 +296,18 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 		const ACastleBuildingBase* Template = GetClass()->GetDefaultObject<ACastleBuildingBase>();
 		AssemblyFlight->LaunchInterval = Template->AssemblyFlight->LaunchInterval * (LegacyVisualCounts[BuildingLevel - 1] - 1)
 			/ (HachimisLayout->Parts.Num() - 1);
+	}
+	else if (BuildingType == ECastleBuildingType::SpeedRoom)
+	{
+		// 加速房的美术为蓝图自己的方块外壳。显式引用该组件，避免把功能碰撞或数字底牌一起染色。
+		UStaticMeshComponent* Shell = FindObjectFast<UStaticMeshComponent>(this, TEXT("StaticMesh"));
+		if (!Shell || !Shell->GetStaticMesh() || Shell->GetNumMaterials() != 1)
+		{
+			OutFailureReason = FText::FromString(GetPathName() + TEXT(" 缺少单槽的加速房外壳 StaticMesh。"));
+			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
+			return false;
+		}
+		CastleBuildingColors::Apply(*Shell, Color, BuildingType, NAME_None, TEXT("SpeedRoomShell"));
 	}
 
 	// 已启用的美术碰撞只提供 Visibility 查询；作者明确关闭碰撞的纯表现组件保持无碰撞。

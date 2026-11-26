@@ -413,9 +413,11 @@ bool UCastleMassUnitSubsystem::SpawnEnemyProjectiles(UMassEntityConfigAsset* Con
 		const bool bShield = Spawn.ShieldId != 0;
 		const bool bBalloon = Spawn.BalloonId != 0;
 		const bool bTower = Spawn.TargetTower.IsValid();
-		if (Spawn.Origin.ContainsNaN() || !FMath::IsFinite(Spawn.Damage) || Spawn.Damage < 0.0f
+		if (Spawn.Origin.ContainsNaN() || (Spawn.bHasTargetLocation && Spawn.TargetLocation.ContainsNaN())
+			|| !FMath::IsFinite(Spawn.Damage) || Spawn.Damage < 0.0f
 			|| Spawn.Attacker.World.Get() != GetWorld() || !Spawn.Attacker.Entity.IsSet()
 			|| static_cast<int32>(bShield) + static_cast<int32>(bBalloon) + static_cast<int32>(bTower) != 1
+			|| (bTower && !Spawn.bHasTargetLocation)
 			|| (bTower && Spawn.TargetTower->GetWorld() != GetWorld()))
 		{
 			return Reject(TEXT("发射点、非负伤害、攻击者世界或互斥锁定目标无效，整批拒绝。"));
