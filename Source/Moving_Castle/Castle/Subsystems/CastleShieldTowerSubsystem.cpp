@@ -2,6 +2,7 @@
 #include "CastleBuildingBase.h"
 #include "Castle/Support/CastleSupportTowerSubsystem.h"
 #include "Components/ActorComponent.h"
+#include "Items/CastleBadgeSubsystem.h"
 
 #include "CastleMassFragments.h"
 #include "CastleMassUnitSubsystem.h"
@@ -17,9 +18,31 @@ bool UCastleShieldTowerSubsystem::DoesSupportWorldType(EWorldType::Type WorldTyp
 
 bool UCastleShieldTowerSubsystem::TryConsumeStrongestActiveShield(int64& OutConsumedBlocks)
 {
-	// Phase 1B 在确定可消费的最大护盾后同步更新注册表和表现。当前不写次数，也不广播。
-	UE_LOG(LogMoving_Castle, Error, TEXT("护盾子系统 %s 无法耗尽护盾：气球扣护盾入口尚未实现（Phase 0）。"), *GetPathName());
-	return false;
+	OutConsumedBlocks = 0;
+	if (!IsInGameThread())
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("护盾子系统 %s 只能在游戏线程耗尽护盾。"), *GetPathName());
+		return false;
+	}
+
+	uint64 ChosenId = 0;
+	UObject* ChosenOwner = nullptr;
+	for (const auto& Pair : ActiveShields)
+	{
+		const FActiveShield& Shield = Pair.Value;
+		if (!Shield.Owner.IsValid() || Shield.RemainingBlocks <= 0) { continue; }
+		// 剩余次数并列时选较早登记的激活 ID，行为与既有最近护盾查询一致。
+		if (Shield.RemainingBlocks > OutConsumedBlocks || (Shield.RemainingBlocks == OutConsumedBlocks && Pair.Key < ChosenId))
+		{
+			ChosenId = Pair.Key;
+			ChosenOwner = Shield.Owner.Get();
+			OutConsumedBlocks = Shield.RemainingBlocks;
+		}
+	}
+	if (ChosenId == 0) { return false; }
+	ActiveShields.Remove(ChosenId);
+	OnShieldStateChanged.Broadcast(ChosenOwner, 0);
+	return true;
 }
 
 uint64 UCastleShieldTowerSubsystem::UpsertActiveShield(UObject* OwnerKey, const FVector& WorldLocation,
@@ -144,18 +167,26 @@ bool UCastleShieldTowerSubsystem::ApplyAttackToShield(uint64 ShieldId, const FCa
 	UObject* Owner = Shield->Owner.Get();
 	float ReflectDamage = Shield->ReflectDamage;
 	// 红色为空投落地时入圈的塔提供攻击加成；护盾挡击次数不受影响，仅反伤随攻击力变化。
-	if (const auto* Effect = Cast<UActorComponent>(Owner))
+	const auto* Effect = Cast<UActorComponent>(Owner);
+	if (const auto* Tower = Cast<ACastleBuildingBase>(Effect ? Effect->GetOwner() : Owner))
 	{
-		if (const auto* Tower = Cast<ACastleBuildingBase>(Effect->GetOwner()))
+		const auto* Support = GetWorld()->GetSubsystem<UCastleSupportTowerSubsystem>();
+		if (!Support)
 		{
-			const auto* Support = GetWorld()->GetSubsystem<UCastleSupportTowerSubsystem>();
-			if (!Support)
-			{
-				UE_LOG(LogMoving_Castle, Error, TEXT("盾塔 %s 受击结算失败：缺少支援塔子系统。"), *Tower->GetPathName());
-				return false;
-			}
-			ReflectDamage *= Support->GetTowerDamageMultiplier(*Tower);
+			UE_LOG(LogMoving_Castle, Error, TEXT("盾塔 %s 受击结算失败：缺少支援塔子系统。"), *Tower->GetPathName());
+			return false;
 		}
+		ReflectDamage *= Support->GetTowerDamageMultiplier(*Tower);
+	}
+	else if (const auto* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld()))
+	{
+		// 注册接口也支持非建筑 OwnerKey；这些盾只受全局火力徽章影响，没有建筑专属空投增益。
+		ReflectDamage = static_cast<float>(ReflectDamage * Badges->GetFriendlyDamageMultiplier());
+	}
+	if (!FMath::IsFinite(ReflectDamage))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("护盾 %s 的有效反伤为非有限数，拒绝本次挡击。"), *GetPathNameSafe(Owner));
+		return false;
 	}
 	OutRemainingBlocksAfterHit = --Shield->RemainingBlocks;
 	// 先完成注册表变更，再广播，委托里即使重启护盾也不会被旧命中的注销覆盖。

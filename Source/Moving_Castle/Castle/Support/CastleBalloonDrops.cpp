@@ -10,6 +10,7 @@
 #include "Components/Building/Effects/Attack/CastleCannonTowerAttackEffectComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
+#include "Items/CastleBadgeSubsystem.h"
 #include "Moving_Castle.h"
 
 namespace
@@ -31,13 +32,12 @@ namespace
 }
 
 bool UCastleSupportTowerSubsystem::LaunchBalloon(ACastleBuildingBase& Source, ACastleBoard& Board,
-	const UCastleSupportTowerData& Data)
+	const UCastleSupportTowerData& Data, const int64 Number)
 {
 	FBalloon Flight;
 	Flight.Source = &Source;
 	Flight.Board = &Board;
 	Flight.Level = Source.GetBuildingLevel();
-	const int64 Number = Source.GetEffectiveBuildingNumber();
 	// 落地减速直接使用有效数字百分比，先拒绝会产生零或负速度的配置。
 	if (Number < 1 || Number >= 100)
 	{
@@ -112,16 +112,34 @@ bool UCastleSupportTowerSubsystem::DamageBalloon(const uint64 Id, const float Da
 		return false;
 	}
 	Flight->Health -= Damage;
-	return Flight->Health > 0.0f || PopBalloon(Id);
+	return Flight->Health > 0.0f || PopBalloonInternal(Id, false);
 }
 
 bool UCastleSupportTowerSubsystem::PopBalloon(const uint64 Id)
+{
+	return PopBalloonInternal(Id, true);
+}
+
+bool UCastleSupportTowerSubsystem::PopBalloonInternal(const uint64 Id, const bool bPlayerPopped)
 {
 	FBalloon* Flight = Balloons.Find(Id);
 	if (!IsInGameThread() || !Flight || Flight->bCargoReleased || !Flight->Visual.IsValid() || !Flight->Source.IsValid())
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("气球 %llu 已失效或已破裂，无法再次投放（世界 %s）。"), Id, *GetPathNameSafe(GetWorld()));
 		return false;
+	}
+	const auto* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
+	const double ExtraCells = bPlayerPopped && Badges ? Badges->GetStringGloveExtraCells() : 0.0;
+	if (ExtraCells > 0.0)
+	{
+		const ACastleBoard* Board = Flight->Board.Get();
+		if (!Board || !FMath::IsFinite(Board->CellSize) || Board->CellSize <= 0.0f)
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("空投塔 %s 气球 %llu 无法应用摘绳手套：棋盘 %s 或格宽无效。"),
+				*Flight->Source->GetPathName(), Id, *GetPathNameSafe(Board));
+			return false;
+		}
+		Flight->ExtraImpactRadius = ExtraCells * Board->CellSize;
 	}
 	// 即便由 Mass 近战命中，同步撤销气球身份；落地伤害和人员生成只在世界 Tick 处理。
 	Flight->bCargoReleased = true;
@@ -203,13 +221,15 @@ bool UCastleSupportTowerSubsystem::ApplyLanding(const FBalloon& Flight, FMassEnt
 	const auto& Data = *Source.GetBuildingDefinition()->SupportData;
 	UCastleMassUnitSubsystem* Units = GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>();
 	const double RadiusSquared = FMath::Square(static_cast<double>(Data.LandingRadius));
+	const double ImpactRadius = Data.LandingRadius + Flight.ExtraImpactRadius;
+	const double ImpactRadiusSquared = FMath::Square(ImpactRadius);
 	const double Now = GetWorld()->GetTimeSeconds();
 	const float Damage = Flight.Number * GetTowerDamageMultiplier(Source);
 	const float SpeedAfterSlow = 1.0f - Flight.Number * 0.01f;
 	int32 EnemiesHit = 0;
 	for (FCastleSupportUnit& Enemy : Enemies)
 	{
-		if (Enemy.Health <= 0.0f || FVector::DistSquared(Flight.Landing, Enemy.Location) > RadiusSquared) { continue; }
+		if (Enemy.Health <= 0.0f || FVector::DistSquared(Flight.Landing, Enemy.Location) > ImpactRadiusSquared) { continue; }
 		if (!Units->ApplyImmediateDamageToEnemy(Enemy.Handle, Damage)) { return false; }
 		Enemy.Health = FMath::Max(0.0f, Enemy.Health - Damage);
 		++EnemiesHit;
@@ -217,7 +237,7 @@ bool UCastleSupportTowerSubsystem::ApplyLanding(const FBalloon& Flight, FMassEnt
 	}
 	UE_LOG(LogMoving_Castle, Display, TEXT("空投塔 Lv%d %s 落地：命中 %d 个敌人，单体伤害 %.2f、减速 %d%%，数字和 %d。"),
 		Flight.Level, *Source.GetName(), EnemiesHit, Damage, Flight.Number, Flight.Sum);
-	DrawDebugCircle(GetWorld(), Flight.Landing + FVector(0.0, 0.0, 35.0), Data.LandingRadius, 40,
+	DrawDebugCircle(GetWorld(), Flight.Landing + FVector(0.0, 0.0, 35.0), ImpactRadius, 40,
 		FlightTint(Flight.Color).ToFColor(true), false, 2.0f, 0, 12.0f, FVector::ForwardVector, FVector::RightVector, false);
 	if (Flight.Level == 1) { return true; }
 	const float PercentMultiplier = 1.0f + Flight.Sum * 0.01f;
@@ -297,6 +317,8 @@ bool UCastleSupportTowerSubsystem::FireAdjacentAttacks(const FBalloon& Flight, c
 		}
 	}
 	UCastleMassUnitSubsystem* Units = GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>();
+	const auto* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
+	const double Firepower = Badges ? Badges->GetFriendlyDamageMultiplier() : 1.0;
 	for (ACastleBuildingBase* Neighbor : Neighbors)
 	{
 		const ECastleBuildingType Type = Neighbor->GetBuildingType();
@@ -328,7 +350,7 @@ bool UCastleSupportTowerSubsystem::FireAdjacentAttacks(const FBalloon& Flight, c
 		Shot.Target = Target->Handle;
 		Shot.Origin = Muzzle;
 		// 不走原建筑触发或弹药库联动，避免连锁及总伤害串入；伤害精确取本邻居卡面的一半。
-		Shot.Damage = Neighbor->GetEffectiveBuildingNumber() / 2;
+		Shot.Damage = static_cast<float>((Neighbor->GetEffectiveBuildingNumber() / 2) * Firepower);
 		TArray<FCastleMassUnitHandle> Projectiles;
 		FText Reason;
 		if (!Units->SpawnHomingProjectiles(Data->ProjectileConfiguration, {Shot}, Projectiles, Reason))

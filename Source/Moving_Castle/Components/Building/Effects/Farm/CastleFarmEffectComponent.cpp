@@ -12,12 +12,13 @@ bool UCastleFarmEffectComponent::ExecuteEffect(const FCastleBuildingTriggerConte
 {
 	ACastleBuildingBase* Farm = CastChecked<ACastleBuildingBase>(GetOwner());
 	const int32 Level = Farm->GetBuildingLevel();
-	if (Level < 1 || Level > 5 || Farm->GetEffectiveBuildingNumber() <= 0)
+	const int64 TriggerNumber = GetTriggeredBuildingNumber(Context);
+	if (Level < 1 || Level > 5 || TriggerNumber <= 0)
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("农田 %s 结算失败：等级或自身数字无效。"), *Farm->GetPathName());
 		return false;
 	}
-	int64 Total = Farm->GetEffectiveBuildingNumber();
+	int64 Total = TriggerNumber;
 	if (Level > 1)
 	{
 		ACastleBoard* Board = ACastleBoard::FindBoardForBuilding(Farm);
@@ -37,7 +38,7 @@ bool UCastleFarmEffectComponent::ExecuteEffect(const FCastleBuildingTriggerConte
 		TArray<ACastleBuildingBase*> Connected;
 		if (!Board->GetConnectedBuildings(Farm, Candidates, Connected)) { return false; }
 		Total = 0;
-		for (const ACastleBuildingBase* Other : Connected) { Total += Other->GetEffectiveBuildingNumber(); }
+		for (const ACastleBuildingBase* Other : Connected) { Total += Other == Farm ? TriggerNumber : Other->GetEffectiveBuildingNumber(); }
 	}
 	if (Total <= 0 || Total > MAX_int32)
 	{
@@ -57,14 +58,14 @@ bool UCastleFarmEffectComponent::ExecuteEffect(const FCastleBuildingTriggerConte
 	}
 	FText Reason;
 	const int32 Gold = static_cast<int32>(Total);
-	if (!Economy->CanAddGold(Gold, Reason))
+	if (!Economy->CanAddGameplayGold(Gold, Reason))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("农田 %s 无法入账，账户=%s，原因=%s。"), *Farm->GetPathName(), *Economy->GetPathName(), *Reason.ToString());
 		return false;
 	}
 	UCastleMassUnitSubsystem* Units = nullptr;
 	const bool bGrantBuff = Level == 5 && Context.Source == ECastleBuildingTriggerSource::NPCEntry;
-	const float BonusDelta = 0.1f * Farm->GetEffectiveBuildingNumber();
+	const float BonusDelta = 0.1f * TriggerNumber;
 	if (bGrantBuff)
 	{
 		Units = GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>();
@@ -75,14 +76,15 @@ bool UCastleFarmEffectComponent::ExecuteEffect(const FCastleBuildingTriggerConte
 			return false;
 		}
 	}
-	if (!Economy->TryAddGold(Gold, Reason))
+	int32 GrantedGold = 0;
+	if (!Economy->TryAddGameplayGold(Gold, Reason, &GrantedGold))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("农田 %s 提交金币失败，账户=%s，原因=%s。"), *Farm->GetPathName(), *Economy->GetPathName(), *Reason.ToString());
 		return false;
 	}
 	if (bGrantBuff && !Units->AddNPCFarmBuff(Context.NPC, BonusDelta)) { return false; }
-	LastGoldGranted = Gold;
-	UE_LOG(LogMoving_Castle, Display, TEXT("农田 %s Lv%d 入账 %d 金币%s。"), *Farm->GetName(), Level, Gold,
+	LastGoldGranted = GrantedGold;
+	UE_LOG(LogMoving_Castle, Display, TEXT("农田 %s Lv%d 入账 %d 金币%s。"), *Farm->GetName(), Level, GrantedGold,
 		bGrantBuff ? TEXT("，NPC 已叠加本座数字 10% 的攻击增益") : TEXT(""));
 	return true;
 }

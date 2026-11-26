@@ -28,11 +28,13 @@ class MOVING_CASTLE_API UCastleSupportTowerSubsystem : public UTickableWorldSubs
 {
 	GENERATED_BODY()
 public:
-	bool QueueLaunch(ACastleBuildingBase& Source);
+	/** 当次触发数字随请求保存，即使本帧随后又有 NPC 进入同一座支援塔也不会串值。 */
+	bool QueueLaunch(ACastleBuildingBase& Source, int64 NumberBonus = 0);
 	/** 三种敌人攻击和在途敌弹共用同一世界内不复用的气球 ID。 */
 	bool FindBalloonTarget(const FVector& Origin, uint64& OutId, FVector& OutLocation) const;
 	bool GetBalloonTarget(uint64 Id, FVector& OutLocation) const;
 	bool DamageBalloon(uint64 Id, float Damage);
+	/** 玩家手动点破。敌方打爆从 DamageBalloon 进入，破裂来源随飞行状态保存。 */
 	bool PopBalloon(uint64 Id);
 	float GetTowerDamageMultiplier(const ACastleBuildingBase& Tower) const;
 	float GetArcherRateMultiplier(const ACastleBuildingBase& Tower) const;
@@ -86,6 +88,8 @@ private:
 		ECastleTileColor Color = ECastleTileColor::Gray;
 		float Health = 0.0f;
 		bool bCargoReleased = false;
+		/** 点破时锁定摘绳手套加成，只扩大对敌伤害和减速。 */
+		double ExtraImpactRadius = 0.0;
 		FVector Landing = FVector::ZeroVector;
 	};
 
@@ -121,7 +125,12 @@ private:
 		bool bRally = false;
 	};
 
-	TArray<TWeakObjectPtr<ACastleBuildingBase>> PendingLaunches;
+	struct FLaunchRequest
+	{
+		TWeakObjectPtr<ACastleBuildingBase> Source;
+		int64 NumberBonus;
+	};
+	TArray<FLaunchRequest> PendingLaunches;
 	TArray<FSwarm> Swarms;
 	TMap<uint64, FBalloon> Balloons;
 	uint64 NextBalloonId = 1;
@@ -134,11 +143,12 @@ private:
 	TArray<FCastleMassUnitHandle> RecruitedNPCs;
 
 	bool GatherUnits(FMassEntityManager& Manager, ECastleMassUnitKind Kind, TArray<FCastleSupportUnit>& OutUnits) const;
-	void Launch(ACastleBuildingBase& Source);
+	void Launch(ACastleBuildingBase& Source, int64 NumberBonus);
 	bool LaunchSwarm(FSwarm&& Batch, const FVector& Start, const UCastleSupportTowerData& Data);
-	bool BuildHiveSchedule(const ACastleBoard& Board, const ACastleBuildingBase& Source, FBeeSchedule& OutSchedule) const;
+	bool BuildHiveSchedule(const ACastleBoard& Board, const ACastleBuildingBase& Source, int64 SourceNumber, FBeeSchedule& OutSchedule) const;
 	void TickSwarms(float DeltaTime, TArray<FCastleSupportUnit>& Enemies);
-	bool LaunchBalloon(ACastleBuildingBase& Source, ACastleBoard& Board, const UCastleSupportTowerData& Data);
+	bool LaunchBalloon(ACastleBuildingBase& Source, ACastleBoard& Board, const UCastleSupportTowerData& Data, int64 Number);
+	bool PopBalloonInternal(uint64 Id, bool bPlayerPopped);
 	void TickBalloons(float DeltaTime, FMassEntityManager& Manager, TArray<FCastleSupportUnit>& Enemies);
 	bool ApplyLanding(const FBalloon& Flight, FMassEntityManager& Manager, TArray<FCastleSupportUnit>& Enemies);
 	bool FireAdjacentAttacks(const FBalloon& Flight, const TArray<FCastleSupportUnit>& Enemies) const;

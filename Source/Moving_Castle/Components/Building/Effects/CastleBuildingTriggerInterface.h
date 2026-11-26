@@ -33,6 +33,9 @@ struct MOVING_CASTLE_API FCastleBuildingTriggerContext
 	/** 连锁子触发继续执行建筑自身效果，但不能再发起另一轮连锁。 */
 	UPROPERTY(BlueprintReadOnly, Category="建筑|效果")
 	bool bChainReactionChild = false;
+
+	/** 仅原生效果入口在本次调用副本中填写；不改动塔的卡面或相邻建筑。 */
+	int64 TriggerNumberBonus = 0;
 };
 
 /** 入口由 C++ 实现；蓝图可以调用、观察和配置，但不接管核心效果逻辑。 */

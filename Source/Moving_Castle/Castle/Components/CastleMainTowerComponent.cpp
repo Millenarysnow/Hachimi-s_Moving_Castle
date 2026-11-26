@@ -4,6 +4,7 @@
 
 #include "CastleMainTowerBalloonComponent.h"
 #include "Engine/World.h"
+#include "Items/CastleBadgeRuntimeSubsystem.h"
 #include "Moving_Castle.h"
 
 UCastleMainTowerComponent::UCastleMainTowerComponent()
@@ -29,17 +30,20 @@ bool UCastleMainTowerComponent::InitializeHealth()
 
 bool UCastleMainTowerComponent::ApplyEnemyDamage(const float Damage)
 {
-	// 等待 Phase 1B 接入真实敌伤流程和护盾拦截，避免在未实现的入口扣血或消耗徽章。
-	UE_LOG(LogMoving_Castle, Error, TEXT("主塔 %s 无法结算敌方伤害 %.2f：敌伤入口尚未实现（Phase 0）。"),
-		*GetPathName(), Damage);
-	return false;
+	return ApplyDamageInternal(Damage, true);
 }
 
 bool UCastleMainTowerComponent::ApplyDamage(const float Damage)
 {
-	if (!FMath::IsFinite(Damage) || Damage < 0.0f || !FMath::IsFinite(MaxHealth) || MaxHealth <= 0.0f)
+	return ApplyDamageInternal(Damage, false);
+}
+
+bool UCastleMainTowerComponent::ApplyDamageInternal(const float Damage, const bool bEnemyAttack)
+{
+	if (!IsInGameThread() || bResolvingDamage || !FMath::IsFinite(Damage) || Damage < 0.0f
+		|| !FMath::IsFinite(MaxHealth) || MaxHealth <= 0.0f || !FMath::IsFinite(CurrentHealth))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("主塔受击失败：伤害必须是有限非负数，且 MaxHealth 必须有效。"));
+		UE_LOG(LogMoving_Castle, Error, TEXT("主塔 %s 受击失败：须在游戏线程提交非重入攻击和有效生命，伤害须为有限非负数。"), *GetPathName());
 		return false;
 	}
 
@@ -49,10 +53,23 @@ bool UCastleMainTowerComponent::ApplyDamage(const float Damage)
 		return false;
 	}
 
+	TGuardValue<bool> DamageGuard(bResolvingDamage, true);
 	const float PreviousHealth = CurrentHealth;
-	CurrentHealth = FMath::Max(0.0f, CurrentHealth - Damage);
+	float NextHealth = FMath::Max(0.0f, PreviousHealth - Damage);
+	if (bEnemyAttack && NextHealth == 0.0f)
+	{
+		auto* Runtime = GetWorld() ? GetWorld()->GetSubsystem<UCastleBadgeRuntimeSubsystem>() : nullptr;
+		if (!Runtime)
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("主塔 %s 结算敌方致命伤害失败：缺少本局徽章子系统。"), *GetPathName());
+			return false;
+		}
+		if (!Runtime->TryResolveLastBalloonClasp(*this, NextHealth)) { return false; }
+	}
+	CurrentHealth = NextHealth;
 	++AttackCount;
-	NotifyHealthChanged(PreviousHealth, Damage);
+	// 破球警钟只由真实掉血引发；若气球扣保留了受击前的生命，本次通知的掉血量为零。
+	NotifyHealthChanged(PreviousHealth, PreviousHealth - CurrentHealth);
 
 	if (Damage > 0.0f)
 	{
@@ -307,4 +324,10 @@ bool UCastleMainTowerSubsystem::ApplyMainTowerDamage(const float Damage)
 {
 	UCastleMainTowerComponent* Tower = RegisteredMainTower.Get();
 	return IsValid(Tower) && Tower->ApplyDamage(Damage);
+}
+
+bool UCastleMainTowerSubsystem::ApplyEnemyMainTowerDamage(const float Damage)
+{
+	UCastleMainTowerComponent* Tower = RegisteredMainTower.Get();
+	return IsValid(Tower) && Tower->ApplyEnemyDamage(Damage);
 }

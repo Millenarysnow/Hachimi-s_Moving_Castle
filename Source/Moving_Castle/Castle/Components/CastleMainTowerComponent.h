@@ -121,6 +121,9 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** 普通受伤和敌伤共用提交；敌伤在致命时先检查气球扣资格。 */
+	bool ApplyDamageInternal(float Damage, bool bEnemyAttack);
+	bool bResolvingDamage = false;
 	/** 保留未乘徽章倍率的上限；表现组件只接受生命组件发布的结果。 */
 	float BaseMaxHealth = 1000.0f;
 	float HealthMultiplier = 1.0f;
@@ -159,6 +162,8 @@ public:
 
 	/** 记录一次攻击并结算伤害，伤害为零仍会增加主塔攻击计数。 */
 	bool ApplyMainTowerDamage(float Damage);
+	/** 真实敌方攻击统一使用此入口，允许致命时触发最后一颗气球扣。 */
+	bool ApplyEnemyMainTowerDamage(float Damage);
 
 	/** 供棋盘和自动化测试查询当前主塔组件。 */
 	UCastleMainTowerComponent* GetRegisteredMainTower() const;
