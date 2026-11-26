@@ -368,6 +368,12 @@ public:
 		for (const auto& Entry : Island->MiniTiles)
 		{
 			Tiles.Add(Entry.Value.Get());
+			// 以真实地块的外沿验收正式五格布局，覆盖旧位置压到树和花坛、或旧资产比例使地板越界的回归。
+			const FVector Center = Island->GetActorTransform().InverseTransformPosition(Entry.Value->GetActorLocation());
+			const double HalfTile = Island->MiniTileSize * 0.5;
+			Test.TestTrue(FString::Printf(TEXT("微缩地块 %s 完整落在轮盘外侧草地"), *Entry.Key.ToString()),
+				Center.X - HalfTile >= -385.0 && Center.X + HalfTile <= 25.0 &&
+				Center.Y - HalfTile >= -1100.0 && Center.Y + HalfTile <= -695.0);
 			const FCastleGroundCell Cell = Entry.Value->GetGroundCell();
 			if (Cell.Color == Card.Color || Cell.Number == Card.Number) { Match = Entry.Value.Get(); }
 			else { Mismatch = Entry.Value.Get(); }

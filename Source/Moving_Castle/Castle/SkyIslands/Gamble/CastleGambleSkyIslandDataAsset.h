@@ -38,7 +38,7 @@ public:
 	UPROPERTY(EditAnywhere, Category = "轮盘") int32 RouletteRedBlackMultiplier = 2;
 	UPROPERTY(EditAnywhere, Category = "轮盘") int32 RouletteGreenMultiplier = 30;
 	/** 微缩区沿用主棋盘的格距和层高，按此比例缩小。 */
-	UPROPERTY(EditAnywhere, Category = "轮盘") float MiniBoardCellScale = 0.22f;
+	UPROPERTY(EditAnywhere, Category = "轮盘") float MiniBoardCellScale = 0.15f;
 	UPROPERTY(EditAnywhere, Category = "轮盘") FIntPoint MiniBoardGridSize = FIntPoint(5, 5);
 
 	UPROPERTY(EditAnywhere, Category = "老虎机") int32 SlotMachineCost = 10;

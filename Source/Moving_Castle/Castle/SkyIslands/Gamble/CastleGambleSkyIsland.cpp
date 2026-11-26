@@ -638,8 +638,10 @@ bool ACastleGambleSkyIsland::BuildMiniGround(const ACastleBoard& Board, int32 Se
 		return Reject(INVTEXT("主棋盘的格距、地面边长或层高无法用于微缩棋盘。"), OutReason);
 	}
 	const FIntPoint Size = Config->MiniBoardGridSize;
-	// 以轮盘后方、中央通道左侧的两个近边界定位；增大格数只向远离机台的方向扩展。
-	MiniOrigin = FVector(100.0 + MiniTileSize * 0.5, -275.0 - MiniTileSize * 0.5 - (Size.Y - 1) * MiniCellSize,
+	// 锚点取轮盘与岛岸之间的草地中心（岛内厘米）。从格心跨度反推首格，让整块地板以此居中。
+	const FVector2D ClearingCenter(-180.0, -895.0);
+	MiniOrigin = FVector(ClearingCenter.X - (Size.X - 1) * MiniCellSize * 0.5,
+		ClearingCenter.Y - (Size.Y - 1) * MiniCellSize * 0.5,
 		12.0 * Scale + 0.1);
 	FCastleGroundGenerationRequest Request;
 	Request.GridSize = FIntVector(Size.X, Size.Y, 1);
