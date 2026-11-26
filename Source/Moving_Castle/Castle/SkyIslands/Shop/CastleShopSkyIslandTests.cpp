@@ -116,8 +116,9 @@ private:
 		}
 		const FVector RelativeLocation = Offer.GetRelativeLocation();
 		const FBox Box = Offer.Bounds.GetBox();
-		const double FloorZ = Island.GetActorLocation().Z;
-		Test.TestTrue(TEXT("卡包包围盒底面贴地"), FMath::Abs(Box.Min.Z - FloorZ) <= 1.0);
+		// 卡包轴心贴实物展示台顶，测量基准随岛生成位置移动。
+		const double FloorZ = Island.GetActorLocation().Z + 101.0;
+		Test.TestTrue(TEXT("卡包包围盒底面贴展示台"), FMath::Abs(Box.Min.Z - FloorZ) <= 1.0);
 		Test.TestTrue(TEXT("卡包顶面在 180 至 200 cm"), Box.Max.Z - FloorZ >= 180.0 && Box.Max.Z - FloorZ <= 200.0);
 		Test.TestTrue(TEXT("卡包几何高度在 180 至 200 cm"), Box.GetSize().Z >= 180.0 && Box.GetSize().Z <= 200.0);
 		if (Test.TestNotNull(TEXT("卡包保留价格牌"), Offer.Sign.Get()))
@@ -276,7 +277,7 @@ private:
 		FText Reason;
 		const auto Interact = [&Director, &Reason](const UPrimitiveComponent& Target)
 		{
-			// 包底轴心在地板上，从中央通道一侧瞄准世界包围盒中心才与玩家准星一致。
+			// 包底轴心在展示台上，从中央通道一侧瞄准世界包围盒中心才与玩家准星一致。
 			const FVector Center = Target.Bounds.Origin;
 			const double TowardAisle = Target.GetRelativeLocation().Y < 0.0 ? 160.0 : -160.0;
 			return Director.TryInteractWithSkyIsland(Center + FVector(0, TowardAisle, 0), Center, Reason);

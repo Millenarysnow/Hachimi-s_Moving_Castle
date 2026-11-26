@@ -159,18 +159,21 @@ void UCastleShopSkyIslandOffer::MarkSold()
 	}
 	else
 	{
+		// 售罄后覆盖当前徽章台的全部槽位，在售时保留美术的金属、珐琅和木座。
 		OfferMaterialInstance->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.23f, 0.23f, 0.23f));
+		for (int32 Slot = 0; Slot < GetNumMaterials(); ++Slot) { SetMaterial(Slot, OfferMaterialInstance); }
 	}
 	Sign->SetText(FText::FromString(DisplayLabel + TEXT("\nSOLD OUT")));
 }
 
 ACastleShopSkyIsland::ACastleShopSkyIsland()
 {
+	// 绑定该玩法的岛体，位置沿用作者对齐的岛面中心。
+	SetIslandArtMesh(TEXT("SM_SkyIsland_Shop"));
 	ConfigAsset = TSoftObjectPtr<UCastleShopSkyIslandDataAsset>(FSoftObjectPath(
 		TEXT("/Game/MovingCastle/Data/SkyIslands/DA_ShopSkyIsland.DA_ShopSkyIsland")));
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> Sphere(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-	BadgeMesh = Sphere.Object;
+	BadgeMesh = LoadIslandArt(TEXT("SM_Shop_BadgeDisplay"));
 	BadgeMaterial = Material.Object;
 }
 
@@ -241,7 +244,7 @@ bool ACastleShopSkyIsland::CreateOffer(UCastleRoomGroupDataAsset* RoomGroup, UCa
 	// 台座排在入口两旁，中心始终留给去离开门的飞行路径。文本独立挂在根上以免随网格缩放。
 	const int32 Index = Offers.Num();
 	const bool bLeftSide = Index % 2 == 0;
-	const FVector Location(-330.0 + 320.0 * (Index / 2), bLeftSide ? -570.0 : 570.0, RoomGroup ? 0.0 : 100.0);
+	const FVector Location(-330.0 + 320.0 * (Index / 2), bLeftSide ? -570.0 : 570.0, 101.0);
 	const FName OfferName(*FString::Printf(TEXT("Offer%d"), Index + 1));
 	auto* Offer = NewObject<UCastleShopSkyIslandOffer>(this, OfferName);
 	AddInstanceComponent(Offer);
@@ -249,7 +252,7 @@ bool ACastleShopSkyIsland::CreateOffer(UCastleRoomGroupDataAsset* RoomGroup, UCa
 	Offer->SetRelativeLocation(Location);
 	if (RoomGroup)
 	{
-		// 导入后印字面朝局部 +Y。左侧保持原向，右侧绕 Z 转半圈，包底轴心贴地。
+		// 台座饰圈顶面距地约 101 厘米，卡包底面贴台；印字面朝向中央通道。
 		Offer->SetStaticMesh(Config->RoomPackMesh);
 		Offer->SetRelativeRotation(FRotator(0.0, bLeftSide ? 0.0 : 180.0, 0.0));
 		Offer->SetRelativeScale3D(FVector(RoomPackUniformScale));
@@ -258,7 +261,8 @@ bool ACastleShopSkyIsland::CreateOffer(UCastleRoomGroupDataAsset* RoomGroup, UCa
 	else
 	{
 		Offer->SetStaticMesh(BadgeMesh);
-		Offer->SetRelativeScale3D(FVector(1.6, 1.6, 2.0));
+		// 徽章使用原作展示架，作者的正面与卡包同向，朝向中央通道。
+		Offer->SetRelativeRotation(FRotator(0.0, bLeftSide ? 0.0 : 180.0, 0.0));
 	}
 	Offer->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	Offer->SetCollisionResponseToAllChannels(ECR_Ignore);
@@ -272,16 +276,13 @@ bool ACastleShopSkyIsland::CreateOffer(UCastleRoomGroupDataAsset* RoomGroup, UCa
 		: StaticEnum<ECastleBadgeType>()->GetNameStringByValue(static_cast<int64>(Badge->Badge.Type));
 	Offer->DisplayLabel = FName::NameToDisplayString(TypeName, false);
 	UMaterialInterface* Material = RoomGroup ? Config->RoomPackMaterials.FindChecked(RoomGroup->Rarity).Get() : BadgeMaterial.Get();
-	Offer->OfferMaterialInstance = Offer->CreateDynamicMaterialInstance(0, Material);
+	Offer->OfferMaterialInstance = RoomGroup ? Offer->CreateDynamicMaterialInstance(0, Material)
+		: UMaterialInstanceDynamic::Create(Material, Offer);
 	if (!Offer->OfferMaterialInstance)
 	{
 		return RejectOffer(FText::Format(INVTEXT("商品 {0} 无法从材质 {1} 创建动态材质。"),
 			FText::FromString(GetPathNameSafe(RoomGroup ? static_cast<UObject*>(RoomGroup) : Badge)),
 			FText::FromString(GetPathNameSafe(Material))), OutReason);
-	}
-	if (Badge)
-	{
-		Offer->OfferMaterialInstance->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.98f, 0.53f, 0.13f));
 	}
 	Offer->RegisterComponent();
 
@@ -289,7 +290,7 @@ bool ACastleShopSkyIsland::CreateOffer(UCastleRoomGroupDataAsset* RoomGroup, UCa
 	Offer->Sign = NewObject<UTextRenderComponent>(this, SignName);
 	AddInstanceComponent(Offer->Sign);
 	Offer->Sign->SetupAttachment(GetRootComponent());
-	Offer->Sign->SetRelativeLocation(FVector(Location.X - 86.0, Location.Y, 260.0));
+	Offer->Sign->SetRelativeLocation(FVector(Location.X - 86.0, Location.Y + (bLeftSide ? 100.0 : -100.0), Location.Z + 230.0));
 	Offer->Sign->SetRelativeRotation(FRotator(0, 180, 0));
 	Offer->Sign->SetHorizontalAlignment(EHTA_Center);
 	Offer->Sign->SetWorldSize(30.0f);

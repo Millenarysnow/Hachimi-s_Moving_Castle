@@ -61,7 +61,7 @@ bool UCastleRestSkyIslandStation::ExecuteInteract(const FCastleSkyIslandInteract
 		return false;
 	}
 	bClaimed = true;
-	Tint->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.23f, 0.23f, 0.23f));
+	for (int32 Slot = 0; Slot < GetNumMaterials(); ++Slot) { SetMaterial(Slot, Tint); }
 	Sign->SetText(FText::FromString(Label + TEXT(" | CLAIMED")));
 	UE_LOG(LogMoving_Castle, Display, TEXT("休息空岛 %s：%s"), *Island->GetPathName(), *Message.ToString());
 	if (GEngine) { GEngine->AddOnScreenDebugMessage(INDEX_NONE, 4.0f, FColor::Green, Message.ToString()); }
@@ -70,10 +70,10 @@ bool UCastleRestSkyIslandStation::ExecuteInteract(const FCastleSkyIslandInteract
 
 ACastleRestSkyIsland::ACastleRestSkyIsland()
 {
+	// 绑定该玩法的岛体，位置沿用作者对齐的岛面中心。
+	SetIslandArtMesh(TEXT("SM_SkyIsland_Rest"));
 	ConfigAsset = TSoftObjectPtr<UCastleRestSkyIslandDataAsset>(FSoftObjectPath(
 		TEXT("/Game/MovingCastle/Data/SkyIslands/DA_RestSkyIsland.DA_RestSkyIsland")));
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cylinder(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
 	StationMaterial = Material.Object;
 	// 三台横向展开，牌面朝向入口；入口至离开门的中心通道保持可飞行。
@@ -83,7 +83,7 @@ ACastleRestSkyIsland::ACastleRestSkyIsland()
 		Station->SetupAttachment(GetRootComponent());
 		Station->SetStaticMesh(Mesh);
 		Station->SetRelativeLocation(Location);
-		Station->SetRelativeScale3D(FVector(1.8, 1.8, 2.0));
+		// 网格轴心与命中中心重合（距地面 100 厘米），按作者尺寸直接显示。
 		Station->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 		Station->SetCollisionResponseToAllChannels(ECR_Ignore);
 		Station->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
@@ -99,9 +99,9 @@ ACastleRestSkyIsland::ACastleRestSkyIsland()
 		Sign->SetWorldSize(34.0f);
 		return Sign;
 	};
-	HealStation = MakeStation(TEXT("HealStation"), Cylinder.Object, FVector(-220, -530, 100));
-	GoldStation = MakeStation(TEXT("GoldStation"), Cylinder.Object, FVector(-220, 530, 100));
-	ShopStation = MakeStation(TEXT("ShopStation"), Cube.Object, FVector(250, -530, 100));
+	HealStation = MakeStation(TEXT("HealStation"), LoadIslandArt(TEXT("SM_Rest_Heal")), FVector(-220, -530, 100));
+	GoldStation = MakeStation(TEXT("GoldStation"), LoadIslandArt(TEXT("SM_Rest_Gold")), FVector(-220, 530, 100));
+	ShopStation = MakeStation(TEXT("ShopStation"), LoadIslandArt(TEXT("SM_Rest_RoomShop")), FVector(250, -530, 100));
 	HealSign = MakeSign(TEXT("HealSign"), *HealStation);
 	GoldSign = MakeSign(TEXT("GoldSign"), *GoldStation);
 	ShopSign = MakeSign(TEXT("ShopSign"), *ShopStation);
@@ -124,22 +124,23 @@ bool ACastleRestSkyIsland::OnInitializeIsland(const FCastleSkyIslandContext& Con
 
 	// 离线 TextRender 使用英文简标。交互和领取结果通过游戏 HUD 使用中文。
 	const auto ConfigureStation = [this](UCastleRestSkyIslandStation& Station, UTextRenderComponent& Sign,
-		const TCHAR* Label, const FText& Prompt, const FLinearColor& Color)
+		const TCHAR* Label, const FText& Prompt)
 	{
 		Station.Sign = &Sign;
 		Station.Label = Label;
 		Station.Prompt = Prompt;
 		Sign.SetText(FText::FromString(Label));
-		Station.Tint = Station.CreateDynamicMaterialInstance(0, StationMaterial);
+		Station.Tint = UMaterialInstanceDynamic::Create(StationMaterial, &Station);
 		if (!Station.Tint) { return false; }
-		Station.Tint->SetVectorParameterValue(TEXT("Color"), Color);
+		// 领取之前展示原作多材质；领取后同一灰色材质覆盖本台全部槽位。
+		Station.Tint->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.23f, 0.23f, 0.23f));
 		return true;
 	};
-	if (!ConfigureStation(*HealStation, *HealSign, TEXT("HEAL"), INVTEXT("免费气球回血"), FLinearColor::Green)
-		|| !ConfigureStation(*GoldStation, *GoldSign, TEXT("GOLD"), INVTEXT("免费金币"), FLinearColor(1.0f, 0.62f, 0.03f))
-		|| !ConfigureStation(*ShopStation, *ShopSign, TEXT("ROOM SHOP"), INVTEXT("免费换批房间商店"), FLinearColor(0.12f, 0.55f, 1.0f)))
+	if (!ConfigureStation(*HealStation, *HealSign, TEXT("HEAL"), INVTEXT("免费气球回血"))
+		|| !ConfigureStation(*GoldStation, *GoldSign, TEXT("GOLD"), INVTEXT("免费金币"))
+		|| !ConfigureStation(*ShopStation, *ShopSign, TEXT("ROOM SHOP"), INVTEXT("免费换批房间商店")))
 	{
-		OutReason = INVTEXT("休息空岛台座无法创建占位材质。");
+		OutReason = INVTEXT("休息空岛台座无法创建领取后的灰色材质。");
 		UE_LOG(LogMoving_Castle, Error, TEXT("休息空岛 %s：%s"), *GetPathName(), *OutReason.ToString());
 		return false;
 	}

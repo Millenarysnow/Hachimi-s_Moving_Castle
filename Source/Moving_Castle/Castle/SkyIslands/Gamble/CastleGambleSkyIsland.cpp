@@ -124,6 +124,8 @@ bool UCastleGambleMachineComponent::ExecuteInteract(const FCastleSkyIslandIntera
 
 ACastleGambleSkyIsland::ACastleGambleSkyIsland()
 {
+	// 绑定该玩法的岛体，位置沿用作者对齐的岛面中心。
+	SetIslandArtMesh(TEXT("SM_SkyIsland_Gamble"));
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = false;
 	ConfigAsset = TSoftObjectPtr<UCastleGambleSkyIslandDataAsset>(FSoftObjectPath(
@@ -140,7 +142,9 @@ ACastleGambleSkyIsland::ACastleGambleSkyIsland()
 		auto* Machine = CreateDefaultSubobject<UCastleGambleMachineComponent>(Name);
 		Machine->Machine = Kind;
 		Machine->SetupAttachment(GetRootComponent());
+		// 整岛保留机台的多材质外形；这里的不可见网格专门接收玩法射线。
 		Machine->SetStaticMesh(Mesh);
+		Machine->SetVisibility(false);
 		Machine->SetRelativeLocation(Position);
 		Machine->SetRelativeScale3D(Scale);
 		Machine->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
@@ -226,9 +230,6 @@ bool ACastleGambleSkyIsland::OnInitializeIsland(const FCastleSkyIslandContext& C
 
 	RouletteRandom.Initialize(Context.Seed);
 	SlotRandom.Initialize(static_cast<int32>(static_cast<uint32>(Context.Seed) ^ 0x6f8135e9u));
-	SetTint(*Roulette, {0.12f, 0.07f, 0.11f});
-	SetTint(*Slot, {0.31f, 0.085f, 0.53f});
-	SetTint(*Recycler, {0.05f, 0.38f, 0.49f});
 	SetTint(*RoulettePointer, {1.0f, 0.78f, 0.19f});
 	BuildWheel();
 	return true;
