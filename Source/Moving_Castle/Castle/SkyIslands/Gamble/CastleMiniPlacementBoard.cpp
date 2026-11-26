@@ -4,7 +4,8 @@
 
 namespace
 {
-	const FIntVector Faces[] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+	// 六个正交面的整数方向向量，供放置合法性检查遍历相邻房间。
+	const FIntVector FaceDirections[] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
 
 	/** 有符号坐标边界处仍可检查存在的面，不执行溢出的加法。 */
 	bool TryAdjacentCell(const FIntVector& Cell, const FIntVector& Face, FIntVector& OutCell)
@@ -62,7 +63,7 @@ bool FCastleMiniPlacementBoard::CanPlace(const FCastleBuildingDescriptor& Card, 
 	{
 		if (Ground->Color == Card.Color || Ground->Number == Card.Number) { return true; }
 	}
-	for (const FIntVector& Face : Faces)
+	for (const FIntVector& Face : FaceDirections)
 	{
 		FIntVector Neighbor;
 		if (!TryAdjacentCell(Cell, Face, Neighbor)) { continue; }
