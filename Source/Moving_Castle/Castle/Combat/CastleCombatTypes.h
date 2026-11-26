@@ -6,13 +6,22 @@
 
 class UMassEntityConfigAsset;
 
-/** 普通与精英各自独立编号，序号从 1 开始。 */
+/** 普通与精英使用各自的波次表。 */
 UENUM(BlueprintType)
 enum class ECastleBattleKind : uint8
 {
 	Normal,
 	Elite
 };
+
+namespace CastleCombat
+{
+	/** 导演节点与正式战斗共用精英关规则；调用前须校验配置中的精英关间隔。 */
+	inline ECastleBattleKind GetBattleKindForStage(const int32 Stage, const int32 EliteInterval)
+	{
+		return Stage % EliteInterval == 0 ? ECastleBattleKind::Elite : ECastleBattleKind::Normal;
+	}
+}
 
 /** 名册提供共享敌人模板和成簇方式；出场条目可以单独指定实例属性。 */
 USTRUCT(BlueprintType)

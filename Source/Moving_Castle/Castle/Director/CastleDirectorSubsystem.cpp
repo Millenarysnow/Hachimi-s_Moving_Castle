@@ -199,7 +199,8 @@ int32 UCastleDirectorSubsystem::GetNodeCountForStep(const UCastleDirectorConfigD
 
 ECastleDirectorNodeKind UCastleDirectorSubsystem::GetNodeKindForStep(const UCastleDirectorConfigDataAsset& InConfig, const int32 Step)
 {
-	return Step % InConfig.EliteEveryNSteps == 0 ? ECastleDirectorNodeKind::Elite : ECastleDirectorNodeKind::Normal;
+	return CastleCombat::GetBattleKindForStage(Step, InConfig.EliteEveryNSteps) == ECastleBattleKind::Elite
+		? ECastleDirectorNodeKind::Elite : ECastleDirectorNodeKind::Normal;
 }
 
 TArray<ECastleDirectorNodeKind> UCastleDirectorSubsystem::GetNodeKindsForStep(
@@ -362,7 +363,9 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s %s"), *Node->GetPathName(), *OutReason.ToString());
 		return false;
 	}
-	UE_LOG(LogMoving_Castle, Display, TEXT("选择导演节点 %s：第 %d 关，类型 %d。"), *GetPathNameSafe(Node), GetNextStep(), static_cast<int32>(Node->GetKind()));
+	// 节点、难度配置与战斗结果统一使用导演的当前关号。
+	const int32 Stage = GetNextStep();
+	UE_LOG(LogMoving_Castle, Display, TEXT("选择导演节点 %s：第 %d 关，类型 %d。"), *GetPathNameSafe(Node), Stage, static_cast<int32>(Node->GetKind()));
 	UCastleNavigationSubsystem* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
 	const auto Path = Navigation ? Navigation->AcquireSharedPath() : nullptr;
 	if (!Path || !Path->bValid || Path->bClosedLoop || !Path->bTowerDispatch || Path->Length <= UE_DOUBLE_SMALL_NUMBER)
@@ -388,8 +391,6 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 		return Reject(TEXT("棋盘、控制器、战斗系统、配置无效，或上场 NPC 尚未回收。"));
 	}
 	const ECastleBattleKind Kind = Node->GetKind() == ECastleDirectorNodeKind::Elite ? ECastleBattleKind::Elite : ECastleBattleKind::Normal;
-	const int32 PreviousCount = Kind == ECastleBattleKind::Elite ? EliteBattles : NormalBattles;
-	if (PreviousCount == MAX_int32) { return Reject(TEXT("本类战斗序号溢出。")); }
 	FText Failure;
 	// 显隐校验在撤下商店和巡逻草稿之前，失败不得推进开战事务。
 	if (!Board->SetPlacementSurfacePresentationHidden(true, Failure)) { return Reject(Failure.ToString()); }
@@ -399,7 +400,7 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 	Controller->HideDirectorEditingPresentation();
 	// 会话只登记待命池。玩家点击主塔或开启自动出兵后，NPC 才沿门到门快照派出。
 	const bool bNPCsReady = Dispatch->StartBattleDispatchSession(Config->NPCConfiguration, RunNPCCount, Failure);
-	if (!bNPCsReady || !Combat->StartBattle(Kind, PreviousCount + 1, Failure))
+	if (!bNPCsReady || !Combat->StartStageBattle(Kind, Stage, Config->EliteEveryNSteps, Failure))
 	{
 		FText CleanupFailure;
 		const bool bRecalled = RecallBattleNPCs(CleanupFailure);
@@ -409,13 +410,11 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 		return Reject(Failure.ToString() + (bRecalled ? FString() : TEXT("；NPC 回收失败：") + CleanupFailure.ToString())
 			+ (bSurfaceRestored ? FString() : TEXT("；建造面恢复失败：") + SurfaceFailure.ToString()));
 	}
-	ActiveBattleKind = Kind;
-	ActiveBattleOrdinal = PreviousCount + 1;
-	if (Kind == ECastleBattleKind::Elite) { ++EliteBattles; } else { ++NormalBattles; }
 	DestroyNodes();
 	SetPhase(ECastleDirectorPhase::Battle);
-	ShowMessage(FText::FromString(TEXT("战斗进行中")), false);
-	UE_LOG(LogMoving_Castle, Display, TEXT("导演开战提交：第 %d 关，本类第 %d 场，门到门待命池 %d 个 NPC。"), GetNextStep(), ActiveBattleOrdinal, RunNPCCount);
+	const FText BattleLabel = Kind == ECastleBattleKind::Elite ? INVTEXT("精英战斗开始") : INVTEXT("普通战斗开始");
+	ShowMessage(FText::Format(INVTEXT("第 {0} 关 · {1}"), Stage, BattleLabel), false);
+	UE_LOG(LogMoving_Castle, Display, TEXT("导演开战提交：第 %d 关，门到门待命池 %d 个 NPC。"), Stage, RunNPCCount);
 	return true;
 }
 
@@ -703,24 +702,27 @@ bool UCastleDirectorSubsystem::TryEnterSkyIslandFixture(FText& OutReason)
 }
 #endif
 
-void UCastleDirectorSubsystem::HandleBattleCleared(const ECastleBattleKind Kind, const int32 Ordinal)
+void UCastleDirectorSubsystem::HandleBattleCleared(const ECastleBattleKind Kind, const int32 Stage)
 {
-	if (!bRunning || Phase != ECastleDirectorPhase::Battle || Kind != ActiveBattleKind || Ordinal != ActiveBattleOrdinal)
+	// 清场前当前关号保持稳定，只接受该关的战斗结果。
+	if (!bRunning || Phase != ECastleDirectorPhase::Battle || Stage != GetNextStep() || !IsValid(Config) || Config->EliteEveryNSteps < 2
+		|| Kind != CastleCombat::GetBattleKindForStage(Stage, Config->EliteEveryNSteps))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("导演拒绝非法或重复清场通知：阶段 %d，收到类型 %d/序号 %d，预期 %d/%d。"),
-			static_cast<int32>(Phase), static_cast<int32>(Kind), Ordinal, static_cast<int32>(ActiveBattleKind), ActiveBattleOrdinal);
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演拒绝非法或重复清场通知：配置 %s，阶段 %d，收到类型 %d/关号 %d，当前关号 %d。"),
+			*GetPathNameSafe(Config), static_cast<int32>(Phase), static_cast<int32>(Kind), Stage, GetNextStep());
 		return;
 	}
 	FText Failure;
 	if (!RecallBattleNPCs(Failure)) { EnterGameOver(FText::FromString(TEXT("战斗系统出错：") + Failure.ToString())); return; }
 	// 战斗结束时立即恢复 1x 倍速与未暂停状态，避免奖励和编辑阶段沿用战斗倍速。
 	ResetBattleControls(true);
-	++ClearedSteps;
+	ClearedSteps = Stage;
 	if (Kind == ECastleBattleKind::Elite)
 	{
-		// 解锁只随精英胜利次数推进，战斗开始和失败均不改变普通池。
-		const FName UnlockTag = Ordinal == 1 ? FName(TEXT("Unlock.MiasmaWelp")) :
-			Ordinal == 2 ? FName(TEXT("Unlock.LavaGoliath")) : NAME_None;
+		// 精英关必须清场才能前进，因此前两个精英关由关号和间隔直接确定。
+		const int32 EliteStage = Stage / Config->EliteEveryNSteps;
+		const FName UnlockTag = EliteStage == 1 ? FName(TEXT("Unlock.MiasmaWelp")) :
+			EliteStage == 2 ? FName(TEXT("Unlock.LavaGoliath")) : NAME_None;
 		if ((!UnlockTag.IsNone() && !Combat->UnlockEnemyTag(UnlockTag)) || !TryCommitRewards(true, true, true, Failure))
 		{
 			EnterGameOver(FText::Format(INVTEXT("精英胜利奖励提交失败。{0}"), Failure));
@@ -736,10 +738,10 @@ void UCastleDirectorSubsystem::HandleBattleCleared(const ECastleBattleKind Kind,
 	UE_LOG(LogMoving_Castle, Display, TEXT("导演清场：已通过 %d 关，进入三选一，建造面保持隐藏。"), ClearedSteps);
 }
 
-void UCastleDirectorSubsystem::HandleBattleFailed(const ECastleBattleKind Kind, const int32 Ordinal, const FText& Reason)
+void UCastleDirectorSubsystem::HandleBattleFailed(const ECastleBattleKind Kind, const int32 BattleNumber, const FText& Reason)
 {
-	UE_LOG(LogMoving_Castle, Error, TEXT("导演收到战斗失败：配置 %s，类型 %d，序号 %d，%s"),
-		*GetPathNameSafe(Config), static_cast<int32>(Kind), Ordinal, *Reason.ToString());
+	UE_LOG(LogMoving_Castle, Error, TEXT("导演收到战斗失败：配置 %s，类型 %d，战斗编号 %d，%s"),
+		*GetPathNameSafe(Config), static_cast<int32>(Kind), BattleNumber, *Reason.ToString());
 	EnterGameOver(FText::FromString(TEXT("战斗系统出错：") + Reason.ToString()));
 }
 

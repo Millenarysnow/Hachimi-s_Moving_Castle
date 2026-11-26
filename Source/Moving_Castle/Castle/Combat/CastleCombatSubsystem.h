@@ -8,6 +8,7 @@
 class ACastleMassEnemySpawner;
 class UCastleCombatConfigDataAsset;
 
+/** 终态带回开战请求的编号，正式对局为关号，独立战斗为指定表项序号。 */
 DECLARE_MULTICAST_DELEGATE_TwoParams(FCastleBattleCleared, ECastleBattleKind, int32);
 DECLARE_MULTICAST_DELEGATE_ThreeParams(FCastleBattleFailed, ECastleBattleKind, int32, const FText&);
 
@@ -52,8 +53,10 @@ class MOVING_CASTLE_API UCastleCombatSubsystem : public UTickableWorldSubsystem
 public:
 	/** 整体校验后替换配置；进行中的战斗拒绝重初始化。失败输出原因及 Error。 */
 	bool InitializeCombat(UCastleCombatConfigDataAsset* Config, FText& OutFailureReason);
-	/** KindOrdinal 是本类战斗从 1 起的序号；整体预检后生成零延迟组，失败原子回滚。 */
-	bool StartBattle(ECastleBattleKind Kind, int32 KindOrdinal, FText& OutFailureReason);
+	/** 正式开战沿用导演的关号，按精英关间隔推导难度表项并校验所选节点类型。 */
+	bool StartStageBattle(ECastleBattleKind Kind, int32 Stage, int32 EliteInterval, FText& OutFailureReason);
+	/** 教程与调试等独立战斗显式指定从 1 起的表项序号。 */
+	bool StartBattle(ECastleBattleKind Kind, int32 TableOrdinal, FText& OutFailureReason);
 	bool IsBattleActive() const { return bBattleActive; }
 	bool IsCombatInitialized() const { return CombatConfig != nullptr; }
 	/** 空闲或计数失败返回 false，调用者不得将失败的零输出当作清场。 */
@@ -79,10 +82,12 @@ public:
 	virtual TStatId GetStatId() const override;
 
 private:
-	int64 ResolveFirstGlobalWaveIndex(ECastleBattleKind Kind, int32 KindOrdinal) const;
+	/** 整体预检后生成零延迟组，失败时原子回滚。表项用于出怪计划，编号用于日志与结果通知。 */
+	bool StartConfiguredBattle(ECastleBattleKind Kind, int32 TableOrdinal, int32 BattleNumber, FText& OutFailureReason);
+	int64 ResolveFirstGlobalWaveIndex(ECastleBattleKind Kind, int32 TableOrdinal) const;
 	bool CanAdvanceCurrentWave(double WaveElapsed, int32 EnemyCount) const;
 	/** 冻结各波并预检有效条目，构建成功后才允许更改本场状态。 */
-	bool BuildScheduledWaves(ECastleBattleKind Kind, int32 KindOrdinal, int64 FirstGlobalWaveIndex,
+	bool BuildScheduledWaves(ECastleBattleKind Kind, int32 TableOrdinal, int64 FirstGlobalWaveIndex,
 		int32 ExistingEnemies, TArray<FCastleCombatScheduledWave>& OutWaves,
 		int32& OutEstimatedEnemies, int32& OutPendingBatches, FText& OutFailureReason);
 	bool SpawnDueBatches(double WaveElapsed, FText& OutFailureReason);
@@ -107,7 +112,7 @@ private:
 	bool bBattleActive = false;
 	bool bWorldEnding = false;
 	ECastleBattleKind ActiveKind = ECastleBattleKind::Normal;
-	int32 ActiveOrdinal = 0;
+	int32 ActiveBattleNumber = 0;
 	int32 ActiveWaveIndex = INDEX_NONE;
 	int32 PendingBatches = 0;
 	int32 PendingEstimatedEnemies = 0;

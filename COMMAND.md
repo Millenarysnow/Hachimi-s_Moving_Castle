@@ -19,7 +19,7 @@
 
 | 可复制示例 | 参数与运行条件 | 效果与反馈 |
 | --- | --- | --- |
-| `CastleStartBattle Normal 1` | `Normal` 或 `Elite`，再填该类战斗的正整数序号。需要战斗配置和存活的主塔 | 通过战斗子系统按配置开战，屏幕和日志给出结果。 |
+| `CastleStartBattle Normal 1` | `Normal` 或 `Elite`，再填相应难度表从 1 起的表项序号。需要战斗配置和存活的主塔 | 直接启动指定表项的独立调试战斗。正式单局通过节点选择战斗，使用导演关号读取难度表。 |
 | `CastleBattleStatus` | Game 或 PIE | 输出当前波次、剩余敌人数、待出场批次和击杀进度。空闲时提示当前没有战斗。 |
 | `CastleUnlockEnemyTag Unlock.MiasmaWelp` | 一个非空标签，取战斗配置中突袭条目的 `RequiredUnlockTag` | 解锁标签，对后续开战时生成的突袭计划生效。 |
 | `CastleSpawnEnemy LavaGoliath 1` | 类型为 `LavaGoliath`、`LavaPup`、`MiasmaWelp` 或 `ShadowSwarm`，波数为正整数，可省略，默认 `1`。需要项目玩家控制器和存活的主塔 | 在主塔外圈手动生成敌人。群虫每波 6～8 只，其余类型每波 1 只。 |

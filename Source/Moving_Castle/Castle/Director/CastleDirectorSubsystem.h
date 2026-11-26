@@ -63,6 +63,7 @@ public:
 	bool TryEnterSkyIslandFixture(FText& OutReason);
 #endif
 	int32 GetExperience() const { return Experience; }
+	/** 战斗清场或空岛成功返塔后提交，节点与正式战斗都读取同一关卡进度。 */
 	int32 GetClearedSteps() const { return ClearedSteps; }
 	int32 GetNextStep() const { return ClearedSteps + 1; }
 	const FText& GetStatusMessage() const { return StatusMessage; }
@@ -128,8 +129,8 @@ private:
 	bool TryCommitRewards(bool bExperience, bool bHealing, bool bShop, FText& OutReason);
 	bool OpenWildcardPicker(UCastlePendingRoomReward* Reward, FText& OutReason);
 	UFUNCTION() void HandleWildcardClosed(bool bClaimed);
-	void HandleBattleCleared(ECastleBattleKind Kind, int32 Ordinal);
-	void HandleBattleFailed(ECastleBattleKind Kind, int32 Ordinal, const FText& Reason);
+	void HandleBattleCleared(ECastleBattleKind Kind, int32 Stage);
+	void HandleBattleFailed(ECastleBattleKind Kind, int32 BattleNumber, const FText& Reason);
 	void UnbindCombatEvents();
 	/** 退出战斗、结束或重载关卡前重置战斗倍速与暂停标志；bClearWorldPause 控制是否同时解除引擎暂停。 */
 	void ResetBattleControls(bool bClearWorldPause);
@@ -164,11 +165,6 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UCastleCombatSubsystem> Combat;
 	FDelegateHandle BattleClearedHandle;
 	FDelegateHandle BattleFailedHandle;
-	/** 普通、精英分别累计；只有整场开战提交成功后增加。 */
-	int32 NormalBattles = 0;
-	int32 EliteBattles = 0;
-	ECastleBattleKind ActiveBattleKind = ECastleBattleKind::Normal;
-	int32 ActiveBattleOrdinal = 0;
 	ECastleDirectorPhase Phase = ECastleDirectorPhase::Inactive;
 	FText StatusMessage;
 	FText GameOverFailure;

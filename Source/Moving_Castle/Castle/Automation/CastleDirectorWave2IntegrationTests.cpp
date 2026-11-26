@@ -107,20 +107,21 @@ private:
 			Test.TestEqual(TEXT("升级补满生命"), Director.Tower->CurrentHealth, Health[Level - 1]);
 		}
 		Test.TestEqual(TEXT("Lv4 领取后有 13 名 NPC"), Director.RunNPCCount, 13);
-		for (int32 Ordinal = 1; Ordinal <= 2; ++Ordinal)
+		// 按正式精英关号注入两次清场，覆盖前两个精英关的解锁与奖励。
+		for (int32 EliteStage = 1; EliteStage <= 2; ++EliteStage)
 		{
+			const int32 StageNumber = EliteStage * Director.Config->EliteEveryNSteps;
 			Director.DestroyNodes();
-			Director.ActiveBattleKind = ECastleBattleKind::Elite;
-			Director.ActiveBattleOrdinal = Ordinal;
+			Director.ClearedSteps = StageNumber - 1;
 			Director.SetPhase(ECastleDirectorPhase::Battle);
 			Director.Tower->ApplyDamage(100.0f);
-			Director.HandleBattleCleared(ECastleBattleKind::Elite, Ordinal);
+			Director.HandleBattleCleared(ECastleBattleKind::Elite, StageNumber);
 			Test.TestEqual(TEXT("精英自动提交后回编辑"), Director.Phase, ECastleDirectorPhase::Editing);
 			Test.TestEqual(TEXT("满级经验不会越界"), Director.Level, 4);
 			Test.TestEqual(TEXT("精英同一笔奖励补血"), Director.Tower->CurrentHealth, 8000.0f);
 			Test.TestTrue(TEXT("精英同一笔奖励免费换批打开"), Shop->IsShopOpen() && Shop->GetOffers().Num() == 6);
 			Test.TestTrue(TEXT("精英解锁标签写入战斗池"), Director.Combat->HasUnlockedEnemyTag(
-				Ordinal == 1 ? FName(TEXT("Unlock.MiasmaWelp")) : FName(TEXT("Unlock.LavaGoliath"))));
+				EliteStage == 1 ? FName(TEXT("Unlock.MiasmaWelp")) : FName(TEXT("Unlock.LavaGoliath"))));
 			Shop->CloseShop();
 		}
 		VerifyBadgesAndSale(Director);
