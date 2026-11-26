@@ -24,7 +24,6 @@ namespace
 		case ECastleTileColor::Blue: OutColor = FLinearColor(FColor::FromHex(TEXT("287ADB"))); return true;
 		case ECastleTileColor::Green: OutColor = FLinearColor(FColor::FromHex(TEXT("36A86F"))); return true;
 		case ECastleTileColor::Yellow: OutColor = FLinearColor(FColor::FromHex(TEXT("E4AB31"))); return true;
-		case ECastleTileColor::Purple: OutColor = FLinearColor(FColor::FromHex(TEXT("9658DC"))); return true;
 		default: return false;
 		}
 	}

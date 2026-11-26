@@ -68,9 +68,9 @@ namespace BuildingBlueprintNavigationTests
 					for (int32 X = 0; X < Board->GridSize.X; ++X)
 					{
 						FCastleGroundCell Ground;
-						Test->TestTrue(TEXT("真实关卡所有地面均为五色 1～9 号"),
+						Test->TestTrue(TEXT("真实关卡所有地面均为合法颜色与 1～9 数字"),
 							Board->TryGetGroundCell(Board->GridOrigin + FIntVector(X, Y, 0), Ground)
-							&& Ground.Color >= ECastleTileColor::Red && Ground.Color <= ECastleTileColor::Purple
+							&& CastleTileColors::IsPlayable(Ground.Color)
 							&& Ground.Number >= 1 && Ground.Number <= 9);
 					}
 				}

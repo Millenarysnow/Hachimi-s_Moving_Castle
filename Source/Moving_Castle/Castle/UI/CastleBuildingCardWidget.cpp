@@ -29,6 +29,32 @@ namespace
 		Font.Size = Size;
 		TextBlock.SetFont(Font);
 	}
+
+	/** 同时设置边框色和显示名，确保两者始终表达同一张牌的玩法色。 */
+	bool TryGetCardColor(const ECastleTileColor Color, FLinearColor& OutTint, FText& OutName)
+	{
+		switch (Color)
+		{
+		case ECastleTileColor::Red:
+			OutTint = FLinearColor(0.98f, 0.18f, 0.18f);
+			OutName = INVTEXT("红色");
+			return true;
+		case ECastleTileColor::Yellow:
+			OutTint = FLinearColor(1.0f, 0.78f, 0.12f);
+			OutName = INVTEXT("黄色");
+			return true;
+		case ECastleTileColor::Blue:
+			OutTint = FLinearColor(0.16f, 0.50f, 1.0f);
+			OutName = INVTEXT("蓝色");
+			return true;
+		case ECastleTileColor::Green:
+			OutTint = FLinearColor(0.16f, 0.92f, 0.36f);
+			OutName = INVTEXT("绿色");
+			return true;
+		default:
+			return false;
+		}
+	}
 }
 
 void UCastleBuildingCardWidget::NativeOnInitialized()
@@ -131,6 +157,13 @@ void UCastleBuildingCardWidget::NativeConstruct()
 
 void UCastleBuildingCardWidget::SetBuildingDescriptor(const FCastleBuildingDescriptor& InDescriptor)
 {
+	// 有定义的卡必须先通过色值校验，拒绝覆盖当前控件已展示的有效描述。
+	if (InDescriptor.HasDefinition() && !CastleTileColors::IsPlayable(InDescriptor.Color))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑卡片 %s 的定义 %s 使用了无效色值 %d。"),
+			*GetPathName(), *GetPathNameSafe(InDescriptor.Definition.Get()), static_cast<int32>(InDescriptor.Color));
+		return;
+	}
 	Descriptor = InDescriptor;
 	bHasDescriptor = Descriptor.HasDefinition();
 	RefreshVisuals();
@@ -161,52 +194,20 @@ void UCastleBuildingCardWidget::RefreshVisuals()
 		return;
 	}
 
+	FLinearColor Color;
+	FText ColorName;
+	if (!TryGetCardColor(Descriptor.Color, Color, ColorName))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑卡片 %s 的定义 %s 缺少色值 %d 的显示配置。"),
+			*GetPathName(), *GetPathNameSafe(Descriptor.Definition.Get()), static_cast<int32>(Descriptor.Color));
+		return;
+	}
+
 	const FText TypeText = Descriptor.Definition->DisplayName;
 	TitleText->SetText(FText::FromString(FString::Printf(TEXT("%s  |  %d"), *TypeText.ToString(), Descriptor.Number)));
-	DetailText->SetText(FText::FromString(FString::Printf(TEXT("Lv%d  |  %s"), Descriptor.Level, *GetBuildingColorText(Descriptor.Color).ToString())));
+	DetailText->SetText(FText::FromString(FString::Printf(TEXT("Lv%d  |  %s"), Descriptor.Level, *ColorName.ToString())));
 	PreviewWidget->SetVisibility(ESlateVisibility::Visible);
 	PreviewWidget->SetBuildingDescriptor(Descriptor);
 
-	const FLinearColor Color = GetCardColor(Descriptor.Color);
 	CardBorder->SetBrushColor(FLinearColor(Color.R, Color.G, Color.B, 0.24f));
-}
-
-FLinearColor UCastleBuildingCardWidget::GetCardColor(ECastleTileColor Color)
-{
-	switch (Color)
-	{
-	case ECastleTileColor::Red:
-		return FLinearColor(0.98f, 0.18f, 0.18f, 1.0f);
-	case ECastleTileColor::Blue:
-		return FLinearColor(0.16f, 0.50f, 1.0f, 1.0f);
-	case ECastleTileColor::Green:
-		return FLinearColor(0.16f, 0.92f, 0.36f, 1.0f);
-	case ECastleTileColor::Yellow:
-		return FLinearColor(1.0f, 0.78f, 0.12f, 1.0f);
-	case ECastleTileColor::Purple:
-		return FLinearColor(0.76f, 0.30f, 1.0f, 1.0f);
-	case ECastleTileColor::Gray:
-	default:
-		return FLinearColor(0.72f, 0.82f, 0.90f, 1.0f);
-	}
-}
-
-FText UCastleBuildingCardWidget::GetBuildingColorText(ECastleTileColor Color)
-{
-	switch (Color)
-	{
-	case ECastleTileColor::Red:
-		return FText::FromString(TEXT("红色"));
-	case ECastleTileColor::Blue:
-		return FText::FromString(TEXT("蓝色"));
-	case ECastleTileColor::Green:
-		return FText::FromString(TEXT("绿色"));
-	case ECastleTileColor::Yellow:
-		return FText::FromString(TEXT("黄色"));
-	case ECastleTileColor::Purple:
-		return FText::FromString(TEXT("紫色"));
-	case ECastleTileColor::Gray:
-	default:
-		return FText::FromString(TEXT("灰色"));
-	}
 }

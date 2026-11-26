@@ -119,8 +119,8 @@ bool FCastleShopTest::RunTest(const FString& Parameters)
 	{
 		TestFalse(TEXT("刷新后全部可购买"), Offer.bSold);
 		TestTrue(TEXT("所有商品使用一级类"), Offer.Descriptor.Level == 1);
-		TestTrue(TEXT("所有房间均为五色 1～9 数字"), Offer.Descriptor.Color >= ECastleTileColor::Red
-			&& Offer.Descriptor.Color <= ECastleTileColor::Purple && Offer.Descriptor.Number >= 1 && Offer.Descriptor.Number <= 9);
+		TestTrue(TEXT("所有房间均为合法颜色与 1～9 数字"), CastleTileColors::IsPlayable(Offer.Descriptor.Color)
+			&& Offer.Descriptor.Number >= 1 && Offer.Descriptor.Number <= 9);
 		TestEqual(TEXT("所有一级房间使用统一买价"), Offer.Price, 5 + Offer.Descriptor.Number * 2);
 	}
 	// 即使卖出能释放容量，也必须先保证收款不会溢出，不能先删除卡牌再发现无法入账。

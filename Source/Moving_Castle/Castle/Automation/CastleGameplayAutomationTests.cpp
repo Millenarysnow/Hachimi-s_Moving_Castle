@@ -46,7 +46,7 @@ namespace
 }
 
 /**
- * 验证随机地面生成器的确定性、全棋盘五色 1～9 数字和无效请求拒绝逻辑。
+ * 验证随机地面生成器的确定性、四种玩法色与 1～9 数字，以及无效请求的拒绝逻辑。
  *
  * 该测试只依赖 UObject 数据对象，不创建任何美术资源，因此可以在编辑器的
  * NullRHI 模式下运行，也能保证后续替换生成策略时接口行为不会悄悄改变。
@@ -89,13 +89,13 @@ bool FCastleRandomGroundGeneratorAutomationTest::RunTest(const FString& Paramete
 	TestTrue(TEXT("原点同样参与完整地面生成"), FirstResult.FindCell(Request.Origin, StartCell));
 	if (FirstResult.FindCell(Request.Origin, StartCell))
 	{
-		TestTrue(TEXT("原点必须为五色 1～9 号格"), StartCell.Color >= ECastleTileColor::Red
-			&& StartCell.Color <= ECastleTileColor::Purple && StartCell.Number >= 1 && StartCell.Number <= 9);
+		TestTrue(TEXT("原点必须为合法色的 1～9 号格"), CastleTileColors::IsPlayable(StartCell.Color)
+			&& StartCell.Number >= 1 && StartCell.Number <= 9);
 	}
 	for (const FCastleGroundCell& Cell : FirstResult.Cells)
 	{
-		TestTrue(TEXT("整个棋盘没有灰色或 0 号地面"), Cell.Color >= ECastleTileColor::Red
-			&& Cell.Color <= ECastleTileColor::Purple && Cell.Number >= 1 && Cell.Number <= 9);
+		TestTrue(TEXT("整个棋盘使用合法色和 1～9 数字"), CastleTileColors::IsPlayable(Cell.Color)
+			&& Cell.Number >= 1 && Cell.Number <= 9);
 	}
 
 	FCastleGroundGenerationRequest InvalidRequest = Request;
@@ -104,6 +104,11 @@ bool FCastleRandomGroundGeneratorAutomationTest::RunTest(const FString& Paramete
 	AddExpectedError(TEXT("随机地面生成失败：请求尺寸无效"), EAutomationExpectedErrorFlags::Contains, 1);
 	const FCastleGroundGenerationResult InvalidResult = Generator->GenerateGround(InvalidRequest);
 	TestEqual(TEXT("无效尺寸应被拒绝且不返回部分结果"), InvalidResult.Cells.Num(), 0);
+
+	// 模拟旧资产手动覆盖了颜色池，已停用的序号不能被跳过或替换。
+	Generator->FunctionalColors.Add(static_cast<ECastleTileColor>(5));
+	AddExpectedError(TEXT("颜色池含无效色值 5"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestTrue(TEXT("含旧紫色序号的池拒绝整次生成"), Generator->GenerateGround(Request).Cells.IsEmpty());
 
 	return true;
 }
@@ -238,7 +243,7 @@ bool FCastleBackpackAutomationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("加入第一张卡牌后数量应为 1"), Backpack->GetItemCount(), 1);
 
 	TestFalse(TEXT("普通房间拒绝灰色 0 号属性"), Backpack->TryAddBuilding(CastleBuildingTests::MakeDefinition(ECastleBuildingType::NormalRoom), 1, ECastleTileColor::Gray, 0, AddedIndex, FailureReason));
-	TestTrue(TEXT("普通房间接受五色 1～9 号属性"), Backpack->TryAddBuilding(CastleBuildingTests::MakeDefinition(ECastleBuildingType::NormalRoom), 1, ECastleTileColor::Red, 3, AddedIndex, FailureReason));
+	TestTrue(TEXT("普通房间接受合法颜色与数字"), Backpack->TryAddBuilding(CastleBuildingTests::MakeDefinition(ECastleBuildingType::NormalRoom), 1, ECastleTileColor::Red, 3, AddedIndex, FailureReason));
 
 	for (int32 Index = Backpack->GetItemCount(); Index < Backpack->Capacity; ++Index)
 	{

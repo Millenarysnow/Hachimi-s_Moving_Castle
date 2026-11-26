@@ -268,7 +268,7 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 
 	// 功能建筑与普通房间双向使用同色或同数字匹配，不再存在类别隔离。
 	ACastleBuildingBase* NormalRoom = Board->PlaceBuilding(FIntVector(0, 0, 0), NormalRoomCard, false, Reason);
-	if (!TestNotNull(TEXT("在五色地面放置普通房间"), NormalRoom)) { return false; }
+	if (!TestNotNull(TEXT("在有效色号地面放置普通房间"), NormalRoom)) { return false; }
 	if (!CastleBuildingTests::CompletePlacement(NormalRoom)) { return false; }
 	FCastleGridCursorTarget NormalRoomTarget;
 	NormalRoomTarget.bValid = true;

@@ -20,14 +20,8 @@ FCastleGroundGenerationResult UCastleGroundGenerator::GenerateGround_Implementat
 }
 UCastleRandomGroundGenerator::UCastleRandomGroundGenerator()
 {
-	// 原点和其他地面统一从五色池生成，不再设置特殊起始格。
-	FunctionalColors = {
-		ECastleTileColor::Red,
-		ECastleTileColor::Blue,
-		ECastleTileColor::Green,
-		ECastleTileColor::Yellow,
-		ECastleTileColor::Purple
-	};
+	// 包含原点在内的所有地面格默认从正式玩法色集合采样。
+	FunctionalColors.Append(CastleTileColors::GetPlayable());
 }
 
 FCastleGroundGenerationResult UCastleRandomGroundGenerator::GenerateGround_Implementation(const FCastleGroundGenerationRequest& Request) const
@@ -48,9 +42,10 @@ FCastleGroundGenerationResult UCastleRandomGroundGenerator::GenerateGround_Imple
 
 	for (const ECastleTileColor Color : FunctionalColors)
 	{
-		if (Color < ECastleTileColor::Red || Color > ECastleTileColor::Purple)
+		if (!CastleTileColors::IsPlayable(Color))
 		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("随机地面生成失败：功能颜色池必须只包含红、蓝、绿、黄、紫五种有效颜色。"));
+			UE_LOG(LogMoving_Castle, Error, TEXT("随机地面生成器 %s 的颜色池含无效色值 %d。请使用红、黄、蓝、绿配置。"),
+				*GetPathName(), static_cast<int32>(Color));
 			return Result;
 		}
 	}
@@ -71,7 +66,7 @@ FCastleGroundGenerationResult UCastleRandomGroundGenerator::GenerateGround_Imple
 			FCastleGroundCell Cell;
 			Cell.Coordinate = Request.Origin + FIntVector(X, Y, 0);
 
-			// 所有格子统一生成五色 1～9 数字，包含棋盘原点。
+			// 颜色与数字分别采样，缩减颜色集合时数字通道仍可独立复现。
 			const FIntVector SampleCell(Cell.Coordinate.X, Cell.Coordinate.Y, 0);
 			const int32 ColorIndex = FMath::FloorToInt(UCastleDeterministicPCGNoise::SampleNoiseValue(
 				Request.Seed, SampleCell, TEXT("GroundColor")) * FunctionalColors.Num());

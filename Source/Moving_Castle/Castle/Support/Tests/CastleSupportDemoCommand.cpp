@@ -26,17 +26,17 @@ namespace CastleSupportDemo
 
 	/** 只在全新的 MainMap PIE 使用固定牌和实际资产；不会把调试布局存为关卡内容。 */
 	FAutoConsoleCommandWithWorldAndArgs Demo(TEXT("Castle.SupportDemo"),
-		TEXT("Castle.SupportDemo <Hive|Balloon> <1|2|3|4> <Red|Yellow|Blue|Green|Purple>：MainMap 空棋盘支援塔验收。"),
+		TEXT("Castle.SupportDemo <Hive|Balloon> <1|2|3|4> <Red|Yellow|Blue|Green>：MainMap 空棋盘支援塔验收。"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
 	{
 		const TMap<FString, ECastleTileColor> Colors{{TEXT("Red"), ECastleTileColor::Red}, {TEXT("Yellow"), ECastleTileColor::Yellow},
-			{TEXT("Blue"), ECastleTileColor::Blue}, {TEXT("Green"), ECastleTileColor::Green}, {TEXT("Purple"), ECastleTileColor::Purple}};
+			{TEXT("Blue"), ECastleTileColor::Blue}, {TEXT("Green"), ECastleTileColor::Green}};
 		int32 Level = 0;
 		if (!World || World->WorldType != EWorldType::PIE || Args.Num() != 3
 			|| (Args[0] != TEXT("Hive") && Args[0] != TEXT("Balloon")) || Args[1].Len() != 1
 			|| !LexTryParseString(Level, *Args[1]) || Level < 1 || Level > 4 || !Colors.Contains(Args[2]))
 		{
-			Feedback(TEXT("请在 MainMap 的新 PIE 输入 Castle.SupportDemo <Hive|Balloon> <1|2|3|4> <Red|Yellow|Blue|Green|Purple>。"), false);
+			Feedback(TEXT("请在 MainMap 的新 PIE 输入 Castle.SupportDemo <Hive|Balloon> <1|2|3|4> <Red|Yellow|Blue|Green>。"), false);
 			return;
 		}
 		const auto* Director = World->GetSubsystem<UCastleDirectorSubsystem>();

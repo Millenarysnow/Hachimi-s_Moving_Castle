@@ -47,7 +47,7 @@ namespace
 	const FName CardAspectParameter(TEXT("CardAspect"));
 	const FName CardOpacityParameter(TEXT("CardOpacity"));
 
-	/** 使用设计好的五种玩法色；灰不是一种商品颜色，必须向调用处报告配置错误。 */
+	/** 卡面使用四种玩法色的既有色值，未知颜色交给调用处报告配置错误。 */
 	bool GetGameplayTint(ECastleTileColor Color, FLinearColor& OutColor)
 	{
 		const TCHAR* Hex = nullptr;
@@ -57,7 +57,6 @@ namespace
 		case ECastleTileColor::Blue: Hex = TEXT("287ADB"); break;
 		case ECastleTileColor::Green: Hex = TEXT("36A86F"); break;
 		case ECastleTileColor::Yellow: Hex = TEXT("E4AB31"); break;
-		case ECastleTileColor::Purple: Hex = TEXT("9658DC"); break;
 		default: return false;
 		}
 		OutColor = FLinearColor(FColor::FromHex(Hex));

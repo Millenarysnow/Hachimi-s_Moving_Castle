@@ -50,7 +50,7 @@
 | 可复制示例 | 参数与运行条件 | 效果与反馈 |
 | --- | --- | --- |
 | `Castle.BuildingTriggers.Debug 1` / `Castle.BuildingTriggers.Debug 0` | 调试 CVar。Game 或 PIE 中 `1` 开启，`0` 关闭，初始值为 `0` | 绘制建筑逻辑触发区的线框，在建筑上显示累计进入次数。可在 `/Game/MovingCastle/Maps/L_BuildingTriggerDemo` 观察。 |
-| `Castle.SupportDemo Hive 3 Red` | 开发验收。新开的 `MainMap` PIE，处于构筑阶段，棋盘为空且未扩张。类型 `Hive` 或 `Balloon`，等级 `1`～`4`，颜色 `Red`、`Yellow`、`Blue`、`Green`、`Purple` | 放置指定等级的蜂巢或气球塔，生成演示敌人并主动触发建筑效果。可在视口观察效果，日志会给出放置位置或失败原因。 |
+| `Castle.SupportDemo Hive 3 Red` | 开发验收。新开的 `MainMap` PIE，处于构筑阶段，棋盘为空且未扩张。类型 `Hive` 或 `Balloon`，等级 `1`～`4`，颜色 `Red`、`Yellow`、`Blue`、`Green` | 放置指定等级的蜂巢或气球塔，生成演示敌人并主动触发建筑效果。可在视口观察效果，日志会给出放置位置或失败原因。 |
 
 注册位置见 [建筑触发子系统](Source/Moving_Castle/Units/BuildingInteraction/CastleBuildingTriggerSubsystem.cpp)和[支援塔验收命令](Source/Moving_Castle/Castle/Support/Tests/CastleSupportDemoCommand.cpp)。
 

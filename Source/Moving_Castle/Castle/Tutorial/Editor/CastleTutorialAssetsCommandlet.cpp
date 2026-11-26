@@ -30,7 +30,8 @@ namespace
 	const FString DataRoot(TEXT("/Game/MovingCastle/Data/Tutorial/"));
 	const FString PortraitRoot(TEXT("/Game/MovingCastle/UI/Dialogue/Portraits/"));
 	constexpr TCHAR TutorialMap[] = TEXT("/Game/MovingCastle/Maps/TutorialMap");
-	constexpr int32 TutorialSeed = 93;
+	/** 四色池下复现教学首层四面黄色及原数字，固定牌能沿预设回路完成农田替换。 */
+	constexpr int32 TutorialSeed = 369972;
 
 	template<typename T>
 	T* FindAsset(const FString& Path, uint32 LoadFlags = LOAD_None)
@@ -281,7 +282,7 @@ namespace
 
 	bool AuthorBattleAndCards(UCastleTutorialConfigDataAsset& Config)
 	{
-		// 与 93 号塔侧采样一致：一楼四面均为黄色，正后门同为 3。
+		// 与 TutorialSeed 配套，一楼四面均为黄色，正门和后门同为 3。
 		const auto Card = [](const TCHAR* Name)
 		{
 			FCastleBuildingDescriptor Result;

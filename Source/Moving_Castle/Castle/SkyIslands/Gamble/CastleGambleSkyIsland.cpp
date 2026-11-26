@@ -863,9 +863,9 @@ UBoxComponent* ACastleGambleSkyIsland::CreateMiniCard(const FCastleBuildingDescr
 		}
 		Mesh->RegisterComponent();
 	}
-	// 色号牌沿近端立面显示。数字仍来自原卡，徽章和建筑运算均不介入。
+	// 色号牌沿近端立面显示。色值按已校验的枚举序号索引，数字沿用原卡。
 	const FLinearColor Colors[] = {{0.84f, 0.06f, 0.07f}, {0.06f, 0.25f, 0.82f}, {0.05f, 0.61f, 0.18f},
-		{0.94f, 0.64f, 0.04f}, {0.54f, 0.12f, 0.77f}};
+		{0.94f, 0.64f, 0.04f}};
 	const int32 Color = static_cast<int32>(Card.Color) - static_cast<int32>(ECastleTileColor::Red);
 	check(Color >= 0 && Color < UE_ARRAY_COUNT(Colors));
 	auto* Plate = NewObject<UStaticMeshComponent>(this);

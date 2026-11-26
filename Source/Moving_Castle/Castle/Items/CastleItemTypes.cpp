@@ -20,15 +20,6 @@ bool UCastleRoomGroupDataAsset::ValidateRarity(FText& OutReason) const
 	return false;
 }
 
-TConstArrayView<ECastleTileColor> FCastleWildcardRoomSpec::GetLegalColors()
-{
-	static constexpr ECastleTileColor LegalColors[] = {
-		ECastleTileColor::Red, ECastleTileColor::Blue, ECastleTileColor::Green,
-		ECastleTileColor::Yellow, ECastleTileColor::Purple
-	};
-	return MakeArrayView(LegalColors);
-}
-
 bool FCastleWildcardRoomSpec::TryResolveOptions(
 	const TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> DefinitionPool, FCastleWildcardRoomOptions& OutOptions,
 	FText& OutFailureReason) const
@@ -69,7 +60,8 @@ bool FCastleWildcardRoomSpec::TryResolveOptions(
 		Candidate.Definitions.Add(Definition);
 	}
 
-	const TConstArrayView<ECastleTileColor> LegalColors = GetLegalColors();
+	// 默认选项顺序来自共享玩法色集合，显式配置的顺序由房间组资产决定。
+	const TConstArrayView<ECastleTileColor> LegalColors = CastleTileColors::GetPlayable();
 	const TConstArrayView<ECastleTileColor> Colors = AllowedColors.IsEmpty() ? LegalColors : MakeArrayView(AllowedColors);
 	for (const ECastleTileColor Color : Colors)
 	{

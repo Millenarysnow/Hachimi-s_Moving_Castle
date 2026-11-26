@@ -17,7 +17,7 @@
 
 namespace
 {
-	/** 玩法色映射，严格对应红/蓝/绿/黄/紫五色；非法颜色直接报错。 */
+	/** 商店槽位的色标对应红、黄、蓝、绿，调用方负责报告无效色值。 */
 	bool TryResolveOfferGameplayTint(const ECastleTileColor Color, FLinearColor& OutColor)
 	{
 		switch (Color)
@@ -26,7 +26,6 @@ namespace
 		case ECastleTileColor::Blue: OutColor = FLinearColor(FColor::FromHex(TEXT("287ADB"))); return true;
 		case ECastleTileColor::Green: OutColor = FLinearColor(FColor::FromHex(TEXT("36A86F"))); return true;
 		case ECastleTileColor::Yellow: OutColor = FLinearColor(FColor::FromHex(TEXT("E4AB31"))); return true;
-		case ECastleTileColor::Purple: OutColor = FLinearColor(FColor::FromHex(TEXT("9658DC"))); return true;
 		default: return false;
 		}
 	}

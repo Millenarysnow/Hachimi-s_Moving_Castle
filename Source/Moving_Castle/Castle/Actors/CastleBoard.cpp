@@ -601,9 +601,9 @@ bool ACastleBoard::ValidateGroundResult(const FCastleGroundGenerationResult& Res
 		}
 		UniqueCoordinates.Add(Cell.Coordinate);
 
-		if (Cell.Number < 1 || Cell.Number > 9 || Cell.Color < ECastleTileColor::Red || Cell.Color > ECastleTileColor::Purple)
+		if (Cell.Number < 1 || Cell.Number > 9 || !CastleTileColors::IsPlayable(Cell.Color))
 		{
-			OutFailureReason = FText::FromString(FString::Printf(TEXT("地面坐标 (%d, %d, %d) 必须使用五色之一与 1 至 9 数字，实际颜色=%d，数字=%d。"),
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("地面坐标 (%d, %d, %d) 必须使用红、黄、蓝、绿之一与 1 至 9 数字，实际颜色=%d，数字=%d。"),
 				Cell.Coordinate.X, Cell.Coordinate.Y, Cell.Coordinate.Z, static_cast<int32>(Cell.Color), Cell.Number));
 			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 拒绝非法地面：%s"), *GetName(), *OutFailureReason.ToString());
 			return false;
@@ -1965,11 +1965,12 @@ ACastleBuildingBase* ACastleBoard::MergeBuildings(ACastleBuildingBase* First, AC
 				*GetPathName(), *GetPathNameSafe(MergedDescriptor.Definition), *OutFailureReason.ToString());
 			return nullptr;
 		}
+		// 合成赠牌使用与商店相同的四种玩法色，避免奖励产生不可摆放的牌。
+		const TConstArrayView<ECastleTileColor> Colors = CastleTileColors::GetPlayable();
 		for (int32 Index = 0; Index < RewardCount; ++Index)
 		{
 			const UCastleBuildingDefinition* Definition = BuildingDefinitions[FMath::RandRange(0, BuildingDefinitions.Num() - 1)];
-			const auto Color = static_cast<ECastleTileColor>(FMath::RandRange(
-				static_cast<int32>(ECastleTileColor::Red), static_cast<int32>(ECastleTileColor::Purple)));
+			const ECastleTileColor Color = Colors[FMath::RandRange(0, Colors.Num() - 1)];
 			if (!Definition->CreateDescriptor(1, Color, FMath::RandRange(1, Director->GetCurrentMaxShopNumber()),
 				RewardCards.AddDefaulted_GetRef(), OutFailureReason))
 			{

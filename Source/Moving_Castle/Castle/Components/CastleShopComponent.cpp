@@ -92,12 +92,12 @@ bool UCastleShopComponent::GenerateOffers(FRandomStream& Stream, TArray<FCastleS
 		}
 		return false;
 	}
+	const TConstArrayView<ECastleTileColor> Colors = CastleTileColors::GetPlayable();
 	for (int32 Index = 0; Index < 6; ++Index)
 	{
 		UCastleBuildingDefinition* Definition = Board->BuildingDefinitions[Stream.RandRange(0, Board->BuildingDefinitions.Num() - 1)];
-		// 普通房间与功能建筑共用五色和本局当前解锁的数字区间，允许重复出牌。
-		const ECastleTileColor Color = static_cast<ECastleTileColor>(Stream.RandRange(
-			static_cast<int32>(ECastleTileColor::Red), static_cast<int32>(ECastleTileColor::Purple)));
+		// 普通房间与功能建筑都从四种玩法色和本局解锁的数字区间采样，允许重复出牌。
+		const ECastleTileColor Color = Colors[Stream.RandRange(0, Colors.Num() - 1)];
 		const int32 Number = Stream.RandRange(MinOfferNumber, MaxOfferNumber);
 		FCastleShopOffer Offer;
 		if (!Definition->CreateDescriptor(1, Color, Number, Offer.Descriptor, OutFailureReason))

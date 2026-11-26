@@ -386,8 +386,8 @@ namespace
          && Target.Face == Faces[Side] && Target.Cell == Cell && Target.AdjacentCell == Cell + Offsets[Side])) { return true; }
      const FCastleTowerSideCell* Data = Board->FindTowerSideCell(Cell, Target.Face);
      if (!Test->TestNotNull(TEXT("按塔身坐标及方向取得格子数据"), Data)) { return true; }
-     Test->TestTrue(TEXT("合法五色色号与 1～9 数字"), Data->Color >= ECastleTileColor::Red
-         && Data->Color <= ECastleTileColor::Purple && Data->Number >= 1 && Data->Number <= 9);
+     Test->TestTrue(TEXT("合法玩法色与 1～9 数字"), CastleTileColors::IsPlayable(Data->Color)
+         && Data->Number >= 1 && Data->Number <= 9);
      // 高层同样能直接起建，不要求在塔脚先造一根支撑柱。
      Probe.Color = Data->Color;
      Probe.Number = Data->Number;

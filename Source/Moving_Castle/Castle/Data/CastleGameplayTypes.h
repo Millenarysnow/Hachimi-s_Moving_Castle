@@ -11,19 +11,31 @@ class UCastleBuildingDefinition;
 /**
  * 地面和房间共用的颜色枚举。
  *
- * 灰色仅保留为旧资产颜色序号的占位，不参与地面、卡牌或商店生成。
- * 普通房间与功能建筑统一使用红、蓝、绿、黄、紫及 1～9 数字。
+ * 普通房间、功能建筑和可放置格统一使用红、黄、蓝、绿及 1～9 数字。
+ * 枚举显式保留既有资产的序号。灰色仅表示未初始化，在编辑器选单中隐藏。
  */
 UENUM(BlueprintType)
 enum class ECastleTileColor : uint8
 {
-	Gray UMETA(DisplayName = "灰色"),
-	Red UMETA(DisplayName = "红色"),
-	Blue UMETA(DisplayName = "蓝色"),
-	Green UMETA(DisplayName = "绿色"),
-	Yellow UMETA(DisplayName = "黄色"),
-	Purple UMETA(DisplayName = "紫色")
+	Gray = 0 UMETA(Hidden),
+	Red = 1 UMETA(DisplayName = "红色"),
+	Blue = 2 UMETA(DisplayName = "蓝色"),
+	Green = 3 UMETA(DisplayName = "绿色"),
+	Yellow = 4 UMETA(DisplayName = "黄色")
 };
+
+namespace CastleTileColors
+{
+	/** 随机发牌、初始建造面和工坊选项使用同一份玩法色集合，顺序独立于资产序号。 */
+	MOVING_CASTLE_API TConstArrayView<ECastleTileColor> GetPlayable();
+
+	/** 校验房间与格子的颜色，拒绝未初始化值和已移除的颜色序号。 */
+	MOVING_CASTLE_API bool IsPlayable(ECastleTileColor Color);
+
+	/** 地面和塔身格共用材质色值。 */
+	MOVING_CASTLE_API bool TryGetGridTint(ECastleTileColor Color, FLinearColor& OutTint);
+}
+
 /**
  * 当前阶段实现的建筑类别。
  *
@@ -218,7 +230,7 @@ struct MOVING_CASTLE_API FCastleBuildingDescriptor
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑")
 	TObjectPtr<UCastleBuildingDefinition> Definition;
 
-	/** 建筑颜色。所有类别均要求五色之一，灰色只表示未初始化。 */
+	/** 建筑颜色。所有类别均要求使用红、黄、蓝、绿之一，灰色只表示未初始化。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑")
 	ECastleTileColor Color = ECastleTileColor::Gray;
 
