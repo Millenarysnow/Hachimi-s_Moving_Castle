@@ -3,7 +3,7 @@
 #include "CastleMenuModel.h"
 #include "Camera/CameraTypes.h"
 #include "Components/DirectionalLightComponent.h"
-#include "Components/InstancedStaticMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
@@ -20,6 +20,7 @@ ACastleMenuStage::ACastleMenuStage()
 	Key->SetupAttachment(GetRootComponent());
 	Key->SetRelativeRotation(FRotator(-48, 32, 0));
 	Key->SetIntensity(4.0f);
+	Key->ForwardShadingPriority = 1;
 	Key->SetLightColor(FLinearColor(1.0f, 0.94f, 0.84f));
 	auto* Fill = CreateDefaultSubobject<UDirectionalLightComponent>(TEXT("FillLight"));
 	Fill->SetupAttachment(GetRootComponent());
@@ -32,7 +33,13 @@ ACastleMenuStage::ACastleMenuStage()
 bool ACastleMenuStage::ShowModel(const UCastleMenuModel& Model, FString& Error)
 {
 	// 全部资源和变换验证完成后才注册本批组件，避免损坏存档显示一半城堡。
-	TArray<UInstancedStaticMeshComponent*> Groups;
+	struct FResolvedBatch
+	{
+		UStaticMesh* Mesh;
+		TArray<UMaterialInterface*> Materials;
+		const FCastleMenuMeshBatch* Source;
+	};
+	TArray<FResolvedBatch> Groups;
 	FBox Bounds(ForceInit);
 	auto Prepare = [&](const FCastleMenuMeshBatch& Batch)
 	{
@@ -44,13 +51,7 @@ bool ACastleMenuStage::ShowModel(const UCastleMenuModel& Model, FString& Error)
 			Error = FString::Printf(TEXT("展示网格 %s 缺失，或其实例、材质、属性色数据无效。"), *Batch.Mesh.ToString());
 			return false;
 		}
-		auto* Instances = NewObject<UInstancedStaticMeshComponent>(this);
-		Instances->SetupAttachment(Pivot);
-		Instances->SetMobility(EComponentMobility::Movable);
-		Instances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		Instances->SetCanEverAffectNavigation(false);
-		Instances->SetGenerateOverlapEvents(false);
-		Instances->SetStaticMesh(Mesh);
+		FResolvedBatch& Group = Groups.Add_GetRef({Mesh, {}, &Batch});
 		for (int32 Slot = 0; Slot < Batch.Materials.Num(); ++Slot)
 		{
 			UMaterialInterface* Material = Batch.Materials[Slot].LoadSynchronous();
@@ -59,26 +60,37 @@ bool ACastleMenuStage::ShowModel(const UCastleMenuModel& Model, FString& Error)
 				Error = FString::Printf(TEXT("展示网格 %s 的材质 %s 无法加载。"), *Mesh->GetPathName(), *Batch.Materials[Slot].ToString());
 				return false;
 			}
-			Instances->SetMaterial(Slot, Material);
+			Group.Materials.Add(Material);
 		}
-		Instances->SetDefaultCustomPrimitiveDataFloatArray(0, Batch.PrimitiveData);
 		for (const FTransform& Placement : Batch.Placements)
 		{
 			if (!Placement.IsValid()) { Error = Mesh->GetPathName() + TEXT(" 含无效展示变换。"); return false; }
 			Bounds += Mesh->GetBoundingBox().TransformBy(Placement.ToMatrixWithScale());
 		}
-		Instances->AddInstances(Batch.Placements, false, false, false);
-		Groups.Add(Instances);
 		return true;
 	};
 	for (const auto& Batch : Model.Tower) { if (!Prepare(Batch)) { return false; } }
 	for (const auto& Batch : Model.Rooms) { if (!Prepare(Batch)) { return false; } }
 	if (!Bounds.IsValid || Bounds.GetExtent().GetMin() <= 0.0) { Error = TEXT("展示城堡没有有效的三维包围盒。"); return false; }
-	for (auto* Group : Groups)
+	for (const FResolvedBatch& Group : Groups)
 	{
-		Group->SetRelativeLocation(-Bounds.GetCenter());
-		AddInstanceComponent(Group);
-		Group->RegisterComponent();
+		for (FTransform Placement : Group.Source->Placements)
+		{
+			// 游局材质按普通静态网格编译。逐件复现相同顶点工厂，保留材质与原始属性色。
+			auto* Part = NewObject<UStaticMeshComponent>(this);
+			Part->SetupAttachment(Pivot);
+			Part->SetMobility(EComponentMobility::Movable);
+			Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			Part->SetCanEverAffectNavigation(false);
+			Part->SetGenerateOverlapEvents(false);
+			Part->SetStaticMesh(Group.Mesh);
+			for (int32 I = 0; I < Group.Materials.Num(); ++I) { Part->SetMaterial(I, Group.Materials[I]); }
+			Part->SetDefaultCustomPrimitiveDataFloatArray(0, Group.Source->PrimitiveData);
+			Placement.AddToTranslation(-Bounds.GetCenter());
+			Part->SetRelativeTransform(Placement);
+			AddInstanceComponent(Part);
+			Part->RegisterComponent();
+		}
 	}
 	const FVector Extent = Bounds.GetExtent();
 	SweepRadius = FVector2D(Extent.X, Extent.Y).Size();

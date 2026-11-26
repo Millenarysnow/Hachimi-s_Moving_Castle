@@ -11,7 +11,7 @@ class UMaterialInterface;
 class UStaticMesh;
 class UStaticMeshComponent;
 
-/** 同网格、同材质、同属性色的零件共用一个实例化组件，每次摆放保留独立的塔根局部变换。 */
+/** 同网格、同材质、同属性色的零件在存档中共用资源路径，每次摆放保留独立的塔根局部变换。 */
 USTRUCT()
 struct FCastleMenuMeshBatch
 {

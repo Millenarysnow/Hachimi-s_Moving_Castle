@@ -20,6 +20,9 @@
 #include "Widgets/Layout/SScaleBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
+#if WITH_EDITOR
+#include "Editor.h"
+#endif
 
 /** 使用真正的 Slate 按钮保留键盘、手柄和触摸语义，显示部分只有一行字。 */
 class SCastleMenuTextButton final : public SButton
@@ -73,7 +76,7 @@ public:
 		ChildSlot
 		[
 			SNew(SConstraintCanvas)
-			+ SConstraintCanvas::Slot().Anchors(FAnchors(0.075f, 0.13f, 0.47f, 0.87f)).Offset(FMargin(0))
+			+ SConstraintCanvas::Slot().Anchors(FAnchors(0.105f, 0.13f, 0.455f, 0.87f)).Offset(FMargin(0))
 			[
 				SNew(SScaleBox).Stretch(EStretch::ScaleToFit)
 				[
@@ -158,6 +161,14 @@ FReply ACastleMenuController::Choose(const ECastleMenuAction Action)
 	if (Action == ECastleMenuAction::Quit)
 	{
 		bLeaving = true;
+#if WITH_EDITOR
+		// PIE 与编辑器共享进程，显式结束本次试玩。独立运行的游戏仍由平台退出接口关闭。
+		if (GetWorld()->WorldType == EWorldType::PIE)
+		{
+			GEditor->RequestEndPlayMap();
+			return FReply::Handled();
+		}
+#endif
 		UKismetSystemLibrary::QuitGame(this, this, EQuitPreference::Quit, false);
 		return FReply::Handled();
 	}
