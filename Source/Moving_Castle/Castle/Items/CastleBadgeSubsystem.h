@@ -78,6 +78,8 @@ public:
 	float GetShiftWhistleSpeedMultiplier() const;
 	double GetStringGloveExtraCells() const;
 	float GetQuickLadderSpeedMultiplier() const;
+	/** 后手优势只基于该士兵自己完成的整圈数，纯数值函数可用于 Mass 工作线程。 */
+	static float CalculateLateAdvantageSpeedMultiplier(int64 CompletedLaps);
 	float GetSiphonArrowFraction() const;
 	float GetRapidMarchSpeedMultiplier(int32 BuildingLevel) const;
 	int64 GetBerserkBeeGold() const;

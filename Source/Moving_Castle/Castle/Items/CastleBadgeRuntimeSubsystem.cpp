@@ -14,6 +14,7 @@
 #include "Items/CastleBadgeSubsystem.h"
 #include "Moving_Castle.h"
 #include "Subsystems/CastleShieldTowerSubsystem.h"
+#include "Units/Navigation/CastleTowerDispatchSubsystem.h"
 #include <cmath>
 
 namespace
@@ -24,6 +25,7 @@ namespace
 	constexpr int32 WhistleRecipientsPerWave = 3;
 	constexpr double WhistleDuration = 4.0;
 	constexpr double MarchDuration = 3.0;
+	constexpr int32 LapsPerReassignment = 10;
 
 	bool IsFunctionTower(const ACastleBuildingBase& Building)
 	{
@@ -161,6 +163,8 @@ void UCastleBadgeRuntimeSubsystem::ResetBattleEffects()
 	WhistleRecipients = 0;
 	NPCsEnteredThisWave.Reset();
 	NPCMovement.Reset();
+	CompletedLapsInCycle = 0;
+	EarnedTemporaryNPCs = 0;
 }
 
 void UCastleBadgeRuntimeSubsystem::HandleDirectorPhaseChanged(const ECastleDirectorPhase Phase)
@@ -170,12 +174,48 @@ void UCastleBadgeRuntimeSubsystem::HandleDirectorPhaseChanged(const ECastleDirec
 
 void UCastleBadgeRuntimeSubsystem::HandleWaveStarted(const int32 WaveIndex, const int32 TotalWaves)
 {
+	if (WaveIndex == 1) { ResetBattleEffects(); }
 	// 战斗成功进入第一波和后续波次都由同一个委托发布，旧申请令牌不能归还新波机会。
 	++WaveSerial;
 	bWaveActive = true;
 	bFirstTowerEntryUsed = false;
 	WhistleRecipients = 0;
 	NPCsEnteredThisWave.Reset();
+}
+
+void UCastleBadgeRuntimeSubsystem::RecordCompletedPatrolLaps(const int64 NewLaps)
+{
+	if (!bWaveActive || NewLaps == 0) { return; }
+	check(NewLaps > 0);
+	const int32 Combined = CompletedLapsInCycle + static_cast<int32>(NewLaps % LapsPerReassignment);
+	const int64 Earned = NewLaps / LapsPerReassignment + Combined / LapsPerReassignment;
+	const UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
+	if (Badges && Badges->HasBadge(ECastleBadgeType::LapReassignment))
+	{
+		if (Earned > MAX_int64 - EarnedTemporaryNPCs)
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("世界 %s 的一圈调岗令待派人数溢出。"), *GetPathNameSafe(GetWorld()));
+			return;
+		}
+		EarnedTemporaryNPCs += Earned;
+	}
+	CompletedLapsInCycle = Combined % LapsPerReassignment;
+}
+
+bool UCastleBadgeRuntimeSubsystem::TryDispatchEarnedTemporaryNPCs(UCastleTowerDispatchSubsystem& Dispatch)
+{
+	while (EarnedTemporaryNPCs > 0)
+	{
+		FText Reason;
+		if (!Dispatch.TryDispatchTemporarySingleLapNPC(Reason))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("世界 %s 的一圈调岗令派兵失败：%s。"), *GetPathNameSafe(GetWorld()), *Reason.ToString());
+			return false;
+		}
+		// 只在成功提交实体后消费一个名额，Mass 中从不直接生成实体。
+		--EarnedTemporaryNPCs;
+	}
+	return true;
 }
 
 uint64 UCastleBadgeRuntimeSubsystem::ReserveFirstTowerEntry(int64& OutNumberBonus)

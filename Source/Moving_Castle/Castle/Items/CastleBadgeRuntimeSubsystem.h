@@ -7,6 +7,7 @@
 class ACastleBoard;
 class ACastleBuildingBase;
 class UCastleMainTowerComponent;
+class UCastleTowerDispatchSubsystem;
 enum class ECastleBattleKind : uint8;
 enum class ECastleDirectorPhase : uint8;
 struct FCastleBuildingTriggerContext;
@@ -67,6 +68,10 @@ public:
 	bool TryAwardBeeKill();
 	/** 敌方致命受击时查询气球扣。成功结算但不触发时 OutRetainedHealth 为零。 */
 	bool TryResolveLastBalloonClasp(const UCastleMainTowerComponent& Tower, float& OutRetainedHealth);
+	/** Mass 在并行循环结束后，只把本帧正式士兵新完成的圈数交回游戏线程。 */
+	void RecordCompletedPatrolLaps(int64 NewLaps);
+	/** 出兵 Tick 在 Mass 安全边界兑现已达到的圈数门槛。 */
+	bool TryDispatchEarnedTemporaryNPCs(UCastleTowerDispatchSubsystem& Dispatch);
 
 protected:
 	/** 仅游戏和 PIE 世界具备独立的单局事件与结算状态。 */
@@ -102,4 +107,6 @@ private:
 	bool bFirstTowerEntryUsed = false;
 	bool bDispatchingChain = false;
 	bool bLastBalloonClaspUsed = false;
+	int32 CompletedLapsInCycle = 0;
+	int64 EarnedTemporaryNPCs = 0;
 };

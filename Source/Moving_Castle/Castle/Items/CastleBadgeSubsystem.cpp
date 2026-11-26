@@ -246,6 +246,11 @@ float UCastleBadgeSubsystem::GetQuickLadderSpeedMultiplier() const
 	return static_cast<float>(1.0 + SumMagnitude(ECastleBadgeType::QuickLadder));
 }
 
+float UCastleBadgeSubsystem::CalculateLateAdvantageSpeedMultiplier(const int64 CompletedLaps)
+{
+	return CompletedLaps == 0 ? 0.5f : static_cast<float>(1.0 + 0.2 * CompletedLaps);
+}
+
 float UCastleBadgeSubsystem::GetSiphonArrowFraction() const
 {
 	return static_cast<float>(SumMagnitude(ECastleBadgeType::SiphonArrow));
