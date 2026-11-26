@@ -46,7 +46,7 @@
 
 **`WBP_DirectorHUD` 在游玩阶段使用 `SelfHitTestInvisible`，在奖励与游戏结束模态阶段切为 `HitTestInvisible`。** 如果根节点使用 `HitTestInvisible`，鼠标可见时将无法点击任何 HUD 按钮；使用 `SelfHitTestInvisible` 则既不拦截中心准星的空白区域点击，又能在鼠标出现时响应按钮事件。
 
-**键盘快捷键与 UI 按钮共用同一业务入口，光标模式由控制器的操作模式统一仲裁。** 建造商店沿用 `B`，路径撤回/清空沿用 `Backspace` / `Delete`（`ACastlePatrolRoute::UndoDraftPoint` / `ClearPatrolRoute`）；战斗期 `T`（暂停/继续）、`F`（1x/2x 倍速）和 `R`（战斗重试）均在 `ACastlePlayerController` 上开启 `bExecuteWhenPaused = true`，确保战斗暂停期间仍可按键恢复或操作。
+**键盘快捷键与 UI 按钮共用同一业务入口，光标模式由控制器的操作模式统一仲裁。** 正式 MainMap 的普通商店从单局开始即解锁，在主塔编辑阶段可通过 HUD 按钮或 `B` 随时开关；导演仍会在战斗、领奖、空岛及结束阶段拒绝打开。路径撤回/清空沿用 `Backspace` / `Delete`（`ACastlePatrolRoute::UndoDraftPoint` / `ClearPatrolRoute`）；战斗期 `T`（暂停/继续）、`F`（1x/2x 倍速）和 `R`（战斗重试）均在 `ACastlePlayerController` 上开启 `bExecuteWhenPaused = true`，确保战斗暂停期间仍可按键恢复或操作。
 
 ## 被否决的方案
 

@@ -169,8 +169,6 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 	RunNPCCount = Config->InitialNPCCount;
 	Experience = 0;
 	ClearedSteps = 0;
-	bShopPermission = false;
-	bShopPermissionBeforeIsland = false;
 	bRunning = true;
 	BattleClearedHandle = Combat->OnBattleCleared.AddUObject(this, &UCastleDirectorSubsystem::HandleBattleCleared);
 	BattleFailedHandle = Combat->OnBattleFailed.AddUObject(this, &UCastleDirectorSubsystem::HandleBattleFailed);
@@ -339,11 +337,6 @@ bool UCastleDirectorSubsystem::IsShopAccessAllowed(FText& OutReason) const
 			: Phase == ECastleDirectorPhase::Reward ? TEXT("选择奖励时无法使用商店") : TEXT("游戏结束后无法使用商店"));
 		return false;
 	}
-	if (bRunning && !bShopPermission)
-	{
-		OutReason = FText::FromString(TEXT("本轮未选择商店"));
-		return false;
-	}
 	return true;
 }
 
@@ -400,10 +393,8 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 	FText Failure;
 	// 显隐校验在撤下商店和巡逻草稿之前，失败不得推进开战事务。
 	if (!Board->SetPlacementSurfacePresentationHidden(true, Failure)) { return Reject(Failure.ToString()); }
-	const bool bPreviousPermission = bShopPermission;
 	const bool bShopWasOpen = Controller->GetShop()->IsShopOpen();
 	Controller->GetShop()->CloseShop();
-	bShopPermission = false;
 	for (TActorIterator<ACastlePatrolRoute> It(GetWorld()); It; ++It) { It->CancelEditingDraft(); }
 	Controller->HideDirectorEditingPresentation();
 	// 会话只登记待命池。玩家点击主塔或开启自动出兵后，NPC 才沿门到门快照派出。
@@ -414,7 +405,6 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 		const bool bRecalled = RecallBattleNPCs(CleanupFailure);
 		FText SurfaceFailure;
 		const bool bSurfaceRestored = Board->SetPlacementSurfacePresentationHidden(false, SurfaceFailure);
-		bShopPermission = bPreviousPermission;
 		if (bShopWasOpen) { Controller->ToggleShop(); }
 		return Reject(Failure.ToString() + (bRecalled ? FString() : TEXT("；NPC 回收失败：") + CleanupFailure.ToString())
 			+ (bSurfaceRestored ? FString() : TEXT("；建造面恢复失败：") + SurfaceFailure.ToString()));
@@ -548,10 +538,7 @@ bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirector
 	IslandReturnControlRotation = ReturnControlRotation;
 	Pawn->GetMovementComponent()->StopMovementImmediately();
 	Controller->SetControlRotation(Arrival.Rotator());
-	// 只在入岛传送成功后保存主塔权限；初始化或传送失败不改变进岛前的值。
-	bShopPermissionBeforeIsland = bShopPermission;
 	Controller->GetShop()->CloseShop();
-	bShopPermission = false;
 	PatrolRoute->CancelEditingDraft();
 	Controller->HideDirectorEditingPresentation();
 	ActiveSkyIsland = Island;
@@ -603,9 +590,7 @@ bool UCastleDirectorSubsystem::TryDepartSkyIsland(FText& OutReason)
 	bIslandShopGranted = false;
 	++ClearedSteps;
 	Nodes = MoveTemp(Candidates);
-	// 所有离岛校验已完成。先恢复权限再广播编辑阶段，让界面读取同一份已提交状态。
-	bShopPermission = bShopPermissionBeforeIsland;
-	bShopPermissionBeforeIsland = false;
+	// 只有成功返塔后才切回编辑阶段，此时普通商店按常驻规则重新可用。
 	SetPhase(ECastleDirectorPhase::Editing);
 	for (ACastleDirectorNodeActor* Candidate : Nodes) { Candidate->ActivateNode(); }
 	ShowMessage(INVTEXT("已离开空岛，飞向节点进入下一步。"), false);
@@ -880,7 +865,6 @@ bool UCastleDirectorSubsystem::TryCommitRewards(const bool bExperience, const bo
 	UpgradeRewards = MoveTemp(PendingRows);
 	for (const auto& Pending : PendingRooms) { UpgradeRoomRewards.Add(Pending.Get()); }
 	if (TowerUpgradeWidget) { TowerUpgradeWidget->RefreshRewards(UpgradeRewards); }
-	bShopPermission = bShop;
 	if (PreparedShop.IsValid()) { Shop->CommitRewardShop(*PreparedShop); }
 	Nodes = MoveTemp(Candidates);
 	SetPhase(ECastleDirectorPhase::Editing);
@@ -1053,8 +1037,6 @@ void UCastleDirectorSubsystem::EnterGameOver(const FText& Failure)
 	if (ActiveSkyIsland) { ActiveSkyIsland->Destroy(); ActiveSkyIsland = nullptr; }
 	bDepartureRequested = false;
 	Controller->GetShop()->CloseShop();
-	bShopPermission = false;
-	bShopPermissionBeforeIsland = false;
 	DestroyNodes();
 	SetPhase(ECastleDirectorPhase::GameOver);
 	if (!bAutomation && !Controller->SetPause(true))
@@ -1075,7 +1057,6 @@ void UCastleDirectorSubsystem::RestartCurrentMap()
 		return;
 	}
 	ResetBattleControls(true);
-	bShopPermissionBeforeIsland = false;
 	UGameplayStatics::OpenLevel(GetWorld(), FName(*UGameplayStatics::GetCurrentLevelName(GetWorld(), true)));
 }
 
@@ -1281,7 +1262,6 @@ void UCastleDirectorSubsystem::OnWorldEndPlay(UWorld& InWorld)
 	ResetBattleControls(false);
 	UnbindCombatEvents();
 	PendingNode.Reset();
-	bShopPermissionBeforeIsland = false;
 	bRunning = false;
 	Super::OnWorldEndPlay(InWorld);
 }
@@ -1297,7 +1277,6 @@ void UCastleDirectorSubsystem::Deinitialize()
 	}
 	UnbindCombatEvents();
 	if (ActiveSkyIsland) { ActiveSkyIsland->Destroy(); ActiveSkyIsland = nullptr; }
-	bShopPermissionBeforeIsland = false;
 	DestroyNodes();
 	for (UUserWidget* Widget : {HUDWidget.Get(), RewardWidget.Get(), GameOverWidget.Get(),
 		static_cast<UUserWidget*>(TowerUpgradeWidget.Get()), static_cast<UUserWidget*>(WildcardPicker.Get())})
@@ -1329,7 +1308,7 @@ bool UCastleDirectorSubsystem::SetPhaseForAutomation(const ECastleDirectorPhase 
 {
 	if (!bAutomation) { return false; }
 	if (NewPhase == ECastleDirectorPhase::Reward) { ++ClearedSteps; }
-	if (NewPhase == ECastleDirectorPhase::Battle) { bShopPermission = false; Controller->GetShop()->CloseShop(); DestroyNodes(); }
+	if (NewPhase == ECastleDirectorPhase::Battle) { Controller->GetShop()->CloseShop(); DestroyNodes(); }
 	if (NewPhase == ECastleDirectorPhase::GameOver) { EnterGameOver(FText::GetEmpty()); }
 	else { SetPhase(NewPhase); }
 	return true;

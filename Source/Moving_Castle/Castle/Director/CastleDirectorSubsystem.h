@@ -41,6 +41,7 @@ public:
 	/** 导演未运行时保留旧行为；运行时严格按阶段门控。 */
 	bool IsRunning() const { return bRunning; }
 	bool IsEditingAllowed(FText& OutReason) const;
+	/** 普通商店在主塔编辑阶段常驻可用；导演阶段门控仍限制战斗、领奖、空岛和结束阶段。 */
 	bool IsShopAccessAllowed(FText& OutReason) const;
 	ECastleDirectorPhase GetPhase() const { return Phase; }
 	int32 GetLevel() const { return Level; }
@@ -155,8 +156,6 @@ private:
 	FRotator IslandReturnControlRotation;
 	bool bDepartureRequested = false;
 	bool bIslandShopGranted = false;
-	/** 作为本次空岛访问的快照，仅在成功返塔时恢复给主塔商店。 */
-	bool bShopPermissionBeforeIsland = false;
 	UPROPERTY(Transient) TArray<TObjectPtr<UCastlePendingRoomReward>> UpgradeRoomRewards;
 	TArray<FCastleTowerUpgradeRewardEntry> UpgradeRewards;
 	int32 ActiveUpgradeRewardIndex = INDEX_NONE;
@@ -179,7 +178,6 @@ private:
 	int32 RunNPCCount = 0;
 	bool bRunning = false;
 	bool bStartAttempted = false;
-	bool bShopPermission = false;
 	bool bApplyingReward = false;
 	bool bBattlePaused = false;
 	bool bBattleDoubleSpeed = false;

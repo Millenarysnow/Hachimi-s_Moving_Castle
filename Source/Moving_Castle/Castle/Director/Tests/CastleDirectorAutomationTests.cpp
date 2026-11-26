@@ -95,15 +95,19 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 	}
 	TestFalse(TEXT("HUD读取不提前初始化商店"), Controller->GetShop()->IsInitialized());
 	TestTrue(TEXT("商店未初始化时HUD已有正确占用格数"), Director->GetHUDSummary().Contains(TEXT("房间 2/150")));
+	// 正式单局的编辑阶段从开局起允许使用普通商店，奖励是否选店只影响免费换批事务。
 	TestTrue(TEXT("开局编辑可用"), Director->IsEditingAllowed(Reason));
-	TestFalse(TEXT("开局没有商店权限"), Director->IsShopAccessAllowed(Reason));
+	TestTrue(TEXT("正式单局开局即可使用普通商店"), Director->IsShopAccessAllowed(Reason));
 	TestEqual(TEXT("开局上限150"), Controller->GetShop()->RoomLimit, 150);
 	Director->SetPhaseForAutomation(ECastleDirectorPhase::Battle);
 	TestFalse(TEXT("战斗禁止编辑"), Director->IsEditingAllowed(Reason));
+	TestFalse(TEXT("战斗阶段仍禁止打开普通商店"), Director->IsShopAccessAllowed(Reason));
 	Director->SetPhaseForAutomation(ECastleDirectorPhase::Reward);
 	TestFalse(TEXT("奖励禁止编辑"), Director->IsEditingAllowed(Reason));
+	TestFalse(TEXT("奖励选择期间仍禁止打开普通商店"), Director->IsShopAccessAllowed(Reason));
 	// 独立地面关卡保留原有奖励与失败验证，正式塔身成长由 MainMap 集成测试覆盖。
 	if (!TestTrue(TEXT("经验奖励成功"), Director->TryChooseReward(ECastleDirectorReward::Experience, Reason))) { AddError(Reason.ToString()); return false; }
+	TestTrue(TEXT("未选择商店奖励也保持普通商店可用"), Director->IsShopAccessAllowed(Reason));
 	TestEqual(TEXT("本次经验未达到升级阈值"), Director->GetLevel(), 1);
 	TestEqual(TEXT("剩余60经验"), Director->GetExperience(), 60);
 	TestEqual(TEXT("房间上限仍为150"), Controller->GetShop()->RoomLimit, 150);
@@ -111,6 +115,7 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 	Tower->ApplyDamage(500.0f);
 	const int32 AttackCount = Tower->AttackCount;
 	if (!TestTrue(TEXT("回血奖励成功"), Director->TryChooseReward(ECastleDirectorReward::Healing, Reason))) { AddError(Reason.ToString()); return false; }
+	TestTrue(TEXT("后续编辑阶段仍可使用普通商店"), Director->IsShopAccessAllowed(Reason));
 	TestEqual(TEXT("回复最大生命30%"), Tower->CurrentHealth, 800.0f);
 	TestEqual(TEXT("回血不增加攻击次数"), Tower->AttackCount, AttackCount);
 	Director->SetPhaseForAutomation(ECastleDirectorPhase::Reward);

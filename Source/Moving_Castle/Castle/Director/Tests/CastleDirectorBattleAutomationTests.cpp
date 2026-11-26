@@ -316,7 +316,7 @@ public:
 			}
 			FText GateReason;
 			Test->TestFalse(TEXT("战斗编辑门控关闭"), Director->IsEditingAllowed(GateReason));
-			Test->TestFalse(TEXT("战斗商店权限收回"), Director->IsShopAccessAllowed(GateReason));
+			Test->TestFalse(TEXT("战斗阶段仍限制打开普通商店"), Director->IsShopAccessAllowed(GateReason));
 			Test->TestFalse(TEXT("战斗保持飞行输入"), Director->Controller->IsMoveInputIgnored());
 			Stage = 5;
 			return false;

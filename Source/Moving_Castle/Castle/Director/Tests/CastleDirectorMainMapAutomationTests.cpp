@@ -88,9 +88,12 @@ namespace
 		for (TActorIterator<ACastleDirectorNodeActor> It(World); It; ++It) { ++NodeCount; }
 		Test->TestTrue(TEXT("真实世界中生成2至3个节点"), NodeCount >= 2 && NodeCount <= 3);
 		FText Reason;
-		Test->TestFalse(TEXT("开局没有商店权限"), Director->IsShopAccessAllowed(Reason));
+		// 真实 MainMap 开局通过控制器的统一开关入口打开商店，再关闭后继续验证 HUD。
+		Test->TestTrue(TEXT("正式开局即可使用普通商店"), Director->IsShopAccessAllowed(Reason));
 		Controller->ToggleShop();
-		Test->TestFalse(TEXT("真实B键入口拒绝开店"), Controller->GetShop()->IsShopOpen());
+		Test->TestTrue(TEXT("正式开局的B键入口可打开商店"), Controller->GetShop()->IsShopOpen());
+		Controller->ToggleShop();
+		Test->TestFalse(TEXT("关闭后商店界面收起"), Controller->GetShop()->IsShopOpen());
 		Test->TestTrue(TEXT("真实HUD房间计数是10/15"), Director->GetHUDSummary().Contains(TEXT("房间 10/15")));
 		if (UCastleEconomyHUDWidget* Balance = FindMainMapWidget<UCastleEconomyHUDWidget>(*Test, World))
 		{
@@ -221,7 +224,7 @@ namespace
   int32 Stage = 0;
  };
 #if !UE_BUILD_SHIPPING
- /** 在正式 MainMap 领取商店奖励，通过休息岛交互验证权限及建造栏。 */
+	/** 在正式 MainMap 领取商店奖励，通过休息岛交互验证常驻商店及建造栏。 */
  class FCheckIslandShopAndBuildBar final : public IAutomationLatentCommand
  {
  public:
@@ -296,7 +299,7 @@ namespace
 	case EStage::Returned:
 		if (Director->GetPhase() == ECastleDirectorPhase::SkyIsland) { return WaitForDirector(TEXT("未完成离岛")); }
 		Test.TestEqual(TEXT("返塔进入编辑阶段"), Director->GetPhase(), ECastleDirectorPhase::Editing);
-		Test.TestTrue(TEXT("返塔恢复进岛前的商店权限"), Director->IsShopAccessAllowed(Reason));
+		Test.TestTrue(TEXT("返塔后普通商店仍可用"), Director->IsShopAccessAllowed(Reason));
 		Controller->ToggleShop();
 		Test.TestTrue(TEXT("返塔后 B 键入口可打开主塔商店"), Controller->GetShop()->IsShopOpen());
 		Controller->GetShop()->CloseShop();
