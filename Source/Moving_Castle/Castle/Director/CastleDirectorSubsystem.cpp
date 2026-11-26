@@ -166,6 +166,18 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 		for (ACastleDirectorNodeActor* Node : Candidates) { Node->Destroy(); }
 		return false;
 	}
+	// 正式地图的外观槽属于本局启动事务。写入失败时走导演已有的报错出口并撤销待发布节点。
+	if (UWorld::RemovePIEPrefix(GetWorld()->GetOutermost()->GetName()) == TEXT("/Game/MovingCastle/Maps/MainMap"))
+	{
+		MenuRecorder = NewObject<UCastleMenuRecorder>(this);
+		FString Error;
+		if (!MenuRecorder->Start(*Board, Error))
+		{
+			OutReason = FText::FromString(Error);
+			for (ACastleDirectorNodeActor* Node : Candidates) { Node->Destroy(); }
+			return false;
+		}
+	}
 	Level = 1;
 	RunNPCCount = Config->InitialNPCCount;
 	Experience = 0;
@@ -185,17 +197,6 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 	for (ACastleDirectorNodeActor* Node : Nodes) { Node->ActivateNode(); }
 	// 下一关指引由 WBP HUD 读取，避免同一句话叠加到屏幕调试层。
 	StatusMessage = FText::FromString(TEXT("飞向节点进入下一关"));
-	// 只有实际正式关卡才拥有玩家的上局展示槽；教程和自动化夹具各有独立的棋盘。
-	if (UWorld::RemovePIEPrefix(GetWorld()->GetOutermost()->GetName()) == TEXT("/Game/MovingCastle/Maps/MainMap"))
-	{
-		MenuRecorder = NewObject<UCastleMenuRecorder>(this);
-		FString Error;
-		if (!MenuRecorder->Start(*Board, Error))
-		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("开始记录正式局城堡失败：%s"), *Error);
-			ShowMessage(FText::FromString(Error), true);
-		}
-	}
 	UE_LOG(LogMoving_Castle, Display, TEXT("导演启动：编辑阶段，第 1 关，主塔 Lv1，房间上限 %d。"), Initial.RoomLimit);
 	if (Tower->CurrentHealth <= 0.0f) { EnterGameOver(FText::GetEmpty()); }
 	return true;
