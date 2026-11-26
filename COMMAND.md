@@ -1,9 +1,5 @@
 # Moving Castle 调试命令
 
-项目源码共注册 **35 条控制台命令**和 **1 个调试 CVar**，按命令名去重。`CastleDamageMainTower` 同时有全局注册和玩家控制器 `Exec` 入口。
-
-使用 UE 5.8 Development Editor。玩法命令在 PIE 或正在运行的游戏中按 `~` 打开控制台输入。标为「编辑器世界」的命令在停止 PIE 后，从 **Output Log** 底部输入。屏幕提示之外，可在 **Output Log** 中查看 `LogMoving_Castle`。标为「开发验收」的命令只在启用 `WITH_DEV_AUTOMATION_TESTS` 的构建中注册。
-
 ## 棋盘与主塔
 
 | 可复制示例 | 参数与运行条件 | 效果与反馈 |
@@ -16,8 +12,6 @@
 | `CastleBoardTestMainMapOverhang` | 开发验收。新 PIE，使用旧地面版 MainMap 配置，棋盘位置为 `(0,0,1000)`，初始尺寸为 `5×5×8`，背包至少有一个空位 | 放置普通房并验证越出地面两格和叠到八层的上限。运行后可在视口检查已摆放的建筑，成功日志为 `W2_MAINMAP_OVERHANG_PASS`。 |
 | `CastleBoardTestCreateNavigation` | 开发验收。编辑器世界已配置导航体积和导航系统，并且没有默认导航数据 | 创建默认导航数据，成功日志为 `W2_MAINMAP_NAV_CREATED`。命令自身不保存关卡。 |
 | `CastleBoardTestRebuildNavigation` | 开发验收。当前世界已有导航系统和默认导航数据 | 完整重建现有导航数据并同步等待，在日志输出 `W2_NAV_REBUILD_SECONDS`。 |
-
-正式 `MainMap` 使用 `MainTowerSides`。要测地块显隐、扩张或旧悬挑场景，请用配有地面生成器的 `GroundBoard` 测试关卡。两个 `MainMap` 棋盘验收命令还有表中列出的专用夹具要求。见 [棋盘范围与扩张](Docs/技术文档-棋盘范围与扩张.md)。
 
 注册位置见 [主塔全局命令](Source/Moving_Castle/Castle/Director/CastleDirectorDebugCommands.cpp)、[控制器 Exec](Source/Moving_Castle/Castle/Controllers/CastlePlayerController.h)、[棋盘命令](Source/Moving_Castle/Castle/Debug/CastleBoardDebugCommands.cpp)、[棋盘验收](Source/Moving_Castle/Castle/Debug/CastleBoardAcceptanceCommands.cpp)和[导航重建计时](Source/Moving_Castle/Castle/Automation/CastleBoardExpansionAutomationTests.cpp)。
 
