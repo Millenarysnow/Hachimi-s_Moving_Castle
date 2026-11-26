@@ -1,13 +1,27 @@
 #pragma once
 
 #include "Engine/DataAsset.h"
-#include "Castle/Items/CastleItemTypes.h"
+#include "CastleGameplayTypes.h"
 #include "CastleShopSkyIslandDataAsset.generated.h"
 
 class UCastleBadgeDataAsset;
 class UCastleRoomGroupDataAsset;
 class UMaterialInterface;
 class UStaticMesh;
+
+/** 单个主塔等级的五档整数百分比；四行依次对应主塔 Lv1 至 Lv4。 */
+USTRUCT(BlueprintType)
+struct MOVING_CASTLE_API FCastleShopRarityWeights
+{
+	GENERATED_BODY()
+
+	/** 由空岛配置显式填写。五档均非负，每行合计 100。 */
+	UPROPERTY(EditAnywhere, Category = "商品稀有度") int32 Common = 0;
+	UPROPERTY(EditAnywhere, Category = "商品稀有度") int32 Uncommon = 0;
+	UPROPERTY(EditAnywhere, Category = "商品稀有度") int32 Rare = 0;
+	UPROPERTY(EditAnywhere, Category = "商品稀有度") int32 Epic = 0;
+	UPROPERTY(EditAnywhere, Category = "商品稀有度") int32 Legendary = 0;
+};
 
 /** 实体货架使用专属配置，商品内容沿用房间组和徽章的原始资产。 */
 UCLASS(BlueprintType)
@@ -34,7 +48,11 @@ public:
 
 	/** 五个正式稀有度都必须提供材质，商品台据此创建各自的动态材质。 */
 	UPROPERTY(EditAnywhere, Category = "房间包")
-	TMap<ECastleRoomPackRarity, TObjectPtr<UMaterialInterface>> RoomPackMaterials;
+	TMap<ECastleItemRarity, TObjectPtr<UMaterialInterface>> RoomPackMaterials;
+
+	/** Phase 1C 校验四行配置，按当前主塔等级选中一行，再抽取商品档位。 */
+	UPROPERTY(EditAnywhere, Category = "商品稀有度")
+	TArray<FCastleShopRarityWeights> RarityWeightsByTowerLevel;
 
 	/** 房间组池中的条目引用原始发牌模板，无需为实体商店复制配置。 */
 	UPROPERTY(EditAnywhere, Category = "商店空岛")

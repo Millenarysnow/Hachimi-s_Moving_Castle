@@ -38,6 +38,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|经济")
 	bool TryAddGold(int32 Amount, FText& OutFailureReason);
 
+	/** 玩法奖励专用入口；实现后仅此处应用零钱袋，普通收支入口保持原有语义。 */
+	bool TryAddGameplayGold(int32 BaseAmount, FText& OutFailureReason, int32* OutFinalAmount = nullptr);
+
 	/** 扣除金币。余额不足时不产生任何修改，调用方不需要事后修正余额。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|经济")
 	bool TrySpendGold(int32 Amount, FText& OutFailureReason);

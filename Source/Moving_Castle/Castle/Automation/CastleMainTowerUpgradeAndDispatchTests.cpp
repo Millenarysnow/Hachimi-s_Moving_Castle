@@ -501,7 +501,12 @@ bool FCastleMainTowerWaypointLimitTest::RunTest(const FString& Parameters)
 	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
 	ACastlePatrolRoute* Route = World->SpawnActor<ACastlePatrolRoute>();
 	if (!TestNotNull(TEXT("生成路线编辑入口"), Route)) { return false; }
-	// 直接使用准星射线成功解析落点后的相同入口，避免测试依赖鼠标焦点。
+	// 使用准星解析后的同一入口，监听者在通知中读取已经提交的草稿和上限。
+	TArray<FIntPoint> DraftCounts;
+	Route->OnWaypointDraftChanged.AddLambda([Route, &DraftCounts]
+	{
+		DraftCounts.Emplace(Route->GetUsedWaypointCount(), Route->GetRemainingWaypointCount());
+	});
 	FText Reason;
 	TestEqual(TEXT("初始限额为两点"), Route->GetMaxPlayerWaypoints(), 2);
 	TestTrue(TEXT("第 1 点被接收"), Route->TryAppendDraftWaypoint(FVector(0, 0, 0), Reason));
@@ -518,6 +523,8 @@ bool FCastleMainTowerWaypointLimitTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("增量不能超过 99 上限"), Route->AddMaxPlayerWaypoints(1));
 	TestFalse(TEXT("配置不能低于 1"), Route->SetMaxPlayerWaypoints(0));
 	TestEqual(TEXT("无效配置保留原上限"), Route->GetMaxPlayerWaypoints(), 99);
+	const TArray<FIntPoint> ExpectedCounts = {FIntPoint(1, 1), FIntPoint(2, 0), FIntPoint(2, 1), FIntPoint(3, 0), FIntPoint(3, 96)};
+	TestTrue(TEXT("成功变更才通知 HUD，且通知内可以读取最新点数"), DraftCounts == ExpectedCounts);
 	return true;
 }
 

@@ -259,7 +259,11 @@ bool ACastlePatrolRoute::SetMaxPlayerWaypoints(const int32 NewLimit)
 			*GetPathName(), NewLimit, ACastlePatrolWaypointMarker::MaxDisplayedNumber);
 		return false;
 	}
-	MaxPlayerWaypoints = NewLimit;
+	if (MaxPlayerWaypoints != NewLimit)
+	{
+		MaxPlayerWaypoints = NewLimit;
+		OnWaypointDraftChanged.Broadcast();
+	}
 	return true;
 }
 
@@ -276,8 +280,10 @@ bool ACastlePatrolRoute::AddMaxPlayerWaypoints(const int32 Delta)
 
 void ACastlePatrolRoute::CancelEditingDraft()
 {
-	SetEditing(false);
+	const bool bHadPoints = !DraftWaypoints.IsEmpty();
 	DraftWaypoints.Reset();
+	SetEditing(false);
+	if (bHadPoints) { OnWaypointDraftChanged.Broadcast(); }
 }
 
 void ACastlePatrolRoute::SetEditing(bool bNewEditing)
@@ -326,6 +332,7 @@ void ACastlePatrolRoute::ToggleEditing()
 	}
 	DraftWaypoints = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>()->GetRequestedWaypoints();
 	SetEditing(true);
+	OnWaypointDraftChanged.Broadcast();
 	if (Controller)
 	{
 		// 路线状态已提交，关闭面板后只恢复本模式的路径编辑输入。
@@ -408,6 +415,7 @@ bool ACastlePatrolRoute::TryAppendDraftWaypoint(const FVector Point, FText& OutR
 		return false;
 	}
 	DraftWaypoints.Add(Point);
+	OnWaypointDraftChanged.Broadcast();
 	return true;
 }
 
@@ -454,7 +462,11 @@ bool ACastlePatrolRoute::TryResolveWaypointFromRay(UWorld* World, const FVector&
 void ACastlePatrolRoute::UndoPoint()
 {
 	if (!bEditing || !CanEdit()) { return; }
-	if (!DraftWaypoints.IsEmpty()) { DraftWaypoints.Pop(); }
+	if (!DraftWaypoints.IsEmpty())
+	{
+		DraftWaypoints.Pop();
+		OnWaypointDraftChanged.Broadcast();
+	}
 	ShowMessage(FString::Printf(TEXT("草稿剩余 %d 个路径点。"), DraftWaypoints.Num()), true);
 }
 
@@ -475,7 +487,9 @@ void ACastlePatrolRoute::ClearRoute()
 	if (!bEditing || !CanEdit()) { return; }
 	GetWorld()->GetSubsystem<UCastleNavigationSubsystem>()->ClearSharedRoute();
 	LocalWaypoints.Reset();
+	const bool bHadPoints = !DraftWaypoints.IsEmpty();
 	DraftWaypoints.Reset();
+	if (bHadPoints) { OnWaypointDraftChanged.Broadcast(); }
 	ShowMessage(TEXT("共享巡逻已清空，NPC 停止。可以重新放点并按 Enter 提交。"), true);
 }
 

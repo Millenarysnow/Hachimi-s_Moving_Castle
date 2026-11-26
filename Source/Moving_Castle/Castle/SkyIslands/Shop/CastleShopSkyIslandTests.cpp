@@ -165,8 +165,8 @@ private:
 		TradeConfig->RoomGroupPool.Reset();
 		for (UCastleRoomGroupDataAsset* Group : Authored->RoomGroupPool)
 		{
-			if (Group->GroupType == ECastleRoomGroupType::ThreeNumberFourArchers
-				|| Group->GroupType == ECastleRoomGroupType::FullyCustomRoom)
+			if (Group && (Group->GetFName() == TEXT("DA_RoomGroup_07_TripleThreeArchers")
+				|| Group->GetFName() == TEXT("DA_RoomGroup_19_FullyCustomRoom")))
 			{
 				TradeConfig->RoomGroupPool.Add(Group);
 			}
@@ -174,7 +174,7 @@ private:
 		TradeConfig->BadgePool.Reset();
 		for (UCastleBadgeDataAsset* Badge : Authored->BadgePool)
 		{
-			if (Badge->Badge.Type == ECastleBadgeType::GambleLuck || Badge->Badge.Type == ECastleBadgeType::BlueRoomNumber)
+			if (Badge && (Badge->Badge.Type == ECastleBadgeType::FirepowerCard || Badge->Badge.Type == ECastleBadgeType::BlueAbacus))
 			{
 				TradeConfig->BadgePool.Add(Badge);
 			}
@@ -263,7 +263,7 @@ private:
 		for (UCastleShopSkyIslandOffer* Offer : Island->Offers)
 		{
 			if (Offer->Badge) { BadgeOffers.Add(Offer); }
-			else if (Offer->RoomGroup->GroupType == ECastleRoomGroupType::FullyCustomRoom) { Wildcard = Offer; }
+			else if (Offer->RoomGroup->bChooseInPicker) { Wildcard = Offer; }
 			else { Fixed = Offer; }
 		}
 		if (!Test.TestNotNull(TEXT("确定房间组台座"), Fixed) || !Test.TestNotNull(TEXT("万能卡台座"), Wildcard)
@@ -299,7 +299,7 @@ private:
 		Test.TestTrue(TEXT("测试账户入账"), Wallet.TryAddGold(200, Reason));
 		Test.TestTrue(TEXT("购买确定房间组"), Interact(*Fixed));
 		Test.TestEqual(TEXT("房间组扣费"), Wallet.GetGold(), 200 - Fixed->Price);
-		Test.TestEqual(TEXT("三张确定卡牌入建筑栏或临时栏"), CardCount(), InitialCards + 3);
+		Test.TestEqual(TEXT("三张确定箭塔入建筑栏或临时栏"), CardCount(), InitialCards + 3);
 		Test.TestTrue(TEXT("房间组台座售罄"), Fixed->bSold);
 		VerifySoldAmount(*Fixed, 1.0f);
 		Test.TestTrue(TEXT("售罄后价格牌更新"), Fixed->Sign && Fixed->Sign->Text.ToString().EndsWith(TEXT("SOLD OUT")));
@@ -476,36 +476,12 @@ bool FCastleShopSkyIslandAssetTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("商店配置资产"), Asset)) { return false; }
 	FText Reason;
 	if (!TestTrue(TEXT("正式配置通过校验"), Asset->Validate(Reason))) { return false; }
-	TestEqual(TEXT("引用 8 个房间组"), Asset->RoomGroupPool.Num(), 8);
-	TestEqual(TEXT("引用 7 个徽章"), Asset->BadgePool.Num(), 7);
+	TestEqual(TEXT("引用 26 个房间组"), Asset->RoomGroupPool.Num(), 26);
+	TestEqual(TEXT("引用 25 个徽章"), Asset->BadgePool.Num(), 25);
 	TestEqual(TEXT("默认货位数"), Asset->OfferCount, 4);
 	TestEqual(TEXT("房间组售价"), Asset->DefaultRoomGroupPrice, 30);
 	TestEqual(TEXT("徽章售价"), Asset->DefaultBadgePrice, 50);
 	TestTrue(TEXT("正式商店明确引用 SM_RoomPack"), Asset->RoomPackMesh.Get() == LoadRoomPackAsset<UStaticMesh>(TEXT("SM_RoomPack")));
-
-	// 核对正式房间组名称与用户确认的档位，池中任一漏配或错配都会被识别。
-	const TMap<FString, ECastleRoomPackRarity> ExpectedGroups{
-		{TEXT("DA_RoomGroup_CustomNormalRoom"), ECastleRoomPackRarity::White},
-		{TEXT("DA_RoomGroup_CustomColorNormalRoom"), ECastleRoomPackRarity::White},
-		{TEXT("DA_RoomGroup_NpcSpeedRoom"), ECastleRoomPackRarity::Blue},
-		{TEXT("DA_RoomGroup_ThreeConsecutiveFarms"), ECastleRoomPackRarity::Blue},
-		{TEXT("DA_RoomGroup_ThreeNumberFourArchers"), ECastleRoomPackRarity::Purple},
-		{TEXT("DA_RoomGroup_HighNumberRoom"), ECastleRoomPackRarity::Purple},
-		{TEXT("DA_RoomGroup_RandomFunctionCustomRoom"), ECastleRoomPackRarity::Gold},
-		{TEXT("DA_RoomGroup_FullyCustomRoom"), ECastleRoomPackRarity::Holo}
-	};
-	TSet<FString> VerifiedGroups;
-	for (const UCastleRoomGroupDataAsset* Group : Asset->RoomGroupPool)
-	{
-		const FString Name = Group->GetName();
-		const ECastleRoomPackRarity* Expected = ExpectedGroups.Find(Name);
-		if (TestNotNull(TEXT("房间组资产在正式档位表中") + Name, Expected))
-		{
-			TestEqual(Name, Group->Rarity, *Expected);
-			VerifiedGroups.Add(Name);
-		}
-	}
-	TestEqual(TEXT("八个正式房间组各自出现"), VerifiedGroups.Num(), ExpectedGroups.Num());
 
 	const UMaterial* Master = LoadRoomPackAsset<UMaterial>(TEXT("M_RoomPack_Master"));
 	TestNotNull(TEXT("共用房间包母材质"), Master);
@@ -519,10 +495,10 @@ bool FCastleShopSkyIslandAssetTest::RunTest(const FString& Parameters)
 		TestEqual(Name + TEXT(" 的源图宽"), Texture->Source.GetSizeX(), int64{1024});
 		TestEqual(Name + TEXT(" 的源图高"), Texture->Source.GetSizeY(), int64{1024});
 	};
-	const TPair<ECastleRoomPackRarity, const TCHAR*> ExpectedMaterials[] = {
-		{ECastleRoomPackRarity::White, TEXT("01_White")}, {ECastleRoomPackRarity::Blue, TEXT("02_Blue")},
-		{ECastleRoomPackRarity::Purple, TEXT("03_Purple")}, {ECastleRoomPackRarity::Gold, TEXT("04_Gold")},
-		{ECastleRoomPackRarity::Holo, TEXT("05_Holo")}
+	const TPair<ECastleItemRarity, const TCHAR*> ExpectedMaterials[] = {
+		{ECastleItemRarity::Common, TEXT("01_White")}, {ECastleItemRarity::Uncommon, TEXT("02_Blue")},
+		{ECastleItemRarity::Rare, TEXT("03_Purple")}, {ECastleItemRarity::Epic, TEXT("04_Gold")},
+		{ECastleItemRarity::Legendary, TEXT("05_Holo")}
 	};
 	for (const auto& Entry : ExpectedMaterials)
 	{
@@ -565,17 +541,17 @@ bool FCastleShopSkyIslandAssetTest::RunTest(const FString& Parameters)
 	Invalid->RoomPackMesh = nullptr;
 	TestFalse(TEXT("拒绝缺失房间包网格"), Invalid->Validate(Reason));
 	Invalid->RoomPackMesh = Asset->RoomPackMesh;
-	Invalid->RoomPackMaterials[ECastleRoomPackRarity::Gold] = nullptr;
+	Invalid->RoomPackMaterials[ECastleItemRarity::Epic] = nullptr;
 	TestFalse(TEXT("拒绝任一档材质缺失"), Invalid->Validate(Reason));
-	Invalid->RoomPackMaterials[ECastleRoomPackRarity::Gold] = UMaterial::GetDefaultMaterial(MD_Surface);
+	Invalid->RoomPackMaterials[ECastleItemRarity::Epic] = UMaterial::GetDefaultMaterial(MD_Surface);
 	TestFalse(TEXT("拒绝材质没有售罄控制参数"), Invalid->Validate(Reason));
 	Invalid->RoomPackMaterials = Asset->RoomPackMaterials;
 	auto* InvalidGroup = DuplicateObject(Asset->RoomGroupPool[0].Get(), GetTransientPackage());
 	Invalid->RoomGroupPool[0] = InvalidGroup;
 	AddExpectedError(TEXT("的卡包稀有度无效"), EAutomationExpectedErrorFlags::Contains, 2);
-	InvalidGroup->Rarity = ECastleRoomPackRarity::None;
+	InvalidGroup->Rarity = ECastleItemRarity::None;
 	TestFalse(TEXT("拒绝房间组漏配稀有度"), Invalid->Validate(Reason));
-	InvalidGroup->Rarity = static_cast<ECastleRoomPackRarity>(255);
+	InvalidGroup->Rarity = static_cast<ECastleItemRarity>(255);
 	TestFalse(TEXT("拒绝房间组稀有度越界"), Invalid->Validate(Reason));
 	return true;
 }

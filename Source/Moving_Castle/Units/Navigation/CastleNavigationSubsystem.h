@@ -28,6 +28,13 @@ struct MOVING_CASTLE_API FCastleLadderPathRange
 	FVector FacingDirection = FVector::ForwardVector;
 };
 
+/** 高速公路在共享路线上的有效距离区间，编译后供 Mass 工作者纯数值读取。 */
+struct MOVING_CASTLE_API FCastleHighwayPathRange
+{
+	double StartDist = 0.0;
+	double EndDist = 0.0;
+};
+
 /** 全世界的一份路线快照。多个 NPC 可以持有同一个只读快照，各自记录路段进度。 */
 USTRUCT(BlueprintType)
 struct MOVING_CASTLE_API FCastleSharedNavigationPath
@@ -84,6 +91,9 @@ struct MOVING_CASTLE_API FCastleSharedNavigationPath
 	/** 只包含梯底到梯顶的攀爬区间，不包含两侧楼板接驳走段。 */
 	UPROPERTY(BlueprintReadOnly, Category="共享路线")
 	TArray<FCastleLadderPathRange> LadderRanges;
+
+	/** 由 Phase 1A 根据有效道路格生成，按距离有序且不得重叠。 */
+	TArray<FCastleHighwayPathRange> HighwayRanges;
 
 	/** 只读数值运算，可由 Mass 工作线程调用；Distance 已由调用方限制到 [0, Length]。 */
 	void SamplePatrol(double Distance, FVector& OutLocation, FVector& OutDirection) const;

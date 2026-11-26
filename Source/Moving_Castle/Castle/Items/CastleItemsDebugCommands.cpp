@@ -14,14 +14,11 @@
 #include "Items/CastleBadgeDataAsset.h"
 #include "Items/CastleBadgeSubsystem.h"
 #include "Items/CastleItemGrantLibrary.h"
-#include "Items/CastlePendingRoomReward.h"
-#include "Items/CastleRoomGroupDataAsset.h"
 #include "Kismet/GameplayStatics.h"
 #include "Moving_Castle.h"
 #include "UI/Items/CastleBadgeBarWidget.h"
 #include "UI/Items/CastleBadgeReplaceModalWidget.h"
 #include "UI/Items/CastleTempBuildBarWidget.h"
-#include "UI/Items/CastleWildcardRoomPickerWidget.h"
 
 namespace CastleItemsDebug
 {
@@ -161,74 +158,22 @@ namespace CastleItemsDebug
 		return true;
 	}
 
-	void GrantGroup(const TArray<FString>& Args, UWorld* World)
+	void GrantGroup(const TArray<FString>&, UWorld* World)
 	{
-		static const TCHAR* Names[] = {
-			TEXT("DA_RoomGroup_ThreeNumberFourArchers"), TEXT("DA_RoomGroup_ThreeConsecutiveFarms"),
-			TEXT("DA_RoomGroup_CustomNormalRoom"), TEXT("DA_RoomGroup_HighNumberRoom"),
-			TEXT("DA_RoomGroup_CustomColorNormalRoom"), TEXT("DA_RoomGroup_RandomFunctionCustomRoom"),
-			TEXT("DA_RoomGroup_FullyCustomRoom"), TEXT("DA_RoomGroup_NpcSpeedRoom")
-		};
-		int32 Index;
-		if (!ReadOrdinal(Args, UE_ARRAY_COUNT(Names), Index, TEXT("Castle.Items.Group <1-8>")))
-		{
-			return;
-		}
-		ACastleBoard* Board = FindBoard(World);
-		APlayerController* Player = FindPlayer(World);
-		const auto* Group = LoadData<UCastleRoomGroupDataAsset>(Names[Index]);
-		if (!Board || !Player || !Group)
-		{
-			return;
-		}
-		if (CountWidgets<UCastleWildcardRoomPickerWidget>(World))
-		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("当前还有待领取界面，请先完成领取。"));
-			return;
-		}
-
-		TArray<TObjectPtr<UCastleBuildingDefinition>> Pool = Board->BuildingDefinitions;
-		// 调试入口显式追加本期定义，以便旧地图直接验收；正式定义池由波次 2 的调用方管理。
-		if (!Pool.ContainsByPredicate([](const UCastleBuildingDefinition* Definition)
-			{ return Definition && Definition->BuildingType == ECastleBuildingType::SpeedRoom; }))
-		{
-			auto* SpeedRoom = LoadObject<UCastleBuildingDefinition>(nullptr,
-				TEXT("/Game/MovingCastle/Data/Buildings/DA_SpeedRoom.DA_SpeedRoom"));
-			if (!SpeedRoom)
-			{
-				UE_LOG(LogMoving_Castle, Error, TEXT("验收定义池缺少 DA_SpeedRoom。"));
-				return;
-			}
-			Pool.Add(SpeedRoom);
-		}
-		FRandomStream Random(FMath::Rand());
-		FText Reason;
-		UCastlePendingRoomReward* Pending = nullptr;
-		if (!UCastleItemGrantLibrary::TryGrantRoomGroup(Group, Board->PrototypeBackpack, Pool, Random, Pending, Reason) || !Pending)
-		{
-			return;
-		}
-		const auto PickerClass = LoadWidget<UCastleWildcardRoomPickerWidget>(TEXT("WBP_WildcardRoomPicker"));
-		auto* Picker = PickerClass ? CreateWidget<UCastleWildcardRoomPickerWidget>(Player, PickerClass) : nullptr;
-		if (!Picker || !Picker->BindReward(Pending, Reason))
-		{
-			return;
-		}
-		// 保留整屏布局区域，使待领按钮进入工坊时能在实际视口中央展开。
-		Picker->AddToViewport(55);
-		Player->SetInputMode(FInputModeGameAndUI());
-		Player->SetShowMouseCursor(true);
+		// 保留命令名供 Phase 1D 接入新资产目录，骨架阶段明确拒绝旧模板。
+		UE_LOG(LogMoving_Castle, Error, TEXT("世界 %s：Castle.Items.Group 的房间组规则引擎尚未实现（Phase 0）。"),
+			*GetPathNameSafe(World));
 	}
 
 	void GrantBadge(const TArray<FString>& Args, UWorld* World)
 	{
 		static const TCHAR* Names[] = {
-			TEXT("DA_Badge_GambleLuck"), TEXT("DA_Badge_BlueRoomNumber"), TEXT("DA_Badge_UpgradeRoomCards"),
+			TEXT("DA_Badge_BlueRoomNumber"), TEXT("DA_Badge_UpgradeRoomCards"),
 			TEXT("DA_Badge_MainTowerHealth"), TEXT("DA_Badge_ArcherFireRate"),
 			TEXT("DA_Badge_FirstMainTowerDamage"), TEXT("DA_Badge_LowMainTowerHealth")
 		};
 		int32 Index;
-		if (!ReadOrdinal(Args, UE_ARRAY_COUNT(Names), Index, TEXT("Castle.Items.Badge <1-7>")))
+		if (!ReadOrdinal(Args, UE_ARRAY_COUNT(Names), Index, TEXT("Castle.Items.Badge <1-6>")))
 		{
 			return;
 		}
@@ -310,9 +255,9 @@ namespace CastleItemsDebug
 		FConsoleCommandWithWorldDelegate::CreateStatic(&MountHUD));
 	FAutoConsoleCommandWithWorld FillCommand(TEXT("Castle.Items.Fill"), TEXT("用红色数字 4 普通房填满建筑栏。"),
 		FConsoleCommandWithWorldDelegate::CreateStatic(&FillBackpack));
-	FAutoConsoleCommandWithWorldAndArgs GroupCommand(TEXT("Castle.Items.Group"), TEXT("发放编号 1 至 8 的房间组。"),
+	FAutoConsoleCommandWithWorldAndArgs GroupCommand(TEXT("Castle.Items.Group"), TEXT("房间组命令的骨架入口，待规则接入。"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&GrantGroup));
-	FAutoConsoleCommandWithWorldAndArgs BadgeCommand(TEXT("Castle.Items.Badge"), TEXT("发放编号 1 至 7 的徽章。"),
+	FAutoConsoleCommandWithWorldAndArgs BadgeCommand(TEXT("Castle.Items.Badge"), TEXT("发放编号 1 至 6 的既有徽章。"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&GrantBadge));
 	FAutoConsoleCommandWithWorldAndArgs RemovalCommand(TEXT("Castle.Items.Remove"), TEXT("移除第 1 至 10 个建筑栏槽位。"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&RemoveCard));

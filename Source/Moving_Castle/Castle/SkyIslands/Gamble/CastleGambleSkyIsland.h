@@ -98,6 +98,8 @@ private:
 	TSoftClassPtr<UCastleGambleRouletteWidget> RoulettePanelClass;
 	UPROPERTY(Transient) TObjectPtr<UCastleGambleSkyIslandDataAsset> Config;
 	UPROPERTY(Transient) TObjectPtr<UCastleBackpackComponent> Backpack;
+	/** 房间组按当前局棋盘准备，功能塔买断等前置条件与背包同属一个运行世界。 */
+	UPROPERTY(Transient) TWeakObjectPtr<ACastleBoard> RewardBoard;
 	UPROPERTY(Transient) TObjectPtr<UCastleEconomyComponent> Economy;
 	UPROPERTY(Transient) TObjectPtr<UCastleMainTowerComponent> Tower;
 	UPROPERTY(Transient) TObjectPtr<UCastleBadgeSubsystem> Badges;

@@ -15,6 +15,8 @@ struct MOVING_CASTLE_API FCastleMassPatrolFragment : public FMassFragment
 	bool bSupportJourney = false;
 	/** 调度器显式标记门 A 派出的 NPC；调试闭环的单位不读取战斗派兵模式。 */
 	bool bTowerDispatched = false;
+	/** 由单圈临时派遣设置，回收和累计圈数都与正式士兵分开处理。 */
+	bool bTemporaryOneLap = false;
 	/** 手动模式到门 B 后保持停止，直到调度器在 Mass 安全边界提交回收。 */
 	bool bReachedDispatchEntrance = false;
 	bool bBlocked = false;

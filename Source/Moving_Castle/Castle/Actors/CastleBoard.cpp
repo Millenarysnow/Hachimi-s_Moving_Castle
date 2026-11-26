@@ -1947,8 +1947,7 @@ ACastleBuildingBase* ACastleBoard::MergeBuildings(ACastleBuildingBase* First, AC
 	TArray<FCastleBuildingDescriptor> RewardCards;
 	const UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
 	const int64 RewardCount = Badges ? Badges->GetUpgradeBonusRoomCards() : 0;
-	if (RewardCount > 0 && First->GetBuildingType() != ECastleBuildingType::NormalRoom
-		&& First->GetBuildingType() != ECastleBuildingType::SpeedRoom)
+	if (RewardCount > 0 && First->GetBuildingType() != ECastleBuildingType::NormalRoom)
 	{
 		if (RewardCount > MAX_int32)
 		{

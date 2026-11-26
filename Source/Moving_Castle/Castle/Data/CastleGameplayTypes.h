@@ -51,8 +51,29 @@ enum class ECastleBuildingType : uint8
 	Farm UMETA(DisplayName = "农田"),
 	ShieldTower UMETA(DisplayName = "盾塔"),
 	BeeHive UMETA(DisplayName = "蜂巢塔"),
-	BalloonTower UMETA(DisplayName = "气球空投塔"),
-	SpeedRoom UMETA(DisplayName = "加速房间")
+	BalloonTower UMETA(DisplayName = "气球空投塔")
+};
+
+/** 房间组和徽章共用的商品稀有度；未配置不属于正式五档。 */
+UENUM(BlueprintType)
+enum class ECastleItemRarity : uint8
+{
+	None = 0 UMETA(DisplayName = "未配置"),
+	Common UMETA(DisplayName = "普通"),
+	Uncommon UMETA(DisplayName = "优秀"),
+	Rare UMETA(DisplayName = "稀有"),
+	Epic UMETA(DisplayName = "史诗"),
+	Legendary UMETA(DisplayName = "传说")
+};
+
+/** 在原建筑定义上附加的特质；同一建筑卡在背包、棋盘和拆回时共用这份身份。 */
+UENUM(BlueprintType)
+enum class ECastleRoomTrait : uint8
+{
+	None = 0 UMETA(DisplayName = "无"),
+	Highway UMETA(DisplayName = "高速公路"),
+	SkyIslandPortal UMETA(DisplayName = "传送门房间"),
+	SelfOrbiting UMETA(DisplayName = "自环绕炮塔")
 };
 
 /**
@@ -241,6 +262,14 @@ struct MOVING_CASTLE_API FCastleBuildingDescriptor
 	/** 当前卡牌等级。普通房间固定为 1，升级读取同一资产的下一级配置。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑")
 	int32 Level = 1;
+
+	/** 配置在原房间或炮塔定义上的特质，普通牌使用 None。 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑|特质")
+	ECastleRoomTrait RoomTrait = ECastleRoomTrait::None;
+
+	/** 仅自环绕炮塔在主栏结算时消耗此计数；无计数的特质存 0。 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑|特质")
+	int32 TraitRemainingRounds = 0;
 
 	/** 判断资产和对应等级是否存在，供空槽位和卡片显示快速查询。 */
 	bool HasDefinition() const;

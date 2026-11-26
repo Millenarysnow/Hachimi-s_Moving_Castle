@@ -25,9 +25,9 @@ namespace
 {
 	constexpr double RoomPackUniformScale = 14.5;
 	const FName RoomPackSoldParameter(TEXT("SoldAmount"));
-	constexpr ECastleRoomPackRarity RoomPackRarities[] = {
-		ECastleRoomPackRarity::White, ECastleRoomPackRarity::Blue, ECastleRoomPackRarity::Purple,
-		ECastleRoomPackRarity::Gold, ECastleRoomPackRarity::Holo
+	constexpr ECastleItemRarity RoomPackRarities[] = {
+		ECastleItemRarity::Common, ECastleItemRarity::Uncommon, ECastleItemRarity::Rare,
+		ECastleItemRarity::Epic, ECastleItemRarity::Legendary
 	};
 
 	/** 单个抽样条目只指向一种商品，可用同一随机流混合两个池。 */
@@ -78,14 +78,14 @@ bool UCastleShopSkyIslandDataAsset::Validate(FText& OutReason) const
 			FText::FromString(RoomPackMesh->GetPathName())));
 	}
 	// 逐档检查引用和售罄参数。多出的键也拒绝，防止错误的稀有度藏在完整配置中。
-	for (const ECastleRoomPackRarity Rarity : RoomPackRarities)
+	for (const ECastleItemRarity Rarity : RoomPackRarities)
 	{
 		const UMaterialInterface* Material = RoomPackMaterials.FindRef(Rarity).Get();
 		float InitialSoldAmount;
 		if (!IsValid(Material) || !Material->GetScalarParameterValue(RoomPackSoldParameter, InitialSoldAmount) || InitialSoldAmount != 0.0f)
 		{
 			return Reject(FText::Format(INVTEXT("RoomPackMaterials 的 {0} 档材质 {1} 缺失，或没有初值为 0 的 SoldAmount 参数。"),
-				FText::FromString(StaticEnum<ECastleRoomPackRarity>()->GetNameStringByValue(static_cast<int64>(Rarity))),
+				FText::FromString(StaticEnum<ECastleItemRarity>()->GetNameStringByValue(static_cast<int64>(Rarity))),
 				FText::FromString(GetPathNameSafe(Material))));
 		}
 	}
@@ -95,9 +95,9 @@ bool UCastleShopSkyIslandDataAsset::Validate(FText& OutReason) const
 	}
 	for (const UCastleRoomGroupDataAsset* RoomGroup : RoomGroupPool)
 	{
-		if (!IsValid(RoomGroup) || RoomGroup->DisplayName.IsEmpty() || RoomGroup->GroupType > ECastleRoomGroupType::NPCSpeedRoom)
+		if (!IsValid(RoomGroup) || RoomGroup->DisplayName.IsEmpty())
 		{
-			return Reject(FText::Format(INVTEXT("房间组商品 {0} 的资产、名称或类型无效。"),
+			return Reject(FText::Format(INVTEXT("房间组商品 {0} 的资产或名称无效。"),
 				FText::FromString(GetPathNameSafe(RoomGroup))));
 		}
 		if (!RoomGroup->ValidateRarity(OutReason)) { return false; }
@@ -268,7 +268,8 @@ bool ACastleShopSkyIsland::CreateOffer(UCastleRoomGroupDataAsset* RoomGroup, UCa
 	Offer->RewardSeed = RewardSeed;
 	Offer->Price = RoomGroup ? Config->DefaultRoomGroupPrice : Config->DefaultBadgePrice;
 	Offer->ProductName = RoomGroup ? RoomGroup->DisplayName : Badge->Badge.GetDisplayName();
-	const FString TypeName = RoomGroup ? StaticEnum<ECastleRoomGroupType>()->GetNameStringByValue(static_cast<int64>(RoomGroup->GroupType))
+	// 包装名用资产身份，中文交互标题仍使用配置好的 DisplayName。
+	const FString TypeName = RoomGroup ? RoomGroup->GetName()
 		: StaticEnum<ECastleBadgeType>()->GetNameStringByValue(static_cast<int64>(Badge->Badge.Type));
 	Offer->DisplayLabel = FName::NameToDisplayString(TypeName, false);
 	UMaterialInterface* Material = RoomGroup ? Config->RoomPackMaterials.FindChecked(RoomGroup->Rarity).Get() : BadgeMaterial.Get();
@@ -339,14 +340,13 @@ bool ACastleShopSkyIsland::Purchase(UCastleShopSkyIslandOffer& Offer, FText& Out
 
 	// 先准备整批房间与牌面，确定卡提交前才扣款。万能卡把扣款延迟到实际确认。
 	FRandomStream Random(Offer.RewardSeed);
-	TArray<FCastleBuildingDescriptor> Cards;
-	UCastlePendingRoomReward* Pending = nullptr;
-	if (!UCastleItemGrantLibrary::TryPrepareRoomGroup(Offer.RoomGroup, Backpack, Board->BuildingDefinitions,
-		Random, Cards, Pending, OutReason))
+	FCastlePreparedRoomGroup Prepared;
+	if (!UCastleItemGrantLibrary::TryPrepareRoomGroup(Offer.RoomGroup, Backpack, Board.Get(), Board->BuildingDefinitions,
+		Random, Prepared, OutReason))
 	{
 		return false;
 	}
-	if (Pending)
+	if (UCastlePendingRoomReward* Pending = Prepared.PendingReward)
 	{
 		const TWeakObjectPtr<ACastleShopSkyIsland> WeakIsland(this);
 		const TWeakObjectPtr<UCastleShopSkyIslandOffer> WeakOffer(&Offer);
@@ -398,7 +398,7 @@ bool ACastleShopSkyIsland::Purchase(UCastleShopSkyIslandOffer& Offer, FText& Out
 	}
 
 	if (!Economy->TrySpendGold(Offer.Price, OutReason)) { return false; }
-	if (!Backpack->TryAddItemsAllowOverflow(Cards, OutReason))
+	if (!UCastleItemGrantLibrary::TryCommitPreparedRoomGroup(Prepared, Backpack, OutReason))
 	{
 		RefundFailedOffer(Offer, OutReason);
 		return false;

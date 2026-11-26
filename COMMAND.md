@@ -56,24 +56,22 @@
 | `CastleSpendGold 100` | 金额为非负整数，且余额足够。需要项目玩家控制器 | 扣减金币，屏幕显示新余额或金币不足。 |
 | `Castle.Items.UI` | 非 Shipping。需要本地玩家视口、唯一棋盘与背包、徽章子系统 | 挂载临时建筑栏、徽章栏及替换界面。正式 HUD 已包含这些控件时会在日志提示已挂载。 |
 | `Castle.Items.Fill` | 非 Shipping。需要唯一棋盘、背包和普通房定义 | 用一级红色 4 号普通房填满主建筑栏，日志显示主栏及临时栏数量。 |
-| `Castle.Items.Group 7` | 非 Shipping。编号 `1`～`8`，需要唯一棋盘、本地玩家和可用的房间组资产。先处理已有的领取窗口 | 显示对应房间组的领取界面，可测试固定房间和自定义房间。 |
-| `Castle.Items.Badge 1` | 非 Shipping。编号 `1`～`7`，需要徽章子系统及对应资产 | 发放指定徽章。徽章栏满时可用徽章替换界面测试保留或舍弃。 |
+| `Castle.Items.Group 10` | 非 Shipping。Phase 0 骨架入口 | 在输出日志记录房间组规则引擎尚未实现的 Error。 |
+| `Castle.Items.Badge 1` | 非 Shipping。编号 `1`～`6`，需要徽章子系统及对应资产 | 尝试发放指定徽章。资产配置无效时输出 Error。徽章栏满时进入替换流程。 |
 | `Castle.Items.Remove 1` | 非 Shipping。槽位从 `1` 到 `10`，需要唯一棋盘和背包 | 移除主建筑栏指定槽位的卡，失败原因写入日志。 |
 | `Castle.Items.ResetBadges` | 非 Shipping。需要当前 GameInstance 的徽章子系统 | 清空已持有徽章和待替换徽章，刷新徽章栏。 |
 | `Castle.Items.Reload` | 非 Shipping。Game 或 PIE | 重开当前地图，重置关卡运行状态，可观察 GameInstance 中徽章是否继承。 |
 
 编号对应 [道具命令中的资产表](Source/Moving_Castle/Castle/Items/CastleItemsDebugCommands.cpp)。
 
-| 编号 | `Castle.Items.Group` 的房间组 | `Castle.Items.Badge` 的徽章效果 |
-| --- | --- | --- |
-| 1 | 三间 4 号箭塔 | 赌博幸运 |
-| 2 | 三间连续数字的农田 | 蓝色房间数字加成 |
-| 3 | 自定义普通房 | 房间卡牌升级 |
-| 4 | 高数字房间 | 主塔生命加成 |
-| 5 | 自定义颜色普通房 | 箭塔射速加成 |
-| 6 | 随机功能自定义房间 | 主塔首次受伤相关效果 |
-| 7 | 全自定义房间 | 主塔低生命值相关效果 |
-| 8 | NPC 加速房 | 无 |
+| 编号 | 骨架阶段 `Castle.Items.Badge` 的徽章 |
+| --- | --- |
+| 1 | 蓝釉算盘 |
+| 2 | 工坊返料章 |
+| 3 | 备用气球挂架 |
+| 4 | 快弦工牌 |
+| 5 | 破球警钟 |
+| 6 | 应急压舱扣 |
 
 ## 导演、空岛与对话
 

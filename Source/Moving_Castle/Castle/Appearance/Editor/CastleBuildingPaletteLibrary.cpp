@@ -292,20 +292,6 @@ bool UCastleBuildingPaletteLibrary::RebuildBuildingPalettes()
 		if (!BindAtlas(*M,*Texture,bShield,Assets)) { return false; }
 		if (Assets.Contains(M)) { M->PostEditChange(); }
 	}
-	// 加速房只有单一美术外壳，直接绑定已有的房间中间色档，使该 BP 的硬引用也进入烘焙。
-	auto* Speed = LoadObject<UBlueprint>(nullptr,TEXT("/Game/MovingCastle/BP/BP_SpeedRoom_lv1"));
-	auto* Mid = LoadObject<UMaterial>(nullptr,*(Materials + TEXT("M_Room_Tile2")));
-	if (!Speed || !Speed->SimpleConstructionScript || !Mid) { UE_LOG(LogMoving_Castle,Error,TEXT("加速房蓝图或 Room 中间色档缺失")); return false; }
-	auto* Node = Speed->SimpleConstructionScript->FindSCSNode(TEXT("StaticMesh"));
-	auto* Shell = Node ? Cast<UStaticMeshComponent>(Node->ComponentTemplate) : nullptr;
-	if (!Shell || Shell->GetNumMaterials()!=1) { return PaletteError(*Speed,TEXT("StaticMesh 外壳必须有一个材质槽")); }
-	if (Shell->GetMaterial(0) != Mid)
-	{
-		Shell->SetMaterial(0,Mid);
-		FKismetEditorUtilities::CompileBlueprint(Speed);
-		if (Speed->Status == BS_Error) { return PaletteError(*Speed,TEXT("加速房蓝图编译失败")); }
-		Assets.Add(Speed);
-	}
 	if (GShaderCompilingManager) { GShaderCompilingManager->FinishAllCompilation(); }
 	// 编译错误在保存前检查；待发布资产全部验证完毕才开始写盘。
 	for (UObject* Asset : Assets)

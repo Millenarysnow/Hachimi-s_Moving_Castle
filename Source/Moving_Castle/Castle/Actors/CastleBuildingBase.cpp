@@ -117,6 +117,13 @@ bool ACastleBuildingBase::InitializeBuilding(const FCastleBuildingDescriptor& De
 		UE_LOG(LogMoving_Castle, Error, TEXT("建筑初始化失败：%s"), *Reason.ToString());
 		return false;
 	}
+	if (Descriptor.RoomTrait != ECastleRoomTrait::None || Descriptor.TraitRemainingRounds != 0)
+	{
+		// Phase 1A 在这里接入特质组件，现阶段不能成功放置后丢弃卡牌特质。
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑定义 %s 无法放置带特质的房间：房间特质尚未实现（Phase 0）。"),
+			*GetPathNameSafe(Descriptor.Definition.Get()));
+		return false;
+	}
 	if (Descriptor.Level != BuildingLevel || Descriptor.GetBuildingType() != BuildingType)
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("建筑初始化失败：Data Asset 的生成类、类别或等级与实际 Actor 不一致。"));
@@ -296,18 +303,6 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 		const ACastleBuildingBase* Template = GetClass()->GetDefaultObject<ACastleBuildingBase>();
 		AssemblyFlight->LaunchInterval = Template->AssemblyFlight->LaunchInterval * (LegacyVisualCounts[BuildingLevel - 1] - 1)
 			/ (HachimisLayout->Parts.Num() - 1);
-	}
-	else if (BuildingType == ECastleBuildingType::SpeedRoom)
-	{
-		// 加速房的美术为蓝图自己的方块外壳。显式引用该组件，避免把功能碰撞或数字底牌一起染色。
-		UStaticMeshComponent* Shell = FindObjectFast<UStaticMeshComponent>(this, TEXT("StaticMesh"));
-		if (!Shell || !Shell->GetStaticMesh() || Shell->GetNumMaterials() != 1)
-		{
-			OutFailureReason = FText::FromString(GetPathName() + TEXT(" 缺少单槽的加速房外壳 StaticMesh。"));
-			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
-			return false;
-		}
-		CastleBuildingColors::Apply(*Shell, Color, BuildingType, NAME_None, TEXT("SpeedRoomShell"));
 	}
 
 	// 已启用的美术碰撞只提供 Visibility 查询；作者明确关闭碰撞的纯表现组件保持无碰撞。

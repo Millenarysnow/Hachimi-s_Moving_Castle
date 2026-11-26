@@ -17,43 +17,6 @@
 #include "Moving_Castle.h"
 #include "Units/BuildingInteraction/CastleBuildingTriggerSubsystem.h"
 
-bool UCastleSupportTowerSubsystem::ApplyNPCMovementSpeedBoost(const FCastleMassUnitHandle& NPC,
-	const float Multiplier, const float DurationSeconds)
-{
-	UWorld* World = GetWorld();
-	if (!IsInGameThread() || !World || NPC.World.Get() != World || !FMath::IsFinite(Multiplier) || Multiplier <= 1.0f
-		|| !FMath::IsFinite(DurationSeconds) || DurationSeconds <= 0.0f)
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("世界 %s 无法为 NPC %d 登记加速：线程、世界或倍率和时长配置无效。"),
-			*GetPathNameSafe(World), NPC.Entity.Index);
-		return false;
-	}
-
-	UMassEntitySubsystem* Mass = World->GetSubsystem<UMassEntitySubsystem>();
-	if (!Mass || !Mass->GetEntityManager().IsEntityActive(NPC.Entity))
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("世界 %s 无法为 NPC %d 登记加速：Mass 子系统或实体无效。"),
-			*World->GetPathName(), NPC.Entity.Index);
-		return false;
-	}
-	// 进入记录在查询结束后的游戏线程派发。这里只读取身份，倍率实际写入在 Mass 阶段外进行。
-	const FMassEntityView View(Mass->GetMutableEntityManager(), NPC.Entity);
-	const auto* Unit = View.GetFragmentDataPtr<FCastleMassUnitFragment>();
-	if (!View.HasTag<FCastleMassNPCTag>() || !Unit || Unit->Kind != ECastleMassUnitKind::NPC
-		|| !FMath::IsFinite(Unit->Health) || Unit->Health <= 0.0f)
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("世界 %s 无法为实体 %d 登记加速：来源必须为有效且存活的 NPC。"),
-			*World->GetPathName(), NPC.Entity.Index);
-		return false;
-	}
-
-	// 每次经过均从当前时刻计时。重叠的同倍率记录维持到最后一次到期，且不缩短空投或其他房间的增益。
-	MovementModifiers.Add({NPC.Entity, Multiplier, World->GetTimeSeconds() + static_cast<double>(DurationSeconds)});
-	UE_LOG(LogMoving_Castle, Display, TEXT("NPC %d 获得 %.2fx 移速增益，持续 %.2f 秒。"),
-		NPC.Entity.Index, Multiplier, DurationSeconds);
-	return true;
-}
-
 bool UCastleSupportTowerSubsystem::RallyNPCs(FMassEntityManager& Manager, ACastleBuildingBase& Source,
 	const FVector& Destination, TConstArrayView<FCastleSupportUnit> NPCs)
 {

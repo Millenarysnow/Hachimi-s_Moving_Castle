@@ -7,11 +7,6 @@
 #include "CastleBackpackTestObserver.h"
 #include "CastleBuildingTestUtilities.h"
 #include "CastleBuildingDefinition.h"
-#include "CastleMassFragments.h"
-#include "CastleMassTraits.h"
-#include "CastleMassUnitSubsystem.h"
-#include "Castle/Support/CastleSupportTowerSubsystem.h"
-#include "Components/Building/Effects/CastleSpeedRoomEffectComponent.h"
 #include "Components/Button.h"
 #include "Components/PanelWidget.h"
 #include "Components/SizeBox.h"
@@ -25,8 +20,6 @@
 #include "Items/CastleItemGrantLibrary.h"
 #include "Items/CastlePendingRoomReward.h"
 #include "Items/CastleRoomGroupDataAsset.h"
-#include "MassEntityConfigAsset.h"
-#include "MassEntitySubsystem.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 #include "Tests/AutomationCommon.h"
@@ -214,124 +207,49 @@ bool FCastleWildcardItemTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleRoomGroupItemTest, "MovingCastle.Items.RoomGroups.AllTemplates",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleRoomGroupItemTest, "MovingCastle.Items.RoomGroups.SkeletonFailures",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FCastleRoomGroupItemTest::RunTest(const FString& Parameters)
 {
-	TArray<TObjectPtr<UCastleBuildingDefinition>> Pool;
-	for (const TCHAR* Name : {TEXT("NormalRoom"), TEXT("ArcherTower"), TEXT("Farm"), TEXT("SpeedRoom")})
+	auto* Group = NewObject<UCastleRoomGroupDataAsset>();
+	Group->DisplayName = INVTEXT("骨架事务测试房间组");
+	auto* Backpack = NewObject<UCastleBackpackComponent>();
+	auto* Definition = CastleItemTests::LoadDefinition(TEXT("NormalRoom"));
+	FText Reason;
+	if (!TestNotNull(TEXT("正式普通房定义"), Definition)
+		|| !TestTrue(TEXT("填满主栏"), CastleItemTests::FillBackpack(*Backpack, *Definition, Reason)))
 	{
-		UCastleBuildingDefinition* Definition = CastleItemTests::LoadDefinition(Name);
-		if (!TestNotNull(Name, Definition))
-		{
-			return false;
-		}
-		Pool.Add(Definition);
+		return false;
 	}
+	const TObjectPtr<UCastleBuildingDefinition> Pool[] = {Definition};
 	FRandomStream Random(2704);
-	// 漏配和反序列化后越界的模板必须在准备牌面前失败，且保留调用方的随机流和库存。
-	auto* InvalidGroup = NewObject<UCastleRoomGroupDataAsset>();
-	InvalidGroup->DisplayName = INVTEXT("验证卡包稀有度");
-	auto* UnchangedBackpack = NewObject<UCastleBackpackComponent>();
-	const int32 SeedBeforeReject = Random.GetCurrentSeed();
-	UCastlePendingRoomReward* RejectedReward = nullptr;
-	FText InvalidReason;
+	const int32 InitialSeed = Random.GetCurrentSeed();
+	FCastlePreparedRoomGroup Prepared;
+
+	// 拒绝漏配和越界档位，合法档位也必须在规则引擎交付前明确失败。
 	AddExpectedError(TEXT("的卡包稀有度无效"), EAutomationExpectedErrorFlags::Contains, 2);
-	TestFalse(TEXT("未配置稀有度的房间组拒绝发放"), UCastleItemGrantLibrary::TryGrantRoomGroup(
-		InvalidGroup, UnchangedBackpack, Pool, Random, RejectedReward, InvalidReason));
-	TestTrue(TEXT("稀有度错误指出资产路径"), InvalidReason.ToString().Contains(InvalidGroup->GetPathName()));
-	InvalidGroup->Rarity = static_cast<ECastleRoomPackRarity>(255);
-	TestFalse(TEXT("越界稀有度的房间组拒绝发放"), UCastleItemGrantLibrary::TryGrantRoomGroup(
-		InvalidGroup, UnchangedBackpack, Pool, Random, RejectedReward, InvalidReason));
-	TestNull(TEXT("非法稀有度未创建待领奖励"), RejectedReward);
-	TestEqual(TEXT("非法稀有度未消耗随机流"), Random.GetCurrentSeed(), SeedBeforeReject);
-	TestEqual(TEXT("非法稀有度未发放卡牌"), UnchangedBackpack->GetItemCount() + UnchangedBackpack->GetTempItemCount(), 0);
-	for (int32 Template = 0; Template <= static_cast<int32>(ECastleRoomGroupType::NPCSpeedRoom); ++Template)
-	{
-		auto* Backpack = NewObject<UCastleBackpackComponent>();
-		auto* Group = NewObject<UCastleRoomGroupDataAsset>();
-		Group->DisplayName = FText::AsNumber(Template);
-		Group->GroupType = static_cast<ECastleRoomGroupType>(Template);
-		// 这些临时模板仅用于验证发牌语义，提供一个显式合法的展示档位。
-		Group->Rarity = ECastleRoomPackRarity::White;
-		UCastlePendingRoomReward* Pending = nullptr;
-		FText Reason;
-		if (!TestTrue(TEXT("从正式定义池发放房间组"), UCastleItemGrantLibrary::TryGrantRoomGroup(
-			Group, Backpack, Pool, Random, Pending, Reason)))
-		{
-			AddError(Reason.ToString());
-			return false;
-		}
-		const auto Type = Group->GroupType;
-		if (Type == ECastleRoomGroupType::ThreeNumberFourArchers || Type == ECastleRoomGroupType::ThreeConsecutiveFarms)
-		{
-			TestNull(TEXT("三张直接发放，不创建待领项"), Pending);
-			const auto Cards = Backpack->GetItems();
-			if (!TestEqual(TEXT("获得三张确定牌"), Cards.Num(), 3))
-			{
-				return false;
-			}
-			for (int32 Index = 0; Index < Cards.Num(); ++Index)
-			{
-				const bool bFarm = Type == ECastleRoomGroupType::ThreeConsecutiveFarms;
-				TestEqual(TEXT("三张卡均为指定房间类型"), Cards[Index].GetBuildingType(),
-					bFarm ? ECastleBuildingType::Farm : ECastleBuildingType::ArcherTower);
-				TestEqual(TEXT("箭塔数字四，农田数字连续"), Cards[Index].Number, bFarm ? Cards[0].Number + Index : 4);
-				if (bFarm)
-				{
-					TestEqual(TEXT("三张农田同色"), Cards[Index].Color, Cards[0].Color);
-					TestTrue(TEXT("农田数字在一至六"), Cards[Index].Number >= 1 && Cards[Index].Number <= 6);
-				}
-			}
-		}
-		else if (Type == ECastleRoomGroupType::HighNumberRoom || Type == ECastleRoomGroupType::NPCSpeedRoom)
-		{
-			TestNull(TEXT("默认直接发放房间"), Pending);
-			FCastleBuildingDescriptor Card;
-			if (!TestTrue(TEXT("获得一张确定牌"), Backpack->TryGetItemAt(0, Card)))
-			{
-				return false;
-			}
-			if (Type == ECastleRoomGroupType::HighNumberRoom)
-			{
-				TestTrue(TEXT("大数字限制在七至九"), Card.Number >= 7 && Card.Number <= 9);
-			}
-			else
-			{
-				TestEqual(TEXT("加速房使用原生建筑类型"), Card.GetBuildingType(), ECastleBuildingType::SpeedRoom);
-				TestEqual(TEXT("加速房只有一级"), Card.Level, 1);
-			}
-		}
-		else
-		{
-			if (!TestNotNull(TEXT("自定义模板生成待领取句柄"), Pending))
-			{
-				return false;
-			}
-			TestEqual(TEXT("点击前无卡进包"), Backpack->GetItemCount(), 0);
-			FCastleWildcardRoomOptions Options;
-			if (!TestTrue(TEXT("点击获取解析本卡的选项"), Pending->TryBeginClaim(Options, Reason)))
-			{
-				return false;
-			}
-			const bool bAllDefinitions = Type == ECastleRoomGroupType::FullyCustomRoom;
-			TestEqual(TEXT("固定型只有一个定义，全自定义使用定义池"), Options.Definitions.Num(), bAllDefinitions ? Pool.Num() : 1);
-			TestEqual(TEXT("默认可选四种玩法色"), Options.Colors.Num(), 4);
-			TestEqual(TEXT("万能颜色只锁定数字，其余默认六个数字"), Options.Numbers.Num(),
-				Type == ECastleRoomGroupType::CustomColorNormalRoom ? 1 : 6);
-			if (Type == ECastleRoomGroupType::RandomFunctionCustomRoom)
-			{
-				const auto Kind = Options.Definitions[0]->BuildingType;
-				TestTrue(TEXT("随机功能限定在功能塔"), Kind == ECastleBuildingType::ArcherTower || Kind == ECastleBuildingType::Farm);
-			}
-			bool bTemp;
-			int32 Index;
-			TestTrue(TEXT("全部选定后领取确定牌"),
-				Pending->TryConfirmClaim(Options.Definitions[0], Options.Colors[0], Options.Numbers[0], bTemp, Index, Reason));
-			TestEqual(TEXT("本次领取只提交一张"), Backpack->GetItemCount(), 1);
-		}
-	}
+	TestFalse(TEXT("未配置稀有度不可准备"),
+		UCastleItemGrantLibrary::TryPrepareRoomGroup(Group, Backpack, nullptr, Pool, Random, Prepared, Reason));
+	TestTrue(TEXT("错误指出资产路径"), Reason.ToString().Contains(Group->GetPathName()));
+	Group->Rarity = static_cast<ECastleItemRarity>(255);
+	TestFalse(TEXT("越界稀有度不可准备"),
+		UCastleItemGrantLibrary::TryPrepareRoomGroup(Group, Backpack, nullptr, Pool, Random, Prepared, Reason));
+	Group->Rarity = ECastleItemRarity::Common;
+	Group->ShopPrice = 48;
+	AddExpectedError(TEXT("房间组规则引擎尚未实现"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestFalse(TEXT("骨架入口报告未实现"),
+		UCastleItemGrantLibrary::TryPrepareRoomGroup(Group, Backpack, nullptr, Pool, Random, Prepared, Reason));
+	TestTrue(TEXT("失败未准备任何交易数据"), Prepared.Cards.IsEmpty() && !Prepared.MainBarChange.IsSet());
+	TestNull(TEXT("失败未创建待领项"), Prepared.PendingReward);
+
+	Prepared.Group = Group;
+	Prepared.Cards = Backpack->GetItems(); // 骨架提交收到了牌也必须拒绝，不能误写入临时栏。
+	AddExpectedError(TEXT("房间组原子提交尚未实现"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestFalse(TEXT("骨架不提交发放"), UCastleItemGrantLibrary::TryCommitPreparedRoomGroup(Prepared, Backpack, Reason));
+	TestEqual(TEXT("失败不消耗随机流"), Random.GetCurrentSeed(), InitialSeed);
+	TestEqual(TEXT("失败不改主栏"), Backpack->GetItemCount(), 10);
+	TestEqual(TEXT("失败不写临时栏"), Backpack->GetTempItemCount(), 0);
 	return true;
 }
 
@@ -357,7 +275,6 @@ bool FCastleBadgeItemTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	TestEqual(TEXT("默认幸运值"), Badges->GetGambleLuckBonus(), 0.0);
 	TestEqual(TEXT("默认蓝房数字"), Badges->GetBlueRoomNumberBonus(), int64{0});
 	TestEqual(TEXT("默认升级赠牌"), Badges->GetUpgradeBonusRoomCards(), int64{0});
 	TestEqual(TEXT("默认主塔血量"), Badges->GetMainTowerHealthMultiplier(), 1.0);
@@ -369,13 +286,16 @@ bool FCastleBadgeItemTest::RunTest(const FString& Parameters)
 	FText Reason;
 	bool bReplace;
 	FCastleBadgeDefinition Badge;
-	for (int32 Index = 0; Index < UCastleBadgeSubsystem::MaxBadges; ++Index)
+	// 五种已接线徽章占前五槽，第六枚也选择非低血量类型。
+	const ECastleBadgeType InitialTypes[] = {ECastleBadgeType::BlueAbacus, ECastleBadgeType::WorkshopRefund,
+		ECastleBadgeType::BalloonRack, ECastleBadgeType::QuickstringPass, ECastleBadgeType::BurstAlarm,
+		ECastleBadgeType::FirepowerCard};
+	for (const ECastleBadgeType Type : InitialTypes)
 	{
-		FCastleBadgeDefinition::TryMakeStandard(static_cast<ECastleBadgeType>(Index), Badge);
+		FCastleBadgeDefinition::TryMakeStandard(Type, Badge);
 		TestTrue(TEXT("前六枚直接加入"), Badges->TryAcquireBadge(Badge, bReplace, Reason));
 		TestFalse(TEXT("前六枚无需选择"), bReplace);
 	}
-	TestTrue(TEXT("持有一枚幸运徽章"), FMath::IsNearlyEqual(Badges->GetGambleLuckBonus(), 0.15, 1e-6));
 	TestEqual(TEXT("蓝房数字加一"), Badges->GetBlueRoomNumberBonus(), int64{1});
 	TestEqual(TEXT("升级赠两张卡"), Badges->GetUpgradeBonusRoomCards(), int64{2});
 	TestTrue(TEXT("主塔生命为 1.2 倍"), FMath::IsNearlyEqual(Badges->GetMainTowerHealthMultiplier(), 1.2, 1e-6));
@@ -384,7 +304,8 @@ bool FCastleBadgeItemTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("首次掉血后全房间射速翻倍"), Badges->GetGlobalTowerFireRateMultiplier(true), 2.0f);
 	TestEqual(TEXT("首次掉血后召唤物移动翻倍"), Badges->GetSummonSpeedMultiplier(true), 2.0f);
 
-	FCastleBadgeDefinition::TryMakeStandard(ECastleBadgeType::LowMainTowerHealth, Badge);
+	FCastleBadgeDefinition::TryMakeStandard(ECastleBadgeType::EmergencyBallast, Badge);
+	// 清场徽章放在首批之外，验证待替换状态不会提前影响敌人攻速。
 	TestTrue(TEXT("第七枚成为候选"), Badges->TryAcquireBadge(Badge, bReplace, Reason));
 	TestTrue(TEXT("第七枚需要替换选择"), bReplace);
 	TestEqual(TEXT("候选徽章仍无效果"), Badges->GetEnemyAttackSpeedMultiplier(0.2f), 1.0f);
@@ -407,10 +328,10 @@ bool FCastleBadgeItemTest::RunTest(const FString& Parameters)
 	auto* AfterTravel = SecondWorld->GetGameInstance()->GetSubsystem<UCastleBadgeSubsystem>();
 	TestEqual(TEXT("新世界继续使用原子系统"), AfterTravel, Badges);
 	TestEqual(TEXT("六枚徽章完整保留"), AfterTravel->GetBadges().Num(), 6);
-	TestEqual(TEXT("保留替换后的第一槽"), AfterTravel->GetBadges()[0].Type, ECastleBadgeType::LowMainTowerHealth);
+	TestEqual(TEXT("保留替换后的第一槽"), AfterTravel->GetBadges()[0].Type, ECastleBadgeType::EmergencyBallast);
 	TestEqual(TEXT("新一场战斗没有保留触发标志"), AfterTravel->GetGlobalTowerFireRateMultiplier(false), 1.0f);
 
-	for (int32 Index = 0; Index <= static_cast<int32>(ECastleBadgeType::LowMainTowerHealth); ++Index)
+	for (int32 Index = 1; Index <= static_cast<int32>(ECastleBadgeType::EmergencyBallast); ++Index)
 	{
 		Badges->ClearAllBadgesForTesting();
 		const auto Type = static_cast<ECastleBadgeType>(Index);
@@ -419,137 +340,32 @@ bool FCastleBadgeItemTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("第二枚同名徽章进入另一槽"), Badges->TryAcquireBadge(Badge, bReplace, Reason));
 		switch (Type)
 		{
-		case ECastleBadgeType::GambleLuck:
-			TestTrue(TEXT("两枚幸运合计 0.30"), FMath::IsNearlyEqual(Badges->GetGambleLuckBonus(), 0.30, 1e-6));
-			break;
-		case ECastleBadgeType::BlueRoomNumber:
+		case ECastleBadgeType::BlueAbacus:
 			TestEqual(TEXT("两枚蓝房数字加二"), Badges->GetBlueRoomNumberBonus(), int64{2});
 			break;
-		case ECastleBadgeType::UpgradeRoomCards:
+		case ECastleBadgeType::WorkshopRefund:
 			TestEqual(TEXT("两枚合计赠四张"), Badges->GetUpgradeBonusRoomCards(), int64{4});
 			break;
-		case ECastleBadgeType::MainTowerHealth:
+		case ECastleBadgeType::BalloonRack:
 			TestTrue(TEXT("两枚主塔生命徽章加算至 1.4 倍"),
 				FMath::IsNearlyEqual(Badges->GetMainTowerHealthMultiplier(), 1.4, 1e-6));
 			break;
-		case ECastleBadgeType::ArcherFireRate:
+		case ECastleBadgeType::QuickstringPass:
 			TestTrue(TEXT("两枚箭塔射速徽章加算至 1.4 倍"),
 				FMath::IsNearlyEqual(Badges->GetArcherFireRateMultiplier(), 1.4, 1e-6));
 			break;
-		case ECastleBadgeType::FirstMainTowerDamage:
+		case ECastleBadgeType::BurstAlarm:
 			TestEqual(TEXT("两枚首次掉血徽章仍固定两倍"), Badges->GetGlobalTowerFireRateMultiplier(true), 2.0f);
 			TestEqual(TEXT("两枚首次掉血徽章仍固定两倍移速"), Badges->GetSummonSpeedMultiplier(true), 2.0f);
 			break;
-		case ECastleBadgeType::LowMainTowerHealth:
+		case ECastleBadgeType::EmergencyBallast:
 			TestEqual(TEXT("两枚低血量压制仍固定减半"), Badges->GetEnemyAttackSpeedMultiplier(0.20f), 0.5f);
 			break;
+		default:
+			AddError(TEXT("六种已有徽章的效果测试缺少断言。"));
+			return false;
 		}
 	}
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleSpeedRoomItemTest, "MovingCastle.Items.SpeedRoom.NPCRefreshAndExpiry",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-
-bool FCastleSpeedRoomItemTest::RunTest(const FString& Parameters)
-{
-	auto* Definition = CastleItemTests::LoadDefinition(TEXT("SpeedRoom"));
-	if (!TestNotNull(TEXT("真实一级加速房定义"), Definition))
-	{
-		return false;
-	}
-	const auto Settings = UWorld::InitializationValues().AllowAudioPlayback(false).CreatePhysicsScene(true)
-		.CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(false);
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Settings);
-	GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
-	ON_SCOPE_EXIT
-	{
-		World->BeginTearingDown();
-		World->DestroyWorld(false);
-		GEngine->DestroyWorldContext(World);
-	};
-	auto* Support = World->GetSubsystem<UCastleSupportTowerSubsystem>();
-	auto* Units = World->GetSubsystem<UCastleMassUnitSubsystem>();
-	auto* Mass = World->GetSubsystem<UMassEntitySubsystem>();
-	if (!Support || !Units || !Mass)
-	{
-		AddError(TEXT("测试世界缺少支援塔或 Mass 子系统。"));
-		return false;
-	}
-	auto* Config = NewObject<UMassEntityConfigAsset>(World);
-	Config->GetMutableConfig().AddTrait(*NewObject<UCastleMassNPCTrait>(Config));
-	TArray<FCastleMassUnitHandle> Handles;
-	FText Reason;
-	if (!TestTrue(TEXT("生成真实 Mass NPC"), Units->SpawnUnits(Config, {FTransform::Identity}, Handles, Reason))
-		|| !TestEqual(TEXT("NPC 数量"), Handles.Num(), 1))
-	{
-		AddError(Reason.ToString());
-		return false;
-	}
-
-	FCastleBuildingDescriptor Descriptor;
-	if (!TestTrue(TEXT("生成可放置的加速房描述符"), Definition->CreateDescriptor(1, ECastleTileColor::Red, 4, Descriptor, Reason)))
-	{
-		AddError(Reason.ToString());
-		return false;
-	}
-	ACastleBoard* Board = World->SpawnActor<ACastleBoard>();
-	Board->GridSize = FIntVector(1, 1, 2);
-	CastleBuildingTests::ConfigureBoard(Board);
-	FCastleGroundGenerationResult Ground;
-	FCastleGroundCell& Cell = Ground.Cells.AddDefaulted_GetRef();
-	Cell.Coordinate = FIntVector::ZeroValue;
-	Cell.Color = ECastleTileColor::Red;
-	Cell.Number = 4;
-	if (!TestTrue(TEXT("建立正式放置格"), Board->ApplyGroundGenerationResult(Ground, Reason)))
-	{
-		AddError(Reason.ToString());
-		return false;
-	}
-	ACastleBuildingBase* Building = Board->PlaceBuilding(FIntVector::ZeroValue, Descriptor, true, Reason);
-	if (!TestNotNull(TEXT("正式加速房可放置"), Building) || !CastleBuildingTests::CompletePlacement(Building))
-	{
-		AddError(Reason.ToString());
-		return false;
-	}
-	auto* Effect = Cast<UCastleSpeedRoomEffectComponent>(Building->BuildingEffect);
-	if (!TestNotNull(TEXT("建筑绑定原生加速组件"), Effect))
-	{
-		return false;
-	}
-	TestFalse(TEXT("一级加速房没有合成目标"), Building->CanMergeToNextLevel());
-	AddExpectedError(TEXT("主动调用没有 NPC"), EAutomationExpectedErrorFlags::Contains, 1);
-	TestFalse(TEXT("主动调用未产生加速"), Building->TriggerBuildingEffect(FCastleBuildingTriggerContext{}));
-	TestEqual(TEXT("失败调用恢复正式触发计数"), Effect->TriggerCount, int64{0});
-
-	FCastleBuildingTriggerContext Entry;
-	Entry.Source = ECastleBuildingTriggerSource::NPCEntry;
-	Entry.NPC = Handles[0];
-	auto ReadMultiplier = [&]()
-	{
-		return Mass->GetMutableEntityManager().GetFragmentDataChecked<FCastleMassUnitFragment>(Entry.NPC.Entity).SupportMovementMultiplier;
-	};
-	// 世界推进真实游戏时间，Tick 内共用支援倍率刷新路径。
-	auto AdvanceWorld = [World, Support](const int32 Steps)
-	{
-		for (int32 Step = 0; Step < Steps; ++Step)
-		{
-			World->Tick(LEVELTICK_All, 0.1f);
-			Support->Tick(0.1f);
-		}
-	};
-	TestTrue(TEXT("真实 NPC 进入触发加速"), Building->TriggerBuildingEffect(Entry));
-	TestTrue(TEXT("没有空投时孤立加速仍唤醒支援 Tick"), Support->IsTickable());
-	Support->Tick(0.0f);
-	TestEqual(TEXT("移动倍率提升至 1.5"), ReadMultiplier(), 1.5f);
-	AdvanceWorld(30);
-	TestTrue(TEXT("再次经过刷新加速时长"), Building->TriggerBuildingEffect(Entry));
-	AdvanceWorld(30);
-	TestTrue(TEXT("已超出第一次的五秒期限"), World->GetTimeSeconds() > 5.0);
-	TestEqual(TEXT("第二次仍在五秒内，倍率维持 1.5"), ReadMultiplier(), 1.5f);
-	AdvanceWorld(25);
-	TestEqual(TEXT("第二次增益到期后恢复 1.0"), ReadMultiplier(), 1.0f);
-	TestEqual(TEXT("两次真实进入均记录成功"), Effect->TriggerCount, int64{2});
 	return true;
 }
 

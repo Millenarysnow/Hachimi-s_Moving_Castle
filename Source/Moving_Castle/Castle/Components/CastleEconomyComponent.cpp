@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleEconomyComponent.h"
+#include "Moving_Castle.h"
 
 UCastleEconomyComponent::UCastleEconomyComponent()
 {
@@ -53,6 +54,15 @@ bool UCastleEconomyComponent::TryAddGold(int32 Amount, FText& OutFailureReason)
 		OnGoldChanged.Broadcast(PreviousGold, Gold);
 	}
 	return true;
+}
+
+bool UCastleEconomyComponent::TryAddGameplayGold(const int32 BaseAmount, FText& OutFailureReason, int32* OutFinalAmount)
+{
+	// 奖励倍率和余额提交由 Phase 1B 接入；此入口在此前不调整余额或通知 UI。
+	OutFailureReason = INVTEXT("玩法金币入口尚未实现（Phase 0）。");
+	UE_LOG(LogMoving_Castle, Error, TEXT("金币账户 %s 拒绝玩法收入 %d：%s"),
+		*GetPathName(), BaseAmount, *OutFailureReason.ToString());
+	return false;
 }
 
 bool UCastleEconomyComponent::TrySpendGold(int32 Amount, FText& OutFailureReason)

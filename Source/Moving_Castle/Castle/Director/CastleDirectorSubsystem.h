@@ -8,6 +8,7 @@
 #include "CastleDirectorSubsystem.generated.h"
 
 class ACastleBoard;
+class ACastleBuildingBase;
 class ACastleDirectorNodeActor;
 class ACastlePlayerController;
 class ACastlePatrolRoute;
@@ -24,6 +25,8 @@ struct FCastleBadgeDefinition;
 
 /** 原生阶段事件不承担流程决策，界面和输入只监听最终状态。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCastleDirectorPhaseChanged, ECastleDirectorPhase);
+/** 导演接受清场后发布已提交的战斗类型与关号。 */
+DECLARE_MULTICAST_DELEGATE_TwoParams(FCastleBattleClearedForItems, ECastleBattleKind, int32);
 
 /** 整局导演：在白名单地图的首次游戏 Tick 启动，世界重载时自然销毁全部单局状态。 */
 UCLASS()
@@ -54,6 +57,8 @@ public:
 	void ClaimTowerUpgradeReward(int32 Index);
 	void DiscardTowerUpgradeRewards();
 	bool TryInteractWithSkyIsland(const FVector& Start, const FVector& End, FText& OutReason);
+	/** 额外空岛使用当前节点的进度；从离岛门返塔后仍停留在同一关。 */
+	bool TryEnterBonusSkyIslandFromPortal(ACastleBuildingBase* PortalRoom, FText& OutReason);
 	bool RequestIslandRoomShop(ACastleSkyIslandBase* Island, FText& OutReason);
 	bool RequestIslandRoomReward(ACastleSkyIslandBase* Island, UCastlePendingRoomReward* Reward, FText& OutReason);
 	bool RequestIslandBadgeReward(ACastleSkyIslandBase* Island, const FCastleBadgeDefinition& Badge, FText& OutReason);
@@ -90,6 +95,12 @@ public:
 	static ECastleDirectorNodeKind GetNodeKindForStep(const UCastleDirectorConfigDataAsset& InConfig, int32 Step);
 	static TArray<ECastleDirectorNodeKind> GetNodeKindsForStep(const UCastleDirectorConfigDataAsset& InConfig, int32 Step);
 	FCastleDirectorPhaseChanged OnDirectorPhaseChanged;
+	/** 正式开局依赖已就绪，仅发送一次，先于第一次进入编辑阶段。 */
+	FSimpleMulticastDelegate OnRunStarted;
+	/** 成功进入编辑阶段后发送，含开局、战斗奖励提交及空岛返塔。 */
+	FSimpleMulticastDelegate OnEditingPhaseEntered;
+	/** 已接受并提交的清场，带战斗种类及关号；编辑阶段仍由后续奖励流程进入。 */
+	FCastleBattleClearedForItems OnBattleClearedForItems;
 	/** 战斗暂停或倍速状态变化通知，HUD 据此即时切换图标。 */
 	FSimpleMulticastDelegate OnBattleControlStateChanged;
 

@@ -41,9 +41,6 @@ public:
 	bool TryGetPendingBadge(FCastleBadgeDefinition& OutBadge) const;
 
 	UFUNCTION(BlueprintPure, Category = "移动城堡|徽章")
-	double GetGambleLuckBonus() const;
-
-	UFUNCTION(BlueprintPure, Category = "移动城堡|徽章")
 	int64 GetBlueRoomNumberBonus() const;
 
 	UFUNCTION(BlueprintPure, Category = "移动城堡|徽章")
@@ -75,5 +72,7 @@ private:
 	UPROPERTY(Transient)
 	TArray<FCastleBadgeDefinition> Badges;
 
+	/** 待替换项和已持有项都需要让 GC 追踪结构内的图标引用。 */
+	UPROPERTY(Transient)
 	TOptional<FCastleBadgeDefinition> PendingBadge;
 };

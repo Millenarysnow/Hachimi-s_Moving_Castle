@@ -113,6 +113,14 @@ bool UCastleTowerDispatchSubsystem::EndBattleDispatch()
 	return EndBattleDispatchSession(Reason);
 }
 
+bool UCastleTowerDispatchSubsystem::TryDispatchTemporarySingleLapNPC(FText& OutReason)
+{
+	// 临时出兵由 Phase 1B 处理实体生命周期；拒绝未接线调用，正式待命池保持原状。
+	OutReason = INVTEXT("临时单圈派遣尚未实现（Phase 0）。");
+	UE_LOG(LogMoving_Castle, Error, TEXT("出兵资产 %s 拒绝临时派遣：%s"), *GetPathNameSafe(Config.Get()), *OutReason.ToString());
+	return false;
+}
+
 bool UCastleTowerDispatchSubsystem::TryDispatchSingleNPC(FText& OutReason)
 {
 	OutReason = FText::GetEmpty();

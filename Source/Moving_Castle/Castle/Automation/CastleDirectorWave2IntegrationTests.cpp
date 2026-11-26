@@ -211,15 +211,14 @@ private:
 		if (!Test.TestNotNull(TEXT("正式 GameInstance 徽章组件"), Badges)) { return; }
 		FText Reason;
 		bool bReplace = false;
-		for (const ECastleBadgeType Type : {ECastleBadgeType::MainTowerHealth, ECastleBadgeType::ArcherFireRate,
-			ECastleBadgeType::BlueRoomNumber, ECastleBadgeType::GambleLuck,
-			ECastleBadgeType::FirstMainTowerDamage, ECastleBadgeType::LowMainTowerHealth})
+		for (const ECastleBadgeType Type : {ECastleBadgeType::BalloonRack, ECastleBadgeType::QuickstringPass,
+			ECastleBadgeType::BlueAbacus, ECastleBadgeType::FirepowerCard,
+			ECastleBadgeType::BurstAlarm, ECastleBadgeType::EmergencyBallast})
 		{
 			FCastleBadgeDefinition Badge;
 			if (FCastleBadgeDefinition::TryMakeStandard(Type, Badge)) { Test.TestTrue(TEXT("正式徽章入口发放"), Badges->TryAcquireBadge(Badge, bReplace, Reason)); }
 		}
 		Test.TestTrue(TEXT("主塔同步 +20% 生命"), FMath::IsNearlyEqual(Director.Tower->MaxHealth, 9600.0f));
-		Test.TestTrue(TEXT("赌博幸运供空岛查询"), Badges->GetGambleLuckBonus() > 0.0);
 		auto* Mass = Director.GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>();
 		Director.SetPhase(ECastleDirectorPhase::Battle);
 		Director.Tower->ApplyDamage(0.0f);
@@ -232,7 +231,7 @@ private:
 		Director.SetPhase(ECastleDirectorPhase::Editing);
 		Test.TestFalse(TEXT("战斗结束时关闭首次受击增益"), Director.IsFirstTowerDamageTriggeredInBattle());
 		FCastleBadgeDefinition UpgradeBadge;
-		FCastleBadgeDefinition::TryMakeStandard(ECastleBadgeType::UpgradeRoomCards, UpgradeBadge);
+		FCastleBadgeDefinition::TryMakeStandard(ECastleBadgeType::WorkshopRefund, UpgradeBadge);
 		Test.TestTrue(TEXT("第七枚徽章使用正式替换入口"), Badges->TryAcquireBadge(UpgradeBadge, bReplace, Reason));
 		Test.TestTrue(TEXT("第七枚徽章等待确认替换"), bReplace);
 		Test.TestTrue(TEXT("替换一枚后合成徽章生效"), Badges->TryReplaceBadgeAt(3, UpgradeBadge, Reason));

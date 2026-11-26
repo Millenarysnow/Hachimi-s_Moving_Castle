@@ -15,6 +15,13 @@ bool UCastleShieldTowerSubsystem::DoesSupportWorldType(EWorldType::Type WorldTyp
 	return WorldType == EWorldType::Game || WorldType == EWorldType::PIE;
 }
 
+bool UCastleShieldTowerSubsystem::TryConsumeStrongestActiveShield(int64& OutConsumedBlocks)
+{
+	// Phase 1B 在确定可消费的最大护盾后同步更新注册表和表现。当前不写次数，也不广播。
+	UE_LOG(LogMoving_Castle, Error, TEXT("护盾子系统 %s 无法耗尽护盾：气球扣护盾入口尚未实现（Phase 0）。"), *GetPathName());
+	return false;
+}
+
 uint64 UCastleShieldTowerSubsystem::UpsertActiveShield(UObject* OwnerKey, const FVector& WorldLocation,
 	float AttractionRadius, int64 RemainingBlocks, float ReflectDamage)
 {

@@ -138,34 +138,29 @@ bool UCastleBadgeSubsystem::HasBadge(const ECastleBadgeType Type) const
 	return Badges.ContainsByPredicate([Type](const FCastleBadgeDefinition& Badge) { return Badge.Type == Type; });
 }
 
-double UCastleBadgeSubsystem::GetGambleLuckBonus() const
-{
-	return SumMagnitude(ECastleBadgeType::GambleLuck);
-}
-
 int64 UCastleBadgeSubsystem::GetBlueRoomNumberBonus() const
 {
-	return static_cast<int64>(SumMagnitude(ECastleBadgeType::BlueRoomNumber));
+	return static_cast<int64>(SumMagnitude(ECastleBadgeType::BlueAbacus));
 }
 
 int64 UCastleBadgeSubsystem::GetUpgradeBonusRoomCards() const
 {
-	return static_cast<int64>(SumMagnitude(ECastleBadgeType::UpgradeRoomCards));
+	return static_cast<int64>(SumMagnitude(ECastleBadgeType::WorkshopRefund));
 }
 
 double UCastleBadgeSubsystem::GetMainTowerHealthMultiplier() const
 {
-	return 1.0 + SumMagnitude(ECastleBadgeType::MainTowerHealth);
+	return 1.0 + SumMagnitude(ECastleBadgeType::BalloonRack);
 }
 
 double UCastleBadgeSubsystem::GetArcherFireRateMultiplier() const
 {
-	return 1.0 + SumMagnitude(ECastleBadgeType::ArcherFireRate);
+	return 1.0 + SumMagnitude(ECastleBadgeType::QuickstringPass);
 }
 
 float UCastleBadgeSubsystem::GetGlobalTowerFireRateMultiplier(const bool bFirstDamageTriggered) const
 {
-	return bFirstDamageTriggered && HasBadge(ECastleBadgeType::FirstMainTowerDamage) ? 2.0f : 1.0f;
+	return bFirstDamageTriggered && HasBadge(ECastleBadgeType::BurstAlarm) ? 2.0f : 1.0f;
 }
 
 float UCastleBadgeSubsystem::GetSummonSpeedMultiplier(const bool bFirstDamageTriggered) const
@@ -176,5 +171,5 @@ float UCastleBadgeSubsystem::GetSummonSpeedMultiplier(const bool bFirstDamageTri
 
 float UCastleBadgeSubsystem::GetEnemyAttackSpeedMultiplier(const float CurrentHealthFraction) const
 {
-	return CurrentHealthFraction <= 0.20f && HasBadge(ECastleBadgeType::LowMainTowerHealth) ? 0.5f : 1.0f;
+	return CurrentHealthFraction <= 0.20f && HasBadge(ECastleBadgeType::EmergencyBallast) ? 0.5f : 1.0f;
 }

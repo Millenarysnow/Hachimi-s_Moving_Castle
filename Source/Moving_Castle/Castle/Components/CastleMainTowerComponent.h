@@ -67,6 +67,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|主塔")
 	bool ApplyDamage(float Damage);
 
+	/** 敌方攻击专用入口；致命伤害在提交前由徽章运行时检查气球扣。 */
+	bool ApplyEnemyDamage(float Damage);
+
 	/** 按指定生命值回血；不改变 AttackCount，并用负伤害广播实际恢复量。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|主塔")
 	bool ApplyHealing(float Amount);

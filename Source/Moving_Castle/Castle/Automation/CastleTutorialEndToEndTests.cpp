@@ -38,6 +38,7 @@
 #include "Engine/GameViewportClient.h"
 #include "EngineUtils.h"
 #include "Interaction/CastlePatrolRoute.h"
+#include "Items/CastleItemGrantLibrary.h"
 #include "MassEntityConfigAsset.h"
 #include "Misc/AutomationTest.h"
 #include "Slate/SceneViewport.h"
@@ -479,12 +480,21 @@ bool FCastleFortressPopupViewportTest::RunTest(const FString&)
 			Viewport->SetViewportSize(1280, 720);
 			Viewport->SetFixedViewportSize(1280, 720);
 			Player->ToggleControlSettings();
-			Player->ConsoleCommand(TEXT("Castle.Items.Group 7"));
-			auto* Picker = FindScreenWidget<UCastleWildcardRoomPickerWidget>(*World);
-			if (!TestTrue(TEXT("调试入口挂载万能卡并正常展开工坊"), Picker && Click(*Picker, TEXT("ClaimButton"))))
+			// 该回归检查工坊在真实视口的布局，直接用通用万能卡入口构造选项。
+			const TActorIterator<ACastleBoard> Board(World);
+			FText Reason;
+			UCastlePendingRoomReward* Pending = nullptr;
+			if (!TestTrue(TEXT("创建工坊布局测试的待领奖励"), Board && UCastleItemGrantLibrary::TryCreateWildcardReward(
+				INVTEXT("可选房间"), FCastleWildcardRoomSpec{}, Board->PrototypeBackpack, Board->BuildingDefinitions, Pending, Reason)))
 			{
 				return true;
 			}
+			const auto PickerClass = LoadClass<UCastleWildcardRoomPickerWidget>(nullptr,
+				TEXT("/Game/MovingCastle/UI/Items/WBP_WildcardRoomPicker.WBP_WildcardRoomPicker_C"));
+			auto* Picker = PickerClass ? CreateWidget<UCastleWildcardRoomPickerWidget>(Player, PickerClass) : nullptr;
+			if (!TestTrue(TEXT("绑定工坊正式界面"), Picker && Picker->BindReward(Pending, Reason))) { return true; }
+			Picker->AddToViewport(55);
+			if (!TestTrue(TEXT("待领奖励展开工坊"), Click(*Picker, TEXT("ClaimButton")))) { return true; }
 			const auto Select = [&](FName Name, int32 Index)
 			{
 				const auto* Choices = Cast<UPanelWidget>(Picker->GetWidgetFromName(Name));

@@ -11,6 +11,8 @@ class UCastleCombatConfigDataAsset;
 /** 终态带回开战请求的编号，正式对局为关号，独立战斗为指定表项序号。 */
 DECLARE_MULTICAST_DELEGATE_TwoParams(FCastleBattleCleared, ECastleBattleKind, int32);
 DECLARE_MULTICAST_DELEGATE_ThreeParams(FCastleBattleFailed, ECastleBattleKind, int32, const FText&);
+/** 当前战斗内从 1 开始的波次与总波数，开始事务成功后广播。 */
+DECLARE_MULTICAST_DELEGATE_TwoParams(FCastleWaveStarted, int32, int32);
 
 /** 开战时冻结的批次序列，按已生成批次数推导时刻，避免为每只定时突袭怪复制条目。 */
 USTRUCT()
@@ -72,6 +74,7 @@ public:
 
 	FCastleBattleCleared OnBattleCleared;
 	FCastleBattleFailed OnBattleFailed;
+	FCastleWaveStarted OnWaveStarted;
 
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;

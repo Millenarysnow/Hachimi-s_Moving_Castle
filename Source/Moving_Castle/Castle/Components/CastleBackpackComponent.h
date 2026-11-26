@@ -118,6 +118,9 @@ protected:
 	TArray<FCastleBuildingDescriptor> Items;
 
 private:
+	/** 房间组提交入口需一次校验并替换主栏和临时栏，避免在中间状态广播。 */
+	friend class UCastleItemGrantLibrary;
+
 	UPROPERTY(VisibleInstanceOnly, Category = "背包")
 	TArray<FCastleBuildingDescriptor> TempItems;
 

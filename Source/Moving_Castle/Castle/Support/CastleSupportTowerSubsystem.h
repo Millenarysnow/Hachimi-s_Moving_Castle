@@ -38,8 +38,6 @@ public:
 	float GetArcherRateMultiplier(const ACastleBuildingBase& Tower) const;
 	/** 合并空投箭塔增益、箭塔徽章和本次战斗的首次受击增益。 */
 	float GetTowerFireRateMultiplier(const ACastleBuildingBase& Tower) const;
-	/** NPC 进入时登记移速增益；统一由支援 Tick 写入实体并按世界时间恢复。 */
-	bool ApplyNPCMovementSpeedBoost(const FCastleMassUnitHandle& NPC, float Multiplier, float DurationSeconds);
 	/** 导演结束本场时清理尚未结算的支援效果和蓝色空投增援，不影响其他兵团。 */
 	bool EndBattleSupport();
 

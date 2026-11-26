@@ -180,6 +180,8 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 		Badges->OnBadgesChanged.AddUniqueDynamic(this, &UCastleDirectorSubsystem::HandleBadgesChanged);
 		HandleBadgesChanged();
 	}
+	// 开局订阅者读取已准备的本局依赖，并可在第一次编辑阶段初始化配额之前发放初始奖励。
+	OnRunStarted.Broadcast();
 	SetPhase(ECastleDirectorPhase::Editing);
 	for (ACastleDirectorNodeActor* Node : Nodes) { Node->ActivateNode(); }
 	// 下一关指引由 WBP HUD 读取，避免同一句话叠加到屏幕调试层。
@@ -609,6 +611,14 @@ bool UCastleDirectorSubsystem::ValidateIslandAction(const ACastleSkyIslandBase* 
 	return true;
 }
 
+bool UCastleDirectorSubsystem::TryEnterBonusSkyIslandFromPortal(ACastleBuildingBase* PortalRoom, FText& OutReason)
+{
+	// Phase 1A 接入传送事务；此处既不生成空岛，也不消耗节点、随机流或传送门特质。
+	OutReason = INVTEXT("传送门房间的额外空岛尚未实现（Phase 0）。");
+	UE_LOG(LogMoving_Castle, Error, TEXT("房间 %s 无法进入额外空岛：%s"), *GetPathNameSafe(PortalRoom), *OutReason.ToString());
+	return false;
+}
+
 bool UCastleDirectorSubsystem::TryInteractWithSkyIsland(const FVector& Start, const FVector& End, FText& OutReason)
 {
 	if (!ValidateIslandAction(ActiveSkyIsland, OutReason)) { return false; }
@@ -717,6 +727,8 @@ void UCastleDirectorSubsystem::HandleBattleCleared(const ECastleBattleKind Kind,
 	// 战斗结束时立即恢复 1x 倍速与未暂停状态，避免奖励和编辑阶段沿用战斗倍速。
 	ResetBattleControls(true);
 	ClearedSteps = Stage;
+	// 正式清场只发布一次；精英关自动提交奖励前也先通知道具系统。
+	OnBattleClearedForItems.Broadcast(Kind, Stage);
 	if (Kind == ECastleBattleKind::Elite)
 	{
 		// 精英关必须清场才能前进，因此前两个精英关由关号和间隔直接确定。
@@ -977,6 +989,7 @@ void UCastleDirectorSubsystem::DiscardTowerUpgradeRewards()
 void UCastleDirectorSubsystem::SetPhase(const ECastleDirectorPhase NewPhase)
 {
 	// 观察者只在界面和输入已与新阶段同步后收到事件，不驱动第二套流程状态。
+	const bool bEnteredEditing = Phase != NewPhase && NewPhase == ECastleDirectorPhase::Editing;
 	if (NewPhase == ECastleDirectorPhase::Battle && Phase != NewPhase)
 	{
 		// 各场战斗独立触发，上一场伤害不会进入本场的射速计算。
@@ -985,6 +998,7 @@ void UCastleDirectorSubsystem::SetPhase(const ECastleDirectorPhase NewPhase)
 	Phase = NewPhase;
 	UpdatePresentation();
 	OnDirectorPhaseChanged.Broadcast(Phase);
+	if (bEnteredEditing) { OnEditingPhaseEntered.Broadcast(); }
 }
 
 void UCastleDirectorSubsystem::HandleTowerHealthChanged(float PreviousHealth, float CurrentHealth, float Damage)
@@ -1279,6 +1293,10 @@ void UCastleDirectorSubsystem::Deinitialize()
 	}
 	UnbindCombatEvents();
 	if (ActiveSkyIsland) { ActiveSkyIsland->Destroy(); ActiveSkyIsland = nullptr; }
+	// 场景结束时不再保留本局道具监听。
+	OnRunStarted.Clear();
+	OnEditingPhaseEntered.Clear();
+	OnBattleClearedForItems.Clear();
 	DestroyNodes();
 	for (UUserWidget* Widget : {HUDWidget.Get(), RewardWidget.Get(), GameOverWidget.Get(),
 		static_cast<UUserWidget*>(TowerUpgradeWidget.Get()), static_cast<UUserWidget*>(WildcardPicker.Get())})

@@ -222,6 +222,7 @@ bool ACastleGambleSkyIsland::OnInitializeIsland(const FCastleSkyIslandContext& C
 		return Reject(INVTEXT("赌博空岛需要已初始化的棋盘、背包、主塔、金币账户和徽章子系统。"), OutReason);
 	}
 	Backpack = Board->PrototypeBackpack;
+	RewardBoard = Board;
 	if (!BuildMiniGround(*Board, Context.Seed, OutReason)) { return false; }
 
 	RouletteRandom.Initialize(Context.Seed);
@@ -405,9 +406,9 @@ bool ACastleGambleSkyIsland::TryReturnAllCards(FText& OutReason)
 
 bool ACastleGambleSkyIsland::TrySpinRoulette(const ECastleRouletteColor Bet, FText& OutReason)
 {
-	if (bTransacting || IsRouletteSpinning() || !IsValid(Config) || !IsValid(Backpack) || !IsValid(Badges))
+	if (bTransacting || IsRouletteSpinning() || !IsValid(Config) || !IsValid(Backpack))
 	{
-		return Reject(INVTEXT("轮盘正在运行，或本局轮盘配置、背包、徽章源失效。"), OutReason);
+		return Reject(INVTEXT("轮盘正在运行，或本局轮盘配置、背包失效。"), OutReason);
 	}
 	const int32 Count = MiniBoard.GetPlacements().Num();
 	if (Count == 0)
@@ -422,10 +423,10 @@ bool ACastleGambleSkyIsland::TrySpinRoulette(const ECastleRouletteColor Bet, FTe
 	FRandomStream Candidate = RouletteRandom;
 	ECastleRouletteColor Color;
 	int32 ColorSlot = 0;
-	const double Luck = FMath::Max(0.0, Badges->GetGambleLuckBonus());
-	if (!Config->TryRollRoulette(Bet, Luck, SampleUnit(Candidate), Color, ColorSlot))
+	// 轮盘按配置槽权重抽样，库存徽章不参与赌博结算。
+	if (!Config->TryRollRoulette(Bet, 0.0, SampleUnit(Candidate), Color, ColorSlot))
 	{
-		return Reject(INVTEXT("轮盘下注颜色、幸运值或权重无效。"), OutReason);
+		return Reject(INVTEXT("轮盘下注颜色或权重无效。"), OutReason);
 	}
 
 	// 玩法在动画前原子提交，关闭面板或离岛只能结束展示，不能改变已开奖的结果。
@@ -492,9 +493,10 @@ bool ACastleGambleSkyIsland::TryPlaySlot(FText& OutReason)
 	TGuardValue<bool> Transaction(bTransacting, true);
 	FRandomStream Candidate = SlotRandom;
 	ECastleSlotPrize Prize;
-	if (!Config->TryRollSlot(FMath::Max(0.0, Badges->GetGambleLuckBonus()), SampleUnit(Candidate), Prize))
+	// 投币同样只按配置奖项抽样。徽章子系统用于发奖和待替换校验。
+	if (!Config->TryRollSlot(0.0, SampleUnit(Candidate), Prize))
 	{
-		return Reject(INVTEXT("老虎机幸运值或概率权重无效。"), OutReason);
+		return Reject(INVTEXT("老虎机概率权重无效。"), OutReason);
 	}
 	FText Summary;
 	if (!TrySettleSlot(Prize, Candidate, Summary, OutReason)) { return false; }
@@ -511,6 +513,7 @@ bool ACastleGambleSkyIsland::TrySettleSlot(const ECastleSlotPrize Prize, FRandom
 	const int32 Cost = Config->SlotMachineCost;
 	const UCastleRoomGroupDataAsset* Group = nullptr;
 	const UCastleBadgeDataAsset* Badge = nullptr;
+	FCastlePreparedRoomGroup Prepared;
 	int32 Payout = 0;
 	switch (Prize)
 	{
@@ -534,6 +537,12 @@ bool ACastleGambleSkyIsland::TrySettleSlot(const ECastleSlotPrize Prize, FRandom
 		if (Config->RoomGroups.IsEmpty()) { return Reject(INVTEXT("老虎机房间组奖励池为空。"), OutReason); }
 		Group = Config->RoomGroups[Candidate.RandRange(0, Config->RoomGroups.Num() - 1)];
 		if (!IsValid(Group)) { return Reject(INVTEXT("老虎机抽中的房间组资产失效。"), OutReason); }
+		// 无效房间组或尚不可执行的骨架入口在扣费前拒绝，避免发布扣费再退款的中间余额。
+		if (!UCastleItemGrantLibrary::TryPrepareRoomGroup(Group, Backpack, RewardBoard.Get(),
+			Config->RoomDefinitions, Candidate, Prepared, OutReason))
+		{
+			return false;
+		}
 		OutSummary = FText::Format(INVTEXT("老虎机获得房间组：{0}。"), Group->DisplayName);
 		break;
 	case ECastleSlotPrize::Badge:
@@ -549,9 +558,9 @@ bool ACastleGambleSkyIsland::TrySettleSlot(const ECastleSlotPrize Prize, FRandom
 	bool bGranted = true;
 	if (Group)
 	{
-		UCastlePendingRoomReward* Pending = nullptr;
-		bGranted = UCastleItemGrantLibrary::TryGrantRoomGroup(Group, Backpack, Config->RoomDefinitions, Candidate, Pending, OutReason);
-		if (bGranted && Pending) { bGranted = PresentRoomPrize(Pending, OutReason); }
+		bGranted = Prepared.PendingReward
+			? PresentRoomPrize(Prepared.PendingReward, OutReason)
+			: UCastleItemGrantLibrary::TryCommitPreparedRoomGroup(Prepared, Backpack, OutReason);
 	}
 	else if (Badge) { bGranted = PresentBadgePrize(Badge->Badge, OutReason); }
 	else if (Payout > 0) { bGranted = Economy->TryAddGold(Payout, OutReason); }

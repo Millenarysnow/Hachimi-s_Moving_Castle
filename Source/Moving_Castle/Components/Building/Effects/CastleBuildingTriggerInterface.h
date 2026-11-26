@@ -29,6 +29,10 @@ struct MOVING_CASTLE_API FCastleBuildingTriggerContext
 	/** 触发瞬间在共享路线上的位置，不能用本帧最终位置代替中途经过的位置。 */
 	UPROPERTY(BlueprintReadOnly, Category="建筑|效果")
 	FVector EntryLocation = FVector::ZeroVector;
+
+	/** 连锁子触发继续执行建筑自身效果，但不能再发起另一轮连锁。 */
+	UPROPERTY(BlueprintReadOnly, Category="建筑|效果")
+	bool bChainReactionChild = false;
 };
 
 /** 入口由 C++ 实现；蓝图可以调用、观察和配置，但不接管核心效果逻辑。 */

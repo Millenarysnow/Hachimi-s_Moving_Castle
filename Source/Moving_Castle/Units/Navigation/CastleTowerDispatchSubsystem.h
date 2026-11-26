@@ -30,6 +30,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|主塔出兵")
 	bool TryDispatchSingleNPC(FText& OutReason);
 
+	/** 临时士兵从门 A 出发到门 B 后销毁，不占正式待命池，也不参与徽章圈数累计。 */
+	bool TryDispatchTemporarySingleLapNPC(FText& OutReason);
+
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|主塔出兵")
 	bool SetAutoDispatchEnabled(bool bEnabled);
 

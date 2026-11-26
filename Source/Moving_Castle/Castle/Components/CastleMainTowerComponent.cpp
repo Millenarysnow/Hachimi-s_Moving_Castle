@@ -27,6 +27,14 @@ bool UCastleMainTowerComponent::InitializeHealth()
 	return true;
 }
 
+bool UCastleMainTowerComponent::ApplyEnemyDamage(const float Damage)
+{
+	// 等待 Phase 1B 接入真实敌伤流程和护盾拦截，避免在未实现的入口扣血或消耗徽章。
+	UE_LOG(LogMoving_Castle, Error, TEXT("主塔 %s 无法结算敌方伤害 %.2f：敌伤入口尚未实现（Phase 0）。"),
+		*GetPathName(), Damage);
+	return false;
+}
+
 bool UCastleMainTowerComponent::ApplyDamage(const float Damage)
 {
 	if (!FMath::IsFinite(Damage) || Damage < 0.0f || !FMath::IsFinite(MaxHealth) || MaxHealth <= 0.0f)
