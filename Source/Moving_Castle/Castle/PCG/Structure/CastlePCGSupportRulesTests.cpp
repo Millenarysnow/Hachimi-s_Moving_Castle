@@ -196,6 +196,15 @@ bool FCastlePCGSupportAssets::RunTest(const FString& Parameters)
 	};
 	for (const FName Family : CastlePCGSupport::Families())
 	{
+		// 该批 FBX 的 3/4 槽对应支座、金/铜滴水檐和压肋，不属于瓦片五档色阶。
+		for (const int32 ProtectedSlot : {3,4})
+		{
+			const FString Path = FString::Printf(TEXT("/Game/MovingCastle/Model/Buildings/HachimisV4/Materials/M_HC515_%s_%d"),*Family.ToString(),ProtectedSlot);
+			const auto* Original = LoadObject<UMaterial>(nullptr,*Path);
+			if (!TestNotNull(Path,Original)) { return false; }
+			const auto& Base = Original->GetEditorOnlyData()->BaseColor;
+			TestTrue(Path + TEXT(" 保留作者支座或包边固有色"), Base.UseConstant && !Base.Expression);
+		}
 		for (const ECastlePCGBraceKind Kind : CastlePCGSupport::BraceKinds())
 		{
 			CheckKit(Brace->FamilyKits.FindChecked(Family).ByKind.FindChecked(Kind));

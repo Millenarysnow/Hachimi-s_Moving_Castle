@@ -585,9 +585,27 @@ bool FCastlePCGRoofQuarterReversible::RunTest(const FString& Parameters)
 	const FString Visual = Tower->BuildingPCG->GetAppliedVisualKey();
 	const FString Gameplay = Tower->BuildingPCG->GetAppliedGameplayKey();
 	const FName RoofTag(TEXT("CastlePCGGroup=RoofQuarter"));
+	// 同号异色的邻居可触发收檐。检查最终在用的四片屋角，包含刷新后重新创建的组件。
+	const auto CheckRoofColor = [&](ACastleBuildingBase& Owner)
+	{
+		TArray<UStaticMeshComponent*> Parts;
+		Owner.GetComponents(Parts);
+		int32 Count = 0;
+		for (const UStaticMeshComponent* Part : Parts)
+		{
+			if (Part->IsVisible() && Part->ComponentHasTag(RoofTag))
+			{
+				const auto& Data = Part->GetCustomPrimitiveData().Data;
+				TestTrue(Part->GetName() + TEXT(" 使用屋角所属卡的颜色"), Data.IsValidIndex(0) && Data[0] == static_cast<uint8>(Owner.GetBuildingColor()));
+				++Count;
+			}
+		}
+		TestEqual(TEXT("被检查的正式屋角数"),Count,4);
+	};
 	TestEqual(TEXT("初始四片常规屋面"), CountVisibleParts(*Tower, RoofTag), 4);
+	CheckRoofColor(*Tower);
 	FCastleBuildingDescriptor Card;
-	if (!Archer->CreateDescriptor(1, ECastleTileColor::Green, 7, Card, Reason)) { AddError(Reason.ToString()); return false; }
+	if (!Archer->CreateDescriptor(1, ECastleTileColor::Red, 7, Card, Reason)) { AddError(Reason.ToString()); return false; }
 	FCastleGridCursorTarget Cursor;
 	Cursor.bValid = true;
 	Cursor.Surface = ECastleGridCursorSurface::Building;
@@ -600,9 +618,12 @@ bool FCastlePCGRoofQuarterReversible::RunTest(const FString& Parameters)
 	TestNotEqual(TEXT("增加侧上方邻居切换视觉签名"), Tower->BuildingPCG->GetAppliedVisualKey(), Visual);
 	TestEqual(TEXT("侧上方邻居不改变被收檐塔的玩法签名"), Tower->BuildingPCG->GetAppliedGameplayKey(), Gameplay);
 	TestEqual(TEXT("收檐后仍显示四片"), CountVisibleParts(*Tower, RoofTag), 4);
+	CheckRoofColor(*Tower);
+	CheckRoofColor(*Upper);
 	if (!Board->RemoveBuilding(Upper, Reason)) { AddError(Reason.ToString()); return false; }
 	Complete(Tower);
 	TestEqual(TEXT("删除邻居恢复先前屋面视觉"), Tower->BuildingPCG->GetAppliedVisualKey(), Visual);
+	CheckRoofColor(*Tower);
 	TestEqual(TEXT("删除邻居保持玩法签名"), Tower->BuildingPCG->GetAppliedGameplayKey(), Gameplay);
 	return true;
 }
