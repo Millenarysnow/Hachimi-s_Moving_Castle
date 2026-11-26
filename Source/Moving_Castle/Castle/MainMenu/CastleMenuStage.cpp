@@ -123,9 +123,9 @@ void ACastleMenuStage::CalcCamera(float DeltaTime, FMinimalViewInfo& View)
 	const FVector Up = Basis.GetUnitAxis(EAxis::Z);
 	const double TanX = FMath::Tan(FMath::DegreesToRadians(View.FOV * 0.5));
 	const double TanY = TanX / View.AspectRatio;
-	// 在相机前方给整周扫过的圆柱预留视锥边距；把圆柱轴投到画面约 72% 处。
-	// 深度项包含偏心构图引入的透视位移，长侧翼转向镜头时仍留在右列。
-	constexpr double CenterX = 0.44, HalfX = 0.45, HalfY = 0.81;
+	// 转轴位于画面宽度的 72% 处。整周扫过的城堡最多占视口宽度的 39%、高度的 70%，
+	// 让单塔的气球上方、带侧翼的城堡两侧都能看到纸面。深度项计入偏心透视产生的位移。
+	constexpr double CenterX = 0.44, HalfX = 0.39, HalfY = 0.70;
 	const double DepthRadius = SweepRadius * FMath::Abs(Forward.Size2D()) + HalfHeight * FMath::Abs(Forward.Z);
 	const double VerticalRadius = SweepRadius * Up.Size2D() + HalfHeight * FMath::Abs(Up.Z);
 	const double Distance = DepthRadius + FMath::Max((SweepRadius / TanX + CenterX * DepthRadius) / HalfX,

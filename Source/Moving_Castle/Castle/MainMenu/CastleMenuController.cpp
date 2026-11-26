@@ -65,14 +65,17 @@ public:
 		ACastleMenuStage& Stage = *Args._Stage;
 		Logo.SetResourceObject(Stage.TitleTexture);
 		Logo.ImageSize = FVector2D(Stage.TitleTexture->GetSizeX(), Stage.TitleTexture->GetSizeY());
-		const FSlateFontInfo Font(Stage.MenuFont.Get(), 22);
+		// 行高也包含文字上下可点击的留白，三个入口共用同一套字级和点击范围。
+		constexpr float ChoiceRowHeight = 58.0f;
+		const FSlateFontInfo Font(Stage.MenuFont.Get(), 26);
 		auto MakeChoice = [&](const FText& Label, ECastleMenuAction Action)
 		{
 			return SNew(SCastleMenuTextButton).Label(Label).Font(Font)
 				.OnChosen(FOnClicked::CreateUObject(Args._Controller, &ACastleMenuController::Choose, Action));
 		};
 		FirstChoice = MakeChoice(INVTEXT("新手教程"), ECastleMenuAction::Tutorial);
-		// 左列保持一个完整的排版整体。按可用宽高等比缩放，纸纹透过字标透明通道。
+		// 左列按设计宽度等比适配视口。字标在列内单独限宽，整组按内容高度居中，
+		// 这样调整标题时不会连带缩小入口文字，也不会给已经移除的英文副标题预留一行。
 		ChildSlot
 		[
 			SNew(SConstraintCanvas)
@@ -80,18 +83,18 @@ public:
 			[
 				SNew(SScaleBox).Stretch(EStretch::ScaleToFit)
 				[
-					SNew(SBox).WidthOverride(400).HeightOverride(434)
+					SNew(SBox).WidthOverride(400)
 					[
 						SNew(SVerticalBox)
-						+ SVerticalBox::Slot().AutoHeight()
-						[ SNew(SBox).WidthOverride(400).HeightOverride(237)
+						+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
+						[ SNew(SBox).WidthOverride(340).HeightOverride(182)
 							[ SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[ SNew(SImage).Image(&Logo) ] ] ]
-						+ SVerticalBox::Slot().AutoHeight().Padding(0, 33, 0, 0).HAlign(HAlign_Center)
-						[ SNew(SBox).HeightOverride(51)[FirstChoice.ToSharedRef()] ]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 36, 0, 0).HAlign(HAlign_Center)
+						[ SNew(SBox).HeightOverride(ChoiceRowHeight)[FirstChoice.ToSharedRef()] ]
 						+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
-						[ SNew(SBox).HeightOverride(51)[MakeChoice(INVTEXT("开始游戏"), ECastleMenuAction::Play)] ]
+						[ SNew(SBox).HeightOverride(ChoiceRowHeight)[MakeChoice(INVTEXT("开始游戏"), ECastleMenuAction::Play)] ]
 						+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
-						[ SNew(SBox).HeightOverride(51)[MakeChoice(INVTEXT("退出游戏"), ECastleMenuAction::Quit)] ]
+						[ SNew(SBox).HeightOverride(ChoiceRowHeight)[MakeChoice(INVTEXT("退出游戏"), ECastleMenuAction::Quit)] ]
 					]
 				]
 			]
