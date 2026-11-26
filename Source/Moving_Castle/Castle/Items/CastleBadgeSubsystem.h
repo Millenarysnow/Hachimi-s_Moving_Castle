@@ -62,12 +62,32 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|徽章")
 	float GetEnemyAttackSpeedMultiplier(float CurrentHealthFraction) const;
 
+	/** 不可叠加的效果只检查已入槽的徽章，替换弹窗中的候选项不参与。 */
+	bool HasBadge(ECastleBadgeType Type) const;
+
+	/** 与红色空投的局部加成独立相乘，所有我方伤害入口使用同一倍率。 */
+	double GetFriendlyDamageMultiplier() const;
+	/** 每枚贡献一成；经济账户用整数计算金币取整，避免恰好整除时多发一金。 */
+	int32 GetCoinPurseTenths() const;
+	int64 GetStartingFundsGold() const;
+	int64 GetDoubleDoorPassGold() const;
+	int64 GetSpareBowstringBonus() const;
+	/** 普通房间买牌价专用；零价保持零，正数报价向下取整且最低一金。 */
+	int32 GetDiscountedShopBuyPrice(int32 BasePrice) const;
+	int64 GetShopRebateCards() const;
+	float GetShiftWhistleSpeedMultiplier() const;
+	double GetStringGloveExtraCells() const;
+	float GetQuickLadderSpeedMultiplier() const;
+	float GetSiphonArrowFraction() const;
+	float GetRapidMarchSpeedMultiplier(int32 BuildingLevel) const;
+	int64 GetBerserkBeeGold() const;
+
 	/** 仅供自动化和验收命令清理内存状态。 */
 	void ClearAllBadgesForTesting();
 
 private:
 	double SumMagnitude(ECastleBadgeType Type) const;
-	bool HasBadge(ECastleBadgeType Type) const;
+	int32 CountBadges(ECastleBadgeType Type) const;
 
 	UPROPERTY(Transient)
 	TArray<FCastleBadgeDefinition> Badges;
