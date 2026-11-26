@@ -48,6 +48,8 @@ public:
 	UCastleMassEnemyTrait();
 
 protected:
+	/** 敌人模板显式增加 Boids 攻击意图状态，供唯一移动处理器积分。 */
+	virtual void BuildTemplate(FMassEntityTemplateBuildContext& BuildContext, const UWorld& World) const override;
 	virtual ECastleMassUnitKind GetKind() const override { return ECastleMassUnitKind::Enemy; }
 };
 

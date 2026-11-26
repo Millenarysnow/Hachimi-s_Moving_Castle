@@ -1,6 +1,8 @@
 #include "CastleMassProcessors.h"
 
+#include "CastleMainTowerComponent.h"
 #include "CastleMassFragments.h"
+#include "Enemies/Flight/CastleMassFlightSolver.h"
 #include "Enemies/CastleMassDeathSplitFragments.h"
 #include "Projectiles/CastleMassHomingProjectileFragments.h"
 #include "Projectiles/CastleMassEnemyProjectileFragments.h"
@@ -29,15 +31,17 @@ namespace CastleMass
 	}
 }
 
-UCastleMassMovementProcessor::UCastleMassMovementProcessor() : Query(*this)
+UCastleMassMovementProcessor::UCastleMassMovementProcessor() : Query(*this), EnemyQuery(*this)
 {
 	ExecutionFlags = static_cast<int32>(EProcessorExecutionFlags::All);
 	ExecutionOrder.ExecuteInGroup = UE::Mass::ProcessorGroupNames::Movement;
+	bRequiresGameThreadExecution = true;
 }
 
 void UCastleMassMovementProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
 {
-	Query.AddTagRequirement<FCastleMassHumanoidTag>(EMassFragmentPresence::All);
+	// NPC 仍沿用本查询的既有移动分支；敌人群体由后续全局快照统一解算。
+	Query.AddTagRequirement<FCastleMassNPCTag>(EMassFragmentPresence::All);
 	Query.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FMassVelocityFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassMoveTargetFragment>(EMassFragmentAccess::ReadWrite);
@@ -45,11 +49,22 @@ void UCastleMassMovementProcessor::ConfigureQueries(const TSharedRef<FMassEntity
 	Query.AddRequirement<FCastleMassUnitFragment>(EMassFragmentAccess::ReadOnly);
 	Query.AddRequirement<FCastleMassPatrolFragment>(EMassFragmentAccess::ReadOnly, EMassFragmentPresence::Optional);
 	Query.AddConstSharedRequirement<FCastleMassMovementParameters>();
+
+	EnemyQuery.AddTagRequirement<FCastleMassEnemyTag>(EMassFragmentPresence::All);
+	EnemyQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadWrite);
+	EnemyQuery.AddRequirement<FMassVelocityFragment>(EMassFragmentAccess::ReadWrite);
+	EnemyQuery.AddRequirement<FCastleMassMoveTargetFragment>(EMassFragmentAccess::ReadWrite);
+	EnemyQuery.AddRequirement<FCastleMassUnitFragment>(EMassFragmentAccess::ReadOnly);
+	EnemyQuery.AddRequirement<FAgentRadiusFragment>(EMassFragmentAccess::ReadOnly);
+	EnemyQuery.AddRequirement<FCastleMassFlightIntentFragment>(EMassFragmentAccess::ReadWrite);
+	EnemyQuery.AddRequirement<FCastleMassSpawnBurstFragment>(EMassFragmentAccess::ReadOnly, EMassFragmentPresence::Optional);
+	EnemyQuery.AddConstSharedRequirement<FCastleMassMovementParameters>();
 }
 
 void UCastleMassMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
-	Query.ParallelForEachEntityChunk(Context, [](FMassExecutionContext& Chunk)
+	// NPC 保留原有三维目标移动、巡逻排除、加速度和到达逻辑，不进入敌人 Boids 邻域。
+	Query.ForEachEntityChunk(Context, [](FMassExecutionContext& Chunk)
 	{
 		const float DeltaTime = FMath::Max(0.0f, Chunk.GetDeltaTimeSeconds());
 		const FCastleMassMovementSettings& Settings = Chunk.GetConstSharedFragment<FCastleMassMovementParameters>().Settings;
@@ -106,6 +121,124 @@ void UCastleMassMovementProcessor::Execute(FMassEntityManager& EntityManager, FM
 			}
 		}
 	});
+
+	UWorld* World = GetWorld();
+	UCastleMainTowerSubsystem* TowerSubsystem = World ? World->GetSubsystem<UCastleMainTowerSubsystem>() : nullptr;
+	if (!TowerSubsystem)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 飞行解算失败：世界 %s 缺少主塔表面子系统。"), *GetPathNameSafe(World));
+		return;
+	}
+
+	FCastleTowerPrism TowerPrism;
+	const UCastleMainTowerComponent* RegisteredTower = TowerSubsystem->GetRegisteredMainTower();
+	const bool bHasLivingTower = IsValid(RegisteredTower) && RegisteredTower->IsAlive();
+	const FCastleTowerPrism* TowerGeometry = nullptr;
+	if (bHasLivingTower)
+	{
+		if (!TowerSubsystem->GetMainTowerPrism(TowerPrism)) { return; }
+		TowerGeometry = &TowerPrism;
+	}
+
+	TArray<FCastleMassFlightBody> Bodies;
+	TArray<FTransform*> TransformOwners;
+	TArray<FVector*> VelocityOwners;
+	TArray<FCastleMassMoveTargetFragment*> TargetOwners;
+	TArray<FCastleMassFlightIntentFragment*> IntentOwners;
+	TArray<FCastleMassMovementSettings> MovementSettings;
+	bool bInvalidBody = false;
+	EnemyQuery.ForEachEntityChunk(Context, [&Bodies, &TransformOwners, &VelocityOwners, &TargetOwners,
+		&IntentOwners, &MovementSettings, &bInvalidBody](FMassExecutionContext& Chunk)
+	{
+		const float DeltaTime = FMath::Max(0.0f, Chunk.GetDeltaTimeSeconds());
+		const FCastleMassMovementSettings& Settings = Chunk.GetConstSharedFragment<FCastleMassMovementParameters>().Settings;
+		const auto Transforms = Chunk.GetMutableFragmentView<FTransformFragment>();
+		const auto Velocities = Chunk.GetMutableFragmentView<FMassVelocityFragment>();
+		const auto Targets = Chunk.GetMutableFragmentView<FCastleMassMoveTargetFragment>();
+		const auto Units = Chunk.GetFragmentView<FCastleMassUnitFragment>();
+		const auto Radii = Chunk.GetFragmentView<FAgentRadiusFragment>();
+		const auto Intents = Chunk.GetMutableFragmentView<FCastleMassFlightIntentFragment>();
+		const auto Bursts = Chunk.GetFragmentView<FCastleMassSpawnBurstFragment>();
+
+		for (FMassExecutionContext::FEntityIterator It = Chunk.CreateEntityIterator(); It; ++It)
+		{
+			if (!FMath::IsFinite(Units[It].Health))
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("Mass 飞行解算失败：实体 %d 的生命不是有限值。"), Chunk.GetEntity(It).Index);
+				bInvalidBody = true;
+				continue;
+			}
+			if (Units[It].Health <= 0.0f) { continue; }
+
+			FTransform& Transform = Transforms[It].GetMutableTransform();
+			FMassVelocityFragment& Velocity = Velocities[It];
+			FCastleMassMoveTargetFragment& Target = Targets[It];
+			FCastleMassFlightIntentFragment& Intent = Intents[It];
+			const FVector Scale = Transform.GetScale3D().GetAbs();
+			const float EffectiveRadius = Radii[It].Radius * Scale.GetAbsMax();
+			const float SpeedMultiplier = Units[It].SpawnMovementMultiplier * Units[It].SupportMovementMultiplier;
+			const float MaxSpeed = Settings.MaxSpeed * SpeedMultiplier;
+			if (Transform.ContainsNaN() || !FMath::IsFinite(Radii[It].Radius) || Radii[It].Radius < 0.0f
+				|| !FMath::IsFinite(EffectiveRadius) || !FMath::IsFinite(MaxSpeed) || MaxSpeed < 0.0f
+				|| !FMath::IsFinite(Settings.Acceleration) || Settings.Acceleration < 0.0f
+				|| !FMath::IsFinite(Settings.AcceptanceRadius) || Settings.AcceptanceRadius < 0.0f)
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("Mass 飞行解算失败：实体 %d 的位置、逻辑半径或移动参数无效。"), Chunk.GetEntity(It).Index);
+				bInvalidBody = true;
+				continue;
+			}
+
+			FCastleMassFlightBody& Body = Bodies.AddDefaulted_GetRef();
+			Body.EntityIndex = Chunk.GetEntity(It).Index;
+			Body.Location = Transform.GetLocation();
+			Body.Velocity = Velocity.Value;
+			Body.Target = Target.Target;
+			Body.DesiredVelocity = Target.DesiredVelocity * SpeedMultiplier;
+			Body.Radius = EffectiveRadius;
+			Body.MaxSpeed = MaxSpeed;
+			Body.Acceleration = Settings.Acceleration;
+			Body.AcceptanceRadius = Settings.AcceptanceRadius;
+			Body.AttackRange = Intent.AttackRange;
+			Body.IdealStandOff = Intent.IdealStandOff;
+			Body.bHasTarget = Target.bHasTarget;
+			Body.bTrackingMainTower = Intent.bTrackingMainTower;
+			Body.bInAttackRange = Intent.bInAttackRange;
+			Body.bStopMovement = Intent.bStopMovement;
+			Body.bSpawnBurst = !Bursts.IsEmpty();
+			TransformOwners.Add(&Transform);
+			VelocityOwners.Add(&Velocity.Value);
+			TargetOwners.Add(&Target);
+			IntentOwners.Add(&Intent);
+			MovementSettings.Add(Settings);
+			(void)DeltaTime;
+		}
+	});
+	if (bInvalidBody) { return; }
+
+	TArray<FCastleMassFlightResult> Results;
+	FString FailureReason;
+	if (!FCastleMassFlightSolver::Solve(Bodies, Context.GetDeltaTimeSeconds(),
+		TowerGeometry, Results, FailureReason))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 飞行解算失败：%s"), *FailureReason);
+		return;
+	}
+
+	// 先前已经收齐全部实体快照，此处才统一写回新速度和新位置，维持同帧对称性。
+	for (int32 Index = 0; Index < Bodies.Num(); ++Index)
+	{
+		if (Bodies[Index].bSpawnBurst) { continue; }
+		FTransform& Transform = *TransformOwners[Index];
+		FVector& Velocity = *VelocityOwners[Index];
+		Transform.SetLocation(Results[Index].Location);
+		Velocity = Results[Index].Velocity;
+		if (Results[Index].bReachedTarget && !IntentOwners[Index]->bTrackingMainTower)
+		{
+			TargetOwners[Index]->bHasTarget = false;
+			TargetOwners[Index]->DesiredVelocity = FVector::ZeroVector;
+		}
+		CastleMass::FaceVelocity(Transform, Velocity, MovementSettings[Index], Context.GetDeltaTimeSeconds());
+	}
 }
 
 UCastleMassProjectileProcessor::UCastleMassProjectileProcessor() : Query(*this)

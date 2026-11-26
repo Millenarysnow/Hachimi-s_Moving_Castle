@@ -81,6 +81,13 @@ UCastleMassEnemyTrait::UCastleMassEnemyTrait()
 	Movement.MaxSpeed = 350.0f;
 }
 
+void UCastleMassEnemyTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildContext, const UWorld& World) const
+{
+	Super::BuildTemplate(BuildContext, World);
+	// 攻击处理器只提交目标与射程意图，位置和速度由统一飞行解算器负责。
+	BuildContext.AddFragment<FCastleMassFlightIntentFragment>();
+}
+
 UCastleMassNPCTrait::UCastleMassNPCTrait()
 {
 	Movement.MaxSpeed = 200.0f;

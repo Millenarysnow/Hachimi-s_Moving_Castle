@@ -360,7 +360,7 @@ bool FCastleBuildingConcreteCombatTest::RunTest(const FString& Parameters)
 	auto* Shield = Cast<ACastleShieldTowerBuilding>(Scope.Place(ECastleBuildingType::ShieldTower, 3, 9, FIntVector(3, 3, 0)));
 	if (!Shield) { return false; }
 	const FVector Center = Shield->GetActorLocation();
-	MainActor->SetActorLocation(Center);
+	MainActor->SetActorLocation(Center - FVector(350.0f, 0.0f, 0.0f));
 	FText Reason;
 	const auto Spawn = [&](const TCHAR* Name, FVector Location, int32 Count, TArray<FCastleMassUnitHandle>& Out)
 	{
@@ -411,10 +411,12 @@ bool FCastleBuildingConcreteCombatTest::RunTest(const FString& Parameters)
 	Shields->DeactivateShield(RangedShield);
 	// 六只幼骸由前段真实分裂得到；先在其位置之外设置群虫护盾，避免它们消费本段次数。
 	auto* SwarmShield = Cast<ACastleShieldTowerBuilding>(Scope.Place(ECastleBuildingType::ShieldTower, 1, 1, FIntVector(8, 7, 0)));
-	if (!SwarmShield || !SwarmShield->TriggerBuildingEffect(FCastleBuildingTriggerContext())) { return false; }
-	MainActor->SetActorLocation(SwarmShield->GetActorLocation());
+	if (!SwarmShield) { return false; }
+	const FVector SwarmAttackLocation = Center;
+	SwarmShield->SetActorLocation(SwarmAttackLocation);
+	if (!SwarmShield->TriggerBuildingEffect(FCastleBuildingTriggerContext())) { return false; }
 	TArray<FCastleMassUnitHandle> Swarm;
-	if (!Spawn(TEXT("ShadowSwarm"), SwarmShield->GetActorLocation(), 6, Swarm)) { return false; }
+	if (!Spawn(TEXT("ShadowSwarm"), SwarmAttackLocation, 6, Swarm)) { return false; }
 	Step<UCastleMassMeleeAttackProcessor>(Scope.World, 0);
 	int64 Blocks = 0;
 	TestFalse(TEXT("真实群虫围攻耗尽最后一次护盾"), Shields->GetShieldRemainingBlocks(SwarmShield, Blocks));

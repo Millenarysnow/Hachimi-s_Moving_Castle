@@ -90,7 +90,14 @@ void UCastleMassEnemyProjectileProcessor::Execute(FMassEntityManager& EntityMana
 			else if (Launch.TargetTower.IsValid() && Launch.TargetTower->IsAlive()
 				&& Main->GetRegisteredMainTower() == Launch.TargetTower.Get())
 			{
-				TargetLocation = Launch.TargetTower->GetTargetLocation();
+				if (!Launch.bHasTargetLocation || Launch.TargetLocation.ContainsNaN())
+				{
+					UE_LOG(LogMoving_Castle, Error, TEXT("敌方追踪弹 %d 的主塔表面命中点无效，拒绝改用塔心目标。"), Chunk.GetEntity(It).Index);
+					Units[It].Health = 0.0f;
+					Velocities[It].Value = FVector::ZeroVector;
+					continue;
+				}
+				TargetLocation = Launch.TargetLocation;
 			}
 			else
 			{

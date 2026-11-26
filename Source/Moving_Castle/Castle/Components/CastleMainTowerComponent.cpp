@@ -27,6 +27,45 @@ bool UCastleMainTowerComponent::InitializeHealth()
 	return true;
 }
 
+bool UCastleMainTowerComponent::SetTowerShaftDimensions(const float ShaftWidth, const float ShaftHeight,
+	FString& OutFailureReason)
+{
+	OutFailureReason.Reset();
+	const AActor* Owner = GetOwner();
+	FCastleTowerPrism ValidatedPrism;
+	if (!IsValid(Owner) || !FCastleTowerPrism::Build(Owner->GetActorTransform(), ShaftWidth, ShaftHeight,
+		ValidatedPrism, OutFailureReason))
+	{
+		if (!IsValid(Owner)) { OutFailureReason = TEXT("主塔 Actor 无效。"); }
+		UE_LOG(LogMoving_Castle, Error, TEXT("主塔 %s 塔身尺寸更新失败：%s"),
+			*GetPathName(), *OutFailureReason);
+		return false;
+	}
+
+	TowerShaftWidth = ShaftWidth;
+	TowerShaftHeight = ShaftHeight;
+	return true;
+}
+
+bool UCastleMainTowerComponent::GetTowerShaftPrism(FCastleTowerPrism& OutPrism,
+	FString& OutFailureReason) const
+{
+	const AActor* Owner = GetOwner();
+	if (!IsValid(Owner))
+	{
+		OutFailureReason = TEXT("主塔 Actor 无效。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("主塔 %s 塔身查询失败：%s"), *GetPathName(), *OutFailureReason);
+		return false;
+	}
+	if (!FCastleTowerPrism::Build(Owner->GetActorTransform(), TowerShaftWidth, TowerShaftHeight,
+		OutPrism, OutFailureReason))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("主塔 %s 塔身查询失败：%s"), *GetPathName(), *OutFailureReason);
+		return false;
+	}
+	return true;
+}
+
 bool UCastleMainTowerComponent::ApplyDamage(const float Damage)
 {
 	if (!FMath::IsFinite(Damage) || Damage < 0.0f || !FMath::IsFinite(MaxHealth) || MaxHealth <= 0.0f)
@@ -278,6 +317,42 @@ bool UCastleMainTowerSubsystem::GetMainTowerTargetLocation(FVector& OutLocation)
 
 	OutLocation = Tower->GetTargetLocation();
 	return !OutLocation.ContainsNaN();
+}
+
+bool UCastleMainTowerSubsystem::GetMainTowerPrism(FCastleTowerPrism& OutPrism) const
+{
+	UCastleMainTowerComponent* Tower = RegisteredMainTower.Get();
+	if (!IsValid(Tower) || !Tower->IsAlive())
+	{
+		return false;
+	}
+	FString FailureReason;
+	return Tower->GetTowerShaftPrism(OutPrism, FailureReason);
+}
+
+bool UCastleMainTowerSubsystem::GetMainTowerSurface(const FVector& WorldPoint, FVector& OutClosestPoint,
+	FVector& OutOutwardNormal, float& OutSignedDistance) const
+{
+	OutClosestPoint = FVector::ZeroVector;
+	OutOutwardNormal = FVector::ZeroVector;
+	OutSignedDistance = 0.0f;
+	if (!FMath::IsFinite(WorldPoint.X) || !FMath::IsFinite(WorldPoint.Y) || !FMath::IsFinite(WorldPoint.Z))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("主塔表面查询失败：查询点不是有限世界坐标。"));
+		return false;
+	}
+	FCastleTowerPrism Prism;
+	if (!GetMainTowerPrism(Prism))
+	{
+		return false;
+	}
+	if (!Prism.QuerySurface(WorldPoint, OutClosestPoint, OutOutwardNormal, OutSignedDistance))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("主塔 %s 表面查询失败：塔身几何或查询点无效。"),
+			*GetPathNameSafe(GetRegisteredMainTower()));
+		return false;
+	}
+	return true;
 }
 
 bool UCastleMainTowerSubsystem::GetMainTowerHealth(float& OutCurrentHealth, float& OutMaxHealth) const

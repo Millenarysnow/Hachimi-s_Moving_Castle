@@ -6,6 +6,7 @@
 #include "CastleMassMeleeAttackFragments.h"
 #include "CastleMassProcessors.h"
 #include "CastleMassUnitSubsystem.h"
+#include "Enemies/Flight/CastleMassFlightTargeting.h"
 #include "Engine/World.h"
 #include "MassCommonFragments.h"
 #include "MassCommonTypes.h"
@@ -27,10 +28,11 @@ UCastleMassMeleeAttackProcessor::UCastleMassMeleeAttackProcessor() : Query(*this
 void UCastleMassMeleeAttackProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
 {
 	Query.AddTagRequirement<FCastleMassEnemyTag>(EMassFragmentPresence::All);
-	Query.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
+	Query.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassSpawnBurstFragment>(EMassFragmentAccess::None, EMassFragmentPresence::None);
-	Query.AddRequirement<FMassVelocityFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassMoveTargetFragment>(EMassFragmentAccess::ReadWrite);
+	Query.AddRequirement<FCastleMassFlightIntentFragment>(EMassFragmentAccess::ReadWrite);
+	Query.AddRequirement<FAgentRadiusFragment>(EMassFragmentAccess::ReadOnly);
 	// 护盾反伤即时修改攻击者生命，必须向调度器声明写权限。
 	Query.AddRequirement<FCastleMassUnitFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassMeleeAttackFragment>(EMassFragmentAccess::ReadWrite);
@@ -58,9 +60,10 @@ void UCastleMassMeleeAttackProcessor::Execute(FMassEntityManager& EntityManager,
 	Query.ForEachEntityChunk(Context, [this, TowerSubsystem, Shields, Support, UnitSubsystem, &bAnyMissingTarget](FMassExecutionContext& Chunk)
 	{
 		const float DeltaTime = FMath::Max(0.0f, Chunk.GetDeltaTimeSeconds());
-		const auto Transforms = Chunk.GetFragmentView<FTransformFragment>();
-		const auto Velocities = Chunk.GetMutableFragmentView<FMassVelocityFragment>();
+		const auto Transforms = Chunk.GetMutableFragmentView<FTransformFragment>();
 		const auto Targets = Chunk.GetMutableFragmentView<FCastleMassMoveTargetFragment>();
+		const auto FlightIntents = Chunk.GetMutableFragmentView<FCastleMassFlightIntentFragment>();
+		const auto Radii = Chunk.GetFragmentView<FAgentRadiusFragment>();
 		const auto Units = Chunk.GetMutableFragmentView<FCastleMassUnitFragment>();
 		const auto Melees = Chunk.GetMutableFragmentView<FCastleMassMeleeAttackFragment>();
 		const auto Animations = Chunk.GetMutableFragmentView<FCastleMassAttackAnimationFragment>();
@@ -76,7 +79,9 @@ void UCastleMassMeleeAttackProcessor::Execute(FMassEntityManager& EntityManager,
 			uint64 ShieldId = 0;
 			const bool bShieldTarget = !bBalloonTarget && Shields->FindNearestActiveShield(
 				Transforms[It].GetTransform().GetLocation(), MAX_flt, true, ShieldId, TargetLocation);
-			const bool bHasTarget = bBalloonTarget || bShieldTarget || (TowerSubsystem && TowerSubsystem->GetMainTowerTargetLocation(TargetLocation));
+			const bool bTowerTarget = !bBalloonTarget && !bShieldTarget
+				&& TowerSubsystem && TowerSubsystem->GetMainTowerTargetLocation(TargetLocation);
+			const bool bHasTarget = bBalloonTarget || bShieldTarget || bTowerTarget;
 			if (!bHasTarget)
 			{
 				bAnyMissingTarget = true;
@@ -87,26 +92,45 @@ void UCastleMassMeleeAttackProcessor::Execute(FMassEntityManager& EntityManager,
 				}
 				// 不把缺失目标解释为世界原点，不借用其他对象；明确停止等待配置修复。
 				Melee.bInAttackRange = false;
-				Targets[It] = FCastleMassMoveTargetFragment();
-				Velocities[It].Value = FVector::ZeroVector;
+				CastleMassFlightTargeting::SetStopIntent(Targets[It], FlightIntents[It]);
 				if (!Animations.IsEmpty()) { Animations[It].bInAttackState = false; }
 				continue;
 			}
-			const FVector ToTower = TargetLocation - Transforms[It].GetTransform().GetLocation();
-			Melee.bInAttackRange = ToTower.SizeSquared() <= FMath::Square(Melee.AttackRange);
+			FTransform& Transform = Transforms[It].GetMutableTransform();
+			FVector AttackPoint = TargetLocation;
+			if (bTowerTarget)
+			{
+				const float Radius = Radii[It].Radius * Transform.GetScale3D().GetAbsMax();
+				const float IdealStandOff = FMath::Min(Radius + 18.0f,
+					FMath::Max(Radius + 4.0f, Melee.AttackRange * 0.7f));
+				float SurfaceDistance = 0.0f;
+				if (!CastleMassFlightTargeting::SetMainTowerTarget(TowerSubsystem, Transform, Radii[It].Radius,
+					Melee.AttackRange, IdealStandOff, Chunk.GetEntity(It).Index, Targets[It],
+					FlightIntents[It], AttackPoint, SurfaceDistance))
+				{
+					Melee.bInAttackRange = false;
+					CastleMassFlightTargeting::SetStopIntent(Targets[It], FlightIntents[It]);
+					if (!Animations.IsEmpty()) { Animations[It].bInAttackState = false; }
+					continue;
+				}
+				Melee.bInAttackRange = FlightIntents[It].bInAttackRange;
+			}
+			else
+			{
+				Melee.bInAttackRange = FVector::DistSquared(Transform.GetLocation(), TargetLocation)
+					<= FMath::Square(static_cast<double>(Melee.AttackRange));
+				CastleMassFlightTargeting::SetAlternateTarget(TargetLocation, Melee.AttackRange,
+					Melee.bInAttackRange, Targets[It], FlightIntents[It]);
+			}
 			if (!Melee.bInAttackRange)
 			{
 				if (!Animations.IsEmpty()) { Animations[It].bInAttackState = false; }
-				FCastleMassMoveTargetFragment& Target = Targets[It];
-				Target.Target = TargetLocation;
-				Target.DesiredVelocity = FVector::ZeroVector;
-				Target.bHasTarget = true;
 				continue;
 			}
 
-			// 近身后清除移动目标与速度，避免普通移动在下一帧继续穿过主塔。
-			Targets[It] = FCastleMassMoveTargetFragment();
-			Velocities[It].Value = FVector::ZeroVector;
+			FVector Facing = AttackPoint - Transform.GetLocation();
+			Facing.Z = 0.0f;
+			if (!Facing.IsNearlyZero()) { Transform.SetRotation(Facing.Rotation().Quaternion()); }
 			if (!Animations.IsEmpty()) { Animations[It].bInAttackState = true; }
 			Melee.AttackCooldown = FMath::Max(0.0, Melee.AttackCooldown - DeltaTime);
 			if (Melee.AttackCooldown > 0.0f) { continue; }
