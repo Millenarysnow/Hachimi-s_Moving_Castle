@@ -91,15 +91,19 @@ void UCastleMassDeathSplitProcessor::Execute(FMassEntityManager& EntityManager, 
 			TArray<FTransform> Spawns;
 			const FTransform& MotherTransform = Transforms[It].GetTransform();
 			const FVector TowerUp = TowerGeometry ? TowerGeometry->GetUpVector() : FVector::UpVector;
-			const float MotherRadius = Radii[It].Radius * MotherTransform.GetScale3D().GetAbsMax();
-			const float ChildRadius = ChildTrait->Radius * MotherTransform.GetScale3D().GetAbsMax();
+			// 幼骸继承母体实例缩放，起点和塔面校验必须使用各自的缩放后逻辑半径。
+			const FVector MotherScale = MotherTransform.GetScale3D();
+			const float MaximumScaleMultiplier = MotherScale.GetAbsMax();
+			const float MotherRadius = Radii[It].Radius * MaximumScaleMultiplier;
+			const float ChildRadius = ChildTrait->Radius * MaximumScaleMultiplier;
 			const FVector MotherRoot = MotherTransform.GetLocation();
 			const FVector MotherCenter = MotherRoot + TowerUp * MotherRadius;
 			if (!FMath::IsFinite(MotherRadius) || !FMath::IsFinite(ChildRadius)
-				|| !MotherRoot.ContainsNaN() || !MotherCenter.ContainsNaN())
+				|| MotherRoot.ContainsNaN() || MotherCenter.ContainsNaN())
 			{
-				UE_LOG(LogMoving_Castle, Error, TEXT("敌人 %d 死亡分裂失败：子配置 %s 的缩放半径或起点无效。"),
-					Chunk.GetEntity(It).Index, *GetPathNameSafe(Split.ChildConfiguration.Get()));
+				UE_LOG(LogMoving_Castle, Error, TEXT("敌人 %d 死亡分裂失败：子配置 %s 的缩放半径或起点无效；母体缩放 %s、母体半径 %.3f cm、子体半径 %.3f cm、母体根节点 %s、球心 %s。"),
+					Chunk.GetEntity(It).Index, *GetPathNameSafe(Split.ChildConfiguration.Get()), *MotherScale.ToString(),
+					MotherRadius, ChildRadius, *MotherRoot.ToString(), *MotherCenter.ToString());
 				continue;
 			}
 			FVector BurstStartRoot = MotherRoot;
@@ -128,7 +132,7 @@ void UCastleMassDeathSplitProcessor::Execute(FMassEntityManager& EntityManager, 
 					}
 					BurstStartRoot = SphereStart - TowerUp * ChildRadius;
 					const FVector ReferenceAxis = FMath::Abs(FVector::DotProduct(SurfaceNormal, TowerUp)) < 0.95f
-						? TowerUp : FVector::ForwardVector;
+						? TowerUp : TowerGeometry->Rotation.GetAxisX();
 					RadialAxisX = FVector::CrossProduct(SurfaceNormal, ReferenceAxis).GetSafeNormal();
 					RadialAxisY = FVector::CrossProduct(SurfaceNormal, RadialAxisX).GetSafeNormal();
 					if (RadialAxisX.IsNearlyZero() || RadialAxisY.IsNearlyZero())
@@ -156,7 +160,7 @@ void UCastleMassDeathSplitProcessor::Execute(FMassEntityManager& EntityManager, 
 			Split.bHasSplit = true;
 			Chunk.Defer().PushCommand<FMassDeferredCreateCommand>([WeakWorld, Configuration, Spawns = MoveTemp(Spawns),
 				BurstStartRoot, BurstDuration, BurstArcHeight, SpreadRadius, BurstArcDirection,
-				RadialAxisX, RadialAxisY, ChildRadius](FMassEntityManager& Manager)
+				RadialAxisX, RadialAxisY](FMassEntityManager& Manager)
 			{
 				if (!WeakWorld.IsValid())
 				{

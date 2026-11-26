@@ -6,12 +6,24 @@ namespace
 {
 	constexpr float MaxSubstepSeconds = 1.0f / 30.0f;
 	constexpr float SeparationShellScale = 2.6f;
+	constexpr float FlightSeparationFactor = 1.0f;
+	constexpr float AttackSeparationShellScale = 1.55f;
+	constexpr float AttackSlideFactor = 0.85f;
 	constexpr float FlockShellScale = 4.5f;
 	constexpr float AlignmentWeight = 0.35f;
 	constexpr float CohesionWeight = 0.12f;
 	constexpr float TowerFlowMargin = 260.0f;
 	constexpr float TangentialFlowWeight = 0.90f;
 	constexpr float MinimumAgentSpacingScale = 0.85f;
+	static_assert(MaxSubstepSeconds > 0.001f && MaxSubstepSeconds <= 0.05f);
+	static_assert(SeparationShellScale >= 1.3f && SeparationShellScale <= 5.0f);
+	static_assert(AttackSeparationShellScale >= 1.3f && AttackSeparationShellScale <= SeparationShellScale);
+	static_assert(AttackSlideFactor > 0.0f && AttackSlideFactor <= 1.5f);
+	static_assert(FlockShellScale >= SeparationShellScale && FlockShellScale >= 2.0f && FlockShellScale <= 8.0f);
+	static_assert(AlignmentWeight >= 0.0f && AlignmentWeight <= 2.0f);
+	static_assert(CohesionWeight >= 0.0f && CohesionWeight <= 2.0f);
+	static_assert(TowerFlowMargin > 0.0f && TowerFlowMargin <= 2000.0f);
+	static_assert(TangentialFlowWeight >= 0.0f && TangentialFlowWeight <= 3.0f);
 
 	/** 统一检查世界向量三个分量，含拒绝正负无穷。 */
 	bool IsFiniteVector(const FVector& Value)
@@ -71,6 +83,30 @@ namespace
 	{
 		const float Alpha = FMath::Clamp(SurfaceDistance / TowerFlowMargin, 0.0f, 1.0f);
 		return Alpha * Alpha * (3.0f - 2.0f * Alpha);
+	}
+
+	/** 取实际步进线段进入目标接受球的位置，保留邻居推力造成的横向位移。 */
+	bool FindTargetEntry(const FVector& Start, const FVector& End, const FVector& Target,
+		const float AcceptanceRadius, FVector& OutEntry)
+	{
+		const FVector ToTarget = Target - Start;
+		const double RadiusSquared = FMath::Square(static_cast<double>(AcceptanceRadius));
+		if (ToTarget.SizeSquared() <= RadiusSquared)
+		{
+			OutEntry = Start;
+			return true;
+		}
+		const FVector Step = End - Start;
+		const double Length = Step.Size();
+		if (Length <= UE_SMALL_NUMBER) { return false; }
+		const FVector Direction = Step / Length;
+		const double Projection = FVector::DotProduct(ToTarget, Direction);
+		const double EntryDepthSquared = RadiusSquared - (ToTarget - Direction * Projection).SizeSquared();
+		if (EntryDepthSquared < -UE_SMALL_NUMBER) { return false; }
+		const double EntryDistance = Projection - FMath::Sqrt(FMath::Max(0.0, EntryDepthSquared));
+		if (EntryDistance < 0.0 || EntryDistance > Length + UE_SMALL_NUMBER) { return false; }
+		OutEntry = AcceptanceRadius == 0.0f ? Target : Start + Direction * FMath::Min(EntryDistance, Length);
+		return true;
 	}
 }
 
@@ -219,11 +255,15 @@ bool FCastleMassFlightSolver::Solve(const TArray<FCastleMassFlightBody>& Bodies,
 			const FVector CurrentVelocity = Velocities[Index];
 			const FVector Center = CurrentLocation + TowerUp * Body.Radius;
 			const FIntVector Cell = GridKeys[Index];
+			const bool bTrackingTower = Body.bTrackingMainTower && Tower;
+			const bool bSlidingOnTower = bTrackingTower && Body.bInAttackRange;
+			const bool bSeekingTower = bTrackingTower && !bSlidingOnTower;
+			const float SeparationScale = bSlidingOnTower ? AttackSeparationShellScale : SeparationShellScale;
 			FVector Separation = FVector::ZeroVector;
 			FVector Alignment = FVector::ZeroVector;
 			FVector Cohesion = FVector::ZeroVector;
 			FVector BlockingCentroid = FVector::ZeroVector;
-			int32 SeparationCount = 0;
+			float SeparationWeightSum = 0.0f;
 			int32 FlockCount = 0;
 			int32 BlockingCount = 0;
 			FVector ApproachDirection = FVector::ZeroVector;
@@ -252,7 +292,7 @@ bool FCastleMassFlightSolver::Solve(const TArray<FCastleMassFlightBody>& Bodies,
 							const float PairRadius = Body.Radius + Other.Radius;
 							if (PairRadius <= 0.0f) { continue; }
 							const double Distance = FMath::Sqrt(DistanceSquared);
-							const float SeparationShell = PairRadius * SeparationShellScale;
+							const float SeparationShell = PairRadius * SeparationScale;
 							if (Distance < SeparationShell)
 							{
 								const FVector Away = Distance > UE_SMALL_NUMBER
@@ -264,14 +304,14 @@ bool FCastleMassFlightSolver::Solve(const TArray<FCastleMassFlightBody>& Bodies,
 									Weight += (MinimumSpacing - static_cast<float>(Distance)) / MinimumSpacing * 2.0f;
 								}
 								Separation += Away * Weight;
-								++SeparationCount;
+								SeparationWeightSum += Weight;
 							}
-							if (Distance >= PairRadius * FlockShellScale) { continue; }
+							if (bSlidingOnTower || Distance >= PairRadius * FlockShellScale) { continue; }
 							Alignment += Velocities[OtherIndex];
 							Cohesion += OtherCenter;
 							++FlockCount;
 
-							if (Tower && TowerDistances[Index] <= TowerFlowMargin
+							if (bSeekingTower && TowerDistances[Index] <= TowerFlowMargin
 								&& TowerDistances[OtherIndex] < TowerDistances[Index]
 								&& FVector::DotProduct((OtherCenter - Center).GetSafeNormal(), ApproachDirection) > 0.15f)
 							{
@@ -283,8 +323,9 @@ bool FCastleMassFlightSolver::Solve(const TArray<FCastleMassFlightBody>& Bodies,
 				}
 			}
 
-			if (SeparationCount > 0) { Separation /= static_cast<float>(SeparationCount); }
-			if (Body.bTrackingMainTower && Body.bInAttackRange)
+			// 用连续权重抵消密集邻居的叠加量。刚进入壳层的邻居权重为零，合力不会随邻居数跳变。
+			Separation /= FMath::Max(1.0f, SeparationWeightSum);
+			if (bSlidingOnTower)
 			{
 				// 攻击态只收敛塔面法向速度；同伴推力仍能沿完整三维切平面滑移。
 				const FVector Normal = TowerNormals[Index];
@@ -298,8 +339,8 @@ bool FCastleMassFlightSolver::Solve(const TArray<FCastleMassFlightBody>& Bodies,
 			}
 
 			FVector DesiredVelocity = FVector::ZeroVector;
-			bool bReachedGenericTarget = false;
-			if (Body.bTrackingMainTower && Tower)
+			const bool bReachedGenericTarget = OutResults[Index].bReachedTarget;
+			if (bTrackingTower)
 			{
 				if (Body.bInAttackRange)
 				{
@@ -318,13 +359,7 @@ bool FCastleMassFlightSolver::Solve(const TArray<FCastleMassFlightBody>& Bodies,
 			{
 				const FVector ToTarget = Body.Target - CurrentLocation;
 				const double Distance = ToTarget.Size();
-				if (Distance <= Body.AcceptanceRadius)
-				{
-					OutResults[Index].bReachedTarget = true;
-					bReachedGenericTarget = true;
-					HasTargets[Index] = false;
-				}
-				else
+				if (Distance > Body.AcceptanceRadius)
 				{
 					const float BrakingSpeed = Body.Acceleration > 0.0f
 						? FMath::Min(Body.MaxSpeed, FMath::Sqrt(2.0f * Body.Acceleration
@@ -346,14 +381,20 @@ bool FCastleMassFlightSolver::Solve(const TArray<FCastleMassFlightBody>& Bodies,
 				Cohesion = (Cohesion / static_cast<float>(FlockCount) - Center).GetSafeNormal() * Body.MaxSpeed;
 				DesiredVelocity += (Alignment * AlignmentWeight + Cohesion * CohesionWeight) * TowerFlockAttenuation;
 			}
-			if (SeparationCount > 0) { DesiredVelocity += Separation.GetSafeNormal() * Body.MaxSpeed * 1.5f; }
+			// 保留距离衰减和相互抵消后的模长。接近塔面的响应逐步过渡到贴墙滑移响应，避免先推散再停靠。
+			const float SeparationFactor = bTrackingTower
+				? FMath::Lerp(AttackSlideFactor, FlightSeparationFactor, bSlidingOnTower ? 0.0f : TowerFlockAttenuation)
+				: FlightSeparationFactor;
+			DesiredVelocity += Separation.GetClampedToMaxSize(1.0f) * Body.MaxSpeed * SeparationFactor;
 			if (BlockingCount > 0)
 			{
 				BlockingCentroid /= static_cast<float>(BlockingCount);
 				FVector TangentAway = Center - BlockingCentroid;
 				TangentAway -= TowerNormals[Index] * FVector::DotProduct(TangentAway, TowerNormals[Index]);
 				if (TangentAway.IsNearlyZero()) { TangentAway = MakeStableTangent(TowerNormals[Index], Body.EntityIndex); }
-				DesiredVelocity += TangentAway.GetSafeNormal() * Body.MaxSpeed * TangentialFlowWeight;
+				// 与远途群聚交接时逐步抬升绕流力，避免跨入 260 cm 边界的一刻把外围单位横向甩开。
+				DesiredVelocity += TangentAway.GetSafeNormal() * Body.MaxSpeed * TangentialFlowWeight
+					* (1.0f - TowerFlockAttenuation);
 			}
 			DesiredVelocity = DesiredVelocity.GetClampedToMaxSize(Body.MaxSpeed);
 
@@ -367,6 +408,11 @@ bool FCastleMassFlightSolver::Solve(const TArray<FCastleMassFlightBody>& Bodies,
 			}
 			FVector NewLocation = Body.bStopMovement || bReachedGenericTarget
 				? CurrentLocation : CurrentLocation + NewVelocity * SubstepSeconds;
+			// 先截取到达球面的候选步，再用塔身投影确认该位置确实可以到达。
+			FVector TargetEntry = NewLocation;
+			const bool bEnteredTarget = HasTargets[Index] && !bTrackingTower
+				&& FindTargetEntry(CurrentLocation, NewLocation, Body.Target, Body.AcceptanceRadius, TargetEntry);
+			if (bEnteredTarget) { NewLocation = TargetEntry; }
 			if (Tower)
 			{
 				FVector SphereCenter = NewLocation + TowerUp * Body.Radius;
@@ -377,6 +423,14 @@ bool FCastleMassFlightSolver::Solve(const TArray<FCastleMassFlightBody>& Bodies,
 				}
 				NewLocation = SphereCenter - TowerUp * Body.Radius;
 				ProjectGroundAndTowerTop(NewLocation, NewVelocity);
+			}
+			if (bEnteredTarget && FVector::DistSquared(NewLocation, Body.Target)
+				<= FMath::Square(static_cast<double>(Body.AcceptanceRadius) + UE_KINDA_SMALL_NUMBER))
+			{
+				// 已到达的结果保持到帧末，避免同一帧后续子步再次接受邻居推力。
+				NewVelocity = FVector::ZeroVector;
+				OutResults[Index].bReachedTarget = true;
+				HasTargets[Index] = false;
 			}
 			NextLocations[Index] = NewLocation;
 			NextVelocities[Index] = NewVelocity;
