@@ -23,6 +23,7 @@
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
+#include "Castle/Components/CastleMainTowerComponent.h"
 #include "CastleNavigationSubsystem.h"
 #include "CastlePlayerController.h"
 #include "CastleShopComponent.h"
@@ -89,6 +90,16 @@ public:
 			return true;
 		}
 		if (Step == 0) { return Wait(TEXT("教学导演未初始化")); }
+		if (Step == 1 && !bTutorialHealthLockChecked)
+		{
+			auto* MainTowerSubsystem = World->GetSubsystem<UCastleMainTowerSubsystem>();
+			auto* MainTower = IsValid(MainTowerSubsystem) ? MainTowerSubsystem->GetRegisteredMainTower() : nullptr;
+			if (!MainTower) { return Fail(TEXT("TutorialMap 未注册主塔生命组件")); }
+			const float OneHeart = MainTower->MaxHealth / 20.0f;
+			Test.TestTrue(TEXT("教程主塔超额受击可正常结算"), MainTower->ApplyDamage(MainTower->MaxHealth * 2.0f));
+			Test.TestTrue(TEXT("教程主塔生命保持在一颗心"), FMath::IsNearlyEqual(MainTower->CurrentHealth, OneHeart, 0.01f));
+			bTutorialHealthLockChecked = true;
+		}
 		if (Tutorial->HasCompletedTutorial())
 		{
 			Test.TestTrue(TEXT("S10 已实际派出城主并挂载气泡"), Tutorial->HasShownDispatchBubble());
@@ -314,6 +325,7 @@ private:
 	int32 LastStep = 0;
 	int32 Action = 0;
 	int32 ShopPause = 0;
+	bool bTutorialHealthLockChecked = false;
 	TArray<FVector> OriginalWaypoints;
 	double Deadline = FPlatformTime::Seconds() + 30.0;
 };

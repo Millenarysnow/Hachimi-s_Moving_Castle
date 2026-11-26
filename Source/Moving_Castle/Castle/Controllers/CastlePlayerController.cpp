@@ -433,6 +433,11 @@ void ACastlePlayerController::SelectBackpackSlot(int32 SlotIndex)
 		*Descriptor.Definition->DisplayName.ToString(), Descriptor.Number), true);
 }
 
+void ACastlePlayerController::SelectBackpackSlotFromBuildBar(const int32 SlotIndex)
+{
+	SelectBackpackSlot(SlotIndex);
+}
+
 bool ACastlePlayerController::TryPopBalloonFromRay(const FVector& Start, const FVector& End, bool& bOutConsumed)
 {
 	bOutConsumed = false;

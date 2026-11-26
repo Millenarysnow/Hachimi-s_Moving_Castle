@@ -47,6 +47,16 @@ void UCastleBuildBarWidget::NativeConstruct()
 	Backpack = Board->PrototypeBackpack;
 	DisplayedCapacity = INDEX_NONE;
 	bReady = ValidatePresentation() && SyncBackpack();
+	if (bReady)
+	{
+		// 卡槽只报告索引，选牌提交仍由控制器校验背包和模态状态。
+		const auto Slots = GetSlots();
+		for (int32 Index = 0; Index < Slots.Num(); ++Index)
+		{
+			Slots[Index]->SetSlotIndex(Index);
+			Slots[Index]->OnSlotClicked.AddUObject(this, &UCastleBuildBarWidget::HandleBuildBarSlotClicked);
+		}
+	}
 	EnsureModeBindings();
 	RefreshScreenVisibility();
 }
@@ -69,6 +79,10 @@ void UCastleBuildBarWidget::NativeTick(const FGeometry& MyGeometry, float InDelt
 
 void UCastleBuildBarWidget::NativeDestruct()
 {
+	for (UCastleBuildBarSlotWidget* BuildBarSlot : GetSlots())
+	{
+		if (IsValid(BuildBarSlot)) { BuildBarSlot->OnSlotClicked.RemoveAll(this); }
+	}
 	if (UCastleDirectorSubsystem* Director = BoundDirector.Get())
 	{
 		Director->OnDirectorPhaseChanged.Remove(DirectorPhaseHandle);
@@ -166,7 +180,8 @@ bool UCastleBuildBarWidget::ShouldDisplayInCurrentScreen() const
 
 void UCastleBuildBarWidget::RefreshScreenVisibility()
 {
-	SetVisibility((bReady && ShouldDisplayInCurrentScreen()) ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	// 根容器保留自身鼠标命中穿透，让内层卡槽可以接收点击选择。
+	SetVisibility((bReady && ShouldDisplayInCurrentScreen()) ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
 }
 
 void UCastleBuildBarWidget::HandleDirectorPhaseChanged(const ECastleDirectorPhase NewPhase)
@@ -177,6 +192,17 @@ void UCastleBuildBarWidget::HandleDirectorPhaseChanged(const ECastleDirectorPhas
 void UCastleBuildBarWidget::HandlePatrolEditingChanged(const bool bIsEditing)
 {
 	RefreshScreenVisibility();
+}
+
+void UCastleBuildBarWidget::HandleBuildBarSlotClicked(const int32 SlotIndex)
+{
+	if (!Controller.IsValid())
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("建造栏 WBP %s 点击卡槽 %d 失败：玩家控制器已失效。"),
+			*GetClass()->GetPathName(), SlotIndex + 1);
+		return;
+	}
+	Controller->SelectBackpackSlotFromBuildBar(SlotIndex);
 }
 
 void UCastleBuildBarWidget::HandleShopChanged()

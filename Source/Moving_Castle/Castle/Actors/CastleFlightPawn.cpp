@@ -9,6 +9,7 @@
 #include "GameFramework/Controller.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "InputCoreTypes.h"
+#include "Moving_Castle.h"
 
 ACastleFlightPawn::ACastleFlightPawn()
 {
@@ -91,6 +92,10 @@ void ACastleFlightPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 	PlayerInputComponent->BindKey(EKeys::SpaceBar, IE_Released, this, &ACastleFlightPawn::AscendReleased);
 	PlayerInputComponent->BindKey(EKeys::LeftControl, IE_Pressed, this, &ACastleFlightPawn::DescendPressed);
 	PlayerInputComponent->BindKey(EKeys::LeftControl, IE_Released, this, &ACastleFlightPawn::DescendReleased);
+	PlayerInputComponent->BindKey(EKeys::Q, IE_Pressed, this, &ACastleFlightPawn::DesignAscendPressed);
+	PlayerInputComponent->BindKey(EKeys::Q, IE_Released, this, &ACastleFlightPawn::AscendReleased);
+	PlayerInputComponent->BindKey(EKeys::E, IE_Pressed, this, &ACastleFlightPawn::DesignDescendPressed);
+	PlayerInputComponent->BindKey(EKeys::E, IE_Released, this, &ACastleFlightPawn::DescendReleased);
 
 	// 鼠标轴只传入相对移动量；当前模式及模态门控由控制器查询。
 	PlayerInputComponent->BindAxisKey(EKeys::MouseX, this, &ACastleFlightPawn::HandleMouseYaw);
@@ -179,7 +184,17 @@ void ACastleFlightPawn::MoveLeftReleased()
 
 void ACastleFlightPawn::AscendPressed()
 {
-	bAscend = true;
+	const ACastlePlayerController* CastleController = Cast<ACastlePlayerController>(Controller);
+	if (!IsValid(CastleController))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("飞行 Pawn %s 无法处理经典模式上升键：玩家控制器 %s 不是有效的 CastlePlayerController。"),
+			*GetPathName(), *GetNameSafe(Controller));
+		return;
+	}
+	if (CastleController->GetControlMode() == ECastleControlMode::Classic)
+	{
+		bAscend = true;
+	}
 }
 
 void ACastleFlightPawn::AscendReleased()
@@ -189,12 +204,52 @@ void ACastleFlightPawn::AscendReleased()
 
 void ACastleFlightPawn::DescendPressed()
 {
-	bDescend = true;
+	const ACastlePlayerController* CastleController = Cast<ACastlePlayerController>(Controller);
+	if (!IsValid(CastleController))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("飞行 Pawn %s 无法处理经典模式下降键：玩家控制器 %s 不是有效的 CastlePlayerController。"),
+			*GetPathName(), *GetNameSafe(Controller));
+		return;
+	}
+	if (CastleController->GetControlMode() == ECastleControlMode::Classic)
+	{
+		bDescend = true;
+	}
 }
 
 void ACastleFlightPawn::DescendReleased()
 {
 	bDescend = false;
+}
+
+void ACastleFlightPawn::DesignAscendPressed()
+{
+	const ACastlePlayerController* CastleController = Cast<ACastlePlayerController>(Controller);
+	if (!IsValid(CastleController))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("飞行 Pawn %s 无法处理设计模式 Q 键：玩家控制器 %s 不是有效的 CastlePlayerController。"),
+			*GetPathName(), *GetNameSafe(Controller));
+		return;
+	}
+	if (CastleController->GetControlMode() == ECastleControlMode::Design)
+	{
+		bAscend = true;
+	}
+}
+
+void ACastleFlightPawn::DesignDescendPressed()
+{
+	const ACastlePlayerController* CastleController = Cast<ACastlePlayerController>(Controller);
+	if (!IsValid(CastleController))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("飞行 Pawn %s 无法处理设计模式 E 键：玩家控制器 %s 不是有效的 CastlePlayerController。"),
+			*GetPathName(), *GetNameSafe(Controller));
+		return;
+	}
+	if (CastleController->GetControlMode() == ECastleControlMode::Design)
+	{
+		bDescend = true;
+	}
 }
 
 void ACastleFlightPawn::HandleMouseYaw(float AxisValue)

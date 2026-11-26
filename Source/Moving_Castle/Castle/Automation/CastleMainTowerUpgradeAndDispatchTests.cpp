@@ -147,6 +147,22 @@ bool FCastleMainTowerBalloonHealthTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("徽章倍率可使用默认等比生命缩放"), Tower->SetMaxHealthMultiplier(1.2f));
 	TestEqual(TEXT("徽章最大生命"), Tower->MaxHealth, 2400.0f);
 	CheckBalloons(TEXT("等比应用徽章"), 1, 10);
+
+	// 教学场景将一格 HUD 血条作为最低生命，重复超额伤害也只能停在该下限。
+	TestTrue(TEXT("教程锁血测试重新初始化主塔"), Tower->InitializeHealth());
+	TestTrue(TEXT("教程启用一心锁血"), Tower->EnableTutorialHealthLock(Reason));
+	const float TutorialHealthFloor = Tower->MaxHealth / 20.0f;
+	Tower->MaxBalloons = 20;
+	Tower->HealthPerBalloon = 11.0f;
+	TestTrue(TEXT("教程测试主塔受击后仍高于一心"), Tower->ApplyDamage(Tower->MaxHealth - 60.0f));
+	AddExpectedError(TEXT("至少保留一颗心"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestFalse(TEXT("教程不能回收导致生命低于一心的气球"), Tower->TryConsumeBalloons(1, Reason));
+	TestTrue(TEXT("拒绝一心以下的气球回收后保留原生命"), FMath::IsNearlyEqual(Tower->CurrentHealth, 60.0f));
+	TestTrue(TEXT("超额攻击在教程锁血下仍成功结算"), Tower->ApplyDamage(Tower->MaxHealth * 2.0f));
+	TestTrue(TEXT("超额攻击将主塔保留在一颗心"), FMath::IsNearlyEqual(Tower->CurrentHealth, TutorialHealthFloor));
+	TestTrue(TEXT("锁血主塔仍然存活"), Tower->IsAlive());
+	TestTrue(TEXT("锁血后续攻击继续结算"), Tower->ApplyDamage(Tower->MaxHealth));
+	TestTrue(TEXT("后续攻击不能降低一心下限"), FMath::IsNearlyEqual(Tower->CurrentHealth, TutorialHealthFloor));
 	return true;
 }
 

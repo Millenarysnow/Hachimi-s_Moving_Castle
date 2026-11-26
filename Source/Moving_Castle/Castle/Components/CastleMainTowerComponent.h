@@ -76,6 +76,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|主塔")
 	bool ApplyDamage(float Damage);
 
+	/** 仅新手教程启用：将主塔最低生命锁定为当前最大生命的二十分之一。 */
+	bool EnableTutorialHealthLock(FText& OutReason);
+
 	/** 按指定生命值回血；不改变 AttackCount，并用负伤害广播实际恢复量。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|主塔")
 	bool ApplyHealing(float Amount);
@@ -136,10 +139,15 @@ private:
 	/** 保留未乘徽章倍率的上限；表现组件只接受生命组件发布的结果。 */
 	float BaseMaxHealth = 1000.0f;
 	float HealthMultiplier = 1.0f;
+	/** TutorialMap 专用锁血开关；默认关闭，不改变正式主塔伤害规则。 */
+	bool bTutorialHealthLockEnabled = false;
 	UPROPERTY(Transient) TObjectPtr<UCastleMainTowerBalloonComponent> BalloonPresentation;
 
 	/** 更新气球并广播原生命通知，使塔顶和 HUD 使用同一份已提交的数值。 */
 	void NotifyHealthChanged(float PreviousHealth, float Damage);
+
+	/** 返回当前生命下限；常规关卡为零，新手教程为 HUD 二十格中的一格。 */
+	float GetMinimumHealthFloor() const;
 };
 
 /**

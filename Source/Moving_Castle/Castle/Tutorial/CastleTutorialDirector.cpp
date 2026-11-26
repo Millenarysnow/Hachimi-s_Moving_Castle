@@ -121,6 +121,8 @@ bool ACastleTutorialDirector::InitializeTutorial(FText& OutReason)
 		return false;
 	}
 	if (!Configuration->ValidateTutorial(OutReason)) { return false; }
+	// 一心对应正式 HUD 的 20 格血条之一，教程受击和主动生命消耗都留在该下限。
+	if (!Tower->EnableTutorialHealthLock(OutReason)) { return false; }
 	Dialogue = Instance->GetSubsystem<UCastleDialogueSubsystem>();
 	Guide = Instance->GetSubsystem<UCastleGuideSubsystem>();
 	Combat = World->GetSubsystem<UCastleCombatSubsystem>();
