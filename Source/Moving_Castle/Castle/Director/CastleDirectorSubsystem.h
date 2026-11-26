@@ -8,6 +8,7 @@
 #include "CastleDirectorSubsystem.generated.h"
 
 class ACastleBoard;
+class UCastleMenuRecorder;
 class ACastleDirectorNodeActor;
 class ACastlePlayerController;
 class ACastlePatrolRoute;
@@ -149,6 +150,8 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UUserWidget> HUDWidget;
 	UPROPERTY(Transient) TObjectPtr<UUserWidget> RewardWidget;
 	UPROPERTY(Transient) TObjectPtr<UUserWidget> GameOverWidget;
+	/** 仅正式 MainMap 创建，结算和世界结束时停止监听外观提交。 */
+	UPROPERTY(Transient) TObjectPtr<UCastleMenuRecorder> MenuRecorder;
 	UPROPERTY(Transient) TObjectPtr<UCastleTowerUpgradeRewardWidget> TowerUpgradeWidget;
 	UPROPERTY(Transient) TObjectPtr<UCastleWildcardRoomPickerWidget> WildcardPicker;
 	UPROPERTY(Transient) TObjectPtr<ACastlePatrolRoute> PatrolRoute;

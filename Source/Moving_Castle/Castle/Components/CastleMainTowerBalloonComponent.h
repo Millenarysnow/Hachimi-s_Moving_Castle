@@ -10,6 +10,8 @@ class UMaterialInterface;
 class USceneComponent;
 class UStaticMesh;
 class UStaticMeshComponent;
+class FCastleMenuModelBuilder;
+DECLARE_MULTICAST_DELEGATE(FCastleTowerDisplayChanged);
 
 /** 同一个作者挂点上的拉索和大气球随生命同步显隐。固定挂环已烘焙在塔身网格中。 */
 USTRUCT()
@@ -45,6 +47,12 @@ public:
 	void CommitPreparedTier(float CurrentHealth, float MaxHealth);
 	/** 校验生命状态后刷新显隐，非法输入时保留上一帧的吊挂状态。 */
 	bool UpdateHealth(float CurrentHealth, float MaxHealth);
+
+	/** 正式局只有换塔或可见吊挂数量变化时才通知菜单记录器。 */
+	FCastleTowerDisplayChanged OnDisplayChanged;
+	bool CollectMenuTower(FCastleMenuModelBuilder& Builder, FString& Error) const;
+	/** 首玩复用正式初始套件的挂点数据，不在菜单实例化生命、派兵或侧格组件。 */
+	bool BuildFirstMenuTower(FCastleMenuModelBuilder& Builder, FString& Error) const;
 
 private:
 	/** 类默认对象持有硬引用，使运行时未使用的预留等级及其材质也进入 Cook。 */

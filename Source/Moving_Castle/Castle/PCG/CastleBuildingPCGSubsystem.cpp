@@ -200,6 +200,7 @@ bool UCastleBuildingPCGSubsystem::RecomputeInternal(ACastleBoard* Board, const F
 	}
 	for (const auto& Entry : Plans) { Entry.Key->UpdateAppliedKey(); }
 	if (!GameplayChanges.IsEmpty() || !VisualChanges.IsEmpty()) { OnPCGLayoutUpdated.Broadcast(Board); }
+	OnLayoutResolved.Broadcast(*Board, Buildings);
 	return true;
 }
 

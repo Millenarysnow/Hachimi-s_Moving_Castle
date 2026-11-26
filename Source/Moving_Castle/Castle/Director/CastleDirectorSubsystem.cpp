@@ -1,5 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #include "CastleDirectorSubsystem.h"
+#include "Castle/MainMenu/CastleMenuModel.h"
 #include "Castle/Support/CastleSupportTowerSubsystem.h"
 #include "Castle/Items/CastleBadgeSubsystem.h"
 #include "Castle/Items/CastleItemGrantLibrary.h"
@@ -184,6 +185,17 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 	for (ACastleDirectorNodeActor* Node : Nodes) { Node->ActivateNode(); }
 	// 下一关指引由 WBP HUD 读取，避免同一句话叠加到屏幕调试层。
 	StatusMessage = FText::FromString(TEXT("飞向节点进入下一关"));
+	// 只有实际正式关卡才拥有玩家的上局展示槽；教程和自动化夹具各有独立的棋盘。
+	if (UWorld::RemovePIEPrefix(GetWorld()->GetOutermost()->GetName()) == TEXT("/Game/MovingCastle/Maps/MainMap"))
+	{
+		MenuRecorder = NewObject<UCastleMenuRecorder>(this);
+		FString Error;
+		if (!MenuRecorder->Start(*Board, Error))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("开始记录正式局城堡失败：%s"), *Error);
+			ShowMessage(FText::FromString(Error), true);
+		}
+	}
 	UE_LOG(LogMoving_Castle, Display, TEXT("导演启动：编辑阶段，第 1 关，主塔 Lv1，房间上限 %d。"), Initial.RoomLimit);
 	if (Tower->CurrentHealth <= 0.0f) { EnterGameOver(FText::GetEmpty()); }
 	return true;
@@ -1024,6 +1036,7 @@ int32 UCastleDirectorSubsystem::GetCurrentMaxShopNumber() const
 void UCastleDirectorSubsystem::EnterGameOver(const FText& Failure)
 {
 	if (Phase == ECastleDirectorPhase::GameOver) { return; }
+	if (MenuRecorder) { MenuRecorder->Stop(); }
 	// 恢复 1x 全局时间缩放并清掉战斗暂停标志；游戏结束界面自身随后负责保持世界暂停。
 	ResetBattleControls(false);
 	GameOverFailure = Failure;
@@ -1260,6 +1273,7 @@ void UCastleDirectorSubsystem::UnbindCombatEvents()
 
 void UCastleDirectorSubsystem::OnWorldEndPlay(UWorld& InWorld)
 {
+	if (MenuRecorder) { MenuRecorder->Stop(); }
 	// 世界结束时 Mass 自己释放实体；不要在子系统析构顺序不确定时再次派发 Despawn。
 	ResetBattleControls(false);
 	UnbindCombatEvents();

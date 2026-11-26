@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleMainTowerBalloonComponent.h"
+#include "Castle/MainMenu/CastleMenuModel.h"
 
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -33,6 +34,15 @@ namespace
 		double Yaw;
 		double Scale;
 		double TetherRadius;
+
+		/** 游戏和首玩预览使用同一条明确的绳眼至气球底眼变换。 */
+		FTransform TetherTransform() const
+		{
+			const FVector Cable = End - Start;
+			return FTransform(FQuat::FindBetweenNormals(FVector::UpVector, Cable.GetUnsafeNormal()), Start,
+				FVector(TetherRadius / 5.5, TetherRadius / 5.5, Cable.Length() / 100.0));
+		}
+		FTransform BalloonTransform() const { return FTransform(FRotator(0, Yaw, 0), End, FVector(Scale)); }
 	};
 
 	const FLiftMount FirstFlight[] = {
@@ -246,13 +256,8 @@ bool UCastleMainTowerBalloonComponent::PrepareTier(const int32 LayerCount, FText
 	{
 		FCastleMainTowerLiftParts& Rig = PendingParts.AddDefaulted_GetRef();
 		// 清单起点位于塔身烘焙挂环的吊耳孔。拉索沿局部 +Z 延伸，100 cm 端点缩放后抵达气球底眼。
-		const FVector Cable = Mount.End - Mount.Start;
-		const double RadiusScale = Mount.TetherRadius / 5.5;
-		Rig.Tether = CreatePart(ELiftAsset::Tether, TEXT("LiftTether"), Mount,
-			FTransform(FQuat::FindBetweenNormals(FVector::UpVector, Cable.GetUnsafeNormal()), Mount.Start,
-				FVector(RadiusScale, RadiusScale, Cable.Length() / 100.0)));
-		Rig.Balloon = CreatePart(Mount.Balloon, TEXT("LiftBalloon"), Mount,
-			FTransform(FRotator(0, Mount.Yaw, 0), Mount.End, FVector(Mount.Scale)));
+		Rig.Tether = CreatePart(ELiftAsset::Tether, TEXT("LiftTether"), Mount, Mount.TetherTransform());
+		Rig.Balloon = CreatePart(Mount.Balloon, TEXT("LiftBalloon"), Mount, Mount.BalloonTransform());
 		if (!Rig.Tether->IsRegistered() || !Rig.Balloon->IsRegistered())
 		{
 			DiscardPreparedTier();
@@ -282,6 +287,8 @@ void UCastleMainTowerBalloonComponent::CommitPreparedTier(const float CurrentHea
 	PendingTierIndex = INDEX_NONE;
 	LiveCount = 0;
 	UpdateHealth(CurrentHealth, MaxHealth);
+	// 即使没有剩余气球，本次换塔仍改变了塔身。非零时 UpdateHealth 已发出同一次通知。
+	if (LiveCount == 0) { OnDisplayChanged.Broadcast(); }
 }
 
 bool UCastleMainTowerBalloonComponent::UpdateHealth(const float CurrentHealth, const float MaxHealth)
@@ -309,6 +316,52 @@ bool UCastleMainTowerBalloonComponent::UpdateHealth(const float CurrentHealth, c
 		UE_LOG(LogMoving_Castle, Display, TEXT("主塔 %s 破裂 %d 颗大气球，剩余 %d 颗。"),
 			*GetPathNameSafe(GetOwner()), LiveCount - Count, Count);
 	}
+	const bool bChanged = LiveCount != Count;
 	LiveCount = Count;
+	if (bChanged) { OnDisplayChanged.Broadcast(); }
+	return true;
+}
+
+bool UCastleMainTowerBalloonComponent::CollectMenuTower(FCastleMenuModelBuilder& Builder, FString& Error) const
+{
+	if (!IsValid(TowerMesh) || !IsValid(GetOwner()) || LiveParts.IsEmpty())
+	{
+		Error = GetPathName() + TEXT(" 的塔身或已提交吊挂尚未就绪。");
+		return false;
+	}
+	const FTransform Frame = GetOwner()->GetActorTransform();
+	if (!Builder.AddComponent(*TowerMesh, Frame, Error)) { return false; }
+	for (int32 Index = 0; Index < LiveCount; ++Index)
+	{
+		const FCastleMainTowerLiftParts& Rig = LiveParts[Index];
+		if (!IsValid(Rig.Tether) || !IsValid(Rig.Balloon)) { Error = GetPathName() + TEXT(" 的有效吊挂缺少拉索或气球。"); return false; }
+		if (!Builder.AddComponent(*Rig.Tether, Frame, Error) || !Builder.AddComponent(*Rig.Balloon, Frame, Error)) { return false; }
+	}
+	return true;
+}
+
+bool UCastleMainTowerBalloonComponent::BuildFirstMenuTower(FCastleMenuModelBuilder& Builder, FString& Error) const
+{
+	// 首级的网格、吊挂方向与材质均来自正式套件。模型丢失时保留作者资源名供定位。
+	if (TowerAssets.Num() != UE_ARRAY_COUNT(LiftTiers) || LiftAssets.Num() != UE_ARRAY_COUNT(LiftMeshNames))
+	{
+		Error = TEXT("主塔套件缺少已配置的塔身或吊挂资产。");
+		return false;
+	}
+	auto Add = [&](UStaticMesh* Mesh, const TCHAR* Name, const FTransform& Local)
+	{
+		if (!IsValid(Mesh)) { Error = FString::Printf(TEXT("首玩主塔缺少网格 %s。"), Name); return false; }
+		TArray<UMaterialInterface*> Materials;
+		for (const FStaticMaterial& Slot : Mesh->GetStaticMaterials()) { Materials.Add(Slot.MaterialInterface); }
+		return Builder.AddMesh(Mesh, Materials, {}, Local, Error);
+	};
+	if (!Add(TowerAssets[0], LiftTiers[0].MeshName, FTransform::Identity)) { return false; }
+	for (const FLiftMount& Mount : LiftTiers[0].Mounts)
+	{
+		const int32 Tether = static_cast<int32>(ELiftAsset::Tether);
+		const int32 Balloon = static_cast<int32>(Mount.Balloon);
+		if (!Add(LiftAssets[Tether], LiftMeshNames[Tether], Mount.TetherTransform())
+			|| !Add(LiftAssets[Balloon], LiftMeshNames[Balloon], Mount.BalloonTransform())) { return false; }
+	}
 	return true;
 }
