@@ -44,6 +44,9 @@ public:
 	/** 玩法奖励专用入口；零钱袋只影响这条入账路径。可返回已实际添加的金币数。 */
 	bool TryAddGameplayGold(int32 BaseAmount, FText& OutFailureReason, int32* OutFinalAmount = nullptr);
 
+	/** 有投币成本的玩法奖励在同一笔收支中结算，OutFinalAmount 返回扣除成本前的实际奖励。 */
+	bool TryAddGameplayGold(int32 BaseAmount, int32 Cost, FText& OutFailureReason, int32& OutFinalAmount);
+
 	/** 扣除金币。余额不足时不产生任何修改，调用方不需要事后修正余额。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|经济")
 	bool TrySpendGold(int32 Amount, FText& OutFailureReason);
@@ -54,8 +57,10 @@ public:
 
 private:
 	friend class UCastleShopComponent;
+	friend class ACastleShopSkyIsland;
+	friend class ACastleGambleSkyIsland;
 
-	/** 商店联合提交余额与商品；整笔成功前不广播余额，失败时金币仍等于原值。 */
+	/** 商品或非金币机台奖励与扣费联合提交；整笔成功前不广播余额，失败时金币仍等于原值。 */
 	bool TrySpendShopGold(int32 Amount, TFunctionRef<bool()> CommitTrade, FText& OutFailureReason);
 	bool CalculateGameplayGold(int32 BaseAmount, int32& OutAmount, FText& OutFailureReason) const;
 

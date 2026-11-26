@@ -39,6 +39,7 @@ namespace
 	constexpr TCHAR ShopAssetPath[] = TEXT("/Game/MovingCastle/Data/SkyIslands/DA_ShopSkyIsland.DA_ShopSkyIsland");
 	constexpr TCHAR RoomPackFolder[] = TEXT("/Game/MovingCastle/Model/Items/RoomPack");
 	const FName SoldAmountParameter(TEXT("SoldAmount"));
+	enum class EShopIslandTestScenario : uint8 { RoomGroup, Badge, TowerLevels };
 
 	/** 由正式对象路径加载，避免漏配后仍由别的有效资源凑齐数量。 */
 	template <typename AssetType>
@@ -61,8 +62,8 @@ class FCastleShopSkyIslandScenario final : public IAutomationLatentCommand
 {
 public:
 	FCastleShopSkyIslandScenario(FAutomationTestBase& InTest, TStrongObjectPtr<UCastleDirectorConfigDataAsset>&& InConfig,
-		const bool bInTestRoomGroup)
-		: Test(InTest), Config(MoveTemp(InConfig)), bTestRoomGroup(bInTestRoomGroup) {}
+		const EShopIslandTestScenario InScenario)
+		: Test(InTest), Config(MoveTemp(InConfig)), Scenario(InScenario) {}
 
 	virtual ~FCastleShopSkyIslandScenario() override { StopConfiguringTestIslands(); }
 
@@ -80,6 +81,7 @@ public:
 			Test.AddError(TEXT("商店空岛测试需要 MainMap 的导演完成开局。"));
 			return true;
 		}
+		if (Scenario == EShopIslandTestScenario::TowerLevels) { return UpdateTowerLevelPurchases(*World, *Director); }
 		if (Stage == 0)
 		{
 			if (!PrepareAndEnter(*World, *Director)) { return true; }
@@ -108,6 +110,96 @@ public:
 	}
 
 private:
+	/** 同一局中逐级扩层，从未裁剪的正式目录挑种子，再让导演生成并结算真实货位。 */
+	bool UpdateTowerLevelPurchases(UWorld& World, UCastleDirectorSubsystem& Director)
+	{
+		if (Director.GetPhase() == ECastleDirectorPhase::SkyIsland)
+		{
+			if (FPlatformTime::Seconds() < WaitUntil) { return false; }
+			Test.AddError(TEXT("分级购买测试等待离岛超时。"));
+			return true;
+		}
+		if (!Test.TestEqual(TEXT("上一次离岛后只推进一步"), Director.GetClearedSteps(), Stage) || Stage == 4) { return true; }
+		const int32 Level = Stage + 1;
+		const TActorIterator<ACastleBoard> Board(&World);
+		auto* Controller = Cast<ACastlePlayerController>(World.GetFirstPlayerController());
+		const auto* Authored = LoadObject<UCastleShopSkyIslandDataAsset>(nullptr, ShopAssetPath);
+		if (!Test.TestTrue(TEXT("等级测试使用正式棋盘、目录和本局账户"), Board && Board->PrototypeBackpack
+			&& Controller && Controller->GetEconomy() && Authored && Director.GetConfig() == Config.Get())) { return true; }
+		FText Reason;
+		if (Level > 1 && !Test.TestTrue(TEXT("使用正常棋盘扩层入口提升稀有度等级"),
+			Board->ExpandMainTowerLayers(Level * 2 + 1, Reason))) { return true; }
+
+		// 每级购买一组该级新开放稀有度，Lv3、Lv4 同时验证拆解和染色的扣费原子路径。
+		const TCHAR* Products[] = {TEXT("DA_RoomGroup_07_TripleThreeArchers"), TEXT("DA_RoomGroup_11_RedStorm"),
+			TEXT("DA_RoomGroup_20_Normalize"), TEXT("DA_RoomGroup_22_GreenLushRedWither")};
+		const FName DesiredGroup(Products[Stage]);
+		int32 ContextSeed = INDEX_NONE;
+		TArray<ACastleShopSkyIsland::FProduct> Rolls;
+		for (int32 Seed = 0; Seed < 4096; ++Seed)
+		{
+			if (!ACastleShopSkyIsland::TryRollProducts(*Authored, Level, Seed, Rolls, Reason)) { Test.AddError(Reason.ToString()); return true; }
+			if (Rolls.ContainsByPredicate([DesiredGroup](const auto& Row) { return Row.RoomGroup && Row.RoomGroup->GetFName() == DesiredGroup; }))
+			{
+				ContextSeed = Seed;
+				break;
+			}
+		}
+		if (!Test.TestTrue(TEXT("正式概率表可抽到这一级新解锁的商品"), ContextSeed != INDEX_NONE)) { return true; }
+		const uint32 StepSeed = static_cast<uint32>(Director.GetNextStep()) * 0x9e3779b9u;
+		{
+			// 调试进入入口会派生节点随机种子，只对本用例的内存配置指定反向推算的种子。
+			TGuardValue<int32> RunSeed(Config->RunSeed, static_cast<int32>(static_cast<uint32>(ContextSeed) ^ StepSeed));
+			if (!Test.TestTrue(TEXT("正式导演生成商店空岛"), Director.TryEnterSkyIslandByTypeForDebug(ECastleSkyIslandType::Shop, Reason)))
+			{
+				Test.AddError(Reason.ToString());
+				return true;
+			}
+		}
+		const TActorIterator<ACastleShopSkyIsland> Island(&World);
+		if (!Test.TestTrue(TEXT("进入真正使用正式目录的商店空岛"), Island && Island->Config == Authored)) { return true; }
+		const auto* Offer = Island->Offers.FindByPredicate([DesiredGroup](const UCastleShopSkyIslandOffer* Entry)
+		{
+			return Entry->RoomGroup && Entry->RoomGroup->GetFName() == DesiredGroup;
+		});
+		if (!Test.TestNotNull(DesiredGroup.ToString(), Offer)) { return true; }
+
+		auto& Wallet = *Controller->GetEconomy();
+		auto& Pack = *Board->PrototypeBackpack;
+		auto* Normal = Board->FindBuildingDefinition(ECastleBuildingType::NormalRoom);
+		FCastleBuildingDescriptor Card;
+		// 清空本次测试的库存并布置一个确定首槽，隔离四种交易的牌面断言。
+		while (Pack.GetItemCount() > 0)
+		{
+			if (!Test.TestTrue(TEXT("清空上一档买入的房间"), Pack.TryConsumeItemAt(0, Card, Reason))) { return true; }
+		}
+		int32 Slot = INDEX_NONE;
+		if (!Test.TestTrue(TEXT("准备确定的红 6 首牌与余额"),
+			Normal && Pack.TryAddBuilding(Normal, 1, ECastleTileColor::Red, 6, Slot, Reason) && Wallet.TryAddGold(1000, Reason))) { return true; }
+		const int32 Before = Wallet.GetGold();
+		const FVector Center = (*Offer)->Bounds.Origin;
+		const double TowardAisle = (*Offer)->GetRelativeLocation().Y < 0 ? 160.0 : -160.0;
+		if (!Test.TestTrue(DesiredGroup.ToString() + TEXT(" 由真实准星购买"),
+			Director.TryInteractWithSkyIsland(Center + FVector(0, TowardAisle, 0), Center, Reason))) { Test.AddError(Reason.ToString()); return true; }
+		Test.TestEqual(TEXT("余额只扣单品资产价格"), Wallet.GetGold(), Before - (*Offer)->RoomGroup->ShopPrice);
+		Test.TestTrue(TEXT("交易成功后货位售罄"), (*Offer)->bSold);
+		const int32 ExpectedCount[] = {4, 7, 6, 4};
+		Test.TestEqual(TEXT("真实卡包结算的主栏张数"), Pack.GetItemCount(), ExpectedCount[Stage]);
+		Test.TestEqual(TEXT("未超容量时临时栏为空"), Pack.GetTempItemCount(), 0);
+		if (Level == 3 || Level == 4)
+		{
+			for (const auto& Result : Pack.GetItems())
+			{
+				Test.TestTrue(TEXT("拆解保持红色且数字为 1，染色则全主栏为绿"), Result.Definition == Normal
+					&& (Level == 3 ? Result.Color == ECastleTileColor::Red && Result.Number == 1 : Result.Color == ECastleTileColor::Green));
+			}
+		}
+		Island->OnDepartureRequested.Broadcast();
+		WaitUntil = FPlatformTime::Seconds() + 5.0;
+		++Stage;
+		return false;
+	}
+
 	void VerifyRoomPackDisplay(const ACastleShopSkyIsland& Island, const UCastleShopSkyIslandOffer& Offer)
 	{
 		Test.TestTrue(TEXT("房间组使用配置的卡包网格"), Offer.GetStaticMesh() == Island.Config->RoomPackMesh.Get());
@@ -322,7 +414,7 @@ private:
 		}
 		Test.TestTrue(TEXT("真实 PIE 覆盖左右两侧的房间包朝向"), bCheckedLeftPack && bCheckedRightPack);
 		// 保留正式购房和徽章交易两条用例，房间组规则引擎的失败不会挡住独立的徽章验收。
-		const bool bPurchased = bTestRoomGroup
+		const bool bPurchased = Scenario == EShopIslandTestScenario::RoomGroup
 			? VerifyRoomGroupPurchases(World, Wallet, Backpack, *Fixed, *Wildcard, Interact, Reason)
 			: VerifyBadgePurchases(World, **Island, Wallet, BadgeOffers, Interact, Reason);
 		if (!bPurchased) { return false; }
@@ -488,15 +580,15 @@ private:
 	TStrongObjectPtr<UCastleShopSkyIslandDataAsset> TradeConfig;
 	TWeakObjectPtr<UWorld> ConfiguredWorld;
 	FDelegateHandle SpawnHandle;
-	const bool bTestRoomGroup;
+	const EShopIslandTestScenario Scenario;
 	bool bCheckedLeftPack = false;
 	bool bCheckedRightPack = false;
 	int32 Stage = 0;
 	double WaitUntil = FPlatformTime::Seconds() + 30.0;
 };
 
-/** 两条交易用例共享开局准备，各自从一局干净的 MainMap 开始。 */
-static bool QueueShopSkyIslandScenario(FAutomationTestBase& Test, const bool bTestRoomGroup)
+/** 交易用例共享开局准备，各自从一局干净的 MainMap 开始。 */
+static bool QueueShopSkyIslandScenario(FAutomationTestBase& Test, const EShopIslandTestScenario Scenario)
 {
 	auto* Settings = GetMutableDefault<UCastleDirectorSettings>();
 	const auto Previous = Settings->DirectorConfig;
@@ -522,7 +614,7 @@ static bool QueueShopSkyIslandScenario(FAutomationTestBase& Test, const bool bTe
 	// 只等待本用例显式启动的 PIE 导演，避免全量队列中引擎等待到另一个测试的游戏世界。
 	ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/MovingCastle/Maps/MainMap")));
 	ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
-	ADD_LATENT_AUTOMATION_COMMAND(FCastleShopSkyIslandScenario(Test, MoveTemp(Config), bTestRoomGroup));
+	ADD_LATENT_AUTOMATION_COMMAND(FCastleShopSkyIslandScenario(Test, MoveTemp(Config), Scenario));
 	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([Settings, Previous, bRequested = false]() mutable
 	{
 		// 场景结束时等待已挂载的界面及世界真正销毁，再恢复全局 PIE 启动配置。
@@ -542,7 +634,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleShopSkyIslandIntegrationTest, "MovingCas
 
 bool FCastleShopSkyIslandIntegrationTest::RunTest(const FString& Parameters)
 {
-	return QueueShopSkyIslandScenario(*this, true);
+	return QueueShopSkyIslandScenario(*this, EShopIslandTestScenario::RoomGroup);
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleShopSkyIslandBadgeTransactionTest, "MovingCastle.SkyIslands.Shop.BadgeTransactions",
@@ -550,7 +642,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleShopSkyIslandBadgeTransactionTest, "Movi
 
 bool FCastleShopSkyIslandBadgeTransactionTest::RunTest(const FString& Parameters)
 {
-	return QueueShopSkyIslandScenario(*this, false);
+	return QueueShopSkyIslandScenario(*this, EShopIslandTestScenario::Badge);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleShopSkyIslandLevelPurchasesTest, "MovingCastle.SkyIslands.Shop.LevelPurchases",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleShopSkyIslandLevelPurchasesTest::RunTest(const FString& Parameters)
+{
+	return QueueShopSkyIslandScenario(*this, EShopIslandTestScenario::TowerLevels);
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleShopSkyIslandAssetTest, "MovingCastle.SkyIslands.Shop.ConfigValidation",

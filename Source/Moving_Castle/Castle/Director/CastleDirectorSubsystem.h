@@ -21,7 +21,7 @@ class UCastleTowerUpgradeRewardWidget;
 class UCastleWildcardRoomPickerWidget;
 class ACastleSkyIslandBase;
 enum class ECastleSkyIslandType : uint8;
-struct FCastleBadgeDefinition;
+class UCastleBadgeDataAsset;
 
 /** 原生阶段事件不承担流程决策，界面和输入只监听最终状态。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCastleDirectorPhaseChanged, ECastleDirectorPhase);
@@ -61,7 +61,8 @@ public:
 	bool TryEnterBonusSkyIslandFromPortal(ACastleBuildingBase* PortalRoom, FText& OutReason);
 	bool RequestIslandRoomShop(ACastleSkyIslandBase* Island, FText& OutReason);
 	bool RequestIslandRoomReward(ACastleSkyIslandBase* Island, UCastlePendingRoomReward* Reward, FText& OutReason);
-	bool RequestIslandBadgeReward(ACastleSkyIslandBase* Island, const FCastleBadgeDefinition& Badge, FText& OutReason);
+	/** 保留完整徽章资产到发放边界，便于在库存和界面更新前校验显示资源。 */
+	bool RequestIslandBadgeReward(ACastleSkyIslandBase* Island, const UCastleBadgeDataAsset& Badge, FText& OutReason);
 #if !UE_BUILD_SHIPPING
 	/** 在编辑阶段从本局正式配置指定空岛，沿用节点入岛与离岛的事务。 */
 	bool TryEnterSkyIslandByTypeForDebug(ECastleSkyIslandType Type, FText& OutReason);

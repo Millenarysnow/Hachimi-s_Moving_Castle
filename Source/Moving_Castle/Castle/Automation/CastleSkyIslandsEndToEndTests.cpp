@@ -278,7 +278,8 @@ namespace
 			Test.TestFalse(TEXT("玩家输入和临时商店已关闭"), Controller.IsMoveInputIgnored()
 				|| Controller.IsLookInputIgnored() || Controller.GetShop()->IsShopOpen());
 			FText Reason;
-			Test.TestFalse(TEXT("空岛的免费商店权限没有带回主塔"), Director.IsShopAccessAllowed(Reason));
+			// 常驻商店只依据返塔后的编辑阶段开放，临时商店已在上方验证关闭。
+			Test.TestTrue(TEXT("返塔恢复常驻普通商店的访问权限"), Director.IsShopAccessAllowed(Reason));
 			Test.TestFalse(TEXT("上次空岛 Actor 及世界中的空岛实例均已清除"), ActiveIsland.IsValid()
 				|| static_cast<bool>(TActorIterator<ACastleSkyIslandBase>(World)));
 			TArray<ECastleDirectorNodeKind> Expected = Director.GetNodeKindsForStep(*Director.GetConfig(), Director.GetNextStep());

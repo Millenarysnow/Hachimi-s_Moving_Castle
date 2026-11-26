@@ -445,7 +445,9 @@ bool UCastleItemGrantLibrary::TryGrantBadge(const UCastleBadgeDataAsset* Asset, 
 	{
 		return RejectGrant(Asset, INVTEXT("需要有效的徽章资产和 GameInstance 徽章子系统。"), OutFailureReason);
 	}
-	if (!Badges->TryAcquireBadge(Asset->Badge, bOutNeedsReplacement, OutFailureReason))
+	// 调试命令和空岛共用资产奖励契约，界面收到库存通知时即可读取图标。
+	if (!Asset->ValidateReward(OutFailureReason)
+		|| !Badges->TryAcquireBadge(Asset->Badge, bOutNeedsReplacement, OutFailureReason))
 	{
 		const FText Reason = OutFailureReason;
 		return RejectGrant(Asset, Reason, OutFailureReason);

@@ -104,7 +104,8 @@ bool UCastleGambleSkyIslandDataAsset::Validate(FText& OutReason) const
 	for (const UCastleBadgeDataAsset* Asset : Badges)
 	{
 		FText BadgeReason;
-		if (!IsValid(Asset) || !Asset->Badge.Validate(BadgeReason))
+		// 赌博与商店使用同一批徽章，奖品入槽需要同样完整的资源和交易配置。
+		if (!IsValid(Asset) || !Asset->ValidateReward(BadgeReason))
 		{
 			return Reject(FText::Format(INVTEXT("徽章 {0} 无效。{1}"), FText::FromString(GetPathNameSafe(Asset)), BadgeReason));
 		}

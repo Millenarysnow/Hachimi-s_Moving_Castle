@@ -114,9 +114,10 @@ void UCastleMassMeleeAttackProcessor::Execute(FMassEntityManager& EntityManager,
 			Attacker.World = GetWorld();
 			Attacker.Entity = Chunk.GetEntity(It);
 			int64 RemainingBlocks = 0;
+			// 直击主塔属于敌伤，致命结算由主塔统一检查最后一颗气球扣。
 			const bool bApplied = bBalloonTarget ? Support->DamageBalloon(BalloonId, Melee.AttackDamage)
 				: (bShieldTarget ? Shields->ApplyAttackToShield(ShieldId, Attacker, RemainingBlocks)
-					: TowerSubsystem->ApplyMainTowerDamage(Melee.AttackDamage));
+					: TowerSubsystem->ApplyEnemyMainTowerDamage(Melee.AttackDamage));
 			if (bApplied)
 			{
 				++Melee.AttackCount;

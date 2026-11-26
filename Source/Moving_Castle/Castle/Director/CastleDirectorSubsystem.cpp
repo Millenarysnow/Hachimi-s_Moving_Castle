@@ -727,7 +727,7 @@ bool UCastleDirectorSubsystem::RequestIslandRoomReward(ACastleSkyIslandBase* Isl
 }
 
 bool UCastleDirectorSubsystem::RequestIslandBadgeReward(ACastleSkyIslandBase* Island,
-	const FCastleBadgeDefinition& Badge, FText& OutReason)
+	const UCastleBadgeDataAsset& Badge, FText& OutReason)
 {
 	if (!ValidateIslandAction(Island, OutReason)) { return false; }
 	auto* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
@@ -738,7 +738,8 @@ bool UCastleDirectorSubsystem::RequestIslandBadgeReward(ACastleSkyIslandBase* Is
 		return false;
 	}
 	bool bNeedsReplacement = false;
-	return Badges->TryAcquireBadge(Badge, bNeedsReplacement, OutReason);
+	// 由与调试发放相同的资产入口校验。本局 HUD 监听库存并接管第七枚的替换输入。
+	return UCastleItemGrantLibrary::TryGrantBadge(&Badge, Badges, bNeedsReplacement, OutReason);
 }
 
 #if !UE_BUILD_SHIPPING

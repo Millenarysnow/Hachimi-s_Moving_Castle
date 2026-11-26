@@ -10,6 +10,7 @@
 #include "GameFramework/PawnMovementComponent.h"
 #include "HAL/IConsoleManager.h"
 #include "Items/CastleBadgeSubsystem.h"
+#include "Items/CastleItemGrantLibrary.h"
 #include "Items/CastlePendingRoomReward.h"
 #include "Moving_Castle.h"
 #include "TimerManager.h"
@@ -164,13 +165,13 @@ bool ACastleGambleAcceptanceIsland::PresentRoomPrize(UCastlePendingRoomReward* R
 	return true;
 }
 
-bool ACastleGambleAcceptanceIsland::PresentBadgePrize(const FCastleBadgeDefinition& Badge, FText& OutReason)
+bool ACastleGambleAcceptanceIsland::PresentBadgePrize(const UCastleBadgeDataAsset& Badge, FText& OutReason)
 {
 	// 正式 HUD 早已订阅此子系统，满槽后由同一个替换面板接管输入。
 	auto* BadgeSubsystem = UCastleBadgeSubsystem::GetForWorld(GetWorld());
 	if (!BadgeSubsystem) { OutReason = INVTEXT("验收空岛缺少徽章子系统。"); return false; }
 	bool bNeedsReplacement = false;
-	return BadgeSubsystem->TryAcquireBadge(Badge, bNeedsReplacement, OutReason);
+	return UCastleItemGrantLibrary::TryGrantBadge(&Badge, BadgeSubsystem, bNeedsReplacement, OutReason);
 }
 
 void ACastleGambleAcceptanceIsland::OnPickerClosed(bool bClaimed)

@@ -18,7 +18,7 @@ public:
 
 protected:
 	virtual bool PresentRoomPrize(UCastlePendingRoomReward* Reward, FText& OutReason) override;
-	virtual bool PresentBadgePrize(const FCastleBadgeDefinition& Badge, FText& OutReason) override;
+	virtual bool PresentBadgePrize(const UCastleBadgeDataAsset& Badge, FText& OutReason) override;
 
 private:
 	friend class FCastleGambleAcceptanceScenario;

@@ -59,15 +59,36 @@ bool UCastleEconomyComponent::TryAddGold(int32 Amount, FText& OutFailureReason)
 
 bool UCastleEconomyComponent::TryAddGameplayGold(const int32 BaseAmount, FText& OutFailureReason, int32* OutFinalAmount)
 {
-	if (OutFinalAmount) { *OutFinalAmount = 0; }
 	int32 Amount = 0;
-	if (!CalculateGameplayGold(BaseAmount, Amount, OutFailureReason) || !TryAddGold(Amount, OutFailureReason))
+	const bool bAdded = TryAddGameplayGold(BaseAmount, 0, OutFailureReason, Amount);
+	if (OutFinalAmount) { *OutFinalAmount = Amount; }
+	return bAdded;
+}
+
+bool UCastleEconomyComponent::TryAddGameplayGold(const int32 BaseAmount, const int32 Cost, FText& OutFailureReason,
+	int32& OutFinalAmount)
+{
+	OutFinalAmount = 0;
+	int32 Amount = 0;
+	if (!CanSpendGold(Cost, OutFailureReason) || !CalculateGameplayGold(BaseAmount, Amount, OutFailureReason))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("金币账户 %s 拒绝玩法收入 %d：%s"),
-			*GetPathName(), BaseAmount, *OutFailureReason.ToString());
+		UE_LOG(LogMoving_Castle, Error, TEXT("金币账户 %s 拒绝玩法收入 %d（成本 %d）：%s"),
+			*GetPathName(), BaseAmount, Cost, *OutFailureReason.ToString());
 		return false;
 	}
-	if (OutFinalAmount) { *OutFinalAmount = Amount; }
+	// 先用含加成的实发奖励检查净额，再一次性公布余额，避免溢出失败时先扣款、再补回。
+	const int64 NewGold = static_cast<int64>(Gold) - Cost + Amount;
+	if (NewGold > MAX_int32)
+	{
+		OutFailureReason = INVTEXT("增加金币失败：余额将超出整数上限。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("金币账户 %s 拒绝玩法收入 %d（成本 %d）：%s"),
+			*GetPathName(), BaseAmount, Cost, *OutFailureReason.ToString());
+		return false;
+	}
+	const int32 PreviousGold = Gold;
+	Gold = static_cast<int32>(NewGold);
+	OutFinalAmount = Amount;
+	if (Gold != PreviousGold) { OnGoldChanged.Broadcast(PreviousGold, Gold); }
 	return true;
 }
 

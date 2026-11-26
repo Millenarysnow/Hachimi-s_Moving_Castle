@@ -196,7 +196,7 @@ bool FCastlePatrolWaypointNumberTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("真实蓝图在世界中生成"), Marker)) { World->DestroyWorld(false); return false; }
 
 	TInlineComponentArray<UStaticMeshComponent*> Meshes(Marker);
-	TestEqual(TEXT("一个主体、两面各两个数字组件"), Meshes.Num(), 5);
+	// 蓝图可包含自身的静态网格。主体和四个数字分别按根节点、组件名校验，并对全部网格检查碰撞契约。
 	TestFalse(TEXT("标记 Actor 不开启碰撞"), Marker->GetActorEnableCollision());
 	for (const UStaticMeshComponent* Mesh : Meshes)
 	{

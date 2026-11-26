@@ -5,8 +5,10 @@
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
+#include "Castle/Items/CastleBadgeDataAsset.h"
 #include "Castle/Items/CastleBadgeRuntimeSubsystem.h"
 #include "Castle/Items/CastleBadgeSubsystem.h"
+#include "Castle/Items/CastleItemGrantLibrary.h"
 #include "Castle/Support/CastleSupportTowerData.h"
 #include "Castle/Support/CastleSupportTowerSubsystem.h"
 #include "CastleBackpackComponent.h"
@@ -31,9 +33,18 @@
 #include "MassExecutionContext.h"
 #include "MassExecutor.h"
 #include "MassProcessingContext.h"
+#include "Materials/MaterialInterface.h"
 #include "Misc/AutomationTest.h"
 #include "NavigationSystem.h"
 #include "Subsystems/CastleShieldTowerSubsystem.h"
+#include "Units/Mass/Enemies/CastleMassEnemyLaserAttackProcessor.h"
+#include "Units/Mass/Enemies/CastleMassEnemyLaserAttackTrait.h"
+#include "Units/Mass/Enemies/CastleMassEnemyRangedAttackProcessor.h"
+#include "Units/Mass/Enemies/CastleMassEnemyRangedAttackTrait.h"
+#include "Units/Mass/Enemies/CastleMassMeleeAttackProcessor.h"
+#include "Units/Mass/Enemies/CastleMassMeleeAttackTrait.h"
+#include "Units/Mass/Projectiles/CastleMassEnemyProjectileProcessor.h"
+#include "Units/Mass/Projectiles/CastleMassEnemyProjectileTrait.h"
 #include "Units/Mass/Projectiles/CastleMassHomingProjectileProcessor.h"
 
 namespace CastleBadgesFullTests
@@ -669,6 +680,75 @@ bool FCastleBadgesFullShieldTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleBadgeEnemyAttackIntegrationTest, "MovingCastle.Items.Badges.EnemyAttackEntryPoints",
+	CastleBadgesFullTests::Flags)
+
+bool FCastleBadgeEnemyAttackIntegrationTest::RunTest(const FString&)
+{
+	using namespace CastleBadgesFullTests;
+	FGame Game(*this);
+	auto* Tower = Game.MakeTower(5);
+	auto* Shields = Game.World->GetSubsystem<UCastleShieldTowerSubsystem>();
+	const auto* Clasp = LoadObject<UCastleBadgeDataAsset>(nullptr,
+		TEXT("/Game/MovingCastle/Data/Items/Badges/DA_Badge_25_LastBalloonClasp.DA_Badge_25_LastBalloonClasp"));
+	FText Reason;
+	bool bReplacement = false;
+	if (!TestTrue(TEXT("装备正式气球扣"), UCastleItemGrantLibrary::TryGrantBadge(Clasp, Game.Badges, bReplacement, Reason))) { return false; }
+	const FVector TowerTarget = Tower->GetTargetLocation();
+	const float LethalDamage = Tower->MaxHealth;
+
+	// 护盾在敌人的选目标范围外，但仍已展开。若阻止死亡，必然由主塔敌伤入口消耗该盾。
+	AActor* ShieldOwner = Game.World->SpawnActor<AActor>();
+	const auto VerifyHit = [&](const FString& Name, UMassEntityConfigAsset* Enemy, TFunctionRef<void()> ResolveAttack)
+	{
+		Game.Director->OnRunStarted.Broadcast();
+		if (!TestTrue(Name + TEXT(" 准备主塔和远处护盾"), Tower->InitializeHealth()
+			&& Shields->UpsertActiveShield(ShieldOwner, TowerTarget + FVector(12000, 0, 0), 200, 9, 0) != 0)) { return false; }
+		TArray<FCastleMassUnitHandle> Spawned;
+		if (!TestTrue(Name + TEXT(" 生成真实攻击实体"), Game.Units().SpawnUnits(Enemy,
+			{FTransform(TowerTarget + FVector(100, 0, 0))}, Spawned, Reason))) { return false; }
+		ResolveAttack();
+		Game.Manager().DestroyEntity(Spawned[0].Entity);
+		int32 Live = 0, Capacity = 0;
+		Tower->GetBalloonCounts(Live, Capacity);
+		int64 Blocks = 0;
+		TestEqual(Name + TEXT(" 致命伤害实际保留一颗气球"), Live, 1);
+		TestEqual(Name + TEXT(" 主塔正确记录一次命中"), Tower->AttackCount, 1);
+		TestFalse(Name + TEXT(" 拦截耗尽已展开护盾"), Shields->GetShieldRemainingBlocks(ShieldOwner, Blocks));
+		return true;
+	};
+
+	auto* MeleeEnemy = Game.MakeUnitConfig<UCastleMassEnemyTrait>();
+	auto* Melee = NewObject<UCastleMassMeleeAttackTrait>(MeleeEnemy);
+	Melee->AttackDamage = LethalDamage;
+	MeleeEnemy->GetMutableConfig().AddTrait(*Melee);
+	if (!VerifyHit(TEXT("近战"), MeleeEnemy, [&Game]() { Game.Step<UCastleMassMeleeAttackProcessor>(0.0f); })) { return false; }
+
+	auto* LaserEnemy = Game.MakeUnitConfig<UCastleMassEnemyTrait>();
+	auto* Laser = NewObject<UCastleMassEnemyLaserAttackTrait>(LaserEnemy);
+	Laser->AttackDamage = LethalDamage;
+	Laser->BeamMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+	Laser->BeamMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/MovingCastle/Mass/M_MassEnemyTint"));
+	LaserEnemy->GetMutableConfig().AddTrait(*Laser);
+	if (!VerifyHit(TEXT("激光"), LaserEnemy, [&Game]() { Game.Step<UCastleMassEnemyLaserAttackProcessor>(0.0f); })) { return false; }
+
+	// 远程覆盖发射和追踪命中，证明已有飞弹入口与新增的两条直击入口一致。
+	auto* RangedEnemy = Game.MakeUnitConfig<UCastleMassEnemyTrait>();
+	auto* Ranged = NewObject<UCastleMassEnemyRangedAttackTrait>(RangedEnemy);
+	Ranged->AttackDamage = LethalDamage;
+	Ranged->ProjectileConfiguration = NewObject<UMassEntityConfigAsset>(RangedEnemy);
+	auto* Projectile = NewObject<UCastleMassEnemyProjectileTrait>(Ranged->ProjectileConfiguration);
+	Projectile->Movement.MaxSpeed = 1400.0f;
+	Projectile->Radius = 12.0f;
+	Ranged->ProjectileConfiguration->GetMutableConfig().AddTrait(*Projectile);
+	RangedEnemy->GetMutableConfig().AddTrait(*Ranged);
+	return VerifyHit(TEXT("远程飞弹"), RangedEnemy, [&Game]()
+	{
+		Game.Step<UCastleMassEnemyRangedAttackProcessor>(0.0f);
+		Game.Step<UCastleMassEnemyProjectileProcessor>(2.0f);
+	});
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleBadgesFullProjectilesTest, "MovingCastle.Items.Badges.Full.ProvenancedArrowHits",
 	CastleBadgesFullTests::Flags)
 
@@ -755,7 +835,11 @@ bool FCastleBadgesFullGloveTest::RunTest(const FString&)
 		uint64 Id = 0;
 		FVector Position;
 		if (!Support->FindBalloonTarget(BalloonTower->GetActorLocation() + FVector(0, 0, 800), Id, Position)) { return false; }
-		const bool bPopped = bManual ? Support->PopBalloon(Id) : Support->DamageBalloon(Id, SupportData->BalloonHealth);
+		// 玩家分支用真实可见性射线命中气球，敌人分支走伤害入口，无需共享内部开关。
+		bool bConsumed = false;
+		const bool bPopped = bManual
+			? Game.Player->TryPopBalloonFromRay(Position + FVector(-650, 0, 180), Position, bConsumed) && bConsumed
+			: Support->DamageBalloon(Id, SupportData->BalloonHealth);
 		if (!bPopped) { return false; }
 		Support->Tick(3.0f);
 		return true;

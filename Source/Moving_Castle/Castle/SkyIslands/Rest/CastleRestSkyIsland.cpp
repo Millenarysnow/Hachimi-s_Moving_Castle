@@ -181,8 +181,10 @@ bool ACastleRestSkyIsland::ClaimStation(const UCastleRestSkyIslandStation& Stati
 			OutReason = INVTEXT("当前玩家没有有效的金币账户。");
 			return false;
 		}
-		if (!Economy->TryAddGold(Config->GoldReward, OutReason)) { return false; }
-		OutMessage = FText::Format(INVTEXT("已领取 {0} 金币。"), FText::AsNumber(Config->GoldReward));
+		// 免费金币台发放玩法收入，提示使用零钱袋叠加后真正到账的金额。
+		int32 FinalGold = 0;
+		if (!Economy->TryAddGameplayGold(Config->GoldReward, OutReason, &FinalGold)) { return false; }
+		OutMessage = FText::Format(INVTEXT("已领取 {0} 金币。"), FText::AsNumber(FinalGold));
 		return true;
 	}
 	if (&Station != ShopStation || !GetIslandContext().Director.IsValid())

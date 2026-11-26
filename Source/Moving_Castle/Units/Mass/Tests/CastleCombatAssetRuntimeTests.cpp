@@ -32,8 +32,9 @@ bool FCastleCombatDefaultAssetTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("簇上界"), Entry->MaxClusterCount, bSwarm ? 8 : 1);
 		TestEqual(TEXT("簇散布半径"), Entry->ClusterSpreadRadius, bSwarm ? 120.0f : 0.0f);
 	}
-	TestEqual(TEXT("内半径"), Config->SpawnInnerRadius, 1800.0f);
-	TestEqual(TEXT("外半径"), Config->SpawnOuterRadius, 2300.0f);
+	// 主地图正式 DA 覆盖原生构造默认值，测试固定当前远距离刷怪环的配置。
+	TestEqual(TEXT("正式配置的刷怪内半径"), Config->SpawnInnerRadius, 10000.0f);
+	TestEqual(TEXT("正式配置的刷怪外半径"), Config->SpawnOuterRadius, 12000.0f);
 	TestEqual(TEXT("种子"), Config->SpawnSeed, 20261116);
 	if (!TestNotNull(TEXT("难度曲线存在"), Config->DifficultyCurve.Get())) { return false; }
 	const auto* Curve = Config->DifficultyCurve.Get();

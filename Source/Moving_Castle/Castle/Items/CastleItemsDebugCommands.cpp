@@ -9,8 +9,6 @@
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/GameViewportClient.h"
-#include "Engine/StaticMesh.h"
-#include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
@@ -338,18 +336,7 @@ namespace CastleItemsDebug
 		{
 			return;
 		}
-		// 调试命令发放的也是正式资产。展示资源与交易元数据缺失时在写入前拒绝。
-		if (Asset->Rarity < ECastleItemRarity::Common || Asset->Rarity > ECastleItemRarity::Legendary || Asset->ShopPrice < 0)
-		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("徽章 %s 发放失败：稀有度 %d 或售价 %d 不合法。"),
-				*Asset->GetPathName(), static_cast<int32>(Asset->Rarity), Asset->ShopPrice);
-			return;
-		}
-		if (!IsValid(Asset->Badge.Icon) || !IsValid(Asset->DisplayMesh))
-		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("徽章 %s 发放失败：Badge.Icon PNG 或 DisplayMesh GLB 缺失。"), *Asset->GetPathName());
-			return;
-		}
+	// 库入口在写入前统一校验正式徽章资产的效果、交易属性、PNG 和 GLB。
 		FText Reason;
 		bool bReplace = false;
 		if (UCastleItemGrantLibrary::TryGrantBadge(Asset, Badges, bReplace, Reason))

@@ -64,7 +64,8 @@ protected:
 	virtual bool OnInitializeIsland(const FCastleSkyIslandContext& Context, FText& OutReason) override;
 	/** 正式奖励由导演管理，验收载体复用奖励控件但独立托管其生命周期。 */
 	virtual bool PresentRoomPrize(UCastlePendingRoomReward* Reward, FText& OutReason);
-	virtual bool PresentBadgePrize(const FCastleBadgeDefinition& Badge, FText& OutReason);
+	/** 将正式资产交给徽章发放入口，替换面板订阅发放结果。 */
+	virtual bool PresentBadgePrize(const UCastleBadgeDataAsset& Badge, FText& OutReason);
 
 private:
 	friend class UCastleGambleMachineComponent;

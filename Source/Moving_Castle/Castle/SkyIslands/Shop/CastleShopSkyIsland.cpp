@@ -138,7 +138,8 @@ bool UCastleShopSkyIslandDataAsset::Validate(FText& OutReason) const
 			return Reject(FText::Format(INVTEXT("徽章商品 {0}：{1}"), Name, Reason));
 		}
 		const UTexture2D* Icon = Badge->Badge.Icon;
-		if (!IsValid(Icon) || Icon->GetSizeX() != 512 || Icon->GetSizeY() != 512 || !Icon->SRGB
+		// 校验导入尺寸。编辑器首次加载时 GPU 平台数据可能在异步编译，GetSizeX/Y 会返回临时默认纹理尺寸。
+		if (!IsValid(Icon) || Icon->GetImportedSize() != FIntPoint(512, 512) || !Icon->SRGB
 			|| Icon->LODGroup != TEXTUREGROUP_UI || Icon->CompressionSettings != TC_EditorIcon)
 		{
 			return Reject(FText::Format(INVTEXT("徽章 {0} 的图标 {1} 必须是 512×512 的 sRGB RGBA UI 纹理。"),
@@ -435,15 +436,13 @@ bool ACastleShopSkyIsland::Purchase(UCastleShopSkyIslandOffer& Offer, FText& Out
 
 	if (Offer.Badge)
 	{
-		if (!Economy->TrySpendGold(Offer.Price, OutReason)) { return false; }
-		if (!GrantBadgeWithReplaceUI(Offer.Badge->Badge, OutReason))
+		return Economy->TrySpendShopGold(Offer.Price, [&]()
 		{
-			RefundFailedOffer(Offer, OutReason);
-			return false;
-		}
-		// 满六枚时，待替换状态同样表示发放成功。替换或舍弃由徽章界面完成。
-		CompleteSale(Offer);
-		return true;
+			if (!GrantBadgeWithReplaceUI(*Offer.Badge, OutReason)) { return false; }
+			// 满六枚时，待替换状态同样表示发放成功。替换或舍弃由徽章界面完成。
+			CompleteSale(Offer);
+			return true;
+		}, OutReason);
 	}
 	auto* Backpack = Board.IsValid() ? Board->PrototypeBackpack.Get() : nullptr;
 	if (!IsValid(Backpack) || Backpack->Capacity < 1)
@@ -511,14 +510,13 @@ bool ACastleShopSkyIsland::Purchase(UCastleShopSkyIslandOffer& Offer, FText& Out
 		return OpenPendingOffer(Offer, OutReason);
 	}
 
-	if (!Economy->TrySpendGold(Offer.Price, OutReason)) { return false; }
-	if (!UCastleItemGrantLibrary::TryCommitPreparedRoomGroup(Prepared, Backpack, OutReason))
+	// 确定房间组只有整批写入成功才更新售罄和余额，准备后的快照失效会拒绝整笔交易。
+	return Economy->TrySpendShopGold(Offer.Price, [&]()
 	{
-		RefundFailedOffer(Offer, OutReason);
-		return false;
-	}
-	CompleteSale(Offer);
-	return true;
+		if (!UCastleItemGrantLibrary::TryCommitPreparedRoomGroup(Prepared, Backpack, OutReason)) { return false; }
+		CompleteSale(Offer);
+		return true;
+	}, OutReason);
 }
 
 bool ACastleShopSkyIsland::OpenPendingOffer(UCastleShopSkyIslandOffer& Offer, FText& OutReason)

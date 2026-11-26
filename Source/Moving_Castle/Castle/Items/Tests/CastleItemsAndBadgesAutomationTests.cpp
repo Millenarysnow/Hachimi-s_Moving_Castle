@@ -19,7 +19,6 @@
 #include "Items/CastleBadgeSubsystem.h"
 #include "Items/CastleItemGrantLibrary.h"
 #include "Items/CastlePendingRoomReward.h"
-#include "Items/CastleRoomGroupDataAsset.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 #include "Tests/AutomationCommon.h"
@@ -204,52 +203,6 @@ bool FCastleWildcardItemTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("具体颜色"), Card.Color, ECastleTileColor::Blue);
 		TestEqual(TEXT("具体数字"), Card.Number, 9);
 	}
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleRoomGroupItemTest, "MovingCastle.Items.RoomGroups.SkeletonFailures",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-
-bool FCastleRoomGroupItemTest::RunTest(const FString& Parameters)
-{
-	auto* Group = NewObject<UCastleRoomGroupDataAsset>();
-	Group->DisplayName = INVTEXT("骨架事务测试房间组");
-	auto* Backpack = NewObject<UCastleBackpackComponent>();
-	auto* Definition = CastleItemTests::LoadDefinition(TEXT("NormalRoom"));
-	FText Reason;
-	if (!TestNotNull(TEXT("正式普通房定义"), Definition)
-		|| !TestTrue(TEXT("填满主栏"), CastleItemTests::FillBackpack(*Backpack, *Definition, Reason)))
-	{
-		return false;
-	}
-	const TObjectPtr<UCastleBuildingDefinition> Pool[] = {Definition};
-	FRandomStream Random(2704);
-	const int32 InitialSeed = Random.GetCurrentSeed();
-	FCastlePreparedRoomGroup Prepared;
-
-	// 拒绝漏配和越界档位，合法档位也必须在规则引擎交付前明确失败。
-	AddExpectedError(TEXT("的卡包稀有度无效"), EAutomationExpectedErrorFlags::Contains, 2);
-	TestFalse(TEXT("未配置稀有度不可准备"),
-		UCastleItemGrantLibrary::TryPrepareRoomGroup(Group, Backpack, nullptr, Pool, Random, Prepared, Reason));
-	TestTrue(TEXT("错误指出资产路径"), Reason.ToString().Contains(Group->GetPathName()));
-	Group->Rarity = static_cast<ECastleItemRarity>(255);
-	TestFalse(TEXT("越界稀有度不可准备"),
-		UCastleItemGrantLibrary::TryPrepareRoomGroup(Group, Backpack, nullptr, Pool, Random, Prepared, Reason));
-	Group->Rarity = ECastleItemRarity::Common;
-	Group->ShopPrice = 48;
-	AddExpectedError(TEXT("房间组规则引擎尚未实现"), EAutomationExpectedErrorFlags::Contains, 1);
-	TestFalse(TEXT("骨架入口报告未实现"),
-		UCastleItemGrantLibrary::TryPrepareRoomGroup(Group, Backpack, nullptr, Pool, Random, Prepared, Reason));
-	TestTrue(TEXT("失败未准备任何交易数据"), Prepared.Cards.IsEmpty() && !Prepared.MainBarChange.IsSet());
-	TestNull(TEXT("失败未创建待领项"), Prepared.PendingReward);
-
-	Prepared.Group = Group;
-	Prepared.Cards = Backpack->GetItems(); // 骨架提交收到了牌也必须拒绝，不能误写入临时栏。
-	AddExpectedError(TEXT("房间组原子提交尚未实现"), EAutomationExpectedErrorFlags::Contains, 1);
-	TestFalse(TEXT("骨架不提交发放"), UCastleItemGrantLibrary::TryCommitPreparedRoomGroup(Prepared, Backpack, Reason));
-	TestEqual(TEXT("失败不消耗随机流"), Random.GetCurrentSeed(), InitialSeed);
-	TestEqual(TEXT("失败不改主栏"), Backpack->GetItemCount(), 10);
-	TestEqual(TEXT("失败不写临时栏"), Backpack->GetTempItemCount(), 0);
 	return true;
 }
 

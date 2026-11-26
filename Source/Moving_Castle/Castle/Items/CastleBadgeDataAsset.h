@@ -14,6 +14,9 @@ class MOVING_CASTLE_API UCastleBadgeDataAsset : public UDataAsset
 	GENERATED_BODY()
 
 public:
+	/** 发放前校验徽章效果、交易元数据和展示引用；商店额外检查货台所需的网格与材质规格。 */
+	bool ValidateReward(FText& OutFailureReason) const;
+
 	/** 单枚徽章的效果和槽位图标，一起传入徽章库存。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "徽章")
 	FCastleBadgeDefinition Badge;

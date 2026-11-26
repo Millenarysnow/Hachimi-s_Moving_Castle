@@ -3,7 +3,10 @@
 #include "Castle/Combat/CastleCombatConfigDataAsset.h"
 #include "Castle/Combat/CastleCombatSubsystem.h"
 #include "Castle/Components/CastleMainTowerComponent.h"
+#include "Castle/Items/CastleBadgeDataAsset.h"
 #include "Castle/Items/CastleBadgeSubsystem.h"
+#include "Castle/Items/CastleItemGrantLibrary.h"
+#include "Castle/SkyIslands/Shop/CastleShopSkyIslandDataAsset.h"
 #include "Castle/UI/Director/CastleDirectorWidgets.h"
 #include "Castle/UI/Items/CastleBadgeBarWidget.h"
 #include "Castle/UI/Items/CastleBadgeReplaceModalWidget.h"
@@ -102,24 +105,24 @@ bool FCastleBadgeIconUITest::RunTest(const FString&)
 		TestEqual(TEXT("空弹窗槽隐藏图标"), ModalIcon->GetVisibility(), ESlateVisibility::Hidden);
 	}
 
-	// 七张临时纹理的对象身份各异，用于发现槽位错位。徽章类型和数值走真实验证。
-	const ECastleBadgeType Types[] = { ECastleBadgeType::BlueAbacus, ECastleBadgeType::WorkshopRefund,
-		ECastleBadgeType::BalloonRack, ECastleBadgeType::QuickstringPass, ECastleBadgeType::BurstAlarm,
-		ECastleBadgeType::EmergencyBallast, ECastleBadgeType::BlueAbacus };
+	const auto* Catalog = LoadObject<UCastleShopSkyIslandDataAsset>(nullptr,
+		TEXT("/Game/MovingCastle/Data/SkyIslands/DA_ShopSkyIsland.DA_ShopSkyIsland"));
+	if (!TestNotNull(TEXT("正式商店目录"), Catalog)
+		|| !TestEqual(TEXT("正式目录固定 25 枚徽章"), Catalog->BadgePool.Num(), 25)) { return false; }
+	// 用正式资产逐一进入库存。真实 PNG 的对象身份可以检出空图标、串槽和候选错绑。
 	TArray<FCastleBadgeDefinition> Awards;
 	FText Reason;
-	for (const ECastleBadgeType Type : Types)
+	for (int32 Index = 0; Index <= SlotCount; ++Index)
 	{
-		FCastleBadgeDefinition& Award = Awards.AddDefaulted_GetRef();
-		if (!TestTrue(TEXT("创建有效徽章定义"), FCastleBadgeDefinition::TryMakeStandard(Type, Award))) { return false; }
-		Award.Icon = UTexture2D::CreateTransient(4, 4, PF_B8G8R8A8);
-		if (!TestNotNull(TEXT("创建独立临时图标"), Award.Icon.Get())) { return false; }
+		const auto* Asset = Catalog->BadgePool[Index].Get();
 		bool bNeedsReplacement = false;
-		if (!TestTrue(TEXT("通过真实库存入口发放徽章"), Badges->TryAcquireBadge(Award, bNeedsReplacement, Reason)))
+		if (!TestTrue(GetPathNameSafe(Asset) + TEXT(" 通过正式入口发放"),
+			UCastleItemGrantLibrary::TryGrantBadge(Asset, Badges, bNeedsReplacement, Reason)))
 		{
 			AddError(Reason.ToString());
 			return false;
 		}
+		Awards.Add(Asset->Badge);
 		TestEqual(TEXT("只有第七枚进入替换状态"), bNeedsReplacement, Awards.Num() > SlotCount);
 	}
 
@@ -151,12 +154,29 @@ bool FCastleBadgeIconUITest::RunTest(const FString&)
 	TestTrue(TEXT("按钮只替换选中的末槽"), BarSlotIcons.Last()->GetBrush().GetResourceObject() == Candidate.Icon.Get());
 	TestTrue(TEXT("首槽保持原图标"), BarSlotIcons[0]->GetBrush().GetResourceObject() == Awards[0].Icon.Get());
 	bool bNeedsReplacement = false;
-	if (!TestTrue(TEXT("满槽时可打开下一笔替换"), Badges->TryAcquireBadge(Awards[1], bNeedsReplacement, Reason))) { return false; }
+	if (!TestTrue(TEXT("满槽时可打开下一笔替换"),
+		UCastleItemGrantLibrary::TryGrantBadge(Catalog->BadgePool[1], Badges, bNeedsReplacement, Reason))) { return false; }
 	TestTrue(TEXT("弹窗同步已经替换的末槽"), ModalSlotIcons.Last()->GetBrush().GetResourceObject() == Candidate.Icon.Get());
 	Discard->OnClicked.Broadcast();
 	TestEqual(TEXT("舍弃候选后弹窗折叠"), Modal->GetVisibility(), ESlateVisibility::Collapsed);
 	TestNull(TEXT("候选关闭后清除预览资源"), PendingIcon->GetBrush().GetResourceObject());
 	TestTrue(TEXT("舍弃候选保留持有图标"), BarSlotIcons.Last()->GetBrush().GetResourceObject() == Candidate.Icon.Get());
+	for (int32 Index = SlotCount + 1; Index < Catalog->BadgePool.Num(); ++Index)
+	{
+		const auto* Asset = Catalog->BadgePool[Index].Get();
+		if (!TestTrue(GetPathNameSafe(Asset) + TEXT(" 发放到满槽候选"),
+			UCastleItemGrantLibrary::TryGrantBadge(Asset, Badges, bNeedsReplacement, Reason) && bNeedsReplacement)) { return false; }
+		TestTrue(Asset->GetName() + TEXT(" 候选笔刷使用该资产的 PNG"), PendingIcon->GetBrush().GetResourceObject() == Asset->Badge.Icon.Get());
+		ModalSlotButtons.Last()->OnClicked.Broadcast();
+		TestTrue(Asset->GetName() + TEXT(" 正式替换后徽章栏显示该 PNG"), BarSlotIcons.Last()->GetBrush().GetResourceObject() == Asset->Badge.Icon.Get());
+	}
+	// 破坏副本资源，验证发放边界报错且界面仍持有已提交的正式库存。
+	auto* MissingIcon = DuplicateObject(Catalog->BadgePool[0].Get(), GetTransientPackage());
+	MissingIcon->Badge.Icon = nullptr;
+	AddExpectedError(TEXT("徽章缺少有效的 Badge.Icon PNG"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestFalse(TEXT("缺图标拒绝发放且不创建替换候选"),
+		UCastleItemGrantLibrary::TryGrantBadge(MissingIcon, Badges, bNeedsReplacement, Reason));
+	TestEqual(TEXT("拒绝后替换弹窗仍折叠"), Modal->GetVisibility(), ESlateVisibility::Collapsed);
 	Badges->ClearAllBadgesForTesting();
 	for (int32 Index = 0; Index < SlotCount; ++Index)
 	{

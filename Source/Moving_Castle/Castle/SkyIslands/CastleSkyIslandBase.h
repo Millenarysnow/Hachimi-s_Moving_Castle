@@ -5,9 +5,9 @@
 #include "GameFramework/Actor.h"
 #include "CastleSkyIslandBase.generated.h"
 
+class UCastleBadgeDataAsset;
 class UCastlePendingRoomReward;
 class UTextRenderComponent;
-struct FCastleBadgeDefinition;
 struct FCastleGridCursorTarget;
 
 /** 基座的离开按钮只负责报告玩家意图，离岛、传送与关数提交由导演拥有。 */
@@ -36,7 +36,8 @@ public:
 	FSimpleMulticastDelegate OnDepartureRequested;
 	bool RequestOpenTemporaryRoomShop(FText& OutFailureReason);
 	bool GrantPendingRoomRewardUI(UCastlePendingRoomReward* Reward, FText& OutFailureReason);
-	bool GrantBadgeWithReplaceUI(const FCastleBadgeDefinition& Badge, FText& OutFailureReason);
+	/** 导演验证岛上交互，并将完整徽章资产交给发放入口与替换界面。 */
+	bool GrantBadgeWithReplaceUI(const UCastleBadgeDataAsset& Badge, FText& OutFailureReason);
 
 	/** 只有提供建造区的空岛解析射线和摆放；其余空岛不处理这些输入。 */
 	virtual bool TryResolveIslandGridCursorTarget(const FVector& Start, const FVector& End,

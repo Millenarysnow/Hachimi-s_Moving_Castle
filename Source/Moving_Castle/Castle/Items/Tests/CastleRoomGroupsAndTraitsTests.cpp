@@ -10,6 +10,7 @@
 #include "Castle/Items/CastleRoomTraitComponent.h"
 #include "Castle/PCG/CastleBuildingPCGComponent.h"
 #include "Castle/SkyIslands/CastleSkyIslandTestFixture.h"
+#include "Castle/SkyIslands/Gamble/CastleGambleSkyIslandDataAsset.h"
 #include "CastleBackpackComponent.h"
 #include "CastleBackpackTestObserver.h"
 #include "CastleMainTowerComponent.h"
@@ -30,10 +31,6 @@ namespace CastleRoomGroupTests
 {
 	using B = ECastleBuildingType;
 	using C = ECastleTileColor;
-	using R = ECastleRoomRuleBuilding;
-	using N = ECastleRoomRuleNumber;
-	using K = ECastleRoomRuleColor;
-	using A = ECastleRoomGroupMainBarAction;
 	using T = ECastleRoomTrait;
 	using E = ECastleItemRarity;
 
@@ -45,8 +42,7 @@ namespace CastleRoomGroupTests
 		int32 Cards;
 	};
 
-	// 故意使用与正式资产编号一致的内存资产夹具。各组配置由 Phase 1C 在资产分支生成，
-	// 此处覆盖规则引擎的正式入口，不依赖该分支已合入任何房间组资产。
+	// 期望来自房间组目录。按完整对象路径加载正式配置，保留独立的结果断言。
 	static constexpr FGroupCase Cases[] = {
 		{TEXT("01_RandomSupply"), E::Common, 48, 3}, {TEXT("02_WangcaiPatchBag"), E::Common, 40, 2},
 		{TEXT("03_ShieldBehindField"), E::Common, 55, 2}, {TEXT("04_CustomNormalRoom"), E::Common, 36, 1},
@@ -76,161 +72,12 @@ namespace CastleRoomGroupTests
 		};
 	}
 
-	FCastleRoomCardRule Rule(const B Type = B::NormalRoom, const int32 Count = 1)
+	/** 用完整对象名访问当前编号，避免资产重命名或目录移除后仍通过测试。 */
+	UCastleRoomGroupDataAsset* LoadGroup(const int32 Ordinal)
 	{
-		FCastleRoomCardRule Result;
-		Result.Count = Count;
-		Result.BuildingSource = R::Fixed;
-		Result.FixedBuildingType = Type;
-		Result.ColorSource = K::RandomPlayable;
-		Result.NumberSource = N::RandomChoice;
-		Result.NumberChoices = {1, 2, 3, 4, 5, 6};
-		return Result;
-	}
-
-	FCastleRoomCardRule Fixed(const B Type, const C Color, const int32 Number, const int32 Count = 1)
-	{
-		auto Result = Rule(Type, Count);
-		if (Color != C::Gray)
-		{
-			Result.ColorSource = K::Fixed;
-			Result.FixedColor = Color;
-		}
-		Result.NumberSource = N::Fixed;
-		Result.FixedNumber = Number;
-		return Result;
-	}
-
-	UCastleRoomGroupDataAsset* MakeGroup(const int32 Ordinal, UCastleBuildingDefinition* Normal)
-	{
-		const auto& Entry = Cases[Ordinal - 1];
-		auto* Group = NewObject<UCastleRoomGroupDataAsset>(GetTransientPackage(), MakeUniqueObjectName(GetTransientPackage(),
-			UCastleRoomGroupDataAsset::StaticClass(), FName(Entry.Name)));
-		Group->DisplayName = FText::FromString(Entry.Name);
-		Group->ShopPrice = Entry.Price;
-		Group->Rarity = Entry.Rarity;
-		auto& Rules = Group->CardRules;
-		// 每一项都通过可组合配置表达。该编号只属于夹具，运行时不读取编号或名称。
-		switch (Ordinal)
-		{
-		case 1:
-			Rules = {Rule(B::NormalRoom, 3)};
-			Rules[0].BuildingSource = R::RandomStandard;
-			break;
-		case 2:
-			Rules = {Rule(), Rule()};
-			Rules[0].ColorSource = K::MainBarFirst;
-			Rules[1].NumberSource = N::MainBarFirst;
-			Group->EmptyMainBarCardRules = {Rule(B::NormalRoom, 2)};
-			break;
-		case 3:
-			Rules = {Rule(B::ShieldTower), Rule(B::Farm)};
-			Rules[1].ColorSource = K::DifferentFromPreviousCard;
-			Rules[1].NumberSource = N::PreviousCard;
-			break;
-		case 4:
-			Group->bChooseInPicker = true;
-			Group->RoomSpec.AllowedDefinitions = {Normal};
-			break;
-		case 5:
-			Rules = {Rule(B::NormalRoom, 2)};
-			Rules[0].bShareColorDraw = Rules[0].bShareNumberDraw = true;
-			break;
-		case 6:
-			Rules = {Fixed(B::NormalRoom, C::Gray, 6)};
-			Rules[0].BuildingSource = R::RandomFunction;
-			break;
-		case 7:
-			Rules = {Fixed(B::ArcherTower, C::Gray, 3, 3)};
-			break;
-		case 8:
-			Rules = {Rule(B::CannonTower, 2)};
-			Rules[0].NumberChoices = {1, 2, 5, 6};
-			break;
-		case 9:
-			Rules = {Rule(B::Farm, 3)};
-			Rules[0].NumberSource = N::Sequence;
-			Rules[0].NumberChoices = {1, 2, 3};
-			Rules[0].bShareColorDraw = true;
-			break;
-		case 10:
-			Rules = {Fixed(B::NormalRoom, C::Gray, 1, 3)};
-			Rules[0].RoomTrait = T::Highway;
-			break;
-		case 11:
-			Rules = {Rule()};
-			Rules[0].BuildingSource = R::EachFunction;
-			Rules[0].ColorSource = K::Fixed;
-			Rules[0].FixedColor = C::Red;
-			break;
-		case 12:
-			Rules = {Fixed(B::ArcherTower, C::Red, 1), Fixed(B::ArcherTower, C::Red, 2),
-				Fixed(B::ArcherTower, C::Blue, 1), Fixed(B::ArcherTower, C::Blue, 2)};
-			break;
-		case 13:
-			Rules = {Fixed(B::CannonTower, C::Red, 2, 2), Fixed(B::Farm, C::Blue, 2), Fixed(B::NormalRoom, C::Yellow, 2)};
-			break;
-		case 14:
-			Rules = {Fixed(B::NormalRoom, C::Yellow, 2), Fixed(B::ArcherTower, C::Red, 2),
-				Fixed(B::BeeHive, C::Blue, 2), Fixed(B::Farm, C::Green, 2)};
-			break;
-		case 15:
-			Rules = {Rule()};
-			Rules[0].BuildingSource = R::RandomFunction;
-			Rules[0].NumberChoices = {7, 8, 9};
-			break;
-		case 16:
-			Group->bChooseInPicker = Group->bLockRandomFunctionOnFirstOpen = true;
-			break;
-		case 17:
-			Rules = {Fixed(B::NormalRoom, C::Blue, 8, 3)};
-			Rules[0].BuildingSource = R::RandomFunction;
-			break;
-		case 18:
-			Rules = {Fixed(B::BeeHive, C::Green, 3, 4), Fixed(B::NormalRoom, C::Green, 2), Fixed(B::NormalRoom, C::Green, 1)};
-			break;
-		case 19:
-			Group->bChooseInPicker = true;
-			break;
-		case 20:
-			Rules = {Fixed(B::NormalRoom, C::Gray, 1)};
-			Rules[0].BuildingSource = R::MainBarFirst;
-			Rules[0].ColorSource = K::MainBarFirst;
-			Rules[0].bCountFromMainBarFirstNumber = true;
-			Group->MainBarAction = A::ConsumeFirst;
-			break;
-		case 21:
-			Rules = {Fixed(B::NormalRoom, C::Gray, 1)};
-			Rules[0].RoomTrait = T::SkyIslandPortal;
-			break;
-		case 22:
-			Rules = {Fixed(B::NormalRoom, C::Green, 2, 3)};
-			Group->MainBarAction = A::RecolorMatching;
-			Group->RecolorFrom = C::Red;
-			Group->RecolorTo = C::Green;
-			break;
-		case 23:
-			Rules = {Fixed(B::CannonTower, C::Gray, 6)};
-			Rules[0].RoomTrait = T::SelfOrbiting;
-			Rules[0].TraitRemainingRounds = 6;
-			break;
-		case 24:
-			Rules = {Rule(B::NormalRoom, 9)};
-			Rules[0].BuildingSource = R::MostPlacedFunction;
-			Rules[0].NumberSource = N::Sequence;
-			Rules[0].NumberChoices = {1, 2, 3, 4, 5, 6, 7, 8, 9};
-			Rules[0].bShareColorDraw = true;
-			break;
-		case 25:
-			Rules = {Rule(B::NormalRoom, 8)};
-			Rules[0].BuildingSource = R::RandomFunction;
-			Rules[0].bShareBuildingDraw = Rules[0].bShareColorDraw = Rules[0].bShareNumberDraw = true;
-			break;
-		case 26:
-			Group->MainBarAction = A::RecolorAllRandom;
-			break;
-		}
-		return Group;
+		const TCHAR* Name = Cases[Ordinal - 1].Name;
+		return LoadObject<UCastleRoomGroupDataAsset>(nullptr, *FString::Printf(
+			TEXT("/Game/MovingCastle/Data/Items/RoomGroups/DA_RoomGroup_%s.DA_RoomGroup_%s"), Name, Name));
 	}
 
 	/** 比较完整牌面，包含特质字段；用来核对不应发生任何写入的准备与失败。 */
@@ -347,17 +194,39 @@ bool FCastleRoomGroupRulesTest::RunTest(const FString& Parameters)
 	using namespace CastleRoomGroupTests;
 	const int32 Ordinal = FCString::Atoi(*Parameters);
 	if (Ordinal < 1 || Ordinal > UE_ARRAY_COUNT(Cases)) { return false; }
-	auto Pool = MakePool();
-	auto* Group = MakeGroup(Ordinal, Pool[0].Get());
+	const auto* Catalog = LoadObject<UCastleGambleSkyIslandDataAsset>(nullptr,
+		TEXT("/Game/MovingCastle/Data/SkyIslands/DA_GambleSkyIsland.DA_GambleSkyIsland"));
+	const auto* Group = LoadGroup(Ordinal);
+	if (!TestNotNull(TEXT("正式赌博岛房间定义池"), Catalog)
+		|| !TestNotNull(TEXT("正式房间组资产"), Group)
+		|| !TestTrue(TEXT("资产被正式老虎机引用"), Catalog->RoomGroups.Contains(Group))) { return false; }
+	const auto& Pool = Catalog->RoomDefinitions;
+	const FGroupCase& Case = Cases[Ordinal - 1];
+	TestEqual(TEXT("正式房间组稀有度"), Group->Rarity, Case.Rarity);
+	TestEqual(TEXT("正式房间组售价"), Group->ShopPrice, Case.Price);
+	const auto FindDefinition = [&Pool](const B Type) -> UCastleBuildingDefinition*
+	{
+		const auto* Found = Pool.FindByPredicate([Type](const UCastleBuildingDefinition* Definition)
+		{
+			return IsValid(Definition) && Definition->BuildingType == Type;
+		});
+		return Found ? Found->Get() : nullptr;
+	};
+	auto* Normal = FindDefinition(B::NormalRoom);
+	auto* Archer = FindDefinition(B::ArcherTower);
+	auto* Cannon = FindDefinition(B::CannonTower);
+	if (!TestNotNull(TEXT("正式普通房定义"), Normal) || !TestNotNull(TEXT("正式箭塔定义"), Archer)
+		|| !TestNotNull(TEXT("正式炮塔定义"), Cannon)) { return false; }
+
 	auto* Backpack = NewObject<UCastleBackpackComponent>();
 	FWorldFixture Scene;
 	FText Reason;
 	if (Ordinal == 24)
 	{
 		if (!TestTrue(TEXT("买断测试棋盘就绪"), Scene.Initialize(Pool, Reason))
-			|| !TestNotNull(TEXT("一座占四格的炮塔"), Scene.Place(*Pool[2], FIntVector::ZeroValue, 3, Reason))
-			|| !TestNotNull(TEXT("第一座单格箭塔"), Scene.Place(*Pool[1], FIntVector(2, 0, 0), 1, Reason))
-			|| !TestNotNull(TEXT("第二座单格箭塔"), Scene.Place(*Pool[1], FIntVector(3, 0, 0), 1, Reason)))
+			|| !TestNotNull(TEXT("一座占四格的炮塔"), Scene.Place(*Cannon, FIntVector::ZeroValue, 3, Reason))
+			|| !TestNotNull(TEXT("第一座单格箭塔"), Scene.Place(*Archer, FIntVector(2, 0, 0), 1, Reason))
+			|| !TestNotNull(TEXT("第二座单格箭塔"), Scene.Place(*Archer, FIntVector(3, 0, 0), 1, Reason)))
 		{
 			AddError(Reason.ToString());
 			return false;
@@ -368,8 +237,8 @@ bool FCastleRoomGroupRulesTest::RunTest(const FString& Parameters)
 	if (Ordinal == 2 || Ordinal == 20 || Ordinal == 22 || Ordinal == 26)
 	{
 		// 首槽的蓝 6 炮塔同时证明补缝袋继承原牌面，以及归一化按数字而非容量生成。
-		if (!Backpack->TryAddBuilding(Pool[2].Get(), 1, C::Blue, 6, Slot, Reason)
-			|| !Backpack->TryAddBuilding(Pool[0].Get(), 1, C::Red, 2, Slot, Reason))
+		if (!Backpack->TryAddBuilding(Cannon, 1, C::Blue, 6, Slot, Reason)
+			|| !Backpack->TryAddBuilding(Normal, 1, C::Red, 2, Slot, Reason))
 		{
 			AddError(Reason.ToString());
 			return false;
@@ -380,13 +249,13 @@ bool FCastleRoomGroupRulesTest::RunTest(const FString& Parameters)
 		// 填满十槽后放两张红牌进入临时栏，显式检验染色边界及归一化的 FIFO 补位。
 		while (!Backpack->IsFull())
 		{
-			if (!Backpack->TryAddBuilding(Pool[0].Get(), 1, C::Red, 1, Slot, Reason)) { AddError(Reason.ToString()); return false; }
+			if (!Backpack->TryAddBuilding(Normal, 1, C::Red, 1, Slot, Reason)) { AddError(Reason.ToString()); return false; }
 		}
 		FCastleBuildingDescriptor QueueCard;
 		bool bOverflow = false;
-		if (!Pool[0]->CreateDescriptor(1, C::Red, 9, QueueCard, Reason)
+		if (!Normal->CreateDescriptor(1, C::Red, 9, QueueCard, Reason)
 			|| !Backpack->TryAddItemAllowOverflow(QueueCard, bOverflow, Slot, Reason)
-			|| !Pool[0]->CreateDescriptor(1, C::Red, 8, QueueCard, Reason)
+			|| !Normal->CreateDescriptor(1, C::Red, 8, QueueCard, Reason)
 			|| !Backpack->TryAddItemAllowOverflow(QueueCard, bOverflow, Slot, Reason))
 		{
 			AddError(Reason.ToString());
@@ -409,7 +278,7 @@ bool FCastleRoomGroupRulesTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("准备不写入两栏或广播"), EqualCards(Before, Backpack->GetItems())
 		&& EqualCards(TempBefore, Backpack->GetTempItems()) && Observer->ObservedCounts.IsEmpty());
 
-	if (Group->bChooseInPicker)
+	if (Ordinal == 4 || Ordinal == 16 || Ordinal == 19)
 	{
 		FCastleWildcardRoomOptions Options;
 		UCastlePendingRoomReward* Reward = Prepared.PendingReward;
@@ -420,9 +289,13 @@ bool FCastleRoomGroupRulesTest::RunTest(const FString& Parameters)
 			&& Options.Numbers == TArray<int32>{1, 2, 3, 4, 5, 6});
 		if (!TestEqual(TEXT("建筑候选数"), Options.Definitions.Num(), Ordinal == 19 ? 7 : 1)) { return false; }
 		UCastleBuildingDefinition* Chosen = Options.Definitions.Last().Get();
-		if (Ordinal == 4) { TestEqual(TEXT("普通房锁定定义"), Chosen, Pool[0].Get()); }
+		if (Ordinal == 4) { TestEqual(TEXT("普通房锁定定义"), Chosen, Normal); }
 		if (Ordinal == 16) { TestTrue(TEXT("随机锁定为常规功能塔"), MakeArrayView(FunctionTypes).Contains(Chosen->BuildingType)); }
-		if (Ordinal == 19) { TestTrue(TEXT("完全自定义开放全部七类"), Options.Definitions == Pool); }
+		if (Ordinal == 19)
+		{
+			TestTrue(TEXT("完全自定义开放全部七类"), Pool.Num() == 7
+				&& !Pool.ContainsByPredicate([&Options](const auto& Definition) { return !Options.Definitions.Contains(Definition); }));
+		}
 		TestTrue(TEXT("取消选择保留整个候选集合"), Reward->TryCancelClaim(Reason));
 		TestEqual(TEXT("取消不入库"), Backpack->GetItemCount(), 0);
 		const auto FirstOptions = Options.Definitions;
@@ -437,7 +310,7 @@ bool FCastleRoomGroupRulesTest::RunTest(const FString& Parameters)
 	}
 
 	const auto& Cards = Prepared.Cards;
-	if (!TestEqual(TEXT("精确生成张数"), Cards.Num(), Cases[Ordinal - 1].Cards)) { return false; }
+	if (!TestEqual(TEXT("精确生成张数"), Cards.Num(), Case.Cards)) { return false; }
 	for (const auto& Card : Cards)
 	{
 		TestTrue(TEXT("全部是有效一级玩法牌"), Card.Validate(Reason) && Card.Level == 1 && Pool.Contains(Card.Definition));
@@ -604,7 +477,8 @@ bool FCastleRoomGroupRejectedTransactionTest::RunTest(const FString& Parameters)
 	const int32 Seed = Random.GetCurrentSeed();
 	for (const int32 Ordinal : {20, 24, 26})
 	{
-		auto* Group = MakeGroup(Ordinal, Pool[0].Get());
+		const auto* Group = LoadGroup(Ordinal);
+		if (!TestNotNull(TEXT("正式房间组"), Group)) { return false; }
 		FCastlePreparedRoomGroup Prepared;
 		const TCHAR* Expected = Ordinal == 24 ? TEXT("场上没有任何功能塔") : TEXT("主建筑栏为空");
 		AddExpectedError(Expected, EAutomationExpectedErrorFlags::Contains, 1);
@@ -618,8 +492,11 @@ bool FCastleRoomGroupRejectedTransactionTest::RunTest(const FString& Parameters)
 		&& Backpack->GetTempItemCount() == 0 && Observer->ObservedCounts.IsEmpty());
 
 	// 第一条规则先消耗候选随机数，第二条非法规则导致整批失败。验证原随机流、两栏和通知均未推进。
-	auto* Broken = MakeGroup(1, Pool[0].Get());
-	auto InvalidRule = CastleRoomGroupTests::Rule();
+	const auto* RandomSupply = LoadGroup(1);
+	if (!TestNotNull(TEXT("正式随机补给"), RandomSupply)) { return false; }
+	auto* Broken = DuplicateObject(RandomSupply, GetTransientPackage());
+	FCastleRoomCardRule InvalidRule;
+	InvalidRule.NumberSource = ECastleRoomRuleNumber::RandomChoice;
 	InvalidRule.NumberChoices = {1, 9, 10};
 	Broken->CardRules.Add(InvalidRule);
 	UCastlePendingRoomReward* Reward = nullptr;
@@ -629,7 +506,8 @@ bool FCastleRoomGroupRejectedTransactionTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("晚失败无可见结果"), !Reward && Random.GetCurrentSeed() == Seed && Backpack->GetItemCount() == 0
 		&& Backpack->GetTempItemCount() == 0 && Observer->ObservedCounts.IsEmpty());
 
-	auto* TopSupply = MakeGroup(6, Pool[0].Get());
+	const auto* TopSupply = LoadGroup(6);
+	if (!TestNotNull(TEXT("正式顶格补给"), TopSupply)) { return false; }
 	auto IncompletePool = Pool;
 	IncompletePool.Pop();
 	AddExpectedError(TEXT("抽取池缺少建筑类别"), EAutomationExpectedErrorFlags::Contains, 1);
@@ -638,7 +516,8 @@ bool FCastleRoomGroupRejectedTransactionTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("候选池错误未改变种子"), Random.GetCurrentSeed(), Seed);
 
 	// 重复提交与夹在准备、扣费之间的库存变更都必须拒绝，不能覆盖已经写入的新牌。
-	auto* Shift = MakeGroup(26, Pool[0].Get());
+	const auto* Shift = LoadGroup(26);
+	if (!TestNotNull(TEXT("正式颜色转变"), Shift)) { return false; }
 	int32 Slot;
 	if (!Backpack->TryAddBuilding(Pool[0].Get(), 1, C::Yellow, 1, Slot, Reason)) { AddError(Reason.ToString()); return false; }
 	FCastlePreparedRoomGroup Prepared;
@@ -675,7 +554,8 @@ bool FCastleRoomGroupDrawTest::RunTest(const FString& Parameters)
 	FText Reason;
 	for (const int32 Ordinal : {1, 2, 7, 8, 10, 11, 17})
 	{
-		auto* Group = MakeGroup(Ordinal, Pool[0].Get());
+		const auto* Group = LoadGroup(Ordinal);
+		if (!TestNotNull(TEXT("正式房间组"), Group)) { return false; }
 		bool bDifferentColor = false;
 		bool bDifferentNumber = false;
 		bool bDifferentType = false;
@@ -716,7 +596,8 @@ bool FCastleRoomGroupDrawTest::RunTest(const FString& Parameters)
 		AddError(Reason.ToString());
 		return false;
 	}
-	auto* Buyout = MakeGroup(24, Pool[0].Get());
+	const auto* Buyout = LoadGroup(24);
+	if (!TestNotNull(TEXT("正式功能塔买断"), Buyout)) { return false; }
 	TSet<B> DrawnTypes;
 	for (int32 Sample = 0; Sample < 16; ++Sample)
 	{

@@ -100,7 +100,7 @@ bool ACastleSkyIslandBase::GrantPendingRoomRewardUI(UCastlePendingRoomReward* Re
 	return IslandContext.Director.IsValid() && IslandContext.Director->RequestIslandRoomReward(this, Reward, OutFailureReason);
 }
 
-bool ACastleSkyIslandBase::GrantBadgeWithReplaceUI(const FCastleBadgeDefinition& Badge, FText& OutFailureReason)
+bool ACastleSkyIslandBase::GrantBadgeWithReplaceUI(const UCastleBadgeDataAsset& Badge, FText& OutFailureReason)
 {
 	return IslandContext.Director.IsValid() && IslandContext.Director->RequestIslandBadgeReward(this, Badge, OutFailureReason);
 }
