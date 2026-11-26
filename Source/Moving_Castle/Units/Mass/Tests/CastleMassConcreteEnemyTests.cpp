@@ -218,8 +218,9 @@ bool FCastleMeleeShieldTest::RunTest(const FString& Parameters)
 	Asset->GetMutableConfig().AddTrait(*Melee);
 	TArray<FCastleMassUnitHandle> Enemies;
 	FText Reason;
-	if (!TestTrue(TEXT("生成近战兵"), Scope.Units().SpawnUnits(Asset, {FTransform(FVector(100, 0, 0))}, Enemies, Reason))) { return false; }
-	const uint64 Shield = Scope.Shields().UpsertActiveShield(Scope.Tower, FVector(100, 0, 0), 1500, 1, 7);
+	// 主塔按真实 515 cm 塔身计算，测试兵与护盾都放在塔面外侧的合法近战距离。
+	if (!TestTrue(TEXT("生成近战兵"), Scope.Units().SpawnUnits(Asset, {FTransform(FVector(320, 0, 0))}, Enemies, Reason))) { return false; }
+	const uint64 Shield = Scope.Shields().UpsertActiveShield(Scope.Tower, FVector(320, 0, 0), 1500, 1, 7);
 	Step<UCastleMassMeleeAttackProcessor>(Scope, 0);
 	FCastleMassUnitSnapshot Snapshot;
 	Scope.Units().GetUnitSnapshot(Enemies[0], Snapshot);
@@ -242,13 +243,17 @@ bool FCastleDeathSplitTest::RunTest(const FString& Parameters)
 	using namespace CastleMassConcreteTests;
 	FWorld Scope;
 	auto* Pup = Config<UCastleMassEnemyTrait>();
-	CastChecked<UCastleMassEnemyTrait>(Pup->GetMutableConfig().FindMutableTrait(UCastleMassEnemyTrait::StaticClass()))->MaxHealth = 20;
+	auto* PupUnit = CastChecked<UCastleMassEnemyTrait>(Pup->GetMutableConfig().FindMutableTrait(UCastleMassEnemyTrait::StaticClass()));
+	PupUnit->MaxHealth = 20;
+	PupUnit->Radius = 28.0f;
 	auto* PupLaser = NewObject<UCastleMassEnemyLaserAttackTrait>(Pup);
 	PupLaser->BeamMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
 	PupLaser->BeamMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/MovingCastle/Mass/M_MassEnemyTint"));
 	Pup->GetMutableConfig().AddTrait(*PupLaser);
 	auto* Giant = Config<UCastleMassEnemyTrait>();
-	CastChecked<UCastleMassEnemyTrait>(Giant->GetMutableConfig().FindMutableTrait(UCastleMassEnemyTrait::StaticClass()))->MaxHealth = 120;
+	auto* GiantUnit = CastChecked<UCastleMassEnemyTrait>(Giant->GetMutableConfig().FindMutableTrait(UCastleMassEnemyTrait::StaticClass()));
+	GiantUnit->MaxHealth = 120;
+	GiantUnit->Radius = 55.0f;
 	Giant->GetMutableConfig().AddTrait(*NewObject<UCastleMassMeleeAttackTrait>(Giant));
 	auto* Split = NewObject<UCastleMassDeathSplitTrait>(Giant);
 	Split->ChildConfiguration = Pup;
@@ -259,8 +264,8 @@ bool FCastleDeathSplitTest::RunTest(const FString& Parameters)
 	Giant->GetMutableConfig().AddTrait(*Split);
 	TArray<FCastleMassUnitHandle> Enemies;
 	FText Reason;
-	if (!Scope.Units().SpawnUnits(Giant, {FTransform(FVector(100, 0, 0))}, Enemies, Reason)) { AddError(Reason.ToString()); return false; }
-	Scope.Shields().UpsertActiveShield(Scope.Tower, FVector(100, 0, 0), 1500, 1, 200);
+	if (!Scope.Units().SpawnUnits(Giant, {FTransform(FVector(600, 0, 0))}, Enemies, Reason)) { AddError(Reason.ToString()); return false; }
+	Scope.Shields().UpsertActiveShield(Scope.Tower, FVector(600, 0, 0), 1500, 1, 200);
 	Step<UCastleMassMeleeAttackProcessor>(Scope, 0);
 	TestEqual(TEXT("反伤击杀巨骸"), Scope.Manager().GetFragmentDataChecked<FCastleMassUnitFragment>(Enemies[0].Entity).Health, 0.0f);
 	Step<UCastleMassDeathSplitProcessor>(Scope, 0);
@@ -283,7 +288,7 @@ bool FCastleDeathSplitTest::RunTest(const FString& Parameters)
 		FCastleMassUnitSnapshot Snapshot;
 		Scope.Units().GetUnitSnapshot(Child, Snapshot);
 		TestTrue(TEXT("半程爆散已达到最大弧高"), FMath::IsNearlyEqual(Snapshot.Transform.GetLocation().Z, 60.0, 0.01));
-		TestTrue(TEXT("半程水平位移到半径一半"), FMath::IsNearlyEqual(FVector::Dist2D(Snapshot.Transform.GetLocation(), FVector(100, 0, 0)), 90.0, 0.01));
+		TestTrue(TEXT("半程水平位移到半径一半"), FMath::IsNearlyEqual(FVector::Dist2D(Snapshot.Transform.GetLocation(), FVector(600, 0, 0)), 90.0, 0.01));
 		TestEqual(TEXT("幼骸继承自己的生命"), Snapshot.Health, 20.0f);
 		TestNull(TEXT("幼骸没有递归分裂状态"), Scope.Manager().GetFragmentDataPtr<FCastleMassDeathSplitFragment>(Child.Entity));
 	}
@@ -291,7 +296,7 @@ bool FCastleDeathSplitTest::RunTest(const FString& Parameters)
 	for (const auto& Child : Children)
 	{
 		const FVector Location = Scope.Manager().GetFragmentDataChecked<FTransformFragment>(Child.Entity).GetTransform().GetLocation();
-		TestTrue(TEXT("爆散结束精确到达 180 cm 水平圆环"), FMath::IsNearlyEqual(FVector::Dist2D(Location, FVector(100, 0, 0)), 180.0, 0.01));
+		TestTrue(TEXT("爆散结束精确到达 180 cm 水平圆环"), FMath::IsNearlyEqual(FVector::Dist2D(Location, FVector(600, 0, 0)), 180.0, 0.01));
 		TestEqual(TEXT("爆散落地回到母体高度"), Location.Z, 0.0);
 		TestNull(TEXT("落地后移除位移独占状态"), Scope.Manager().GetFragmentDataPtr<FCastleMassSpawnBurstFragment>(Child.Entity));
 	}
@@ -301,11 +306,43 @@ bool FCastleDeathSplitTest::RunTest(const FString& Parameters)
 	Step<UCastleMassDeathSplitProcessor>(Scope, 0);
 	Step<UCastleMassLifetimeProcessor>(Scope, 0);
 	TestEqual(TEXT("幼骸死亡不再分裂"), Living<FCastleMassEnemyTag>(Scope).Num(), 0);
-	// 同一能力也必须响应普通伤害致死，而不是仅由护盾路径直接生成幼骸。
-	if (!Scope.Units().SpawnUnits(Giant, {FTransform::Identity}, Enemies, Reason)) { return false; }
+	// 普通伤害击杀贴近塔底的巨骸，覆盖扇向外墙的弧线和爆散低点的塔底约束。
+	const FVector NearWall(257.5f + 73.0f, 0.0f, 35.0f);
+	Enemies.Reset();
+	if (!Scope.Units().SpawnUnits(Giant, {FTransform(NearWall)}, Enemies, Reason)) { AddError(Reason.ToString()); return false; }
 	Scope.Units().ApplyImmediateDamageToEnemy(Enemies[0], 120);
 	Step<UCastleMassDeathSplitProcessor>(Scope, 0);
-	TestEqual(TEXT("普通伤害死亡同样生成六只"), Living<FCastleMassEnemyTag>(Scope).Num(), 6);
+	Children = Living<FCastleMassEnemyTag>(Scope);
+	if (!TestEqual(TEXT("贴墙巨骸普通伤害死亡同样生成六只"), Children.Num(), 6)) { return false; }
+	FCastleTowerPrism Tower;
+	FString GeometryFailure;
+	if (!Scope.Tower->GetTowerShaftPrism(Tower, GeometryFailure)) { AddError(GeometryFailure); return false; }
+	bool bAllTrajectoriesOutside = true;
+	bool bArcGoesOutward = true;
+	for (int32 Sample = 0; Sample <= 7; ++Sample)
+	{
+		Step<UCastleMassSpawnBurstProcessor>(Scope, Sample == 0 ? 0.0f : 0.05f);
+		for (const auto& Child : Children)
+		{
+			FCastleMassUnitSnapshot Snapshot;
+			if (!TestTrue(TEXT("贴墙分裂全程可读取幼骸状态"), Scope.Units().GetUnitSnapshot(Child, Snapshot))) { return false; }
+			const FVector Root = Snapshot.Transform.GetLocation();
+			FVector Point, Normal;
+			float Distance = 0.0f;
+			bAllTrajectoriesOutside &= Tower.QuerySurface(Root + Tower.GetUpVector() * PupUnit->Radius, Point, Normal, Distance)
+				&& Distance >= PupUnit->Radius - 0.5f && Tower.ToLocalPoint(Root).Z >= -0.5f;
+			if (Sample == 3) { bArcGoesOutward &= Root.X >= NearWall.X + 50.0; }
+		}
+	}
+	TestTrue(TEXT("六只幼骸的爆散弧线与落点全在塔身外且根节点在塔底以上"), bAllTrajectoriesOutside);
+	TestTrue(TEXT("贴墙爆散的抛物线弧顶朝向塔外半空间"), bArcGoesOutward);
+	Step<UCastleMassEnemyLaserAttackProcessor>(Scope, 0.1f);
+	for (const auto& Child : Children)
+	{
+		TestNull(TEXT("贴墙爆散落地后释放移动写入权"), Scope.Manager().GetFragmentDataPtr<FCastleMassSpawnBurstFragment>(Child.Entity));
+		TestTrue(TEXT("贴墙分裂幼骸落地后即可对塔面引导持续激光"),
+			Scope.Manager().GetFragmentDataChecked<FCastleMassEnemyLaserAttackFragment>(Child.Entity).AttackCount > 0);
+	}
 	return true;
 }
 
