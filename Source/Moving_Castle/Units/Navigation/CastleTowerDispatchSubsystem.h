@@ -30,6 +30,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|主塔出兵")
 	bool TryDispatchSingleNPC(FText& OutReason);
 
+	/** 临时士兵从门 A 出发到门 B 后销毁，不占正式待命池，也不参与徽章圈数累计。 */
+	bool TryDispatchTemporarySingleLapNPC(FText& OutReason);
+
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|主塔出兵")
 	bool SetAutoDispatchEnabled(bool bEnabled);
 
@@ -71,6 +74,8 @@ private:
 		bool bDespawnRequested = false;
 	};
 	TArray<FActiveNPC> ActiveNPCs;
+	/** 独立拥有临时实体的生命周期；正式待命池只与 ActiveNPCs 守恒。 */
+	TArray<FActiveNPC> TemporaryNPCs;
 	int32 ReserveCount = 0;
 	int32 SessionTotalNPCs = 0;
 	bool bSessionActive = false;
@@ -84,6 +89,7 @@ private:
 	double HoldDispatchElapsed = 0.0;
 
 	void ReclaimFinishedNPCs();
+	bool DispatchNPC(bool bTemporaryOneLap, FText& OutReason);
 	bool Reject(FText& OutReason, const FString& Detail, bool bConfigurationError) const;
 	void ShowMessage(const FText& Message, bool bSuccess) const;
 	friend class FCastleMainTowerDispatchTest;

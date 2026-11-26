@@ -28,6 +28,13 @@ struct MOVING_CASTLE_API FCastleLadderPathRange
 	FVector FacingDirection = FVector::ForwardVector;
 };
 
+/** 高速公路在共享路线上的有效距离区间，编译后供 Mass 工作者纯数值读取。 */
+struct MOVING_CASTLE_API FCastleHighwayPathRange
+{
+	double StartDist = 0.0;
+	double EndDist = 0.0;
+};
+
 /** 全世界的一份路线快照。多个 NPC 可以持有同一个只读快照，各自记录路段进度。 */
 USTRUCT(BlueprintType)
 struct MOVING_CASTLE_API FCastleSharedNavigationPath
@@ -85,6 +92,9 @@ struct MOVING_CASTLE_API FCastleSharedNavigationPath
 	UPROPERTY(BlueprintReadOnly, Category="共享路线")
 	TArray<FCastleLadderPathRange> LadderRanges;
 
+	/** 根据有效道路格裁剪实际走行折线，按距离有序且不重叠。 */
+	TArray<FCastleHighwayPathRange> HighwayRanges;
+
 	/** 只读数值运算，可由 Mass 工作线程调用；Distance 已由调用方限制到 [0, Length]。 */
 	void SamplePatrol(double Distance, FVector& OutLocation, FVector& OutDirection) const;
 
@@ -96,6 +106,9 @@ struct MOVING_CASTLE_API FCastleSharedNavigationPath
 
 	/** 二分查询梯子区间；返回当前梯子末端，或平地下一梯口/闭环终点的距离。 */
 	bool FindLadderRange(double Distance, double& OutEndDist, FVector& OutFacingDirection) const;
+
+	/** 半开区间，返回当前道路末端或下一入口；出界立即进入普通速度区间。 */
+	bool FindHighwayRange(double Distance, double& OutEndDist) const;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FCastleSharedPathChanged);
@@ -213,11 +226,14 @@ private:
 	void InvalidatePath();
 	void PublishPath(FCastleSharedNavigationPath&& Path);
 	void CalculateSharedPath();
+	/** 只在游戏线程编译。从棋盘读取占用后发布纯数值区间，工作线程无须查格。 */
+	static void CompileHighwayRanges(UWorld& World, FCastleSharedNavigationPath& Path);
 	bool RequestRoute(const TArray<FVector>& Waypoints, bool bClosedLoop, FText& OutFailureReason, bool bTowerDispatch = false);
 	void FailNavigation(const FText& Reason);
 	void HandleAssemblyFinished(UAssemblyFlightComponent* Flight, bool bCompleted);
 	void HandleMergeFinished(UBuildingMergeComponent* Merge, bool bCompleted);
 	friend class FCastleMainTowerDispatchTest;
+	friend class FCastleHighwayRoomTraitTest;
 };
 
 /** 同步放置/替换/删除的栈作用域。与动画观察共享计数，函数返回不会提前解锁后续合并。 */

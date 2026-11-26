@@ -79,6 +79,9 @@ public:
 	/** 仅新手教程启用：将主塔最低生命锁定为当前最大生命的二十分之一。 */
 	bool EnableTutorialHealthLock(FText& OutReason);
 
+	/** 敌方攻击专用入口；致命伤害在提交前由徽章运行时检查气球扣。 */
+	bool ApplyEnemyDamage(float Damage);
+
 	/** 按指定生命值回血；不改变 AttackCount，并用负伤害广播实际恢复量。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|主塔")
 	bool ApplyHealing(float Amount);
@@ -136,6 +139,9 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** 普通受伤和敌伤共用提交；敌伤在致命时先检查气球扣资格。 */
+	bool ApplyDamageInternal(float Damage, bool bEnemyAttack);
+	bool bResolvingDamage = false;
 	/** 保留未乘徽章倍率的上限；表现组件只接受生命组件发布的结果。 */
 	float BaseMaxHealth = 1000.0f;
 	float HealthMultiplier = 1.0f;
@@ -186,6 +192,8 @@ public:
 
 	/** 记录一次攻击并结算伤害，伤害为零仍会增加主塔攻击计数。 */
 	bool ApplyMainTowerDamage(float Damage);
+	/** 真实敌方攻击统一使用此入口，允许致命时触发最后一颗气球扣。 */
+	bool ApplyEnemyMainTowerDamage(float Damage);
 
 	/** 供棋盘和自动化测试查询当前主塔组件。 */
 	UCastleMainTowerComponent* GetRegisteredMainTower() const;

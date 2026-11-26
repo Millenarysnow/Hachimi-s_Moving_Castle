@@ -7,8 +7,10 @@
 
 #include "AssemblyFlightComponent.h"
 #include "BuildingMergeComponent.h"
+#include "CastleBoard.h"
 #include "CastleLadderLinkComponent.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "Misc/ScopeRWLock.h"
 #include "Moving_Castle.h"
 #include "NavigationData.h"
@@ -61,6 +63,18 @@ bool FCastleSharedNavigationPath::FindLadderRange(const double Distance, double&
 	}
 	OutEndDist = LadderRanges.IsValidIndex(Next) ? LadderRanges[Next].StartDist : Length;
 	OutFacingDirection = FVector::ZeroVector;
+	return false;
+}
+
+bool FCastleSharedNavigationPath::FindHighwayRange(const double Distance, double& OutEndDist) const
+{
+	const int32 Next = Algo::UpperBoundBy(HighwayRanges, Distance, &FCastleHighwayPathRange::StartDist);
+	if (Next > 0 && Distance < HighwayRanges[Next - 1].EndDist)
+	{
+		OutEndDist = HighwayRanges[Next - 1].EndDist;
+		return true;
+	}
+	OutEndDist = HighwayRanges.IsValidIndex(Next) ? HighwayRanges[Next].StartDist : Length;
 	return false;
 }
 
@@ -537,6 +551,7 @@ bool UCastleNavigationSubsystem::BuildTemporaryPath(TConstArrayView<FVector> Way
 		Candidate.WaypointDistances.Add(Candidate.PatrolDistances.Last());
 	}
 	Candidate.Length = Candidate.PatrolDistances.Last();
+	CompileHighwayRanges(*GetWorld(), Candidate);
 	Candidate.bValid = true;
 	OutPath = MoveTemp(Candidate);
 	return true;
@@ -664,6 +679,7 @@ void UCastleNavigationSubsystem::CalculateSharedPath()
 	{
 		Path.Length = Path.PatrolDistances.Last();
 		if (LegCount == 0) { Path.Points = Path.Waypoints; Path.PointFlags.Add(0); Path.WaypointDistances.Add(0.0); }
+		CompileHighwayRanges(*GetWorld(), Path);
 	}
 	// 失败快照必须为空，界面和消费者都不能将临时已完成的前几段误当成可用路线。
 	if (!Path.bValid)
@@ -675,6 +691,70 @@ void UCastleNavigationSubsystem::CalculateSharedPath()
 	else if (!Path.bValid) { UE_LOG(LogMoving_Castle, Warning, TEXT("NPC 导航：%s"), *LastFailure.ToString()); }
 	else { UE_LOG(LogMoving_Castle, Display, TEXT("NPC 共享路线发布：导航版本 %d，查询累计 %d 次，完整 %d 段，%d 个转折点，%d 个共享采样，长度 %.1f cm。"), NavigationRevision, PathQueryCount, LegCount, Path.Points.Num(), Path.PatrolPoints.Num(), Path.Length); }
 	PublishPath(MoveTemp(Path));
+}
+
+void UCastleNavigationSubsystem::CompileHighwayRanges(UWorld& World, FCastleSharedNavigationPath& Path)
+{
+	check(IsInGameThread() && Path.PatrolPoints.Num() == Path.PatrolDistances.Num());
+	Path.HighwayRanges.Reset();
+	// 路线求解已经验证棋盘坐标系唯一。没有棋盘的关卡没有高速公路。
+	for (TActorIterator<ACastleBoard> It(&World); It; ++It)
+	{
+		const ACastleBoard& Board = **It;
+		const FTransform GridTransform = Board.GetActorTransform();
+		const FVector HalfExtent(Board.CellSize * 0.5, Board.CellSize * 0.5, Board.LayerHeight * 0.5);
+		TArray<FBox> Roads;
+		for (const FIntVector& Cell : Board.GetActiveHighwayCells())
+		{
+			const FVector Center = GridTransform.InverseTransformPosition(Board.GetGridWorldLocation(Cell));
+			Roads.Emplace(Center - HalfExtent, Center + HalfExtent);
+		}
+		if (Roads.IsEmpty()) { continue; }
+		FVector End = GridTransform.InverseTransformPosition(Path.PatrolPoints[0]);
+		for (int32 Index = 1; Index < Path.PatrolPoints.Num(); ++Index)
+		{
+			const FVector Start = End;
+			End = GridTransform.InverseTransformPosition(Path.PatrolPoints[Index]);
+			const FVector Delta = End - Start;
+			TArray<FCastleHighwayPathRange, TInlineAllocator<4>> SegmentRanges;
+			for (const FBox& Road : Roads)
+			{
+				// 用三轴裁剪确定精确的入格和出格位置。并行于格面时以半开区间判定归属。
+				double Enter = 0.0;
+				double Exit = 1.0;
+				for (int32 Axis = 0; Axis < 3 && Enter < Exit; ++Axis)
+				{
+					if (FMath::Abs(Delta[Axis]) <= UE_DOUBLE_SMALL_NUMBER)
+					{
+						if (Start[Axis] < Road.Min[Axis] || Start[Axis] >= Road.Max[Axis]) { Enter = Exit; }
+					}
+					else
+					{
+						const double A = (Road.Min[Axis] - Start[Axis]) / Delta[Axis];
+						const double B = (Road.Max[Axis] - Start[Axis]) / Delta[Axis];
+						Enter = FMath::Max(Enter, FMath::Min(A, B));
+						Exit = FMath::Min(Exit, FMath::Max(A, B));
+					}
+				}
+				if (Enter < Exit)
+				{
+					const double StartDist = Path.PatrolDistances[Index - 1];
+					const double EndDist = Path.PatrolDistances[Index];
+					SegmentRanges.Add({FMath::Lerp(StartDist, EndDist, Enter), FMath::Lerp(StartDist, EndDist, Exit)});
+				}
+			}
+			// 路线折线顺序天然递增；线段内部按距离排序后合并连续道路，去掉共享格面形成的重复边界。
+			SegmentRanges.Sort([](const auto& A, const auto& B) { return A.StartDist < B.StartDist; });
+			for (const FCastleHighwayPathRange& Range : SegmentRanges)
+			{
+				if (!Path.HighwayRanges.IsEmpty() && Range.StartDist <= Path.HighwayRanges.Last().EndDist + UE_DOUBLE_SMALL_NUMBER)
+				{
+					Path.HighwayRanges.Last().EndDist = FMath::Max(Path.HighwayRanges.Last().EndDist, Range.EndDist);
+				}
+				else { Path.HighwayRanges.Add(Range); }
+			}
+		}
+	}
 }
 
 void UCastleNavigationSubsystem::FailNavigation(const FText& Reason)

@@ -3,6 +3,8 @@
 #include "CastleBuildingBase.h"
 #include "Castle/Appearance/CastleBuildingColors.h"
 #include "Castle/Items/CastleBadgeSubsystem.h"
+#include "Castle/Items/CastleItemTypes.h"
+#include "Castle/Items/CastleRoomTraitComponent.h"
 
 #include "CastleBuildingDefinition.h"
 #include "CastleBoard.h"
@@ -101,6 +103,10 @@ void ACastleBuildingBase::SetPlacementComplete(const bool bComplete)
 	bHasCompletedPlacement = bComplete;
 	PrototypeLabel->SetVisibility(bComplete, false);
 	PrototypeLabelPlate->SetVisibility(bComplete, false);
+	if (RoomTraitComponent)
+	{
+		RoomTraitComponent->SetPortalAvailable(CanReceiveBuildingTrigger());
+	}
 }
 
 void ACastleBuildingBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -112,9 +118,10 @@ void ACastleBuildingBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 bool ACastleBuildingBase::InitializeBuilding(const FCastleBuildingDescriptor& Descriptor, const TArray<FIntVector>& InOccupiedCoordinates)
 {
 	FText Reason;
-	if (!Descriptor.Validate(Reason))
+	if (!Descriptor.Validate(Reason) || !CastleRoomCards::ValidateTrait(Descriptor, Reason))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("建筑初始化失败：%s"), *Reason.ToString());
+		UE_LOG(LogMoving_Castle, Error, TEXT("建筑 %s 初始化定义 %s 失败：%s"),
+			*GetPathName(), *GetPathNameSafe(Descriptor.Definition.Get()), *Reason.ToString());
 		return false;
 	}
 	if (Descriptor.Level != BuildingLevel || Descriptor.GetBuildingType() != BuildingType)
@@ -161,7 +168,9 @@ bool ACastleBuildingBase::InitializeBuilding(const FCastleBuildingDescriptor& De
 	Color = Descriptor.Color;
 	Number = Descriptor.Number;
 	OccupiedCoordinates = InOccupiedCoordinates;
-	PrototypeLabel->SetText(FText::FromString(FString::Printf(TEXT("%d\nLv%d"), Number, BuildingLevel)));
+	RoomTrait = Descriptor.RoomTrait;
+	TraitRemainingRounds = Descriptor.TraitRemainingRounds;
+	UpdateTraitLabel(false);
 	return true;
 }
 
@@ -172,7 +181,27 @@ FCastleBuildingDescriptor ACastleBuildingBase::GetBuildingDescriptor() const
 	Descriptor.Level = BuildingLevel;
 	Descriptor.Color = Color;
 	Descriptor.Number = Number;
+	Descriptor.RoomTrait = RoomTrait;
+	Descriptor.TraitRemainingRounds = TraitRemainingRounds;
 	return Descriptor;
+}
+
+void ACastleBuildingBase::UpdateTraitLabel(const bool bHighwayActive)
+{
+	// 数字标签使用引擎默认字库，以 ASCII 显示当前可用的道路或房间传送门。
+	const TCHAR* Suffix = RoomTrait == ECastleRoomTrait::SkyIslandPortal ? TEXT("\nPORTAL")
+		: (RoomTrait == ECastleRoomTrait::Highway && bHighwayActive ? TEXT("\nHIGHWAY") : TEXT(""));
+	PrototypeLabel->SetText(FText::FromString(FString::Printf(TEXT("%d\nLv%d%s"), Number, BuildingLevel, Suffix)));
+}
+
+void ACastleBuildingBase::ConsumeSkyIslandPortal()
+{
+	check(RoomTrait == ECastleRoomTrait::SkyIslandPortal && IsValid(RoomTraitComponent));
+	// 先清除卡牌身份。离岛回收、拆回背包和其他观察者现在都只会读到普通房间。
+	RoomTrait = ECastleRoomTrait::None;
+	RoomTraitComponent->DestroyComponent();
+	RoomTraitComponent = nullptr;
+	UpdateTraitLabel(false);
 }
 
 TSubclassOf<ACastleBuildingBase> ACastleBuildingBase::GetClassForLevel(int32 InLevel) const
@@ -297,18 +326,6 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 		AssemblyFlight->LaunchInterval = Template->AssemblyFlight->LaunchInterval * (LegacyVisualCounts[BuildingLevel - 1] - 1)
 			/ (HachimisLayout->Parts.Num() - 1);
 	}
-	else if (BuildingType == ECastleBuildingType::SpeedRoom)
-	{
-		// 加速房的美术为蓝图自己的方块外壳。显式引用该组件，避免把功能碰撞或数字底牌一起染色。
-		UStaticMeshComponent* Shell = FindObjectFast<UStaticMeshComponent>(this, TEXT("StaticMesh"));
-		if (!Shell || !Shell->GetStaticMesh() || Shell->GetNumMaterials() != 1)
-		{
-			OutFailureReason = FText::FromString(GetPathName() + TEXT(" 缺少单槽的加速房外壳 StaticMesh。"));
-			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
-			return false;
-		}
-		CastleBuildingColors::Apply(*Shell, Color, BuildingType, NAME_None, TEXT("SpeedRoomShell"));
-	}
 
 	// 已启用的美术碰撞只提供 Visibility 查询；作者明确关闭碰撞的纯表现组件保持无碰撞。
 	// 功能分支完整保留作者配置，不能按可见性关闭隐藏地板碰撞。
@@ -338,6 +355,28 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 	{
 		OutFailureReason = FText::FromString(TEXT("建筑没有可见几何体，无法显示或选中。"));
 		return false;
+	}
+	if (RoomTrait == ECastleRoomTrait::Highway || RoomTrait == ECastleRoomTrait::SkyIslandPortal)
+	{
+		if (!IsValid(GameplayRoot))
+		{
+			OutFailureReason = INVTEXT("房间特质需要有效 GameplayRoot，无法配置功能组件。");
+			UE_LOG(LogMoving_Castle, Error, TEXT("房间 %s：%s"), *GetPathName(), *OutFailureReason.ToString());
+			return false;
+		}
+		if (!RoomTraitComponent)
+		{
+			auto* Component = NewObject<UCastleRoomTraitComponent>(this);
+			if (!Component->TryInitializeTrait(GetBuildingDescriptor(), OutFailureReason)) { return false; }
+			Component->SetupAttachment(GameplayRoot);
+			AddInstanceComponent(Component);
+			Component->RegisterComponent();
+			RoomTraitComponent = Component;
+		}
+		if (RoomTrait == ECastleRoomTrait::SkyIslandPortal)
+		{
+			RoomTraitComponent->ConfigurePortalTransform(InCellSize, InLayerHeight);
+		}
 	}
 	const FBox LocalBounds = Bounds.TransformBy(GetActorTransform().ToInverseMatrixWithScale());
 	const float PlateHeight = LocalBounds.Max.Z + 8.0f;
@@ -390,6 +429,7 @@ void ACastleBuildingBase::PrepareForPreview()
 {
 	// 预览虽然使用相同建筑类，但不属于真实放置实例，不能接收任何玩法效果。
 	bBuildingPreview = true;
+	if (RoomTraitComponent) { RoomTraitComponent->SetPortalAvailable(false); }
 	// 卡片只显示建筑形状，等级与数字由卡片自己的文字控件显示。
 	PrototypeLabel->SetVisibility(false);
 	PrototypeLabelPlate->SetVisibility(false);

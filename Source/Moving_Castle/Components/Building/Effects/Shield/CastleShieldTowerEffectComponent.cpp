@@ -10,6 +10,11 @@
 
 bool UCastleShieldTowerEffectComponent::CalculateShieldBlocks(int64& OutBlocks) const
 {
+	return CalculateShieldBlocksForTrigger(0, OutBlocks);
+}
+
+bool UCastleShieldTowerEffectComponent::CalculateShieldBlocksForTrigger(const int64 NumberBonus, int64& OutBlocks) const
+{
 	OutBlocks = 0;
 	const ACastleBuildingBase* Tower = Cast<ACastleBuildingBase>(GetOwner());
 	if (!IsValid(Tower) || Tower->GetBuildingLevel() < 1 || Tower->GetBuildingLevel() > 5 || Tower->GetEffectiveBuildingNumber() <= 0)
@@ -18,7 +23,8 @@ bool UCastleShieldTowerEffectComponent::CalculateShieldBlocks(int64& OutBlocks) 
 		return false;
 	}
 	const int32 Level = Tower->GetBuildingLevel();
-	int64 Total = Tower->GetEffectiveBuildingNumber();
+	const int64 TriggerNumber = Tower->GetEffectiveBuildingNumber() + NumberBonus;
+	int64 Total = TriggerNumber;
 	int32 AttackTowerCount = 0;
 	if (Level > 1)
 	{
@@ -39,12 +45,13 @@ bool UCastleShieldTowerEffectComponent::CalculateShieldBlocks(int64& OutBlocks) 
 		Total = 0;
 		for (const ACastleBuildingBase* Other : Connected)
 		{
-			if (Total > MAX_int64 - Other->GetEffectiveBuildingNumber())
+			const int64 Number = Other == Tower ? TriggerNumber : Other->GetEffectiveBuildingNumber();
+			if (Total > MAX_int64 - Number)
 			{
 				UE_LOG(LogMoving_Castle, Error, TEXT("盾塔 %s 连通数字和溢出。"), *Tower->GetPathName());
 				return false;
 			}
-			Total += Other->GetEffectiveBuildingNumber();
+			Total += Number;
 			if (Other != Tower && (Other->GetBuildingType() == ECastleBuildingType::ArcherTower || Other->GetBuildingType() == ECastleBuildingType::CannonTower)) { ++AttackTowerCount; }
 		}
 	}
@@ -112,13 +119,13 @@ bool UCastleShieldTowerEffectComponent::PreparePresentation()
 bool UCastleShieldTowerEffectComponent::ExecuteEffect(const FCastleBuildingTriggerContext& Context)
 {
 	int64 Computed = 0;
-	if (!CalculateShieldBlocks(Computed) || !PreparePresentation()) { return false; }
+	if (!CalculateShieldBlocksForTrigger(Context.TriggerNumberBonus, Computed) || !PreparePresentation()) { return false; }
 	ACastleShieldTowerBuilding* Tower = CastChecked<ACastleShieldTowerBuilding>(GetOwner());
 	UCastleShieldTowerSubsystem* Shields = RegisteredShields.Get();
 	int64 Current = 0;
 	Shields->GetShieldRemainingBlocks(Tower, Current);
 	const int64 Refreshed = FMath::Max(Current, Computed);
-	const float Reflection = Tower->GetBuildingLevel() >= 3 ? static_cast<float>(Tower->GetEffectiveBuildingNumber()) : 0.0f;
+	const float Reflection = Tower->GetBuildingLevel() >= 3 ? static_cast<float>(GetTriggeredBuildingNumber(Context)) : 0.0f;
 	if (Shields->UpsertActiveShield(Tower, Tower->GetActorLocation(), AttractionRadius, Refreshed, Reflection) == 0) { return false; }
 	UE_LOG(LogMoving_Castle, Display, TEXT("盾塔 %s Lv%d 展开/刷新护盾：当前 %lld，本次 %lld，结果 %lld，反伤 %.1f。"),
 		*Tower->GetName(), Tower->GetBuildingLevel(), Current, Computed, Refreshed, Reflection);

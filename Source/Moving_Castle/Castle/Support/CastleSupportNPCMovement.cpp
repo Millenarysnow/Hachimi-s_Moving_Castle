@@ -1,4 +1,6 @@
 #include "CastleSupportTowerSubsystem.h"
+#include "Items/CastleBadgeRuntimeSubsystem.h"
+#include "Items/CastleBadgeSubsystem.h"
 
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
@@ -16,43 +18,6 @@
 #include "MassMovementFragments.h"
 #include "Moving_Castle.h"
 #include "Units/BuildingInteraction/CastleBuildingTriggerSubsystem.h"
-
-bool UCastleSupportTowerSubsystem::ApplyNPCMovementSpeedBoost(const FCastleMassUnitHandle& NPC,
-	const float Multiplier, const float DurationSeconds)
-{
-	UWorld* World = GetWorld();
-	if (!IsInGameThread() || !World || NPC.World.Get() != World || !FMath::IsFinite(Multiplier) || Multiplier <= 1.0f
-		|| !FMath::IsFinite(DurationSeconds) || DurationSeconds <= 0.0f)
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("世界 %s 无法为 NPC %d 登记加速：线程、世界或倍率和时长配置无效。"),
-			*GetPathNameSafe(World), NPC.Entity.Index);
-		return false;
-	}
-
-	UMassEntitySubsystem* Mass = World->GetSubsystem<UMassEntitySubsystem>();
-	if (!Mass || !Mass->GetEntityManager().IsEntityActive(NPC.Entity))
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("世界 %s 无法为 NPC %d 登记加速：Mass 子系统或实体无效。"),
-			*World->GetPathName(), NPC.Entity.Index);
-		return false;
-	}
-	// 进入记录在查询结束后的游戏线程派发。这里只读取身份，倍率实际写入在 Mass 阶段外进行。
-	const FMassEntityView View(Mass->GetMutableEntityManager(), NPC.Entity);
-	const auto* Unit = View.GetFragmentDataPtr<FCastleMassUnitFragment>();
-	if (!View.HasTag<FCastleMassNPCTag>() || !Unit || Unit->Kind != ECastleMassUnitKind::NPC
-		|| !FMath::IsFinite(Unit->Health) || Unit->Health <= 0.0f)
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("世界 %s 无法为实体 %d 登记加速：来源必须为有效且存活的 NPC。"),
-			*World->GetPathName(), NPC.Entity.Index);
-		return false;
-	}
-
-	// 每次经过均从当前时刻计时。重叠的同倍率记录维持到最后一次到期，且不缩短空投或其他房间的增益。
-	MovementModifiers.Add({NPC.Entity, Multiplier, World->GetTimeSeconds() + static_cast<double>(DurationSeconds)});
-	UE_LOG(LogMoving_Castle, Display, TEXT("NPC %d 获得 %.2fx 移速增益，持续 %.2f 秒。"),
-		NPC.Entity.Index, Multiplier, DurationSeconds);
-	return true;
-}
 
 bool UCastleSupportTowerSubsystem::RallyNPCs(FMassEntityManager& Manager, ACastleBuildingBase& Source,
 	const FVector& Destination, TConstArrayView<FCastleSupportUnit> NPCs)
@@ -184,6 +149,9 @@ bool UCastleSupportTowerSubsystem::RecruitNPCs(FMassEntityManager& Manager, ACas
 void UCastleSupportTowerSubsystem::TickJourneys(FMassEntityManager& Manager, const float DeltaTime)
 {
 	if (Journeys.IsEmpty()) { return; }
+	const auto* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
+	const auto* Runtime = GetWorld()->GetSubsystem<UCastleBadgeRuntimeSubsystem>();
+	const double Now = GetWorld()->GetTimeSeconds();
 	const auto* Nav = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
 	const auto Shared = Nav->AcquireSharedPath();
 	UCastleBuildingTriggerSubsystem* Triggers = GetWorld()->GetSubsystem<UCastleBuildingTriggerSubsystem>();
@@ -213,10 +181,24 @@ void UCastleSupportTowerSubsystem::TickJourneys(FMassEntityManager& Manager, con
 		}
 		FCastleMassMovementSettings Settings = Manager.GetConstSharedFragmentDataChecked<FCastleMassMovementParameters>(Entity).Settings;
 		Settings.MaxSpeed *= Unit.SupportMovementMultiplier;
-		double Travel = 0.0;
-		if (!CastlePatrolMovement::Advance(Journey.Path, Settings, Journey.Distance, DeltaTime, Journey.Speed, Travel, true))
+		// 调动不推进共享巡逻圈数；已有后手优势保留原圈倍率，梯速与限时徽章仍按各自来源相乘。
+		if (Badges)
 		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("空投塔 %s 的人员 %d 梯子速度配置非法，调动失败并停在原地。"),
+			Settings.LadderSpeedMultiplier *= Badges->GetQuickLadderSpeedMultiplier();
+			if (Badges->HasBadge(ECastleBadgeType::LateAdvantage))
+			{
+				Settings.MaxSpeed *= UCastleBadgeSubsystem::CalculateLateAdvantageSpeedMultiplier(Patrol.CompletedLaps);
+			}
+		}
+		if (const FCastleBadgeNPCMovement* Movement = Runtime ? Runtime->FindNPCMovement(Entity) : nullptr)
+		{
+			Settings.MaxSpeed *= Movement->At(Now);
+		}
+		double Travel = 0.0;
+		if (!FMath::IsFinite(Settings.MaxSpeed)
+			|| !CastlePatrolMovement::Advance(Journey.Path, Settings, Journey.Distance, DeltaTime, Journey.Speed, Travel, true))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("空投塔 %s 的人员 %d 有效移速或梯速配置非法，调动失败并停在原地。"),
 				*GetPathNameSafe(Journey.Source.Get()), Entity.Index);
 			Patrol.bSupportJourney = false;
 			Patrol.bEnabled = false;

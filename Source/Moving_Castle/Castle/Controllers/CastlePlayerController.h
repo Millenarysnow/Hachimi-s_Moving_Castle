@@ -250,6 +250,12 @@ protected:
 	UFUNCTION()
 	void HandleItemBadgeChanged();
 	void InteractWithSkyIsland();
+	/** 编辑阶段的 E 只消费准星命中的房间内置门体。 */
+	void InteractWithRoomPortal();
+	bool TryInteractWithRoomPortalFromRay(const FVector& Start, const FVector& End, FText& OutReason);
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FCastlePortalRoomTraitTest;
+#endif
 
 	/** 统一把收支、选牌和商店失败原因写入日志及屏幕，保证无资源时也有反馈。 */
 	void ShowGameplayMessage(const FString& Message, bool bSuccess) const;

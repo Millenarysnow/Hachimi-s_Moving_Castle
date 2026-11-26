@@ -44,7 +44,7 @@ public:
 	UPROPERTY(EditAnywhere, Category = "老虎机") int32 SlotMachineCost = 10;
 	UPROPERTY(EditAnywhere, Category = "老虎机") FCastleSlotWeights SlotWeights;
 	UPROPERTY(EditAnywhere, Category = "老虎机") TArray<TObjectPtr<UCastleRoomGroupDataAsset>> RoomGroups;
-	/** 房间奖励可包含加速房等正式卡牌，定义池独立于主图的商店出牌池。 */
+	/** 房间组从显式配置的建筑定义池解析牌面，特殊房间使用卡牌特质。 */
 	UPROPERTY(EditAnywhere, Category = "老虎机") TArray<TObjectPtr<UCastleBuildingDefinition>> RoomDefinitions;
 	UPROPERTY(EditAnywhere, Category = "老虎机") TArray<TObjectPtr<UCastleBadgeDataAsset>> Badges;
 

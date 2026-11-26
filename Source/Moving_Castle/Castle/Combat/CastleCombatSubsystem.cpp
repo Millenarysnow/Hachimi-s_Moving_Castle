@@ -316,6 +316,8 @@ bool UCastleCombatSubsystem::StartConfiguredBattle(const ECastleBattleKind Kind,
 	const FString Message = FString::Printf(TEXT("开战：%s战斗（编号 %d），共 %d 波。"), CastleCombat::KindName(ActiveKind), ActiveBattleNumber, Plan.Num());
 	UE_LOG(LogMoving_Castle, Display, TEXT("%s"), *Message);
 	CastleCombat::Screen(Message, true);
+	// 首批生成与完整开战校验通过后才发布；回滚的开战不占用徽章的波次状态。
+	OnWaveStarted.Broadcast(ActiveWaveIndex + 1, Plan.Num());
 	return true;
 }
 
@@ -511,7 +513,9 @@ void UCastleCombatSubsystem::Tick(float DeltaTime)
 		if (CanAdvanceCurrentWave(Elapsed, Count))
 		{
 			BeginWave(ActiveWaveIndex + 1, Now);
-			if (!SpawnDueBatches(0.0, Failure)) { FailBattle(Failure); }
+			if (!SpawnDueBatches(0.0, Failure)) { FailBattle(Failure); return; }
+			// 只有成功进入下一波，监听者才重置本波的计数。
+			OnWaveStarted.Broadcast(ActiveWaveIndex + 1, Plan.Num());
 		}
 		return;
 	}
@@ -592,5 +596,6 @@ void UCastleCombatSubsystem::Deinitialize()
 	CancelForWorldEnd();
 	OnBattleCleared.Clear();
 	OnBattleFailed.Clear();
+	OnWaveStarted.Clear();
 	Super::Deinitialize();
 }

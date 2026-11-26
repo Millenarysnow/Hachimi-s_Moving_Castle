@@ -23,7 +23,7 @@ enum class ECastleHUDScreenMode : uint8
 {
 	/** 建造页面：顶部主塔血条 + 底部建造栏 + 左下通用按钮 + 右下撤回/重做/商店。 */
 	Build = 0,
-	/** 路径编辑界面（按 P 进入）：顶部主塔血条 + 左下通用按钮 + 右下撤回/重做/删除。 */
+	/** 路径编辑界面（按 P 进入）：显示主塔血条、剩余路径点和路径编辑动作。 */
 	PathEdit = 1,
 	/** 战斗界面：顶部主塔血条 + 底部骷髅击杀进度条 + 左下通用按钮 + 右下暂停/倍速/重试。 */
 	Battle = 2
@@ -91,6 +91,10 @@ protected:
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UCastleIconBarWidget> BattleProgressBar;
 
+	/** 路径编辑界面底部的剩余点数，位置与字体由 WBP 定义。 */
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UTextBlock> RemainingWaypointText;
+
 	/** 三界面共用的左下角按钮组：攻略（?）、设置（齿轮）、主菜单（房子）。 */
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UCastleHUDIconButtonWidget> GuideButton;
@@ -128,10 +132,15 @@ protected:
 	TObjectPtr<UCastleHUDIconButtonWidget> BattleRetryButton;
 
 private:
+	/** 独立战斗测试用正常的 HUD Tick 检查界面优先级。 */
+	friend class FCastlePathEditWaypointHUDTest;
+
 	/** 查找并订阅当前世界唯一的路径编辑入口。 */
 	void EnsurePatrolRouteBinding();
 	/** 依据导演阶段与路径编辑状态计算并同步当前界面模式。 */
 	void SyncScreenMode();
+	/** 进入路径页或收到草稿与上限变更时，直接向路线 Actor 读取当前点数。 */
+	void SyncPathWaypointCount();
 	/** 同步战斗暂停与倍速按钮的双态贴图。 */
 	void SyncBattleControlButtons();
 	/** 同步战斗底部的 20 格骷髅击杀进度条。 */
@@ -180,6 +189,7 @@ private:
 	FDelegateHandle DirectorPhaseHandle;
 	FDelegateHandle BattleControlHandle;
 	FDelegateHandle PatrolEditingHandle;
+	FDelegateHandle WaypointDraftHandle;
 	ECastleHUDScreenMode CurrentScreenMode = ECastleHUDScreenMode::Build;
 	bool bButtonsBound = false;
 };

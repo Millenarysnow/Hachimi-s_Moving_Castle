@@ -3,9 +3,17 @@
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
+#include "Engine/World.h"
+#include "Items/CastleBadgeRuntimeSubsystem.h"
 #include "Moving_Castle.h"
 
 bool UCastleCannonTowerAttackEffectComponent::GetAmmunitionBuildings(TArray<ACastleBuildingBase*>& OutBuildings) const
+{
+	return GetAmmunitionBuildingsForTrigger(0, OutBuildings);
+}
+
+bool UCastleCannonTowerAttackEffectComponent::GetAmmunitionBuildingsForTrigger(const int64 NumberBonus,
+	TArray<ACastleBuildingBase*>& OutBuildings) const
 {
 	OutBuildings.Reset();
 	const ACastleBuildingBase* Cannon = Cast<ACastleBuildingBase>(GetOwner());
@@ -15,6 +23,7 @@ bool UCastleCannonTowerAttackEffectComponent::GetAmmunitionBuildings(TArray<ACas
 		return false;
 	}
 	const int32 Level = Cannon->GetBuildingLevel();
+	const int64 Number = Cannon->GetEffectiveBuildingNumber() + NumberBonus;
 	// D9 明确一级没有弹药库，独立生成的一级炮塔无需棋盘空间查询。
 	if (Level == 1) { return true; }
 	ACastleBoard* Board = ACastleBoard::FindBoardForBuilding(Cannon);
@@ -29,7 +38,7 @@ bool UCastleCannonTowerAttackEffectComponent::GetAmmunitionBuildings(TArray<ACas
 	for (ACastleBuildingBase* Other : Candidates)
 	{
 		// D9 允许任意类别，仅用自身排除、建造状态和同数字定义弹药库集合。
-		if (Other != Cannon && Other->GetEffectiveBuildingNumber() == Cannon->GetEffectiveBuildingNumber()) { OutBuildings.Add(Other); }
+		if (Other != Cannon && Other->GetEffectiveBuildingNumber() == Number) { OutBuildings.Add(Other); }
 	}
 	return true;
 }
@@ -41,8 +50,8 @@ bool UCastleCannonTowerAttackEffectComponent::ExecuteEffect(const FCastleBuildin
 	if (!ResolveAttackConfiguration(Data, LevelData)) { return false; }
 	const ACastleBuildingBase* Cannon = CastChecked<ACastleBuildingBase>(GetOwner());
 	TArray<ACastleBuildingBase*> Ammunition;
-	if (!GetAmmunitionBuildings(Ammunition)) { return false; }
-	int64 Numbers = Cannon->GetEffectiveBuildingNumber();
+	if (!GetAmmunitionBuildingsForTrigger(Context.TriggerNumberBonus, Ammunition)) { return false; }
+	int64 Numbers = GetTriggeredBuildingNumber(Context);
 	for (const ACastleBuildingBase* Other : Ammunition) { Numbers += Other->GetEffectiveBuildingNumber() + (Cannon->GetBuildingLevel() == 5 ? 1 : 0); }
 	float FarmBonus = 0.0f;
 	if (!GetTriggerFarmBonus(Context, FarmBonus)) { return false; }
@@ -84,15 +93,27 @@ void UCastleCannonTowerAttackEffectComponent::HandleBoardBuildingTriggered(ACast
 {
 	// D10 已确认：本体主动调用由建筑入口正常处理，附属弹药库只有真实 NPC 进入才联动。
 	// 建造中的炮塔不属于可触发集合；自身事件已经入队，不能再把自己当作弹药库重复结算。
-	if (Context.Source != ECastleBuildingTriggerSource::NPCEntry || Source == GetOwner()) { return; }
+	if (Context.Source != ECastleBuildingTriggerSource::NPCEntry || Context.bChainReactionChild || Source == GetOwner()) { return; }
 	const ACastleBuildingBase* Cannon = CastChecked<ACastleBuildingBase>(GetOwner());
 	if (!Cannon->CanReceiveBuildingTrigger()) { return; }
+	const ACastleBoard* Board = RegisteredBoard.Get();
+	if (!Board || !IsValid(Source))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("炮塔 %s 拒绝弹药库联动：棋盘或触发建筑已失效。"), *Cannon->GetPathName());
+		return;
+	}
+	const auto* Runtime = GetWorld()->GetSubsystem<UCastleBadgeRuntimeSubsystem>();
+	if (Runtime && Runtime->ShouldChainTower(*Board, *Source, *Cannon))
+	{
+		// 同一进塔事件既命中弹药库又命中连锁时，该塔由连锁入口结算一次。
+		return;
+	}
 	TArray<ACastleBuildingBase*> Ammunition;
 	if (!GetAmmunitionBuildings(Ammunition)) { return; }
 	if (Ammunition.Contains(Source))
 	{
 		// 刻意调用组件统一入口而不是建筑入口：保留校验、计数与伤害结算，但不再次广播棋盘事件。
-		if (!Trigger(Context))
+		if (!Trigger(Context, true))
 		{
 			UE_LOG(LogMoving_Castle, Error, TEXT("炮塔 %s 的弹药库 %s 进入联动失败。"), *Cannon->GetPathName(), *GetPathNameSafe(Source));
 		}

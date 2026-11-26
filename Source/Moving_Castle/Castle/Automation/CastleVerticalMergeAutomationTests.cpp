@@ -315,7 +315,7 @@ bool FCastleDemolitionNoBadgeRewardTest::RunTest(const FString&)
 	FCastleBadgeDefinition Badge;
 	FText Reason;
 	bool bNeedsReplacement = false;
-	if (!FCastleBadgeDefinition::TryMakeStandard(ECastleBadgeType::UpgradeRoomCards, Badge)
+	if (!FCastleBadgeDefinition::TryMakeStandard(ECastleBadgeType::WorkshopRefund, Badge)
 		|| !Badges->TryAcquireBadge(Badge, bNeedsReplacement, Reason))
 	{
 		AddError(Reason.ToString());

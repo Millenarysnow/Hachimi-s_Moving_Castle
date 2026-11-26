@@ -337,6 +337,10 @@ public:
 	/** 查询指定坐标当前登记的建筑（含侧挂越界格）；未占用时返回空指针。 */
 	ACastleBuildingBase* GetBuildingAt(const FIntVector& Coordinate) const;
 
+	/** 有效道路是已建成的高速公路，且正上方紧贴的一格没有其他房间。 */
+	bool IsHighwayCellActive(const FIntVector& Coordinate) const;
+	TArray<FIntVector> GetActiveHighwayCells() const;
+
 	/** 正下方底面投影内扫描指定层数；-1 表示全部下层，结果不含自身且按建筑实例去重。 */
 	bool GetBuildingsBelow(const ACastleBuildingBase* Source, int32 LayerCount, TArray<ACastleBuildingBase*>& OutBuildings) const;
 
@@ -444,6 +448,8 @@ protected:
 
 	/** 从棋盘索引移除建筑的所有坐标，但不销毁 Actor。 */
 	bool UnregisterBuilding(ACastleBuildingBase* Building, FText& OutFailureReason);
+	/** 只刷新本格及其下方，其他房间的道路状态与本次占用变化无关。 */
+	void RefreshHighwayMarkersAt(const FIntVector& ChangedCell);
 
 	/** 在占用范围的底面中心生成并初始化建筑 Actor，尚未写入棋盘占用索引。 */
 	ACastleBuildingBase* SpawnBuildingActor(const FCastleBuildingDescriptor& Descriptor, const TArray<FIntVector>& OccupiedCoordinates, FText& OutFailureReason);

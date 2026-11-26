@@ -51,6 +51,12 @@ public:
 	UFUNCTION(BlueprintPure, Category="移动城堡|NPC导航")
 	int32 GetMaxPlayerWaypoints() const { return MaxPlayerWaypoints; }
 
+	/** 只计玩家草稿，不包括双门自动附加的两个端点。 */
+	int32 GetUsedWaypointCount() const { return DraftWaypoints.Num(); }
+
+	/** 上限减去已用草稿点；预设或下调上限超量时保留实际差值，方便界面明确反馈。 */
+	int32 GetRemainingWaypointCount() const { return MaxPlayerWaypoints - GetUsedWaypointCount(); }
+
 	virtual void Tick(float DeltaSeconds) override;
 	bool IsEditing() const { return bEditing; }
 
@@ -65,6 +71,9 @@ public:
 
 	/** 路径编辑进入或退出时广播，界面只订阅唯一编辑状态。 */
 	FCastlePatrolEditingChanged OnEditingStateChanged;
+
+	/** 草稿或上限发生变化时发送，监听者读取本次提交后的已用与剩余点数。 */
+	FSimpleMulticastDelegate OnWaypointDraftChanged;
 
 	/** 开战只取消草稿和输入占用，不提交、不清除正式路线。 */
 	void CancelEditingDraft();
@@ -111,6 +120,8 @@ private:
 	void ShowMessage(const FString& Message, bool bSuccess) const;
 
 	friend class FCastleMainTowerWaypointLimitTest;
+	/** HUD 测试走 P 键和视线解析后的放点入口，覆盖实际草稿通知。 */
+	friend class FCastlePathEditWaypointHUDTest;
 	/** 教学 PIE 验收将确定的格心送进实际路径草稿，用 P 入口提交。 */
 	friend class FCastleTutorialPIEDriver;
 };

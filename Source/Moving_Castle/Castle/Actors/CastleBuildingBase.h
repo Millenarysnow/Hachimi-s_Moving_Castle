@@ -18,6 +18,8 @@ class UAssemblyFlightComponent;
 class UBuildingGameplayRootComponent;
 class UCastleBuildingEffectComponent;
 class UCastleBuildingPCGComponent;
+class UCastleDirectorSubsystem;
+class UCastleRoomTraitComponent;
 
 /**
  * 所有可放置建筑的共同 Actor 基类。
@@ -121,6 +123,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
 	FCastleBuildingDescriptor GetBuildingDescriptor() const;
 
+	/** 特质随原建筑实例保留，普通房间和炮塔仍沿用原有建造与合并身份。 */
+	ECastleRoomTrait GetRoomTrait() const { return RoomTrait; }
+	UCastleRoomTraitComponent* GetRoomTraitComponent() const { return RoomTraitComponent; }
+
 	/** 返回卡牌、场上建筑和升级结果共享的同一份建筑定义。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
 	UCastleBuildingDefinition* GetBuildingDefinition() const { return BuildingDefinition; }
@@ -215,4 +221,21 @@ protected:
 	/** 建筑标签的深色底牌，确保数字在各种建筑颜色上都能读取。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "建筑标签")
 	TObjectPtr<class UStaticMeshComponent> PrototypeLabelPlate;
+
+private:
+	friend class ACastleBoard;
+	friend class UCastleDirectorSubsystem;
+
+	/** 由棋盘在当前格及上方相邻格占用变化时刷新道路标识。 */
+	void UpdateTraitLabel(bool bHighwayActive);
+
+	/** 只在导演成功传送的提交点调用，同时移除门体的显示和准星碰撞。 */
+	void ConsumeSkyIslandPortal();
+
+	UPROPERTY(Transient)
+	TObjectPtr<UCastleRoomTraitComponent> RoomTraitComponent;
+	UPROPERTY(Transient)
+	ECastleRoomTrait RoomTrait = ECastleRoomTrait::None;
+	UPROPERTY(Transient)
+	int32 TraitRemainingRounds = 0;
 };

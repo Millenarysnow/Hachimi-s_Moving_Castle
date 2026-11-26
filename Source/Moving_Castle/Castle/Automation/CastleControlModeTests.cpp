@@ -6,6 +6,7 @@
 #include "Camera/CameraActor.h"
 #include "Castle/Actors/CastleBoard.h"
 #include "Castle/Actors/CastleBuildingBase.h"
+#include "Castle/Automation/CastlePIEAutomation.h"
 #include "Castle/Components/CastleBackpackComponent.h"
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Data/CastleBuildingDefinition.h"
@@ -43,7 +44,8 @@ namespace
 
 	ACastlePlayerController* GetViewportPlayer()
 	{
-		UWorld* World = GEngine->GameViewport ? GEngine->GameViewport->GetWorld() : nullptr;
+		// 仅取本用例启动的 PIE 控制器，避免向其他测试的临时世界发送输入。
+		UWorld* World = GEditor->PlayWorld;
 		return World ? Cast<ACastlePlayerController>(World->GetFirstPlayerController()) : nullptr;
 	}
 
@@ -64,6 +66,8 @@ namespace
 		bool Update() override
 		{
 			auto* Player = GetViewportPlayer();
+			// 请求在编辑器 Tick 启动，首个潜伏帧不保证正式玩家已经就绪。
+			if (!Player && FPlatformTime::Seconds() < StartupDeadline) { return false; }
 			if (!Test.TestNotNull(TEXT("真实视口控制器"), Player)) { return true; }
 			switch (Stage++)
 			{
@@ -191,6 +195,7 @@ namespace
 
 	private:
 		FAutomationTestBase& Test;
+		const double StartupDeadline = FPlatformTime::Seconds() + 20.0;
 		int32 Stage = -2;
 		FRotator Rotation = FRotator::ZeroRotator;
 	};
@@ -451,8 +456,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleControlModesTest, "MovingCastle.ControlM
 
 bool FCastleControlModesTest::RunTest(const FString& Parameters)
 {
-	if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/MainMap"), true)) { return false; }
+	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
 	ADD_LATENT_AUTOMATION_COMMAND(FCheckControlModes(*this));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
 	return true;
 }
 
@@ -464,8 +470,9 @@ bool FCastleDemolishMenuTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("右下角触发时面板完全留在逻辑视口内"),
 		UCastleBuildingDemolishMenuWidget::ClampPopupPosition(FVector2D(1278, 718), FVector2D(220, 300), FVector2D(1280, 720)),
 		FVector2D(1060, 420));
-	if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/Test/TestMap1"), true)) { return false; }
+	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/Test/TestMap1"))) { return false; }
 	ADD_LATENT_AUTOMATION_COMMAND(FCheckDemolishMenu(*this));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
 	return true;
 }
 

@@ -9,6 +9,7 @@
 
 class ACastleBoard;
 class UCastleMenuRecorder;
+class ACastleBuildingBase;
 class ACastleDirectorNodeActor;
 class ACastlePlayerController;
 class ACastlePatrolRoute;
@@ -21,10 +22,12 @@ class UCastleTowerUpgradeRewardWidget;
 class UCastleWildcardRoomPickerWidget;
 class ACastleSkyIslandBase;
 enum class ECastleSkyIslandType : uint8;
-struct FCastleBadgeDefinition;
+class UCastleBadgeDataAsset;
 
 /** 原生阶段事件不承担流程决策，界面和输入只监听最终状态。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCastleDirectorPhaseChanged, ECastleDirectorPhase);
+/** 导演接受清场后发布已提交的战斗类型与关号。 */
+DECLARE_MULTICAST_DELEGATE_TwoParams(FCastleBattleClearedForItems, ECastleBattleKind, int32);
 
 /** 整局导演：在白名单地图的首次游戏 Tick 启动，世界重载时自然销毁全部单局状态。 */
 UCLASS()
@@ -55,9 +58,12 @@ public:
 	void ClaimTowerUpgradeReward(int32 Index);
 	void DiscardTowerUpgradeRewards();
 	bool TryInteractWithSkyIsland(const FVector& Start, const FVector& End, FText& OutReason);
+	/** 额外空岛使用当前节点的进度；从离岛门返塔后仍停留在同一关。 */
+	bool TryEnterBonusSkyIslandFromPortal(ACastleBuildingBase* PortalRoom, FText& OutReason);
 	bool RequestIslandRoomShop(ACastleSkyIslandBase* Island, FText& OutReason);
 	bool RequestIslandRoomReward(ACastleSkyIslandBase* Island, UCastlePendingRoomReward* Reward, FText& OutReason);
-	bool RequestIslandBadgeReward(ACastleSkyIslandBase* Island, const FCastleBadgeDefinition& Badge, FText& OutReason);
+	/** 保留完整徽章资产到发放边界，便于在库存和界面更新前校验显示资源。 */
+	bool RequestIslandBadgeReward(ACastleSkyIslandBase* Island, const UCastleBadgeDataAsset& Badge, FText& OutReason);
 #if !UE_BUILD_SHIPPING
 	/** 在编辑阶段从本局正式配置指定空岛，沿用节点入岛与离岛的事务。 */
 	bool TryEnterSkyIslandByTypeForDebug(ECastleSkyIslandType Type, FText& OutReason);
@@ -91,6 +97,12 @@ public:
 	static ECastleDirectorNodeKind GetNodeKindForStep(const UCastleDirectorConfigDataAsset& InConfig, int32 Step);
 	static TArray<ECastleDirectorNodeKind> GetNodeKindsForStep(const UCastleDirectorConfigDataAsset& InConfig, int32 Step);
 	FCastleDirectorPhaseChanged OnDirectorPhaseChanged;
+	/** 正式开局依赖已就绪，仅发送一次，先于第一次进入编辑阶段。 */
+	FSimpleMulticastDelegate OnRunStarted;
+	/** 成功进入编辑阶段后发送，含开局、战斗奖励提交及空岛返塔。 */
+	FSimpleMulticastDelegate OnEditingPhaseEntered;
+	/** 已接受并提交的清场，带战斗种类及关号；编辑阶段仍由后续奖励流程进入。 */
+	FCastleBattleClearedForItems OnBattleClearedForItems;
 	/** 战斗暂停或倍速状态变化通知，HUD 据此即时切换图标。 */
 	FSimpleMulticastDelegate OnBattleControlStateChanged;
 
@@ -106,6 +118,8 @@ private:
 	friend class FCastleDirectorBattleIntegrationTest;
 	friend class FDirectorBattleScenario;
 	friend class FCastleDirectorWave2Scenario;
+	friend class FCastlePortalRoomTraitTest;
+	friend class FCastleSelfOrbitingRoomTraitTest;
 #endif
 	/** 启动只尝试一次；配置、场景或资产错误通过日志和屏幕明确失败。 */
 	void TryAutoStart();
@@ -121,9 +135,9 @@ private:
 	bool TryStartSelectedBattle(ACastleDirectorNodeActor* Node, FText& OutReason);
 	/** 真实节点先根据关数和节点序号确定类型及玩法种子。 */
 	bool TryEnterSkyIsland(ACastleDirectorNodeActor& Node, const UCastleDirectorConfigDataAsset& IslandConfig, FText& OutReason);
-	/** 统一提交配置查表、生成和传送。节点参数用于报告真实节点的路径。 */
+	/** 统一提交生成与传送；传送门入口保留当前节点，且在传送成功后才消费门体。 */
 	bool TryEnterConfiguredSkyIsland(const UCastleDirectorConfigDataAsset& IslandConfig, ECastleSkyIslandType Type,
-		int32 Seed, const ACastleDirectorNodeActor* Node, FText& OutReason);
+		int32 Seed, const ACastleDirectorNodeActor* Node, FText& OutReason, ACastleBuildingBase* PortalRoom = nullptr);
 	bool TryDepartSkyIsland(FText& OutReason);
 	bool ValidateIslandAction(const ACastleSkyIslandBase* Island, FText& OutReason) const;
 	bool RecallBattleNPCs(FText& OutReason);
@@ -160,6 +174,10 @@ private:
 	FRotator IslandReturnControlRotation;
 	bool bDepartureRequested = false;
 	bool bIslandShopGranted = false;
+	bool bEnteringSkyIsland = false;
+	bool bCurrentIslandIsBonus = false;
+	/** 只在传送成功时递增；同一关使用第二张门牌会独立抽取。 */
+	uint32 BonusSkyIslandVisitCount = 0;
 	UPROPERTY(Transient) TArray<TObjectPtr<UCastlePendingRoomReward>> UpgradeRoomRewards;
 	TArray<FCastleTowerUpgradeRewardEntry> UpgradeRewards;
 	int32 ActiveUpgradeRewardIndex = INDEX_NONE;
@@ -178,6 +196,8 @@ private:
 	bool bRunning = false;
 	bool bStartAttempted = false;
 	bool bApplyingReward = false;
+	/** 只由实际受理的清场置位。空岛返回、开局与重复按领奖键都不能多结算一轮。 */
+	bool bSelfOrbitingRoundPending = false;
 	bool bBattlePaused = false;
 	bool bBattleDoubleSpeed = false;
 	bool bFirstTowerDamageInBattle = false;

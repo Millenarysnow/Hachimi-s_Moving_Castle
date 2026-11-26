@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
+#include "Castle/Automation/CastlePIEAutomation.h"
 #include "CastleNavigationSubsystem.h"
 #include "CastleMassSpawner.h"
 #include "CastleMassTraits.h"
@@ -29,11 +30,14 @@ namespace CastleMassPatrolTests
 			if (FPlatformTime::Seconds() - StartTime > 60.0) { Test->AddError(TEXT("共享闭环验证超时。")); return true; }
 			if (!Demo)
 			{
+				// Editor 用例只读取本次 PIE。独立进程保持原有 Game 世界入口。
+				const EWorldType::Type ExpectedWorld = GIsEditor ? EWorldType::PIE : EWorldType::Game;
 				for (const FWorldContext& Context : GEngine->GetWorldContexts())
 				{
-					if (Context.WorldType != EWorldType::Game) { continue; }
+					if (Context.WorldType != ExpectedWorld || !Context.World()) { continue; }
 					for (TActorIterator<ACastleNavigationDemo> It(Context.World()); It; ++It) { Demo = *It; break; }
 				}
+				if (GIsEditor && !GEditor->PlayWorld) { return false; }
 				if (!Test->TestNotNull(TEXT("在导航楼梯演示地图中运行"), Demo)) { return true; }
 				World = Demo->GetWorld();
 				Navigation = World->GetSubsystem<UCastleNavigationSubsystem>();
@@ -158,11 +162,17 @@ namespace CastleMassPatrolTests
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleMassSharedPatrolTest, "MovingCastle.Patrol.SharedLoop",
-	EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 
 bool FCastleMassSharedPatrolTest::RunTest(const FString& Parameters)
 {
+	// 受管 Editor 队列中自行载入同一演示地图，覆盖真实 NavMesh 与 Mass 的全链路。
+	if (GIsEditor && !CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/Test/L_NPCNavigationDemo"))) { return false; }
 	ADD_LATENT_AUTOMATION_COMMAND(CastleMassPatrolTests::FSharedLoopCommand(this));
+	if (GIsEditor)
+	{
+		FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
+	}
 	return true;
 }
 
