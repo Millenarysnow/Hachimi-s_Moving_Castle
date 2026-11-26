@@ -5,6 +5,7 @@
 
 class UButton;
 class UCastleBadgeSubsystem;
+class UImage;
 class UPanelWidget;
 class UTextBlock;
 
@@ -25,17 +26,31 @@ protected:
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UTextBlock> PendingBadgeLabel;
 
+	/** 候选徽章图标与名称说明由同一笔待替换奖励驱动。 */
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UImage> PendingBadgeIcon;
+
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UPanelWidget> ReplaceSlots;
+
+	/** 与按钮层共用六行布局。图标层不参与命中测试，保留原按钮热区和焦点。 */
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UPanelWidget> ReplaceIcons;
 
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UButton> DiscardButton;
 
 private:
+	/** 图标层与按钮层按索引一一对应，用同一份库存快照刷新。 */
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<UTextBlock>> SlotLabels;
+	TArray<TObjectPtr<UButton>> SlotButtons;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UImage>> SlotIcons;
 
 	TWeakObjectPtr<UCastleBadgeSubsystem> Badges;
+
+	/** 校验候选和库存图标，再一起更新弹窗内容。 */
+	bool UpdateBadgeSlots(const UCastleBadgeSubsystem& Source);
 
 	UFUNCTION()
 	void RefreshBadges();
