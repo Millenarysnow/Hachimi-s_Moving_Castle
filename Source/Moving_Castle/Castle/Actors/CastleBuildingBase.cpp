@@ -97,6 +97,17 @@ bool ACastleBuildingBase::TriggerBuildingEffect(const FCastleBuildingTriggerCont
 
 void ACastleBuildingBase::SetPlacementComplete(const bool bComplete)
 {
+	// 先核对已经发布的整组贴花，再改变建筑状态，避免同一栋楼只有部分占格切换可见性。
+	for (int32 Index = 0; Index < FloorDecals.Num(); ++Index)
+	{
+		if (!IsValid(FloorDecals[Index]) || !FloorDecals[Index]->IsRegistered())
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("建筑 %s 的地板贴花 [%d] 已失效或未注册，无法切换放置状态。"),
+				*GetPathName(), Index);
+			ensureMsgf(false, TEXT("建筑 %s 的地板贴花 [%d] 无效。"), *GetPathName(), Index);
+			return;
+		}
+	}
 	if (bHasCompletedPlacement != bComplete)
 	{
 		if (auto* Triggers = GetWorld()->GetSubsystem<UCastleBuildingTriggerSubsystem>()) { Triggers->NotifyBuildingStateChanged(this); }
@@ -106,7 +117,7 @@ void ACastleBuildingBase::SetPlacementComplete(const bool bComplete)
 	PrototypeLabelPlate->SetVisibility(bComplete, false);
 	for (UDecalComponent* Decal : FloorDecals)
 	{
-		if (IsValid(Decal)) { Decal->SetVisibility(bComplete, false); }
+		Decal->SetVisibility(bComplete, false);
 	}
 }
 
@@ -378,7 +389,8 @@ bool ACastleBuildingBase::ConfigureFloorDecals(const ACastleBoard& Board, FText&
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
 		for (UDecalComponent* Decal : PendingDecals)
 		{
-			if (IsValid(Decal)) { Decal->DestroyComponent(); }
+			// 数组只在组件创建成功后写入；注册失败时也要一并撤销未注册的组件。
+			Decal->DestroyComponent();
 		}
 		return false;
 	};
@@ -413,6 +425,9 @@ bool ACastleBuildingBase::ConfigureFloorDecals(const ACastleBoard& Board, FText&
 	const FTransform& BoardTransform = Board.GetActorTransform();
 	// Decal 局部 +X 轴朝向楼板，投影深度保持短距离，避免纹理落到楼板附近的墙面。
 	const FQuat DecalRotation = BoardTransform.GetRotation() * FRotator(-90.0f, 0.0f, 0.0f).Quaternion();
+	// 俯投后贴花 X 是棋盘高度轴、Z 是棋盘宽度轴，非等比缩放也必须沿对应轴传递。
+	const FVector BoardScale = BoardTransform.GetScale3D();
+	const FVector DecalWorldScale(BoardScale.Z, BoardScale.Y, BoardScale.X);
 	PendingDecals.Reserve(OccupiedCoordinates.Num());
 	for (const FIntVector& Coordinate : OccupiedCoordinates)
 	{
@@ -436,7 +451,7 @@ bool ACastleBuildingBase::ConfigureFloorDecals(const ACastleBoard& Board, FText&
 		// 格心先落到对应占格的楼板顶面，再应用棋盘完整变换，支持旋转、缩放和竖向占格。
 		const FVector WorldLocation = Board.GetGridWorldLocation(Coordinate)
 			+ BoardTransform.TransformVector(LocalSurfaceOffset);
-		const FTransform DecalWorldTransform(DecalRotation, WorldLocation, BoardTransform.GetScale3D());
+		const FTransform DecalWorldTransform(DecalRotation, WorldLocation, DecalWorldScale);
 		if (DecalWorldTransform.ContainsNaN() || !FMath::IsFinite(FloorWidth) || FloorWidth <= 0.0f
 			|| !FMath::IsFinite(FloorDepth) || FloorDepth <= 0.0f)
 		{
