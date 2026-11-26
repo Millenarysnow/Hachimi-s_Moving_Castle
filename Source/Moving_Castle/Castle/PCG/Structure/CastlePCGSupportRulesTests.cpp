@@ -3,6 +3,8 @@
 #include "CastlePCGSupportRules.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/Texture2D.h"
+#include "Engine/Texture2DArray.h"
+#include "ImageCore.h"
 #include "Castle/PCG/HachimisV4/HachimisV4MeshValidation.h"
 #include "Interfaces/Interface_CollisionDataProvider.h"
 #include "Materials/Material.h"
@@ -14,6 +16,33 @@
 
 namespace CastlePCGSupportTests
 {
+	/** 从包中读取五层源像素。对整张作者层逐字节比较，再检查金边区域和一片瓦在各层的颜色。 */
+	bool CheckColorLayers(const UMaterialExpressionTextureSample* Sample, UTexture2D* Source, bool bShield)
+	{
+		UTexture2DArray* Layers = Sample ? Cast<UTexture2DArray>(Sample->Texture) : nullptr;
+		FImage Original, Variants;
+		if (!Layers || !Layers->SRGB || !Source->Source.GetMipImage(Original,0) || !Layers->Source.GetMipImage(Variants,0)
+			|| Variants.NumSlices != 5 || Original.SizeX != Variants.SizeX || Original.SizeY != Variants.SizeY) { return false; }
+		Original.ChangeFormat(ERawImageFormat::BGRA8, EGammaSpace::sRGB);
+		Variants.ChangeFormat(ERawImageFormat::BGRA8, EGammaSpace::sRGB);
+		const auto Pixels = Variants.AsBGRA8();
+		const auto Author = Original.AsBGRA8();
+		if (FMemory::Memcmp(Author.GetData(),Pixels.GetData(),Author.Num()*sizeof(FColor)) != 0) { return false; }
+		const FIntPoint Gold = bShield ? FIntPoint(7,3) : FIntPoint(8,6); // 盾塔香槟金，通用屋面黄铜。
+		const FIntPoint Tile = bShield ? FIntPoint(4,7) : FIntPoint(11,7);
+		TSet<FColor> TileColors;
+		for (int32 Layer=1; Layer<=4; ++Layer)
+		{
+			const FColor* Slice = Pixels.GetData() + Layer*Author.Num();
+			TileColors.Add(Slice[(Tile.Y*64+32)*Original.SizeX + Tile.X*64+32]);
+			for (int32 Y=0; Y<64; ++Y)
+			{
+				const int32 Offset = (Gold.Y*64+Y)*Original.SizeX + Gold.X*64;
+				if (FMemory::Memcmp(Slice+Offset,Author.GetData()+Offset,64*sizeof(FColor)) != 0) { return false; }
+			}
+		}
+		return TileColors.Num() == 4;
+	}
 	/** 使用重载后的正式资产覆盖跨进程引用和每个纯结构规则的实际配置。 */
 	const UCastlePCGRuleSetDataAsset* LoadRules(FAutomationTestBase& Test)
 	{
@@ -181,7 +210,7 @@ bool FCastlePCGSupportAssets::RunTest(const FString& Parameters)
 	const FString Root = TEXT("/Game/MovingCastle/Model/Buildings/HachimisV4/QuadRoofOverlay/");
 	const auto AssetPath = [&Root](const FString& Name) { return Root + Name + TEXT(".") + Name; };
 	const auto* Palette = LoadObject<UMaterial>(nullptr, *AssetPath(TEXT("M_HC515_RoofPalette")));
-	const auto* BaseColor = LoadObject<UTexture2D>(nullptr, *AssetPath(TEXT("T_HC515_Roof_BaseColor")));
+	auto* BaseColor = LoadObject<UTexture2D>(nullptr, *AssetPath(TEXT("T_HC515_Roof_BaseColor")));
 	const auto* ORM = LoadObject<UTexture2D>(nullptr, *AssetPath(TEXT("T_HC515_Roof_ORM")));
 	if (!TestNotNull(TEXT("共享调色板材质可重载"), Palette)
 		|| !TestNotNull(TEXT("基础色贴图可重载"), BaseColor) || !TestNotNull(TEXT("ORM 贴图可重载"), ORM)) { return false; }
@@ -190,7 +219,7 @@ bool FCastlePCGSupportAssets::RunTest(const FString& Parameters)
 	const UMaterialEditorOnlyData* Inputs = Palette->GetEditorOnlyData();
 	const auto* BaseSample = Cast<UMaterialExpressionTextureSample>(Inputs->BaseColor.Expression);
 	const auto* ORMSample = Cast<UMaterialExpressionTextureSample>(Inputs->AmbientOcclusion.Expression);
-	TestTrue(TEXT("基础色使用贴图 RGB，不使用纯色常量"), BaseSample && BaseSample->Texture == BaseColor
+	TestTrue(TEXT("共用屋面保留作者图与黄铜，瓦面支持四色"), CastlePCGSupportTests::CheckColorLayers(BaseSample,BaseColor,false)
 		&& !Inputs->BaseColor.UseConstant && Inputs->BaseColor.OutputIndex == 0);
 	TestTrue(TEXT("同一线性贴图的 R/G/B 准确连接 AO/粗糙度/金属度"), ORMSample && ORMSample->Texture == ORM
 		&& Inputs->AmbientOcclusion.OutputIndex == 1 && Inputs->Roughness.Expression == ORMSample && Inputs->Roughness.OutputIndex == 2
@@ -198,11 +227,11 @@ bool FCastlePCGSupportAssets::RunTest(const FString& Parameters)
 		&& !Inputs->AmbientOcclusion.UseConstant && !Inputs->Roughness.UseConstant && !Inputs->Metallic.UseConstant);
 	// 盾塔交付仅内嵌基础色。其余输入恢复 Blender 写入 FBX 前的表面参数。
 	const auto* ShieldPalette = LoadObject<UMaterial>(nullptr, *AssetPath(TEXT("M_HC515_ShieldRoofPalette")));
-	const auto* ShieldColor = LoadObject<UTexture2D>(nullptr, *AssetPath(TEXT("T_HC515_ShieldRoof_BaseColor")));
+	auto* ShieldColor = LoadObject<UTexture2D>(nullptr, *AssetPath(TEXT("T_HC515_ShieldRoof_BaseColor")));
 	if (!TestNotNull(TEXT("盾塔调色板可重载"), ShieldPalette) || !TestNotNull(TEXT("盾塔图集可重载"), ShieldColor)) { return false; }
 	const UMaterialEditorOnlyData* ShieldInputs = ShieldPalette->GetEditorOnlyData();
 	const auto* ShieldSample = Cast<UMaterialExpressionTextureSample>(ShieldInputs->BaseColor.Expression);
-	TestTrue(TEXT("盾塔调色板使用 1024×512 sRGB 源图集"), ShieldSample && ShieldSample->Texture == ShieldColor
+	TestTrue(TEXT("盾塔四色陶片保留 1024×512 作者图与香槟金"), CastlePCGSupportTests::CheckColorLayers(ShieldSample,ShieldColor,true)
 		&& !ShieldInputs->BaseColor.UseConstant && ShieldColor->SRGB && ShieldColor->Source.IsValid()
 		&& ShieldColor->Source.GetSizeX() == 1024 && ShieldColor->Source.GetSizeY() == 512);
 	TestTrue(TEXT("盾塔粗糙度 0.5、金属度 0、高光 0.5、无自发光"), ShieldInputs->Roughness.UseConstant
