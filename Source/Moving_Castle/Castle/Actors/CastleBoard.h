@@ -211,7 +211,7 @@ public:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "战斗|敌人")
 	TObjectPtr<ACastleMassEnemySpawner> InitialEnemySpawner;
 
-	/** 原型背包装入普通房间、箭塔、炮塔、农田和盾塔各两张五色 1～9 号卡。 */
+	/** 原型背包装入普通房间、箭塔、炮塔、农田和盾塔各两张四种玩法色的 1～9 号卡。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "棋盘|原型操作")
 	TObjectPtr<UCastleBackpackComponent> PrototypeBackpack;
 	/** 教程地图显式关闭样例牌，由教学导演按步骤发放固定手牌。 */

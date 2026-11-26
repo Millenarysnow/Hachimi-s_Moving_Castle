@@ -102,7 +102,6 @@ bool UCastleWildcardRoomPickerWidget::BeginBoundReward(FText& OutFailureReason)
 		case ECastleTileColor::Blue: Label = INVTEXT("蓝色"); break;
 		case ECastleTileColor::Green: Label = INVTEXT("绿色"); break;
 		case ECastleTileColor::Yellow: Label = INVTEXT("黄色"); break;
-		case ECastleTileColor::Purple: Label = INVTEXT("紫色"); break;
 		default: checkNoEntry(); break;
 		}
 		AppendChoice(*ColorChoices, Label, FSimpleDelegate::CreateWeakLambda(this, [this, Index]

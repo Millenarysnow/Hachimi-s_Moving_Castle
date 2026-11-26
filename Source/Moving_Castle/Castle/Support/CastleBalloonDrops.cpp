@@ -25,7 +25,6 @@ namespace
 		case ECastleTileColor::Yellow: return FLinearColor(1.0f, 0.72f, 0.03f);
 		case ECastleTileColor::Blue: return FLinearColor(0.05f, 0.35f, 1.0f);
 		case ECastleTileColor::Green: return FLinearColor(0.06f, 0.82f, 0.24f);
-		case ECastleTileColor::Purple: return FLinearColor(0.58f, 0.12f, 0.80f);
 		default: checkNoEntry(); return FLinearColor::Black;
 		}
 	}
@@ -61,7 +60,7 @@ bool UCastleSupportTowerSubsystem::LaunchBalloon(ACastleBuildingBase& Source, AC
 	for (const FVector& Point : Data.BalloonPath) { Flight.Path.Add(Origin + Board.GetActorTransform().TransformVectorNoScale(Point)); }
 	ACastleSupplyBalloon* Balloon = GetWorld()->SpawnActor<ACastleSupplyBalloon>(Flight.Path[0], Board.GetActorRotation());
 	const uint64 Id = NextBalloonId++;
-	if (Flight.Color < ECastleTileColor::Red || Flight.Color > ECastleTileColor::Purple
+	if (!CastleTileColors::IsPlayable(Flight.Color)
 		|| !Balloon || !Balloon->Configure(Id, Data.FlightMaterial, FlightTint(Flight.Color)))
 	{
 		if (Balloon) { Balloon->Destroy(); }

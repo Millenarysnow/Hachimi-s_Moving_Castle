@@ -10,7 +10,7 @@
 
 namespace
 {
-	/** 统一映射五种正式玩法色；灰色或未知枚举视为非法配置。 */
+	/** 详情的色标和名称均取同一玩法色，非法色值交给调用方报告。 */
 	bool TryResolveDetailGameplayColor(const ECastleTileColor Color, FLinearColor& OutLinearColor, FString& OutColorName)
 	{
 		switch (Color)
@@ -30,10 +30,6 @@ namespace
 		case ECastleTileColor::Yellow:
 			OutLinearColor = FLinearColor(FColor::FromHex(TEXT("E4AB31")));
 			OutColorName = TEXT("黄色");
-			return true;
-		case ECastleTileColor::Purple:
-			OutLinearColor = FLinearColor(FColor::FromHex(TEXT("9658DC")));
-			OutColorName = TEXT("紫色");
 			return true;
 		default:
 			return false;

@@ -8,31 +8,8 @@
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
+#include "Moving_Castle.h"
 #include "UObject/ConstructorHelpers.h"
-
-namespace
-{
-	/** 返回格子颜色对应的占位材质颜色。 */
-	FLinearColor GetGroundTileColor(const ECastleTileColor Color)
-	{
-		switch (Color)
-		{
-		case ECastleTileColor::Red:
-			return FLinearColor(0.75f, 0.08f, 0.08f, 1.0f);
-		case ECastleTileColor::Blue:
-			return FLinearColor(0.06f, 0.25f, 0.80f, 1.0f);
-		case ECastleTileColor::Green:
-			return FLinearColor(0.05f, 0.58f, 0.18f, 1.0f);
-		case ECastleTileColor::Yellow:
-			return FLinearColor(0.90f, 0.60f, 0.04f, 1.0f);
-		case ECastleTileColor::Purple:
-			return FLinearColor(0.48f, 0.12f, 0.72f, 1.0f);
-		case ECastleTileColor::Gray:
-		default:
-			return FLinearColor(0.42f, 0.46f, 0.52f, 1.0f);
-		}
-	}
-}
 
 ACastleGroundTileActor::ACastleGroundTileActor()
 {
@@ -87,13 +64,22 @@ bool ACastleGroundTileActor::InitializeGroundCell(const FCastleGroundCell& InGro
 		return false;
 	}
 
+	// 格面的显示色与摆放属性必须相符，先校验再创建材质和启用格面碰撞。
+	FLinearColor TileTint;
+	if (!CastleTileColors::TryGetGridTint(InGroundCell.Color, TileTint))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("地块 %s 在坐标 %s 使用了无效色值 %d。"),
+			*GetPathName(), *InGroundCell.Coordinate.ToString(), static_cast<int32>(InGroundCell.Color));
+		return false;
+	}
+
 	UMaterialInstanceDynamic* TileMaterial = UMaterialInstanceDynamic::Create(PrototypeMaterial, TileMesh);
 	UMaterialInstanceDynamic* PlateMaterial = UMaterialInstanceDynamic::Create(PrototypeMaterial, NumberPlate);
 	if (TileMaterial == nullptr || PlateMaterial == nullptr)
 	{
 		return false;
 	}
-	TileMaterial->SetVectorParameterValue(TEXT("Color"), GetGroundTileColor(InGroundCell.Color));
+	TileMaterial->SetVectorParameterValue(TEXT("Color"), TileTint);
 	PlateMaterial->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.015f, 0.015f, 0.02f, 1.0f));
 
 	GroundCell = InGroundCell;

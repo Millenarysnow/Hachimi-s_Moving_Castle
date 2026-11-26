@@ -27,7 +27,7 @@ struct MOVING_CASTLE_API FCastleWildcardRoomSpec
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "万能卡")
 	TArray<TObjectPtr<UCastleBuildingDefinition>> AllowedDefinitions;
 
-	/** 空数组表示全部正式五色。 */
+	/** 空数组表示红、黄、蓝、绿全部玩法色。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "万能卡")
 	TArray<ECastleTileColor> AllowedColors;
 
@@ -44,9 +44,6 @@ struct MOVING_CASTLE_API FCastleWildcardRoomSpec
 	/** 在显示界面以前一次校验全部正式候选值，配置非法时整项奖励失败。 */
 	bool TryResolveOptions(TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> DefinitionPool,
 		FCastleWildcardRoomOptions& OutOptions, FText& OutFailureReason) const;
-
-	/** 由万能卡解析器与直接发牌共用五种正式颜色。 */
-	static TConstArrayView<ECastleTileColor> GetLegalColors();
 };
 
 /** 房间组模板决定属性的生成时机和发放方式。 */

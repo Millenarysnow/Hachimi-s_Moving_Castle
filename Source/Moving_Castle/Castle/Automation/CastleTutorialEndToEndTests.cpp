@@ -496,7 +496,7 @@ bool FCastleFortressPopupViewportTest::RunTest(const FString&)
 			auto* CardSlot = Cast<USizeBox>(Picker->GetWidgetFromName(TEXT("PreviewCardSlot")));
 			if (!TestNotNull(TEXT("工坊卡牌槽"), CardSlot)) { return true; }
 			TestNull(TEXT("完全自定义房打开时没有默认预览"), CardSlot->GetContent());
-			if (!Select(TEXT("DefinitionChoices"), 0) || !Select(TEXT("ColorChoices"), 3)) { return true; }
+			if (!Select(TEXT("DefinitionChoices"), 0) || !Select(TEXT("ColorChoices"), 1)) { return true; }
 			TestNull(TEXT("仍缺数字时保持线稿"), CardSlot->GetContent());
 			if (!Select(TEXT("NumberChoices"), 2)) { return true; }
 			const auto* Card = Cast<UCastleShopCardWidget>(CardSlot->GetContent());

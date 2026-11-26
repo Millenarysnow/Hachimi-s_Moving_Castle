@@ -189,7 +189,7 @@ private:
 		auto* Confirm = Cast<UButton>(Picker->GetWidgetFromName(TEXT("ConfirmButton")));
 		if (Test.TestNotNull(TEXT("绑定确认按钮"), Confirm)
 			&& Select(TEXT("DefinitionChoices"), 0, Director.Board->BuildingDefinitions.Num())
-			&& Select(TEXT("ColorChoices"), 1, 5) && Select(TEXT("NumberChoices"), 3, 4))
+			&& Select(TEXT("ColorChoices"), 2, 4) && Select(TEXT("NumberChoices"), 3, 4))
 		{
 			Confirm->OnClicked.Broadcast();
 			Test.TestTrue(TEXT("只移除已确认的自定义房"), !Director.WildcardPicker && Director.UpgradeRewards.Num() == 1);

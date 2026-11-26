@@ -38,7 +38,7 @@ bool FCastleMiniPlacementBoard::InitializeGround(TConstArrayView<FCastleGroundCe
 	{
 		const FIntVector& Position = Cell.Coordinate;
 		if (Position.Z != 0 || Position.X < 0 || Position.X >= GridSize.X || Position.Y < 0 || Position.Y >= GridSize.Y
-			|| Cell.Color < ECastleTileColor::Red || Cell.Color > ECastleTileColor::Purple || Cell.Number < 1 || Cell.Number > 9
+			|| !CastleTileColors::IsPlayable(Cell.Color) || Cell.Number < 1 || Cell.Number > 9
 			|| Generated.Contains(Position))
 		{
 			OutReason = FText::Format(INVTEXT("微缩地面格 {0} 重复、越界或色号无效。"), FText::FromString(Position.ToString()));

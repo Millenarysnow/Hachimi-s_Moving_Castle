@@ -46,7 +46,7 @@ public:
 	/** 构造函数会设置默认的功能颜色池。 */
 	UCastleRandomGroundGenerator();
 
-	/** 随机地面可使用的功能颜色，灰色不会从该池中随机选取。 */
+	/** 随机地面可使用的玩法色，配置中的每一项都必须为红、黄、蓝、绿之一。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "随机地面")
 	TArray<ECastleTileColor> FunctionalColors;
 

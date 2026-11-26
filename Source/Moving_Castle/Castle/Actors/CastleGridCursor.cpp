@@ -44,7 +44,7 @@ ACastleGridCursor::ACastleGridCursor()
 		return;
 	}
 
-	// 使用高亮浅蓝色，保证在当前阶段的红、蓝、绿、黄地面上都能区分。
+	// 使用高亮浅蓝色，便于在红、黄、蓝、绿地面上区分指示器和格面。
 	CursorMaterial->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.12f, 0.78f, 1.0f, 1.0f));
 	CursorMesh->SetMaterial(0, CursorMaterial);
 }

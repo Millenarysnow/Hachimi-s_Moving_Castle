@@ -166,8 +166,16 @@ bool FCastleWildcardItemTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	TestEqual(TEXT("全部五色"), Options.Colors.Num(), 5);
+	const TArray<ECastleTileColor> ExpectedColors = {
+		ECastleTileColor::Red, ECastleTileColor::Yellow, ECastleTileColor::Blue, ECastleTileColor::Green
+	};
+	TestTrue(TEXT("工坊按红黄蓝绿提供四个默认选项"), Options.Colors == ExpectedColors);
 	TestEqual(TEXT("完整九个数字"), Options.Numbers.Num(), 9);
+
+	// 旧色值留在资产的显式选项时应拒绝整组配置，防止颜色被静默忽略。
+	Spec.AllowedColors = {ECastleTileColor::Red, static_cast<ECastleTileColor>(5)};
+	AddExpectedError(TEXT("色值 5 非正式颜色"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestFalse(TEXT("工坊拒绝显式配置旧紫色序号"), Spec.TryResolveOptions(Pool, Options, Reason));
 
 	Spec.AllowedColors = {ECastleTileColor::Red, ECastleTileColor::Blue};
 	Spec.AllowedNumbers = {7, 8, 9};
@@ -309,7 +317,7 @@ bool FCastleRoomGroupItemTest::RunTest(const FString& Parameters)
 			}
 			const bool bAllDefinitions = Type == ECastleRoomGroupType::FullyCustomRoom;
 			TestEqual(TEXT("固定型只有一个定义，全自定义使用定义池"), Options.Definitions.Num(), bAllDefinitions ? Pool.Num() : 1);
-			TestEqual(TEXT("默认可选五色"), Options.Colors.Num(), 5);
+			TestEqual(TEXT("默认可选四种玩法色"), Options.Colors.Num(), 4);
 			TestEqual(TEXT("万能颜色只锁定数字，其余默认六个数字"), Options.Numbers.Num(),
 				Type == ECastleRoomGroupType::CustomColorNormalRoom ? 1 : 6);
 			if (Type == ECastleRoomGroupType::RandomFunctionCustomRoom)
@@ -644,7 +652,7 @@ bool FCastleItemWidgetAssetTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("未选齐时显示线稿"), Placeholder->GetVisibility(), ESlateVisibility::HitTestInvisible);
 		if (!TestEqual(TEXT("固定定义只生成一个按钮"), Definitions->GetChildrenCount(), 1)
 			|| !TestEqual(TEXT("固定数字只生成一个按钮"), Numbers->GetChildrenCount(), 1)
-			|| !TestEqual(TEXT("只开放五种颜色"), Colors->GetChildrenCount(), 5))
+			|| !TestEqual(TEXT("只开放四种玩法色"), Colors->GetChildrenCount(), 4))
 		{
 			return true;
 		}
@@ -654,8 +662,8 @@ bool FCastleItemWidgetAssetTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("右上关闭取消本次选择"), Claim->GetVisibility(), ESlateVisibility::Visible);
 		TestEqual(TEXT("取消后无卡进入临时栏"), Backpack->GetTempItemCount(), 0);
 		Claim->OnClicked.Broadcast();
-		UButton* Yellow = Cast<UButton>(Colors->GetChildAt(3));
-		if (!TestNotNull(TEXT("第四个选项是可点击颜色按钮"), Yellow))
+		UButton* Yellow = Cast<UButton>(Colors->GetChildAt(1));
+		if (!TestNotNull(TEXT("第二个选项是可点击颜色按钮"), Yellow))
 		{
 			return true;
 		}

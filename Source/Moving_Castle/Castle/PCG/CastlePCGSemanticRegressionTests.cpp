@@ -173,7 +173,7 @@ bool FCastlePCGStairOwnership::RunTest(const FString& Parameters)
 		Board->BuildingDefinitions = {Definition, Room};
 		const FIntVector Cell(Column++, 0, 0);
 		ACastleBuildingBase* Lower = Place(*this, *Board, *Definition, Cell, 1, ECastleTileColor::Green);
-		ACastleBuildingBase* Upper = Place(*this, *Board, *Room, Cell + FCastlePCGBoardQuery::Up, 1, ECastleTileColor::Purple);
+		ACastleBuildingBase* Upper = Place(*this, *Board, *Room, Cell + FCastlePCGBoardQuery::Up, 1, ECastleTileColor::Yellow);
 		if (!Lower || !Upper || !TestNotNull(TEXT("正式本族布局"), Lower->HachimisLayout.Get())
 			|| !TestNotNull(TEXT("正式本族梯资产"), Lower->HachimisLayout->Ladder.Get())) { return false; }
 		int32 Ladders = 0;
@@ -342,7 +342,7 @@ bool FCastlePCGChannelIsolation::RunTest(const FString& Parameters)
 	if (!SetGreenSevenGround(*Board, Reason)) { AddError(Reason.ToString()); return false; }
 	const FIntVector Base(1, 1, 0), Side(2, 1, 0), Above(1, 1, 1);
 	ACastleBuildingBase* Lower = Place(*this, *Board, *Farm, Base, 1, ECastleTileColor::Green);
-	ACastleBuildingBase* Neighbor = Place(*this, *Board, *Room, Side, 1, ECastleTileColor::Purple);
+	ACastleBuildingBase* Neighbor = Place(*this, *Board, *Room, Side, 1, ECastleTileColor::Yellow);
 	if (!Lower || !Neighbor) { return false; }
 	TestFalse(TEXT("Planar 显式关闭门洞后，即使同号 V4 和 Room 不自发开门"), HasOpenPassage(*Board, Base, Side));
 	if (!TestNotNull(TEXT("农田有正式 V4 墙槽布局"), Lower->HachimisLayout.Get())) { return false; }
@@ -543,7 +543,7 @@ bool FCastlePCGStructureExtensions::RunTest(const FString& Parameters)
 	TestEqual(TEXT("拒绝保留上一稳定目标"), Tower->BuildingPCG->GetAppliedKey(), Current);
 	Brace->bDuplicate = false;
 	// 新的直接支撑只改变悬挑条件，之前只读六邻会遗漏某些更远的斜撑规则依赖。
-	if (!Place(*this, *Board, *Room, Overhang - FCastlePCGBoardQuery::Up, 1, ECastleTileColor::Purple)) { return false; }
+	if (!Place(*this, *Board, *Room, Overhang - FCastlePCGBoardQuery::Up, 1, ECastleTileColor::Yellow)) { return false; }
 	TestEqual(TEXT("直接支撑到位后卸下正式斜撑"), CountVisibleParts(*Tower, BraceTag), 0);
 	TestEqual(TEXT("补齐支撑后移除斜撑"), CountVisibleParts(*Tower, TEXT("CastlePCGNode=RegressionBrace")), 0);
 	TestEqual(TEXT("补齐支撑后移除覆写"), CountVisibleParts(*Tower, TEXT("CastlePCGNode=RegressionRoof")), 0);
@@ -645,10 +645,10 @@ namespace CastlePCGTests
 				return false;
 			}
 			Top = Place(Test, Board, *Room, TopCell, 1, ECastleTileColor::Green);
-			Archer = Place(Test, Board, *ArcherDefinition, ArcherStart, 2, ECastleTileColor::Purple);
-			Corner = Place(Test, Board, *Room, CornerCell, 1, ECastleTileColor::Purple);
+			Archer = Place(Test, Board, *ArcherDefinition, ArcherStart, 2, ECastleTileColor::Yellow);
+			Corner = Place(Test, Board, *Room, CornerCell, 1, ECastleTileColor::Yellow);
 			if (!Top || !Archer || !Corner) { return false; }
-			Test.TestTrue(TEXT("紫色 7 号箭塔沿 X 横跨两格"), Archer->GetOccupiedCoordinates().Contains(ArcherStart + FIntVector(1, 0, 0)));
+			Test.TestTrue(TEXT("黄色 7 号箭塔沿 X 横跨两格"), Archer->GetOccupiedCoordinates().Contains(ArcherStart + FIntVector(1, 0, 0)));
 			Test.TestTrue(TEXT("孤立上层房保留可见且可选中的带洞楼板"), CountVisibleParts(*Top, TEXT("CastlePCGGroup=UpperFloor")) > 0);
 			Test.TestTrue(TEXT("上层房可独立捕获合并所需可见零件"), CountVisibleParts(*Top) > 0);
 			Test.TestTrue(TEXT("拐角普通房连通农田和箭塔两侧门洞"), HasOpenPassage(Board, Base, CornerCell)

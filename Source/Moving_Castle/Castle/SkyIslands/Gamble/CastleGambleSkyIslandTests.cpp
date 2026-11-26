@@ -115,7 +115,7 @@ bool FCastleGambleIslandAutomationTest::RunTest(const FString& Parameters)
 	const FCastleBuildingDescriptor Initial[] = {RedOne, GreenThree, RedTwo, BlueOne};
 	// 第二格与原点不同色号，用它区分地面匹配和已放房间的相邻匹配。
 	const FCastleGroundCell Ground[] = {
-		{FIntVector::ZeroValue, ECastleTileColor::Red, 9}, {FIntVector(1, 0, 0), ECastleTileColor::Purple, 8}
+		{FIntVector::ZeroValue, ECastleTileColor::Red, 9}, {FIntVector(1, 0, 0), ECastleTileColor::Yellow, 8}
 	};
 	if (!TestTrue(TEXT("初始化带色号的测试地面"), Island->MiniBoard.InitializeGround(Ground, FIntPoint(2, 1), Reason))) { return false; }
 	if (!TestTrue(TEXT("填入测试牌"), Backpack.TryAddItemsAllowOverflow(Initial, Reason))) { return false; }

@@ -45,12 +45,6 @@ protected:
 	/** 执行每次加入屏幕时的视觉同步。 */
 	virtual void NativeConstruct() override;
 
-	/** 创建并返回颜色对应的边框色。 */
-	static FLinearColor GetCardColor(ECastleTileColor Color);
-
-	/** 返回建筑颜色的中文显示名。 */
-	static FText GetBuildingColorText(ECastleTileColor Color);
-
 	/** 重新写入标题、等级和预览数据。 */
 	void RefreshVisuals();
 

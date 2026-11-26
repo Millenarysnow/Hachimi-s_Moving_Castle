@@ -25,20 +25,6 @@ namespace
 		{ECastleGridFace::PositiveX, FIntVector(1, 0, 0)}, {ECastleGridFace::PositiveY, FIntVector(0, 1, 0)}
 	};
 
-	/** 合法色与原地块一致；采样直接索引配对表，不需要灰色或无效枚举兜底。 */
-	struct FTowerTileColor
-	{
-		ECastleTileColor Color;
-		FLinearColor Tint;
-	};
-	constexpr FTowerTileColor TowerTileColors[] = {
-		{ECastleTileColor::Red, FLinearColor(0.75f, 0.08f, 0.08f)},
-		{ECastleTileColor::Blue, FLinearColor(0.06f, 0.25f, 0.80f)},
-		{ECastleTileColor::Green, FLinearColor(0.05f, 0.58f, 0.18f)},
-		{ECastleTileColor::Yellow, FLinearColor(0.90f, 0.60f, 0.04f)},
-		{ECastleTileColor::Purple, FLinearColor(0.48f, 0.12f, 0.72f)}
-	};
-
 	/** 面板局部 X 朝外、局部 Z 朝上；保留墙面装饰和相邻格间的缝隙。 */
 	constexpr float PanelThickness = 8.0f;
 	constexpr float MeshSize = 100.0f;
@@ -102,10 +88,10 @@ bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, F
 	USceneComponent* Root = Tower->GetRootComponent();
 	TArray<FCastleTowerSideCell> Pending;
 	Pending.Reserve((TargetLayerCount - GeneratedLayerCount) * UE_ARRAY_COUNT(TowerFaces));
-	const auto Reject = [&](const FCastleTowerSideCell& Cell)
+	const auto Reject = [&](const FCastleTowerSideCell& Cell, const FString& Cause)
 	{
-		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 塔身格 %s 面 %d 无法创建或注册表现组件。"),
-			*Tower->GetPathName(), *Cell.TowerCell.ToString(), static_cast<int32>(Cell.Face)));
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 塔身格 %s 面 %d 无法初始化，原因是%s"),
+			*Tower->GetPathName(), *Cell.TowerCell.ToString(), static_cast<int32>(Cell.Face), *Cause));
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		for (const FCastleTowerSideCell& Added : Pending)
 		{
@@ -115,6 +101,7 @@ bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, F
 		return false;
 	};
 	// 每个侧面与层号独立采样，已发布面板从创建到扩层始终保留。
+	const TConstArrayView<ECastleTileColor> Colors = CastleTileColors::GetPlayable();
 	const float PanelWidth = TowerCellWidth * 0.84f;
 	const float PanelHeight = TowerLayerHeight * 0.88f;
 	for (int32 Layer = GeneratedLayerCount; Layer < TargetLayerCount; ++Layer)
@@ -123,13 +110,20 @@ bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, F
 		{
 			const FIntVector SampleCell(Face.Outward.X, Face.Outward.Y, Layer);
 			const int32 ColorIndex = FMath::FloorToInt(UCastleDeterministicPCGNoise::SampleNoiseValue(
-				RunSeed, SampleCell, TEXT("TowerSideColor")) * UE_ARRAY_COUNT(TowerTileColors));
+				RunSeed, SampleCell, TEXT("TowerSideColor")) * Colors.Num());
 			FCastleTowerSideCell& Cell = Pending.AddDefaulted_GetRef();
 			Cell.TowerCell = TowerBaseCell + FIntVector(0, 0, Layer);
 			Cell.Face = Face.Face;
-			Cell.Color = TowerTileColors[ColorIndex].Color;
+			Cell.Color = Colors[ColorIndex];
 			Cell.Number = 1 + FMath::FloorToInt(UCastleDeterministicPCGNoise::SampleNoiseValue(
 				RunSeed, SampleCell, TEXT("TowerSideNumber")) * 9);
+
+			// 采样色值缺少材质映射时撤销本批次，避免发布无法正确显示的格面。
+			FLinearColor PanelTint;
+			if (!CastleTileColors::TryGetGridTint(Cell.Color, PanelTint))
+			{
+				return Reject(Cell, FString::Printf(TEXT("色值 %d 未配置格面材质色。"), static_cast<int32>(Cell.Color)));
+			}
 
 			const FVector Outward(Face.Outward);
 			const FRotator Rotation = FRotationMatrix::MakeFromXZ(Outward, FVector::UpVector).Rotator();
@@ -141,9 +135,9 @@ bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, F
 			UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(PanelMaterial, Panel);
 			if (!Panel || !Label || !Material)
 			{
-				return Reject(Cell);
+				return Reject(Cell, TEXT("无法创建面板、数字或动态材质。"));
 			}
-			Material->SetVectorParameterValue(TEXT("Color"), TowerTileColors[ColorIndex].Tint);
+			Material->SetVectorParameterValue(TEXT("Color"), PanelTint);
 
 			// 先配置碰撞和导航资格再注册，避免短暂暴露建造面为实体障碍或行走几何。
 			Panel->SetupAttachment(Root);
@@ -175,7 +169,10 @@ bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, F
 			Tower->AddInstanceComponent(Label);
 			Panel->RegisterComponent();
 			Label->RegisterComponent();
-			if (!Panel->IsRegistered() || !Label->IsRegistered()) { return Reject(Cell); }
+			if (!Panel->IsRegistered() || !Label->IsRegistered())
+			{
+				return Reject(Cell, TEXT("无法注册面板或数字组件。"));
+			}
 		}
 	}
 	Cells.Append(MoveTemp(Pending));
