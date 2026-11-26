@@ -56,22 +56,78 @@
 | `CastleSpendGold 100` | 金额为非负整数，且余额足够。需要项目玩家控制器 | 扣减金币，屏幕显示新余额或金币不足。 |
 | `Castle.Items.UI` | 非 Shipping。需要本地玩家视口、唯一棋盘与背包、徽章子系统 | 挂载临时建筑栏、徽章栏及替换界面。正式 HUD 已包含这些控件时会在日志提示已挂载。 |
 | `Castle.Items.Fill` | 非 Shipping。需要唯一棋盘、背包和普通房定义 | 用一级红色 4 号普通房填满主建筑栏，日志显示主栏及临时栏数量。 |
-| `Castle.Items.Group 10` | 非 Shipping。Phase 0 骨架入口 | 在输出日志记录房间组规则引擎尚未实现的 Error。 |
-| `Castle.Items.Badge 1` | 非 Shipping。编号 `1`～`6`，需要徽章子系统及对应资产 | 尝试发放指定徽章。资产配置无效时输出 Error。徽章栏满时进入替换流程。 |
+| `Castle.Items.Group 10` | 非 Shipping。编号 `1`～`26`，需要本地城堡玩家控制器、唯一棋盘及背包、对应房间组资产。自定义项需在没有其他模态界面时运行 | 直接发放项优先入主栏，其余进入临时栏，屏幕和日志显示结果。自定义项打开原有属性选择弹窗，确认后入包。编号、资产或发放条件不合法时输出 Error。 |
+| `Castle.Items.Badge 1` | 非 Shipping。编号 `1`～`25`，需要徽章子系统及配置完整的对应资产 | 发放指定徽章，栏位满时进入替换流程。徽章栏和替换弹窗展示对应的图标与效果摘要。日志记录发放、待替换或失败原因。 |
 | `Castle.Items.Remove 1` | 非 Shipping。槽位从 `1` 到 `10`，需要唯一棋盘和背包 | 移除主建筑栏指定槽位的卡，失败原因写入日志。 |
 | `Castle.Items.ResetBadges` | 非 Shipping。需要当前 GameInstance 的徽章子系统 | 清空已持有徽章和待替换徽章，刷新徽章栏。 |
 | `Castle.Items.Reload` | 非 Shipping。Game 或 PIE | 重开当前地图，重置关卡运行状态，可观察 GameInstance 中徽章是否继承。 |
 
-编号对应 [道具命令中的资产表](Source/Moving_Castle/Castle/Items/CastleItemsDebugCommands.cpp)。
+### 房间组编号
 
-| 编号 | 骨架阶段 `Castle.Items.Badge` 的徽章 |
-| --- | --- |
-| 1 | 蓝釉算盘 |
-| 2 | 工坊返料章 |
-| 3 | 备用气球挂架 |
-| 4 | 快弦工牌 |
-| 5 | 破球警钟 |
-| 6 | 应急压舱扣 |
+资产目录为 `/Game/MovingCastle/Data/Items/RoomGroups/`。
+
+| 编号 | 房间组 | 资产名 |
+| ---: | --- | --- |
+| 1 | 随机补给 | `DA_RoomGroup_01_RandomSupply` |
+| 2 | 旺财的补缝袋 | `DA_RoomGroup_02_WangcaiPatchBag` |
+| 3 | 盾后小田 | `DA_RoomGroup_03_ShieldBehindField` |
+| 4 | 自定义普通房间 | `DA_RoomGroup_04_CustomNormalRoom` |
+| 5 | 双胞房间 | `DA_RoomGroup_05_TwinRooms` |
+| 6 | 顶格补给 | `DA_RoomGroup_06_TopSupply` |
+| 7 | 三三箭塔 | `DA_RoomGroup_07_TripleThreeArchers` |
+| 8 | 幸运炮塔 | `DA_RoomGroup_08_LuckyCannons` |
+| 9 | 连号农田 | `DA_RoomGroup_09_SequentialFarms` |
+| 10 | 高速公路 | `DA_RoomGroup_10_Highway` |
+| 11 | 红色风暴 | `DA_RoomGroup_11_RedStorm` |
+| 12 | 双楼梯拼图 | `DA_RoomGroup_12_DoubleStairPuzzle` |
+| 13 | 三色弹药班 | `DA_RoomGroup_13_TricolorAmmoSquad` |
+| 14 | 三岔分工箱 | `DA_RoomGroup_14_ThreeWayToolbox` |
+| 15 | 大数字房间 | `DA_RoomGroup_15_BigNumberRoom` |
+| 16 | 随机功能自定义房间 | `DA_RoomGroup_16_RandomFuncCustomRoom` |
+| 17 | 加入 3 个蓝 8 | `DA_RoomGroup_17_ThreeBlueEights` |
+| 18 | 蜂房接龙匣 | `DA_RoomGroup_18_HiveChainBox` |
+| 19 | 完全自定义房间 | `DA_RoomGroup_19_FullyCustomRoom` |
+| 20 | 归一化 | `DA_RoomGroup_20_Normalize` |
+| 21 | 传送门房间 | `DA_RoomGroup_21_PortalRoom` |
+| 22 | 绿肥红瘦 | `DA_RoomGroup_22_GreenLushRedWither` |
+| 23 | 自环绕炮塔 | `DA_RoomGroup_23_SelfOrbitCannon` |
+| 24 | 功能塔买断 | `DA_RoomGroup_24_TowerBuyout` |
+| 25 | 直接部署 | `DA_RoomGroup_25_DirectDeploy` |
+| 26 | 颜色转变 | `DA_RoomGroup_26_ColorShift` |
+
+### 徽章编号
+
+资产目录为 `/Game/MovingCastle/Data/Items/Badges/`。
+
+| 编号 | 徽章 | 资产名 |
+| ---: | --- | --- |
+| 1 | 旺财的火力牌 | `DA_Badge_01_FirepowerCard` |
+| 2 | 管家的零钱袋 | `DA_Badge_02_CoinPurse` |
+| 3 | 充足的启动资金 | `DA_Badge_03_StartingFunds` |
+| 4 | 双门打卡牌 | `DA_Badge_04_DoubleDoorPass` |
+| 5 | 门后备用弦 | `DA_Badge_05_SpareBowstring` |
+| 6 | 备用气球挂架 | `DA_Badge_06_BalloonRack` |
+| 7 | 商店折扣 | `DA_Badge_07_ShopDiscount` |
+| 8 | 商店返利 | `DA_Badge_08_ShopRebate` |
+| 9 | 值班汽笛 | `DA_Badge_09_ShiftWhistle` |
+| 10 | 摘绳手套 | `DA_Badge_10_StringGlove` |
+| 11 | 快弦工牌 | `DA_Badge_11_QuickstringPass` |
+| 12 | 翻货免单章 | `DA_Badge_12_FreeRefresh` |
+| 13 | 快速梯子 | `DA_Badge_13_QuickLadder` |
+| 14 | 环路采购签 | `DA_Badge_14_LoopPurchase` |
+| 15 | 后手优势 | `DA_Badge_15_LateAdvantage` |
+| 16 | 虹吸箭簇 | `DA_Badge_16_SiphonArrow` |
+| 17 | 蓝釉算盘 | `DA_Badge_17_BlueAbacus` |
+| 18 | 工坊返料章 | `DA_Badge_18_WorkshopRefund` |
+| 19 | 应急压舱扣 | `DA_Badge_19_EmergencyBallast` |
+| 20 | 急速行军 | `DA_Badge_20_RapidMarch` |
+| 21 | 狂暴工蜂 | `DA_Badge_21_BerserkBee` |
+| 22 | 连锁反应 | `DA_Badge_22_ChainReaction` |
+| 23 | 破球警钟 | `DA_Badge_23_BurstAlarm` |
+| 24 | 一圈调岗令 | `DA_Badge_24_LapReassignment` |
+| 25 | 最后一颗气球扣 | `DA_Badge_25_LastBalloonClasp` |
+
+注册位置见 [道具命令](Source/Moving_Castle/Castle/Items/CastleItemsDebugCommands.cpp)。
 
 ## 导演、空岛与对话
 
