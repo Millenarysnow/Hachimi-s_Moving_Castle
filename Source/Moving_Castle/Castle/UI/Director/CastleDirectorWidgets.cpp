@@ -169,6 +169,8 @@ void UCastleDirectorHUDWidget::NativeOnInitialized()
 	// 初始化时战斗进度条先置空并隐藏，等待进入战斗后显示。
 	BattleProgressBar->SetFilledCount(0);
 	BattleProgressBar->SetVisibility(ESlateVisibility::Collapsed);
+	// 路点文案在进入路径页并读取到实际数据后才显示。
+	RemainingWaypointText->SetVisibility(ESlateVisibility::Collapsed);
 	RightActionSwitcher->SetActiveWidgetIndex(static_cast<int32>(ECastleHUDScreenMode::Build));
 }
 
@@ -242,12 +244,15 @@ void UCastleDirectorHUDWidget::EnsurePatrolRouteBinding()
 	{
 		BoundPatrolRoute = Route;
 		PatrolEditingHandle = Route->OnEditingStateChanged.AddUObject(this, &UCastleDirectorHUDWidget::HandlePatrolEditingChanged);
+		WaypointDraftHandle = Route->OnWaypointDraftChanged.AddUObject(this, &UCastleDirectorHUDWidget::SyncPathWaypointCount);
+		// 原路线销毁后若在同一帧绑定了已编辑的新路线，界面模式可能保持不变。
+		SyncPathWaypointCount();
 	}
 }
 
 void UCastleDirectorHUDWidget::SyncScreenMode()
 {
-	if (!IsValid(RightActionSwitcher) || !IsValid(BattleProgressBar))
+	if (!IsValid(RightActionSwitcher) || !IsValid(BattleProgressBar) || !IsValid(RemainingWaypointText))
 	{
 		return;
 	}
@@ -266,8 +271,14 @@ void UCastleDirectorHUDWidget::SyncScreenMode()
 		TargetMode = ECastleHUDScreenMode::PathEdit;
 	}
 
+	const bool bModeChanged = CurrentScreenMode != TargetMode;
 	CurrentScreenMode = TargetMode;
 	RightActionSwitcher->SetActiveWidgetIndex(static_cast<int32>(CurrentScreenMode));
+	if (bModeChanged)
+	{
+		// 模式切换立即显示或折叠，草稿变化由委托更新文案，无需逐帧格式化。
+		SyncPathWaypointCount();
+	}
 
 	const bool bShowBattleBar = (CurrentScreenMode == ECastleHUDScreenMode::Battle);
 	BattleProgressBar->SetVisibility(bShowBattleBar ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
@@ -279,6 +290,32 @@ void UCastleDirectorHUDWidget::SyncScreenMode()
 	{
 		BattleProgressBar->SetFilledCount(0);
 	}
+}
+
+void UCastleDirectorHUDWidget::SyncPathWaypointCount()
+{
+	if (!IsValid(RemainingWaypointText))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("主界面 HUD %s 缺少 RemainingWaypointText，无法同步路径点。"), *GetClass()->GetPathName());
+		return;
+	}
+	if (CurrentScreenMode != ECastleHUDScreenMode::PathEdit)
+	{
+		RemainingWaypointText->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+
+	const ACastlePatrolRoute* Route = BoundPatrolRoute.Get();
+	if (!IsValid(Route))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("主界面 HUD %s 的路径编辑入口失效，无法读取剩余路径点。"), *GetClass()->GetPathName());
+		RemainingWaypointText->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+	// 直接使用草稿的已用量与上限差值，保留预设路线超限时的真实计数。
+	RemainingWaypointText->SetText(FText::Format(NSLOCTEXT("CastleDirectorHUD", "RemainingWaypoints", "剩余路径点：{0} / {1}"),
+		FText::AsNumber(Route->GetRemainingWaypointCount()), FText::AsNumber(Route->GetMaxPlayerWaypoints())));
+	RemainingWaypointText->SetVisibility(ESlateVisibility::HitTestInvisible);
 }
 
 void UCastleDirectorHUDWidget::SyncBattleControlButtons()
@@ -480,6 +517,7 @@ void UCastleDirectorHUDWidget::NativeDestruct()
 	if (ACastlePatrolRoute* Route = BoundPatrolRoute.Get())
 	{
 		Route->OnEditingStateChanged.Remove(PatrolEditingHandle);
+		Route->OnWaypointDraftChanged.Remove(WaypointDraftHandle);
 		BoundPatrolRoute.Reset();
 	}
 	if (UCastleShopComponent* Shop = BoundShop.Get())
@@ -500,6 +538,11 @@ bool UCastleDirectorHUDWidget::HasRequiredBindings() const
 	if (!IsValid(BattleProgressBar) || !BattleProgressBar->ValidatePresentation())
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("主界面 HUD %s 缺少有效的底部 20 格战斗骷髅进度条 BattleProgressBar。"), *GetClass()->GetPathName());
+		return false;
+	}
+	if (!IsValid(RemainingWaypointText))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("主界面 HUD %s 缺少必需控件 RemainingWaypointText。"), *GetClass()->GetPathName());
 		return false;
 	}
 	if (!IsValid(RightActionSwitcher) || RightActionSwitcher->GetNumWidgets() != 3)

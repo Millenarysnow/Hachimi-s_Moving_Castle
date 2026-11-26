@@ -120,6 +120,8 @@ private:
 	void ShowMessage(const FString& Message, bool bSuccess) const;
 
 	friend class FCastleMainTowerWaypointLimitTest;
+	/** HUD 测试走 P 键和视线解析后的放点入口，覆盖实际草稿通知。 */
+	friend class FCastlePathEditWaypointHUDTest;
 	/** 教学 PIE 验收将确定的格心送进实际路径草稿，用 P 入口提交。 */
 	friend class FCastleTutorialPIEDriver;
 };
