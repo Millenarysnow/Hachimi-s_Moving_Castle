@@ -120,6 +120,16 @@ protected:
 private:
 	/** 房间组提交入口需一次校验并替换主栏和临时栏，避免在中间状态广播。 */
 	friend class UCastleItemGrantLibrary;
+	friend class UCastleDirectorSubsystem;
+
+	/** 每次受理清场只快照主栏。余轮和所有奖励在导演提交返编辑时一并写入。 */
+	struct FPreparedSelfOrbitingRound
+	{
+		TArray<FCastleBuildingDescriptor> MainBarAfter;
+		TArray<FCastleBuildingDescriptor> Rewards;
+	};
+	bool TryPrepareSelfOrbitingRound(TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> DefinitionPool,
+		FRandomStream& Random, FPreparedSelfOrbitingRound& OutRound, FText& OutReason) const;
 
 	UPROPERTY(VisibleInstanceOnly, Category = "背包")
 	TArray<FCastleBuildingDescriptor> TempItems;

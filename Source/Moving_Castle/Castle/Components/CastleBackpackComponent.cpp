@@ -155,6 +155,45 @@ void UCastleBackpackComponent::AppendValidatedItem(const FCastleBuildingDescript
 	Destination.Add(Descriptor);
 }
 
+bool UCastleBackpackComponent::TryPrepareSelfOrbitingRound(
+	const TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> DefinitionPool, FRandomStream& Random,
+	FPreparedSelfOrbitingRound& OutRound, FText& OutReason) const
+{
+	OutRound = {};
+	OutReason = FText::GetEmpty();
+	// 本轮资格取决于已有主栏。此处不访问临时栏或棋盘 Actor，奖励牌也不会加入本轮遍历。
+	if (!Items.ContainsByPredicate([](const FCastleBuildingDescriptor& Card)
+		{ return Card.RoomTrait == ECastleRoomTrait::SelfOrbiting; })) { return true; }
+
+	CastleRoomCards::FDefinitionPool Pool;
+	TArray<TObjectPtr<UCastleBuildingDefinition>> Functions;
+	if (!Pool.TryInitialize(DefinitionPool, OutReason) || !Pool.TryCollect(false, Functions, OutReason)) { return false; }
+
+	FRandomStream CandidateRandom = Random;
+	FPreparedSelfOrbitingRound Candidate;
+	Candidate.MainBarAfter = Items;
+	const auto Colors = CastleTileColors::GetPlayable();
+	for (FCastleBuildingDescriptor& Card : Candidate.MainBarAfter)
+	{
+		if (Card.RoomTrait != ECastleRoomTrait::SelfOrbiting) { continue; }
+		if (!ValidateDescriptorForStorage(Card, OutReason)) { return false; }
+		const UCastleBuildingDefinition* Function = Functions[CandidateRandom.RandRange(0, Functions.Num() - 1)];
+		const ECastleTileColor Color = Colors[CandidateRandom.RandRange(0, Colors.Num() - 1)];
+		FCastleBuildingDescriptor Reward;
+		if (!Function->CreateDescriptor(1, Color, 6, Reward, OutReason)) { return false; }
+		Candidate.Rewards.Add(MoveTemp(Reward));
+		if (--Card.TraitRemainingRounds == 0)
+		{
+			// 六次发完后退回同一张普通炮塔卡，保持定义、颜色和号码。
+			Card.RoomTrait = ECastleRoomTrait::None;
+		}
+	}
+	if (!CanApplyItemBatch(Candidate.Rewards, &Candidate.MainBarAfter, false, OutReason)) { return false; }
+	OutRound = MoveTemp(Candidate);
+	Random = CandidateRandom;
+	return true;
+}
+
 bool UCastleBackpackComponent::TryInsertItemAt(int32 Index, const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason)
 {
 	OutFailureReason = FText::GetEmpty();
