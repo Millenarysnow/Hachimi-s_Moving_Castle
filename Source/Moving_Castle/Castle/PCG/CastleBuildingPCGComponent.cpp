@@ -1,4 +1,5 @@
 #include "CastleBuildingPCGComponent.h"
+#include "Castle/Appearance/CastleBuildingColors.h"
 
 #include "CastlePCGSemantics.h"
 #include "CastleBoard.h"
@@ -245,6 +246,8 @@ void UCastleBuildingPCGComponent::ApplyVisual(const ACastleBoard& Board, const F
 		if (!Visual.Group.IsNone()) { Mesh->ComponentTags.Add(FName(TEXT("CastlePCGGroup=") + Visual.Group.ToString())); }
 		Mesh->SetStaticMesh(Visual.Mesh);
 		for (int32 M = 0; M < Visual.Materials.Num(); ++M) { Mesh->SetMaterial(M, Visual.Materials[M]); }
+		// 动态墙和屋角由当前 Actor 持有，在注册前应用同一张卡的属性色。
+		CastleBuildingColors::Apply(*Mesh, Building->GetBuildingColor(), Building->GetBuildingType(), Visual.Node, Visual.Group);
 		Mesh->SetRelativeTransform(Visual.Relative);
 		Building->AddInstanceComponent(Mesh);
 		Mesh->RegisterComponent();
