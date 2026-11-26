@@ -5,6 +5,7 @@
 #include "CastleMainTowerComponent.h"
 #include "CastleMassTraits.h"
 #include "CastleMassUnitSubsystem.h"
+#include "Castle/Combat/CastleTowerPrism.h"
 #include "Engine/World.h"
 #include "MassEntityConfigAsset.h"
 #include "Moving_Castle.h"
@@ -43,7 +44,9 @@ bool ACastleMassEnemySpawner::SpawnUnits()
 		return false;
 	}
 
-	if (!Configuration || !Configuration->FindTrait(UCastleMassEnemyTrait::StaticClass()))
+	const UCastleMassEnemyTrait* EnemyTrait = Configuration
+		? Cast<UCastleMassEnemyTrait>(Configuration->FindTrait(UCastleMassEnemyTrait::StaticClass())) : nullptr;
+	if (!IsValid(EnemyTrait))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 敌人圆环生成失败：配置没有 Castle Mass 敌人 Trait。"));
 		return false;
@@ -51,6 +54,19 @@ bool ACastleMassEnemySpawner::SpawnUnits()
 
 	if (UCastleMassUnitSubsystem* Units = GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>())
 	{
+		FCastleTowerPrism TowerPrism;
+		if (!TowerSubsystem->GetMainTowerPrism(TowerPrism))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("Mass 敌人圆环生成失败：主塔 %s 的塔身几何无效。"),
+				*GetPathNameSafe(TowerSubsystem->GetRegisteredMainTower()));
+			return false;
+		}
+		const float EffectiveRadius = EnemyTrait->Radius * AttributeOverrides.ScaleMultiplier;
+		if (!FMath::IsFinite(EffectiveRadius) || EffectiveRadius < 0.0f)
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("Mass 敌人圆环生成失败：配置 %s 的逻辑半径无效。"), *GetPathNameSafe(Configuration));
+			return false;
+		}
 		if (!SpawnedUnits.IsEmpty())
 		{
 			return false;
@@ -69,11 +85,29 @@ bool ACastleMassEnemySpawner::SpawnUnits()
 			const FVector Location = TargetLocation + FVector(FMath::Cos(Angle) * Radius,
 				FMath::Sin(Angle) * Radius, HeightOffset);
 			const int32 ClusterCount = RandomStream.RandRange(MinClusterCount, MaxClusterCount);
+			const float ClusterPhase = RandomStream.FRandRange(0.0f, UE_TWO_PI);
 			for (int32 Member = 0; Member < ClusterCount; ++Member)
 			{
 				const float OffsetRadius = FMath::Sqrt(RandomStream.GetFraction()) * ClusterSpreadRadius;
-				const float OffsetAngle = RandomStream.FRandRange(0.0f, UE_TWO_PI);
-				const FVector MemberLocation = Location + FVector(FMath::Cos(OffsetAngle) * OffsetRadius, FMath::Sin(OffsetAngle) * OffsetRadius, 0);
+				const float OffsetAngle = ClusterPhase + UE_TWO_PI * Member / ClusterCount;
+				const float HeightJitter = ClusterCount > 1
+					? RandomStream.FRandRange(-EffectiveRadius, EffectiveRadius) : 0.0f;
+				FVector MemberLocation = Location + FVector(FMath::Cos(OffsetAngle) * OffsetRadius,
+					FMath::Sin(OffsetAngle) * OffsetRadius, HeightJitter);
+				FVector SphereCenter = MemberLocation + TowerPrism.GetUpVector() * EffectiveRadius;
+				FVector NoVelocity = FVector::ZeroVector;
+				if (!TowerPrism.ProjectSphereOutside(SphereCenter, EffectiveRadius, NoVelocity))
+				{
+					UE_LOG(LogMoving_Castle, Error, TEXT("Mass 敌人圆环生成失败：配置 %s 的实体不能投影到主塔外侧。"), *GetPathNameSafe(Configuration));
+					return false;
+				}
+				MemberLocation = SphereCenter - TowerPrism.GetUpVector() * EffectiveRadius;
+				FVector Local = TowerPrism.ToLocalPoint(MemberLocation);
+				if (Local.Z < 0.0f)
+				{
+					Local.Z = 0.0f;
+					MemberLocation = TowerPrism.BottomCenter + TowerPrism.Rotation.RotateVector(Local);
+				}
 				Transforms.Emplace((TargetLocation - MemberLocation).Rotation(), MemberLocation);
 			}
 		}

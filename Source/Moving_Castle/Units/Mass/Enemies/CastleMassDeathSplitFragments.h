@@ -27,6 +27,8 @@ struct MOVING_CASTLE_API FCastleMassSpawnBurstFragment : public FMassFragment
 
 	UPROPERTY() FVector Start = FVector::ZeroVector;
 	UPROPERTY() FVector Target = FVector::ZeroVector;
+	/** 抛物线弧高方向；贴墙分裂时沿塔面外法线，普通分裂时为世界上方向。 */
+	UPROPERTY() FVector ArcDirection = FVector::UpVector;
 	UPROPERTY() float Elapsed = 0.0f;
 	UPROPERTY() float Duration = 0.35f;
 	UPROPERTY() float ArcHeight = 60.0f;
