@@ -27,39 +27,54 @@ bool FCastleCombatDefaultAssetTest::RunTest(const FString& Parameters)
 		if (!TestNotNull(FString::Printf(TEXT("名册含 %s"), Id), Entry)) { continue; }
 		const FString Expected = FString(TEXT("/Game/MovingCastle/Mass/DA_MassEnemy_")) + Id + TEXT(".DA_MassEnemy_") + Id;
 		TestEqual(TEXT("引用原有正式敌人 DA"), GetPathNameSafe(Entry->Configuration), Expected);
-		const bool bSwarm = Entry->EnemyId == TEXT("ShadowSwarm");
-		TestEqual(TEXT("簇下界"), Entry->MinClusterCount, bSwarm ? 6 : 1);
-		TestEqual(TEXT("簇上界"), Entry->MaxClusterCount, bSwarm ? 8 : 1);
-		TestEqual(TEXT("簇散布半径"), Entry->ClusterSpreadRadius, bSwarm ? 120.0f : 0.0f);
+		// 波次表按“只”配置数量，每个圆环基准点只展开一只，四种兵都必须保持单体。
+		TestEqual(TEXT("簇下界"), Entry->MinClusterCount, 1);
+		TestEqual(TEXT("簇上界"), Entry->MaxClusterCount, 1);
+		TestEqual(TEXT("簇散布半径"), Entry->ClusterSpreadRadius, 0.0f);
 	}
-	TestEqual(TEXT("内半径"), Config->SpawnInnerRadius, 1800.0f);
-	TestEqual(TEXT("外半径"), Config->SpawnOuterRadius, 2300.0f);
+	TestEqual(TEXT("内半径"), Config->SpawnInnerRadius, 10000.0f);
+	TestEqual(TEXT("外半径"), Config->SpawnOuterRadius, 12000.0f);
 	TestEqual(TEXT("种子"), Config->SpawnSeed, 20261116);
 	if (!TestNotNull(TEXT("难度曲线存在"), Config->DifficultyCurve.Get())) { return false; }
 	const auto* Curve = Config->DifficultyCurve.Get();
 	TestEqual(TEXT("曲线使用专用正式资产"), Curve->GetPathName(), FString(TEXT("/Game/MovingCastle/Data/Combat/DA_DifficultyCurve_Default.DA_DifficultyCurve_Default")));
-	TestEqual(TEXT("普通表六场"), Curve->NormalBattles.Num(), 6);
+	TestEqual(TEXT("普通表十场"), Curve->NormalBattles.Num(), 10);
 	TestEqual(TEXT("精英表两场"), Curve->EliteBattles.Num(), 2);
 	TestEqual(TEXT("初版增长率"), Curve->CountGrowthPerOrdinal, 0.25f);
 	TArray<FCastleCombatWaveDefinition> Plan;
 	if (TestTrue(TEXT("普通第一场"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 1, Plan, Failure))
-		&& TestEqual(TEXT("第一场两波"), Plan.Num(), 2))
+		&& TestEqual(TEXT("第一场一波"), Plan.Num(), 1))
 	{
 		TestTrue(TEXT("首波启用群虫曲线"), Plan[0].BugCurve.bEnabled);
 		TestEqual(TEXT("首波虫群引用名册"), Plan[0].BugCurve.BugEnemyId, FName(TEXT("ShadowSwarm")));
+		TestEqual(TEXT("首波五只虫"), Plan[0].BugCurve.BugBase, 5);
 		if (TestEqual(TEXT("首波一条带门槛的突袭"), Plan[0].RaidEntries.Num(), 1))
 		{
 			TestEqual(TEXT("龙崽需要解锁门槛"), Plan[0].RaidEntries[0].RequiredUnlockTag, FName(TEXT("Unlock.MiasmaWelp")));
 		}
 	}
-	if (TestTrue(TEXT("普通第八场外推"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 8, Plan, Failure))
-		&& TestEqual(TEXT("第八场继承一波"), Plan.Num(), 1) && TestEqual(TEXT("末场两条突袭"), Plan[0].RaidEntries.Num(), 2))
+	if (TestTrue(TEXT("普通第四场"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 4, Plan, Failure))
+		&& TestEqual(TEXT("第四场两波"), Plan.Num(), 2))
 	{
-		TestEqual(TEXT("虫群首波基数继续来自虫群曲线"), Plan[0].BugCurve.BugBase, 4);
-		TestEqual(TEXT("瘴翼 ceil(2*1.5)"), Plan[0].RaidEntries[0].Count, 3);
-		TestEqual(TEXT("巨骸 ceil(1*1.5)"), Plan[0].RaidEntries[1].Count, 2);
-		TestEqual(TEXT("瘴翼保留六秒"), Plan[0].RaidEntries[0].TriggerDelay, 6.0f);
-		TestEqual(TEXT("巨骸保留十二秒"), Plan[0].RaidEntries[1].TriggerDelay, 12.0f);
+		TestEqual(TEXT("第四场首波六只虫"), Plan[0].BugCurve.BugBase, 6);
+		TestEqual(TEXT("第四场次波六只虫"), Plan[1].BugCurve.BugBase, 6);
+		if (TestEqual(TEXT("第四场次波一只幼骸"), Plan[1].RaidEntries.Num(), 1))
+		{
+			TestEqual(TEXT("幼骸无需门槛"), Plan[1].RaidEntries[0].EnemyId, FName(TEXT("LavaPup")));
+		}
+	}
+	if (TestTrue(TEXT("普通第九场"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 9, Plan, Failure)))
+	{
+		TestEqual(TEXT("第九场三波"), Plan.Num(), 3);
+	}
+	if (TestTrue(TEXT("普通第十一场外推"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 11, Plan, Failure))
+		&& TestEqual(TEXT("表外沿用末场三波"), Plan.Num(), 3))
+	{
+		TestEqual(TEXT("虫群首波基数继续来自虫群曲线"), Plan[0].BugCurve.BugBase, 18);
+		TestEqual(TEXT("瘴翼 ceil(3*1.25)"), Plan[1].RaidEntries[0].Count, 4);
+		TestEqual(TEXT("巨骸 ceil(2*1.25)"), Plan[2].RaidEntries[0].Count, 3);
+		TestEqual(TEXT("瘴翼保留五秒"), Plan[1].RaidEntries[0].TriggerDelay, 5.0f);
+		TestEqual(TEXT("巨骸保留四秒"), Plan[2].RaidEntries[0].TriggerDelay, 4.0f);
 	}
 	for (int32 Index = 0; Index < 2; ++Index)
 	{

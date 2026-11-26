@@ -63,6 +63,10 @@ public:
 			// 所有故障注入只改临时副本，不改磁盘上的 DA 或编辑器原始地图。
 			Director->Config = DuplicateObject<UCastleDirectorConfigDataAsset>(Director->Config, World);
 			Director->Config->CombatConfig = DuplicateObject<UCastleCombatConfigDataAsset>(Director->Config->CombatConfig, Director->Config);
+			// 精英节奏在本用例固定为 5 步，让“第五关进精英”的断言与正式资产的 10 步节奏解耦。
+			Director->Config->EliteEveryNSteps = 5;
+			// 待命池固定 8 名，让整场战斗场景与正式资产的开局人数（现为 1 名）解耦。
+			Director->Config->InitialNPCCount = 8;
 			if (!Test->TestTrue(TEXT("临时战斗配置初始化"), Director->Combat->InitializeCombat(Director->Config->CombatConfig, Reason))) { return true; }
 			Navigation->ClearSharedRoute();
 			ACastleDirectorNodeActor* First = Director->Nodes[0];
