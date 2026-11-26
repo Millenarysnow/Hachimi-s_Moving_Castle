@@ -124,6 +124,8 @@ bool UCastleGambleMachineComponent::ExecuteInteract(const FCastleSkyIslandIntera
 
 ACastleGambleSkyIsland::ACastleGambleSkyIsland()
 {
+	// 绑定该玩法的岛体，位置沿用作者对齐的岛面中心。
+	SetIslandArtMesh(TEXT("SM_SkyIsland_Gamble"));
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = false;
 	ConfigAsset = TSoftObjectPtr<UCastleGambleSkyIslandDataAsset>(FSoftObjectPath(
@@ -140,7 +142,9 @@ ACastleGambleSkyIsland::ACastleGambleSkyIsland()
 		auto* Machine = CreateDefaultSubobject<UCastleGambleMachineComponent>(Name);
 		Machine->Machine = Kind;
 		Machine->SetupAttachment(GetRootComponent());
+		// 整岛保留机台的多材质外形；这里的不可见网格专门接收玩法射线。
 		Machine->SetStaticMesh(Mesh);
+		Machine->SetVisibility(false);
 		Machine->SetRelativeLocation(Position);
 		Machine->SetRelativeScale3D(Scale);
 		Machine->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
@@ -226,9 +230,6 @@ bool ACastleGambleSkyIsland::OnInitializeIsland(const FCastleSkyIslandContext& C
 
 	RouletteRandom.Initialize(Context.Seed);
 	SlotRandom.Initialize(static_cast<int32>(static_cast<uint32>(Context.Seed) ^ 0x6f8135e9u));
-	SetTint(*Roulette, {0.12f, 0.07f, 0.11f});
-	SetTint(*Slot, {0.31f, 0.085f, 0.53f});
-	SetTint(*Recycler, {0.05f, 0.38f, 0.49f});
 	SetTint(*RoulettePointer, {1.0f, 0.78f, 0.19f});
 	BuildWheel();
 	return true;
@@ -637,8 +638,10 @@ bool ACastleGambleSkyIsland::BuildMiniGround(const ACastleBoard& Board, int32 Se
 		return Reject(INVTEXT("主棋盘的格距、地面边长或层高无法用于微缩棋盘。"), OutReason);
 	}
 	const FIntPoint Size = Config->MiniBoardGridSize;
-	// 以轮盘后方、中央通道左侧的两个近边界定位；增大格数只向远离机台的方向扩展。
-	MiniOrigin = FVector(100.0 + MiniTileSize * 0.5, -275.0 - MiniTileSize * 0.5 - (Size.Y - 1) * MiniCellSize,
+	// 锚点取轮盘与岛岸之间的草地中心（岛内厘米）。从格心跨度反推首格，让整块地板以此居中。
+	const FVector2D ClearingCenter(-180.0, -895.0);
+	MiniOrigin = FVector(ClearingCenter.X - (Size.X - 1) * MiniCellSize * 0.5,
+		ClearingCenter.Y - (Size.Y - 1) * MiniCellSize * 0.5,
 		12.0 * Scale + 0.1);
 	FCastleGroundGenerationRequest Request;
 	Request.GridSize = FIntVector(Size.X, Size.Y, 1);

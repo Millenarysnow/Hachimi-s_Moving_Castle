@@ -80,7 +80,8 @@ public:
 		FText Reason;
 		Test.TestEqual(TEXT("离岛恢复编辑阶段"), Director->GetPhase(), ECastleDirectorPhase::Editing);
 		Test.TestEqual(TEXT("离岛只推进一步"), Director->GetClearedSteps(), BeforeIsland + 1);
-		Test.TestFalse(TEXT("休息岛许可不泄漏到塔侧 B 商店"), Director->IsShopAccessAllowed(Reason));
+		// 返塔关闭本次补给商店，恢复主塔编辑阶段的常驻商店入口。
+		Test.TestTrue(TEXT("返塔后主塔普通商店可用"), Director->IsShopAccessAllowed(Reason));
 		Test.TestFalse(TEXT("离岛销毁休息岛"), static_cast<bool>(TActorIterator<ACastleRestSkyIsland>(World)));
 		Test.TestTrue(TEXT("离岛生成下一批节点"), static_cast<bool>(TActorIterator<ACastleDirectorNodeActor>(World)));
 		const auto* Controller = Cast<ACastlePlayerController>(World->GetFirstPlayerController());
