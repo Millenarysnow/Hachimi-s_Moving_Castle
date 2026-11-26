@@ -124,6 +124,13 @@ private:
 	UPROPERTY(VisibleInstanceOnly, Category = "背包")
 	TArray<FCastleBuildingDescriptor> TempItems;
 
+	/** 批次校验与写入分开，房间组可先核对主栏快照，消费首牌时按既有 FIFO 先补位。 */
+	bool CanApplyItemBatch(TConstArrayView<FCastleBuildingDescriptor> Descriptors,
+		const TArray<FCastleBuildingDescriptor>* MainBarAfter, bool bRefill, FText& OutFailureReason) const;
+	void ApplyValidatedItemBatch(TConstArrayView<FCastleBuildingDescriptor> Descriptors,
+		const TArray<FCastleBuildingDescriptor>* MainBarAfter, bool bRefill);
+	int32 RefillFromTempBar();
+
 	/** 只接收已通过整批校验的卡牌，由调用入口统一通知。 */
 	void AppendValidatedItem(const FCastleBuildingDescriptor& Descriptor);
 };

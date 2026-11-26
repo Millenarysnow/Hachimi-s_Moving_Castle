@@ -3,6 +3,7 @@
 #include "CastleBackpackComponent.h"
 
 #include "CastleBuildingDefinition.h"
+#include "Items/CastleItemTypes.h"
 #include "Moving_Castle.h"
 
 UCastleBackpackComponent::UCastleBackpackComponent()
@@ -88,18 +89,29 @@ bool UCastleBackpackComponent::TryAddItemAllowOverflow(const FCastleBuildingDesc
 bool UCastleBackpackComponent::TryAddItemsAllowOverflow(const TConstArrayView<FCastleBuildingDescriptor> Descriptors,
 	FText& OutFailureReason)
 {
+	if (!CanApplyItemBatch(Descriptors, nullptr, false, OutFailureReason)) { return false; }
+	ApplyValidatedItemBatch(Descriptors, nullptr, false);
+	OnBackpackChanged.Broadcast();
+	return true;
+}
+
+bool UCastleBackpackComponent::CanApplyItemBatch(const TConstArrayView<FCastleBuildingDescriptor> Descriptors,
+	const TArray<FCastleBuildingDescriptor>* MainBarAfter, const bool bRefill, FText& OutFailureReason) const
+{
 	OutFailureReason = FText::GetEmpty();
-	if (!IsInGameThread() || Capacity < 1 || Descriptors.IsEmpty())
+	if (!IsInGameThread() || Capacity < 1 || Items.Num() > Capacity
+		|| (MainBarAfter ? MainBarAfter->Num() > Capacity : Descriptors.IsEmpty()))
 	{
 		OutFailureReason = INVTEXT("建筑卡牌必须在游戏线程发放，且背包容量有效、卡牌批次非空。");
 		UE_LOG(LogMoving_Castle, Error, TEXT("背包 %s 发放失败：容量 %d，批次张数 %d。%s"),
 			*GetPathName(), Capacity, Descriptors.Num(), *OutFailureReason.ToString());
 		return false;
 	}
-	for (const FCastleBuildingDescriptor& Descriptor : Descriptors)
+	const auto ValidateBatch = [this, &OutFailureReason](const TConstArrayView<FCastleBuildingDescriptor> Batch)
 	{
-		if (!ValidateDescriptorForStorage(Descriptor, OutFailureReason))
+		for (const FCastleBuildingDescriptor& Descriptor : Batch)
 		{
+			if (ValidateDescriptorForStorage(Descriptor, OutFailureReason)) { continue; }
 			if (Descriptor.Level == 1)
 			{
 				UE_LOG(LogMoving_Castle, Error, TEXT("背包 %s 拒绝整批建筑卡牌：资产 %s，%s"),
@@ -107,8 +119,24 @@ bool UCastleBackpackComponent::TryAddItemsAllowOverflow(const TConstArrayView<FC
 			}
 			return false;
 		}
+		return true;
+	};
+	if (MainBarAfter && !ValidateBatch(*MainBarAfter)) { return false; }
+	if (bRefill)
+	{
+		const int32 FreeSlots = Capacity - (MainBarAfter ? MainBarAfter->Num() : Items.Num());
+		const int32 RefillCount = FMath::Min(FreeSlots, TempItems.Num());
+		if (!ValidateBatch(MakeArrayView(TempItems.GetData(), RefillCount))) { return false; }
 	}
+	return ValidateBatch(Descriptors);
+}
 
+void UCastleBackpackComponent::ApplyValidatedItemBatch(const TConstArrayView<FCastleBuildingDescriptor> Descriptors,
+	const TArray<FCastleBuildingDescriptor>* MainBarAfter, const bool bRefill)
+{
+	// 本段没有可失败回调。主栏变换、补位与临时栏追加结束后由事务入口统一广播。
+	if (MainBarAfter) { Items = *MainBarAfter; }
+	if (bRefill) { RefillFromTempBar(); }
 	const int32 PreviousTempCount = TempItems.Num();
 	for (const FCastleBuildingDescriptor& Descriptor : Descriptors)
 	{
@@ -119,8 +147,6 @@ bool UCastleBackpackComponent::TryAddItemsAllowOverflow(const TConstArrayView<FC
 		UE_LOG(LogMoving_Castle, Display, TEXT("背包 %s 有 %d 张新卡进入临时建筑栏，当前共 %d 张。"),
 			*GetPathName(), TempItems.Num() - PreviousTempCount, TempItems.Num());
 	}
-	OnBackpackChanged.Broadcast();
-	return true;
 }
 
 void UCastleBackpackComponent::AppendValidatedItem(const FCastleBuildingDescriptor& Descriptor)
@@ -207,6 +233,14 @@ int32 UCastleBackpackComponent::CommitAutoRefillFromTempBar()
 		return 0;
 	}
 
+	const int32 Count = RefillFromTempBar();
+	// 调用方已完成本次移除事务，即使临时栏为空也要发布主栏的最终变化。
+	OnBackpackChanged.Broadcast();
+	return Count;
+}
+
+int32 UCastleBackpackComponent::RefillFromTempBar()
+{
 	const int32 Count = FMath::Min(Capacity - Items.Num(), TempItems.Num());
 	if (Count > 0)
 	{
@@ -216,8 +250,6 @@ int32 UCastleBackpackComponent::CommitAutoRefillFromTempBar()
 		UE_LOG(LogMoving_Castle, Display, TEXT("背包 %s 自动补入 %d 张建筑卡牌，临时栏剩余 %d 张。"),
 			*GetPathName(), Count, TempItems.Num());
 	}
-	// 调用方已完成本次移除事务，即使临时栏为空也要发布主栏的最终变化。
-	OnBackpackChanged.Broadcast();
 	return Count;
 }
 
@@ -270,5 +302,5 @@ bool UCastleBackpackComponent::ValidateDescriptorForStorage(const FCastleBuildin
 			*GetPathName(), *GetPathNameSafe(Descriptor.Definition.Get()), Descriptor.Level, *OutFailureReason.ToString());
 		return false;
 	}
-	return Descriptor.Validate(OutFailureReason);
+	return Descriptor.Validate(OutFailureReason) && CastleRoomCards::ValidateTrait(Descriptor, OutFailureReason);
 }

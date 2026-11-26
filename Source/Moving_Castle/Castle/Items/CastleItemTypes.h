@@ -6,6 +6,31 @@
 
 class UCastlePendingRoomReward;
 class UCastleRoomGroupDataAsset;
+class UCastleBackpackComponent;
+
+namespace CastleRoomCards
+{
+	/** 六种常规功能塔的稳定抽取顺序。普通房间不参与功能塔抽取或计数。 */
+	TConstArrayView<ECastleBuildingType> GetFunctionTypes();
+
+	/** 房间组按类别选择唯一资产。先验证所有传入引用，抽样时才按规则要求完整的候选集合。 */
+	class FDefinitionPool
+	{
+	public:
+		bool TryInitialize(TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> Definitions, FText& OutReason);
+		UCastleBuildingDefinition* Find(ECastleBuildingType Type) const;
+		bool TryCollect(bool bIncludeNormalRoom, TArray<TObjectPtr<UCastleBuildingDefinition>>& OutDefinitions, FText& OutReason) const;
+
+	private:
+		TMap<ECastleBuildingType, UCastleBuildingDefinition*> ByType;
+	};
+
+	/** 在正式描述符验证后检查特质与建筑类别、等级和剩余轮数的组合。 */
+	bool ValidateTrait(const FCastleBuildingDescriptor& Card, FText& OutReason);
+
+	/** 主栏事务比较完整牌面，特质和剩余轮数变化也会使原快照过期。 */
+	bool HaveSameIdentity(const FCastleBuildingDescriptor& A, const FCastleBuildingDescriptor& B);
+}
 
 /** 本次领奖所用的候选值。数组已展开至非空，单个候选值由界面选中并锁定。 */
 struct MOVING_CASTLE_API FCastleWildcardRoomOptions
@@ -158,6 +183,12 @@ struct MOVING_CASTLE_API FCastlePreparedMainBarChange
 /** 单次交易的准备结果。跨帧保留待领取句柄时，调用方沿用现有的 UPROPERTY 持有方式。 */
 struct MOVING_CASTLE_API FCastlePreparedRoomGroup
 {
+	FCastlePreparedRoomGroup() = default;
+	FCastlePreparedRoomGroup(const FCastlePreparedRoomGroup&) = delete;
+	FCastlePreparedRoomGroup& operator=(const FCastlePreparedRoomGroup&) = delete;
+	FCastlePreparedRoomGroup(FCastlePreparedRoomGroup&&) = default;
+	FCastlePreparedRoomGroup& operator=(FCastlePreparedRoomGroup&&) = default;
+
 	/** 保留来源资产以便在提交失败时记录路径。 */
 	const UCastleRoomGroupDataAsset* Group = nullptr;
 
@@ -169,4 +200,11 @@ struct MOVING_CASTLE_API FCastlePreparedRoomGroup
 
 	/** 无主栏动作时没有快照；有动作时需与发牌同一事务提交。 */
 	TOptional<FCastlePreparedMainBarChange> MainBarChange;
+
+private:
+	friend class UCastleItemGrantLibrary;
+
+	/** 准备结果绑定目标背包。成功后先封闭事务，再通知可能重入发放入口的监听者。 */
+	TWeakObjectPtr<UCastleBackpackComponent> TargetBackpack;
+	mutable bool bCommitted = false;
 };
