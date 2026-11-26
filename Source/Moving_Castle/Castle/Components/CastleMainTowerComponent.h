@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "Subsystems/WorldSubsystem.h"
+#include "Castle/Combat/CastleTowerPrism.h"
 #include "CastleMainTowerComponent.generated.h"
 
 class UCastleMainTowerBalloonComponent;
@@ -46,6 +47,14 @@ public:
 	/** 敌人飞行目标相对主塔 Actor 根节点的高度偏移。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "主塔|目标", meta = (Units = "cm"))
 	float TargetHeightOffset = 250.0f;
+
+	/** 实际战斗塔身底面的边长，忽略静态网格顶端挑檐和烘焙挂环。 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "主塔|战斗几何", meta = (Units = "cm"))
+	float TowerShaftWidth = FCastleTowerPrism::DefaultShaftWidth;
+
+	/** 实际战斗塔身高度，由棋盘按开放层数和层高同步。 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "主塔|战斗几何", meta = (Units = "cm"))
+	float TowerShaftHeight = FCastleTowerPrism::DefaultShaftHeight;
 
 	/** 当前生命；只允许本组件的受击入口修改。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "主塔|生命")
@@ -106,6 +115,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|主塔")
 	FVector GetTargetLocation() const;
 
+	/** 校验并更新主塔塔身逻辑尺寸；扩层提交前调用以保持查询几何与网格一致。 */
+	bool SetTowerShaftDimensions(float ShaftWidth, float ShaftHeight, FString& OutFailureReason);
+
+	/** 基于主塔 Actor 当前世界变换创建塔身快照。 */
+	bool GetTowerShaftPrism(FCastleTowerPrism& OutPrism, FString& OutFailureReason) const;
+
 	/** 返回主塔是否仍有生命。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|主塔")
 	bool IsAlive() const { return CurrentHealth > 0.0f; }
@@ -150,6 +165,13 @@ public:
 
 	/** 读取敌人追踪的主塔目标点。 */
 	bool GetMainTowerTargetLocation(FVector& OutLocation) const;
+
+	/** 读取存活主塔的塔身柱体快照；几何配置失效时写 Error 并返回失败。 */
+	bool GetMainTowerPrism(FCastleTowerPrism& OutPrism) const;
+
+	/** 查询存活主塔塔面最近点及敌人球心到塔身表面的有向距离。 */
+	bool GetMainTowerSurface(const FVector& WorldPoint, FVector& OutClosestPoint,
+		FVector& OutOutwardNormal, float& OutSignedDistance) const;
 
 	/** 读取当前主塔生命，主塔不存在时返回 false。 */
 	bool GetMainTowerHealth(float& OutCurrentHealth, float& OutMaxHealth) const;
