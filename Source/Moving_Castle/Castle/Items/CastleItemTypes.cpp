@@ -1,23 +1,108 @@
 #include "Items/CastleItemTypes.h"
 
 #include "CastleBuildingDefinition.h"
-#include "Items/CastleRoomGroupDataAsset.h"
 #include "Moving_Castle.h"
 
 #define LOCTEXT_NAMESPACE "CastleItemTypes"
 
-bool UCastleRoomGroupDataAsset::ValidateRarity(FText& OutReason) const
+TConstArrayView<ECastleBuildingType> CastleRoomCards::GetFunctionTypes()
 {
-	// 五档在枚举中连续排列。未配置哨兵和反序列化后越界的数值都不能进入业务流程。
-	if (Rarity >= ECastleItemRarity::Common && Rarity <= ECastleItemRarity::Legendary)
+	static constexpr ECastleBuildingType Types[] = {
+		ECastleBuildingType::ArcherTower, ECastleBuildingType::CannonTower, ECastleBuildingType::Farm,
+		ECastleBuildingType::ShieldTower, ECastleBuildingType::BeeHive, ECastleBuildingType::BalloonTower
+	};
+	return MakeArrayView(Types);
+}
+
+bool CastleRoomCards::FDefinitionPool::TryInitialize(
+	const TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> Definitions, FText& OutReason)
+{
+	for (UCastleBuildingDefinition* Definition : Definitions)
 	{
-		OutReason = FText::GetEmpty();
-		return true;
+		if (!IsValid(Definition))
+		{
+			OutReason = LOCTEXT("MissingDefinition", "建筑定义池含有空引用或已失效的建筑定义。");
+			return false;
+		}
+		const ECastleBuildingType Type = Definition->BuildingType;
+		if ((Type != ECastleBuildingType::NormalRoom && !GetFunctionTypes().Contains(Type)) || ByType.Contains(Type))
+		{
+			OutReason = FText::Format(LOCTEXT("AmbiguousDefinition", "建筑定义 {0} 的类别 {1} 非标准房间，或该类别存在多个定义。"),
+				FText::FromString(Definition->GetPathName()), FText::AsNumber(static_cast<uint8>(Type)));
+			return false;
+		}
+		if (!Definition->ValidateConfiguration(OutReason))
+		{
+			OutReason = FText::Format(LOCTEXT("InvalidDefinition", "建筑定义 {0} 校验失败：{1}"),
+				FText::FromString(Definition->GetPathName()), OutReason);
+			return false;
+		}
+		ByType.Add(Type, Definition);
 	}
-	OutReason = FText::Format(INVTEXT("房间组 {0} 的卡包稀有度无效（{1}），必须配置为普通、优秀、稀有、史诗或传说。"),
-		FText::FromString(GetPathName()), FText::AsNumber(static_cast<uint8>(Rarity)));
-	UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+	return true;
+}
+
+UCastleBuildingDefinition* CastleRoomCards::FDefinitionPool::Find(const ECastleBuildingType Type) const
+{
+	return ByType.FindRef(Type);
+}
+
+bool CastleRoomCards::FDefinitionPool::TryCollect(const bool bIncludeNormalRoom,
+	TArray<TObjectPtr<UCastleBuildingDefinition>>& OutDefinitions, FText& OutReason) const
+{
+	OutDefinitions.Reset();
+	TArray<ECastleBuildingType, TInlineAllocator<7>> Types;
+	if (bIncludeNormalRoom) { Types.Add(ECastleBuildingType::NormalRoom); }
+	Types.Append(GetFunctionTypes());
+	for (const ECastleBuildingType Type : Types)
+	{
+		UCastleBuildingDefinition* Definition = Find(Type);
+		if (!Definition)
+		{
+			OutReason = FText::Format(LOCTEXT("IncompleteDrawPool", "抽取池缺少建筑类别 {0} 的定义。"),
+				StaticEnum<ECastleBuildingType>()->GetDisplayNameTextByValue(static_cast<uint8>(Type)));
+			return false;
+		}
+		OutDefinitions.Add(Definition);
+	}
+	return true;
+}
+
+bool CastleRoomCards::ValidateTrait(const FCastleBuildingDescriptor& Card, FText& OutReason)
+{
+	// 带特质的卡随回收保留原字段，因而所有存入入口及 Actor 初始化都使用相同的约束。
+	switch (Card.RoomTrait)
+	{
+	case ECastleRoomTrait::None:
+		if (Card.TraitRemainingRounds == 0) { return true; }
+		break;
+	case ECastleRoomTrait::Highway:
+	case ECastleRoomTrait::SkyIslandPortal:
+		if (Card.GetBuildingType() == ECastleBuildingType::NormalRoom && Card.Level == 1 && Card.TraitRemainingRounds == 0)
+		{
+			return true;
+		}
+		break;
+	case ECastleRoomTrait::SelfOrbiting:
+		if (Card.GetBuildingType() == ECastleBuildingType::CannonTower && Card.Level == 1 && Card.Number == 6
+			&& Card.TraitRemainingRounds >= 1 && Card.TraitRemainingRounds <= 6)
+		{
+			return true;
+		}
+		break;
+	default:
+		break;
+	}
+	OutReason = FText::Format(LOCTEXT("InvalidRoomTrait", "建筑定义 {0} 的牌面不支持特质 {1} 或剩余轮数 {2}。"),
+		FText::FromString(GetPathNameSafe(Card.Definition.Get())), FText::AsNumber(static_cast<uint8>(Card.RoomTrait)),
+		FText::AsNumber(Card.TraitRemainingRounds));
 	return false;
+}
+
+bool CastleRoomCards::HaveSameIdentity(const FCastleBuildingDescriptor& A, const FCastleBuildingDescriptor& B)
+{
+	return A.Definition == B.Definition && A.Color == B.Color && A.Number == B.Number && A.Level == B.Level
+		&& A.RoomTrait == B.RoomTrait && A.TraitRemainingRounds == B.TraitRemainingRounds;
 }
 
 bool FCastleWildcardRoomSpec::TryResolveOptions(

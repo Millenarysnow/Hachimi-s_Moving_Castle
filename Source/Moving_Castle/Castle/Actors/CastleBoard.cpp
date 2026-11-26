@@ -865,6 +865,7 @@ ACastleBuildingBase* ACastleBoard::PlaceBuildingInternal(const FIntVector& Coord
 	}
 
 	// 编辑器世界只支持摆放/规则编辑，不执行游戏动画；实际游戏入口始终走上述完成事件。
+	NewBuilding->SetPlacementComplete(true);
 	if (!bTryMerge)
 	{
 		return NewBuilding;
@@ -895,6 +896,7 @@ void ACastleBoard::HandlePlacementFinished(UAssemblyFlightComponent* Flight, con
 		return;
 	}
 	Building->SetPlacementComplete(true);
+	RefreshHighwayMarkersAt(Building->GetOccupiedCoordinates()[0]);
 	UE_LOG(LogMoving_Castle, Display, TEXT("放置飞入完成，开始检查合并 [%s]。"), *Building->GetName());
 	if (Request.bTryMerge) { ReadyMergeRequests.Add(Building, Request.Origin); }
 	ResolveReadyMerges();
@@ -959,7 +961,12 @@ void ACastleBoard::HandleBuildingDestroyed(AActor* Actor)
 	bool bRemovedOccupancy = false;
 	for (const FIntVector& Coordinate : Building->GetOccupiedCoordinates())
 	{
-		if (GetBuildingAt(Coordinate) == Building) { BuildingByCoordinate.Remove(Coordinate); bRemovedOccupancy = true; }
+		if (GetBuildingAt(Coordinate) == Building)
+		{
+			BuildingByCoordinate.Remove(Coordinate);
+			RefreshHighwayMarkersAt(Coordinate);
+			bRemovedOccupancy = true;
+		}
 	}
 	if (bRemovedOccupancy && !IsActorBeingDestroyed() && !GetWorld()->bIsTearingDown) { OnLayoutCommitted.Broadcast(this, Building->GetActorLocation()); }
 }
@@ -1109,6 +1116,35 @@ TArray<ACastleBuildingBase*> ACastleBoard::GetPlacedBuildings() const
 	}
 
 	return Result;
+}
+
+bool ACastleBoard::IsHighwayCellActive(const FIntVector& Coordinate) const
+{
+	const ACastleBuildingBase* Building = GetBuildingAt(Coordinate);
+	return IsValid(Building) && Building->GetRoomTrait() == ECastleRoomTrait::Highway
+		&& Building->CanReceiveBuildingTrigger() && GetBuildingAt(Coordinate + FIntVector(0, 0, 1)) == nullptr;
+}
+
+TArray<FIntVector> ACastleBoard::GetActiveHighwayCells() const
+{
+	// 只在导航编译时读取占用。施工中的上层建筑已占格，因此能立即遮盖下层道路。
+	TArray<FIntVector> Cells;
+	for (const auto& Entry : BuildingByCoordinate)
+	{
+		if (IsHighwayCellActive(Entry.Key)) { Cells.Add(Entry.Key); }
+	}
+	return Cells;
+}
+
+void ACastleBoard::RefreshHighwayMarkersAt(const FIntVector& ChangedCell)
+{
+	for (const FIntVector& Cell : {ChangedCell, ChangedCell - FIntVector(0, 0, 1)})
+	{
+		if (ACastleBuildingBase* Building = GetBuildingAt(Cell); IsValid(Building) && Building->GetRoomTrait() == ECastleRoomTrait::Highway)
+		{
+			Building->UpdateTraitLabel(IsHighwayCellActive(Cell));
+		}
+	}
 }
 
 ACastleBoard* ACastleBoard::FindBoardForBuilding(const ACastleBuildingBase* Building)
@@ -1552,6 +1588,7 @@ bool ACastleBoard::RegisterBuilding(ACastleBuildingBase* Building, FText& OutFai
 	{
 		BuildingByCoordinate.Add(Coordinate, Building);
 	}
+	for (const FIntVector& Coordinate : OccupiedCoordinates) { RefreshHighwayMarkersAt(Coordinate); }
 	Building->OnDestroyed.AddUniqueDynamic(this, &ACastleBoard::HandleBuildingDestroyed);
 	Building->BuildingEffect->OnBoardRegistered(*this);
 	return true;
@@ -1583,6 +1620,7 @@ bool ACastleBoard::UnregisterBuilding(ACastleBuildingBase* Building, FText& OutF
 	{
 		BuildingByCoordinate.Remove(Coordinate);
 	}
+	for (const FIntVector& Coordinate : OccupiedCoordinates) { RefreshHighwayMarkersAt(Coordinate); }
 	return true;
 }
 

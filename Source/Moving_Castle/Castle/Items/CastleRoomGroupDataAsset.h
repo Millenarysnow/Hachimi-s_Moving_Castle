@@ -26,6 +26,9 @@ public:
 	/** 供商店与发放共用校验；非法值记录房间组资产路径和具体数值。 */
 	bool ValidateRarity(FText& OutReason) const;
 
+	/** 校验资产入口与背包动作能否组合。涉及牌面、棋盘和定义池的部分在准备时校验。 */
+	bool ValidateGrantConfiguration(FText& OutReason) const;
+
 	/** 直接发牌时按顺序准备，后续规则可使用已准备的牌面。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "房间组|生成")
 	TArray<FCastleRoomCardRule> CardRules;

@@ -116,6 +116,8 @@ private:
 	friend class FCastleDirectorBattleIntegrationTest;
 	friend class FDirectorBattleScenario;
 	friend class FCastleDirectorWave2Scenario;
+	friend class FCastlePortalRoomTraitTest;
+	friend class FCastleSelfOrbitingRoomTraitTest;
 #endif
 	/** 启动只尝试一次；配置、场景或资产错误通过日志和屏幕明确失败。 */
 	void TryAutoStart();
@@ -131,9 +133,9 @@ private:
 	bool TryStartSelectedBattle(ACastleDirectorNodeActor* Node, FText& OutReason);
 	/** 真实节点先根据关数和节点序号确定类型及玩法种子。 */
 	bool TryEnterSkyIsland(ACastleDirectorNodeActor& Node, const UCastleDirectorConfigDataAsset& IslandConfig, FText& OutReason);
-	/** 统一提交配置查表、生成和传送。节点参数用于报告真实节点的路径。 */
+	/** 统一提交生成与传送；传送门入口保留当前节点，且在传送成功后才消费门体。 */
 	bool TryEnterConfiguredSkyIsland(const UCastleDirectorConfigDataAsset& IslandConfig, ECastleSkyIslandType Type,
-		int32 Seed, const ACastleDirectorNodeActor* Node, FText& OutReason);
+		int32 Seed, const ACastleDirectorNodeActor* Node, FText& OutReason, ACastleBuildingBase* PortalRoom = nullptr);
 	bool TryDepartSkyIsland(FText& OutReason);
 	bool ValidateIslandAction(const ACastleSkyIslandBase* Island, FText& OutReason) const;
 	bool RecallBattleNPCs(FText& OutReason);
@@ -168,6 +170,10 @@ private:
 	FRotator IslandReturnControlRotation;
 	bool bDepartureRequested = false;
 	bool bIslandShopGranted = false;
+	bool bEnteringSkyIsland = false;
+	bool bCurrentIslandIsBonus = false;
+	/** 只在传送成功时递增；同一关使用第二张门牌会独立抽取。 */
+	uint32 BonusSkyIslandVisitCount = 0;
 	UPROPERTY(Transient) TArray<TObjectPtr<UCastlePendingRoomReward>> UpgradeRoomRewards;
 	TArray<FCastleTowerUpgradeRewardEntry> UpgradeRewards;
 	int32 ActiveUpgradeRewardIndex = INDEX_NONE;
@@ -186,6 +192,8 @@ private:
 	bool bRunning = false;
 	bool bStartAttempted = false;
 	bool bApplyingReward = false;
+	/** 只由实际受理的清场置位。空岛返回、开局与重复按领奖键都不能多结算一轮。 */
+	bool bSelfOrbitingRoundPending = false;
 	bool bBattlePaused = false;
 	bool bBattleDoubleSpeed = false;
 	bool bFirstTowerDamageInBattle = false;
