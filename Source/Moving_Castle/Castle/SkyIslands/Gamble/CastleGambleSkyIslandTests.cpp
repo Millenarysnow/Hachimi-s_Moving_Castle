@@ -11,6 +11,7 @@
 #include "Camera/CameraActor.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
+#include "Castle/SkyIslands/Shop/CastleShopSkyIslandDataAsset.h"
 #include "CastleBackpackComponent.h"
 #include "CastleBuildingDefinition.h"
 #include "CastleEconomyComponent.h"
@@ -170,18 +171,14 @@ bool FCastleGambleIslandAutomationTest::RunTest(const FString& Parameters)
 	Island->Config->SlotWeights = {0, 0, 12, 0, 0};
 	TestTrue(TEXT("金币大奖档结算"), Island->TryPlaySlot(Reason));
 	TestEqual(TEXT("五倍档净赚四十金"), Island->Economy->GetGold(), 140);
-	// 用显式配置的隔离奖品校验骨架拒绝，避免旧奖池更换前误收金币。
-	auto* Group = NewObject<UCastleRoomGroupDataAsset>(Island);
-	Group->DisplayName = INVTEXT("老虎机骨架事务测试");
-	Group->Rarity = ECastleItemRarity::Common;
-	Group->ShopPrice = 48;
-	Island->Config->RoomGroups = {Group};
+	// 模拟已初始化的机台奖品失效，验证拒绝时不会提交投币与随机流。
+	Island->Config->RoomGroups = {nullptr};
 	Island->Config->RoomDefinitions = {Definition};
 	Island->Config->SlotWeights = {0, 0, 0, 12, 0};
 	const int32 SeedBefore = Island->SlotRandom.GetCurrentSeed();
 	const int32 CardsBefore = Island->Backpack->GetItemCount() + Island->Backpack->GetTempItemCount();
-	AddExpectedError(TEXT("房间组规则引擎尚未实现"), EAutomationExpectedErrorFlags::Contains, 1);
-	TestFalse(TEXT("未交付的房间组奖项拒绝投币"), Island->TryPlaySlot(Reason));
+	AddExpectedError(TEXT("老虎机抽中的房间组资产失效"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestFalse(TEXT("房间组奖项失效时拒绝投币"), Island->TryPlaySlot(Reason));
 	TestEqual(TEXT("房间组档失败不扣金币"), Island->Economy->GetGold(), 140);
 	TestEqual(TEXT("房间组档失败不消耗随机流"), Island->SlotRandom.GetCurrentSeed(), SeedBefore);
 	TestEqual(TEXT("房间组档失败不发卡"), Island->Backpack->GetItemCount() + Island->Backpack->GetTempItemCount(), CardsBefore);
@@ -197,6 +194,57 @@ bool FCastleGambleIslandAutomationTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("最后一球拒绝回收"), Island->TryRecycleBalloon(Reason));
 	TestTrue(TEXT("最后一球仍存活且未当作受击"), Island->Tower->IsAlive() && Island->Tower->AttackCount == 0);
 	TestEqual(TEXT("拒绝时不发币"), Island->Economy->GetGold(), 170);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleGambleCatalogTest, "MovingCastle.SkyIslands.Gamble.ConfigValidation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleGambleCatalogTest::RunTest(const FString& Parameters)
+{
+	const auto* Gamble = LoadGambleConfig();
+	const auto* Shop = LoadObject<UCastleShopSkyIslandDataAsset>(nullptr,
+		TEXT("/Game/MovingCastle/Data/SkyIslands/DA_ShopSkyIsland.DA_ShopSkyIsland"));
+	if (!TestNotNull(TEXT("正式赌博配置"), Gamble) || !TestNotNull(TEXT("正式商店配置"), Shop)) { return false; }
+	FText Reason;
+	TestTrue(TEXT("赌博配置通过原生校验"), Gamble->Validate(Reason));
+	TestTrue(TEXT("老虎机使用商店校验过的正式房间组目录"), Shop->Validate(Reason));
+	TestEqual(TEXT("房间组 26 个"), Gamble->RoomGroups.Num(), 26);
+	TestEqual(TEXT("徽章 25 枚"), Gamble->Badges.Num(), 25);
+	for (const auto& Group : Shop->RoomGroupPool)
+	{
+		TestTrue(GetPathNameSafe(Group) + TEXT(" 同时是赌博奖品"), Gamble->RoomGroups.Contains(Group));
+	}
+	for (const auto& Badge : Shop->BadgePool)
+	{
+		TestTrue(GetPathNameSafe(Badge) + TEXT(" 同时是赌博奖品"), Gamble->Badges.Contains(Badge));
+	}
+
+	// 七个正式建筑定义就是随机房间池，也用于校验自定义选项里的硬引用。
+	const TCHAR* DefinitionNames[] = {
+		TEXT("DA_NormalRoom"), TEXT("DA_ArcherTower"), TEXT("DA_CannonTower"), TEXT("DA_Farm"),
+		TEXT("DA_ShieldTower"), TEXT("DA_BeeHive"), TEXT("DA_BalloonTower")
+	};
+	TestEqual(TEXT("随机房间仅包含普通房和六类功能塔"), Gamble->RoomDefinitions.Num(), static_cast<int32>(UE_ARRAY_COUNT(DefinitionNames)));
+	for (const TCHAR* Name : DefinitionNames)
+	{
+		const auto* Definition = LoadObject<UCastleBuildingDefinition>(nullptr,
+			*FString::Printf(TEXT("/Game/MovingCastle/Data/Buildings/%s.%s"), Name, Name));
+		if (!TestNotNull(Name, Definition)) { return false; }
+		TestTrue(FString(Name) + TEXT(" 属于赌博房间定义池"), Gamble->RoomDefinitions.Contains(Definition));
+	}
+	for (const UCastleRoomGroupDataAsset* Group : Gamble->RoomGroups)
+	{
+		if (!TestNotNull(TEXT("房间组资产"), Group)) { return false; }
+		if (Group->bChooseInPicker)
+		{
+			FCastleWildcardRoomOptions Options;
+			TestTrue(Group->GetName() + TEXT(" 的 RoomSpec 可从正式池解析"),
+				Group->RoomSpec.TryResolveOptions(Gamble->RoomDefinitions, Options, Reason));
+			TestEqual(Group->GetName() + TEXT(" 有四种玩法色"), Options.Colors.Num(), 4);
+			TestTrue(Group->GetName() + TEXT(" 数字候选是 1 至 6"), Options.Numbers == TArray<int32>{1, 2, 3, 4, 5, 6});
+		}
+	}
 	return true;
 }
 

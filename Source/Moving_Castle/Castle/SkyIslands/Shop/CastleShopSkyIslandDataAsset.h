@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/DataAsset.h"
+#include "Containers/StaticArray.h"
 #include "CastleGameplayTypes.h"
 #include "CastleShopSkyIslandDataAsset.generated.h"
 
@@ -21,6 +22,9 @@ struct MOVING_CASTLE_API FCastleShopRarityWeights
 	UPROPERTY(EditAnywhere, Category = "商品稀有度") int32 Rare = 0;
 	UPROPERTY(EditAnywhere, Category = "商品稀有度") int32 Epic = 0;
 	UPROPERTY(EditAnywhere, Category = "商品稀有度") int32 Legendary = 0;
+
+	/** 校验和抽样共用从普通到传说的顺序，单位为百分比。 */
+	TStaticArray<int32, 5> GetPercentages() const { return {Common, Uncommon, Rare, Epic, Legendary}; }
 };
 
 /** 实体货架使用专属配置，商品内容沿用房间组和徽章的原始资产。 */
@@ -30,17 +34,9 @@ class MOVING_CASTLE_API UCastleShopSkyIslandDataAsset : public UDataAsset
 	GENERATED_BODY()
 
 public:
-	/** 本次访问在岛上展示的商品台数量。 */
+	/** 商店空岛固定四个货位。保留配置字段供初始化拒绝错误的资产。 */
 	UPROPERTY(EditAnywhere, Category = "商店空岛")
 	int32 OfferCount = 4;
-
-	/** 房间组商品的统一售价。配置为零表示免费商品。 */
-	UPROPERTY(EditAnywhere, Category = "商店空岛")
-	int32 DefaultRoomGroupPrice = 30;
-
-	/** 徽章商品的统一售价。配置为零表示免费商品。 */
-	UPROPERTY(EditAnywhere, Category = "商店空岛")
-	int32 DefaultBadgePrice = 50;
 
 	/** 全部房间组共用同一包底轴心网格，配置必须提供可见性查询几何。 */
 	UPROPERTY(EditAnywhere, Category = "房间包")
@@ -50,7 +46,7 @@ public:
 	UPROPERTY(EditAnywhere, Category = "房间包")
 	TMap<ECastleItemRarity, TObjectPtr<UMaterialInterface>> RoomPackMaterials;
 
-	/** Phase 1C 校验四行配置，按当前主塔等级选中一行，再抽取商品档位。 */
+	/** 四行依次对应主塔 Lv1 至 Lv4。每个货位按该行先抽档位，再抽商品。 */
 	UPROPERTY(EditAnywhere, Category = "商品稀有度")
 	TArray<FCastleShopRarityWeights> RarityWeightsByTowerLevel;
 
