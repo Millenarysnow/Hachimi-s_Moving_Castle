@@ -145,6 +145,10 @@ private:
 	bool TryEnterConfiguredSkyIsland(const UCastleDirectorConfigDataAsset& IslandConfig, ECastleSkyIslandType Type,
 		int32 Seed, const ACastleDirectorNodeActor* Node, FText& OutReason, ACastleBuildingBase* PortalRoom = nullptr);
 	bool TryDepartSkyIsland(FText& OutReason);
+	/** 在更改战斗或空岛状态前，核对玩家并按已开放塔层计算同一俯瞰位。 */
+	bool PrepareTowerOverview(FTransform& OutView, FText& OutReason) const;
+	/** 在阶段对应的提交点传送玩家，并同步停止飞行、更新相机方向。 */
+	bool TeleportPlayerToTowerOverview(const FTransform& View, FText& OutReason);
 	bool ValidateIslandAction(const ACastleSkyIslandBase* Island, FText& OutReason) const;
 	bool RecallBattleNPCs(FText& OutReason);
 	/** 普通战由三选一触发，精英战在清场边界联合提交三笔效果。 */
@@ -177,8 +181,6 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UCastleWildcardRoomPickerWidget> WildcardPicker;
 	UPROPERTY(Transient) TObjectPtr<ACastlePatrolRoute> PatrolRoute;
 	UPROPERTY(Transient) TObjectPtr<ACastleSkyIslandBase> ActiveSkyIsland;
-	FTransform IslandReturnTransform;
-	FRotator IslandReturnControlRotation;
 	bool bDepartureRequested = false;
 	bool bIslandShopGranted = false;
 	bool bEnteringSkyIsland = false;

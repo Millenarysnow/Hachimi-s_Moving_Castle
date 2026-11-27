@@ -19,6 +19,7 @@
 #include "Castle/Components/CastleMainTowerComponent.h"
 #include "Castle/Components/CastleEconomyComponent.h"
 #include "Castle/Automation/CastleBuildingTestUtilities.h"
+#include "Castle/Automation/CastleTowerOverviewTestUtilities.h"
 #include "Units/Navigation/Interaction/CastlePatrolRoute.h"
 #include "Units/Navigation/Interaction/CastlePatrolWaypointMarker.h"
 #include "Units/Navigation/CastleNavigationSubsystem.h"
@@ -26,6 +27,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "GameFramework/PawnMovementComponent.h"
 #include "HAL/IConsoleManager.h"
 #include "Castle/UI/BuildBar/CastleBuildBarWidget.h"
 #include "Castle/UI/Common/CastleHUDControls.h"
@@ -225,7 +227,30 @@ public:
 				}
 			}
 			Test->TestEqual(TEXT("MainMap 同时显示 1、2 两个编号"), Numbers.Num(), 2);
-			if (!Test->TestTrue(TEXT("真实开战成功"), Director->TryStartSelectedBattle(Director->Nodes[0], Reason))) { Test->AddError(Reason.ToString()); return true; }
+			// 使用飞行移动组件的实际 sweep 穿过第二层塔身，然后移动进入正式节点触发球。
+			APawn* Pawn = Director->Controller->GetPawn();
+			UPawnMovementComponent* Movement = Pawn ? Pawn->GetMovementComponent() : nullptr;
+			if (!Test->TestNotNull(TEXT("玩家飞行移动组件"), Movement)) { return true; }
+			const FVector Forward = Board->GetActorForwardVector();
+			const FVector TowerMiddle = Board->GetGridWorldLocation(Board->GetBoardCenterCoordinate()) + FVector::UpVector * Board->LayerHeight;
+			const FVector SweepStart = TowerMiddle - Forward * Board->CellSize * 2.0;
+			const FVector SweepEnd = TowerMiddle + Forward * Board->CellSize * 2.0;
+			Pawn->SetActorLocation(SweepStart);
+			FHitResult Hit;
+			Movement->SafeMoveUpdatedComponent(SweepEnd - SweepStart, Pawn->GetActorQuat(), true, Hit);
+			Test->TestTrue(TEXT("飞行胶囊扫过实体塔身无阻挡"), !Hit.bBlockingHit && Pawn->GetActorLocation().Equals(SweepEnd, 1.0));
+
+			const ACastleDirectorNodeActor* BattleNode = Director->Nodes[0];
+			const FVector NodeCenter = BattleNode->GetActorLocation();
+			const FVector Approach = Forward * 800.0;
+			Pawn->SetActorLocation(NodeCenter - Approach);
+			Movement->SafeMoveUpdatedComponent(Approach, Pawn->GetActorQuat(), true, Hit);
+			if (!Test->TestTrue(TEXT("真实触发球重叠排队开战"), Director->PendingNode.Get() == BattleNode && !Hit.bBlockingHit)) { return true; }
+			Movement->Velocity = Forward * 425.0;
+			Director->Tick(0);
+			if (!Test->TestEqual(TEXT("真实触碰后提交开战"), Director->GetPhase(), ECastleDirectorPhase::Battle)) { return true; }
+			CastleTowerOverviewTests::Check(*Test, *Board, *Director->Controller);
+			CastleTowerOverviewTests::Capture(TEXT("03-battle-tower-overview.png"));
 			int32 Reserve = 0, Active = 0;
 			Dispatch->GetDispatchCounts(Reserve, Active);
 			Test->TestEqual(TEXT("开战登记 8 名待命 NPC"), Reserve, 8);

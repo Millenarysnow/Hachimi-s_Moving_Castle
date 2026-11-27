@@ -4,6 +4,7 @@
 #include "CastlePinballNPCSimulationComponent.h"
 #include "CastlePinballNPCSkyIsland.h"
 #include "CastlePinballNPCStatusWidget.h"
+#include "Castle/Automation/CastleTowerOverviewTestUtilities.h"
 #include "Castle/Components/CastleEconomyComponent.h"
 #include "Castle/Components/CastleMainTowerComponent.h"
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
@@ -353,7 +354,11 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 			TestEqual(TEXT("导演离岛恢复编辑并提交一步"), Director->GetPhase(), ECastleDirectorPhase::Editing);
 			TestEqual(TEXT("导演离岛仅提交一步"), Director->GetClearedSteps(), BeforeStep + 1);
 			TestEqual(TEXT("离岛保留所有已招募的 NPC"), Director->GetRunNPCCount(), BeforeNPCCount);
-			TestTrue(TEXT("导演离岛返回入岛前位置"), Controller->GetPawn()->GetActorLocation().Equals(ReturnLocation, 5.0));
+			const TActorIterator<ACastleBoard> Board(World);
+			if (TestTrue(TEXT("正式导演返塔世界仍有主棋盘"), static_cast<bool>(Board)))
+			{
+				CastleTowerOverviewTests::Check(*this, **Board, *Controller);
+			}
 			TestTrue(TEXT("导演离岛恢复移动、观察并生成后续节点"),
 				!Controller->IsMoveInputIgnored() && !Controller->IsLookInputIgnored()
 				&& static_cast<bool>(TActorIterator<ACastleDirectorNodeActor>(World)));

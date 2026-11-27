@@ -24,6 +24,7 @@
 #include "Interaction/CastlePatrolRoute.h"
 #include "Mass/CastlePatrolMovement.h"
 #include "Misc/AutomationTest.h"
+#include "Castle/Automation/CastleTowerOverviewTestUtilities.h"
 #include "NavigationData.h"
 #include "NavigationSystem.h"
 
@@ -728,6 +729,8 @@ bool FCastlePortalRoomTraitTest::RunTest(const FString& Parameters)
 	Director->ClearedSteps = 4;
 	const int32 Step = Director->GetNextStep();
 	const auto Start = Pawn->GetActorTransform();
+	// 显式登记夹具的主塔，让额外空岛与正式导演共享同一个返塔锚点。
+	Scene.Board->MainTowerActor = Director->Tower->GetOwner();
 
 	FCastleBuildingDescriptor Card;
 	if (!Pool[0]->CreateDescriptor(1, C::Red, 1, Card, Reason)) { AddError(Reason.ToString()); return false; }
@@ -793,8 +796,9 @@ bool FCastlePortalRoomTraitTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("通过空岛离开门发出返塔请求"), Director->TryInteractWithSkyIsland(
 			DepartureCenter + FVector::UpVector * 450.0, DepartureCenter, Reason))) { AddError(Reason.ToString()); return false; }
 		Director->Tick(0.0f);
-		TestTrue(TEXT("返塔恢复原玩家位置及原节点，不推进步骤"), Pawn->GetActorTransform().Equals(Start, 0.1)
-			&& !Director->ActiveSkyIsland && Director->GetClearedSteps() == 4 && Director->GetNextStep() == Step
+		CastleTowerOverviewTests::Check(*this, *Scene.Board, *Controller);
+		TestTrue(TEXT("额外空岛返塔恢复原节点，不推进步骤"),
+			!Director->ActiveSkyIsland && Director->GetClearedSteps() == 4 && Director->GetNextStep() == Step
 			&& Director->GetPhase() == ECastleDirectorPhase::Editing && Director->Nodes.Num() == 1
 			&& Director->Nodes[0] == OriginalNode && !OriginalNode->IsHidden() && OriginalNode->GetActorEnableCollision());
 		TestFalse(TEXT("再次瞄准消耗过的同一位置不进岛"), Controller->TryInteractWithRoomPortalFromRay(Center + Offset, Center, Reason));

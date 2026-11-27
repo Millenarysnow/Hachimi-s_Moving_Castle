@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleBoard.h"
+#include "Algo/RandomShuffle.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/Items/CastleBadgeSubsystem.h"
 #include "Castle/Placement/CastleTowerSideGridComponent.h"
@@ -2266,6 +2267,122 @@ bool ACastleBoard::HasPlacementMatch(const FIntVector& Coordinate, const FCastle
 	return false;
 }
 
+bool ACastleBoard::InitializeTowerSideStarterDeck(FText& OutReason)
+{
+	constexpr int32 HandSize = 5;
+	if (PrototypeBackpack->GetItemCount() != 0 || PrototypeBackpack->GetTempItemCount() != 0
+		|| !PrototypeBackpack->HasFreeSlots(HandSize))
+	{
+		OutReason = INVTEXT("开局建筑栏和临时栏须为空，建筑栏须至少有五个空槽。");
+		return false;
+	}
+	if (!ValidatePlacementSurface(OutReason) || !ValidateBuildingDefinitions(OutReason)) { return false; }
+
+	struct FFaceValue
+	{
+		ECastleTileColor Color;
+		int32 Number;
+
+		bool Matches(const FFaceValue& Other) const { return Color == Other.Color || Number == Other.Number; }
+	};
+	const FIntVector Base = GetBoardCenterCoordinate();
+	const ECastleGridFace Faces[] = {ECastleGridFace::PositiveX, ECastleGridFace::NegativeX,
+		ECastleGridFace::PositiveY, ECastleGridFace::NegativeY};
+	FFaceValue Sides[UE_ARRAY_COUNT(Faces)];
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Faces); ++Index)
+	{
+		const FCastleTowerSideCell* Cell = FindTowerSideCell(Base, Faces[Index]);
+		if (!Cell || !CastleTileColors::IsPlayable(Cell->Color) || Cell->Number < 1 || Cell->Number > 9)
+		{
+			OutReason = FText::Format(INVTEXT("塔底坐标 {0} 的面 {1} 缺少有效色号。"),
+				FText::FromString(Base.ToString()), static_cast<int32>(Faces[Index]));
+			return false;
+		}
+		Sides[Index] = {Cell->Color, Cell->Number};
+	}
+
+	// 这四类一级房均可通行。整池必须具备，抽牌前逐一校验，避免随机数决定是否暴露缺失定义。
+	const ECastleBuildingType Types[] = {ECastleBuildingType::NormalRoom, ECastleBuildingType::ArcherTower,
+		ECastleBuildingType::CannonTower, ECastleBuildingType::Farm};
+	UCastleBuildingDefinition* Definitions[UE_ARRAY_COUNT(Types)];
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Types); ++Index)
+	{
+		Definitions[Index] = FindBuildingDefinition(Types[Index]);
+		if (!IsValid(Definitions[Index]))
+		{
+			OutReason = FText::Format(INVTEXT("缺少 {0} 的一级可通行建筑定义。"),
+				StaticEnum<ECastleBuildingType>()->GetDisplayNameTextByValue(static_cast<int64>(Types[Index])));
+			return false;
+		}
+	}
+
+	// 固定测试种子派生出独立手牌流；正式每局使用独立新种子。
+	constexpr uint32 StarterDeckSeedSalt = 0x3b9a19d5u;
+	FRandomStream Random(bUseFixedTowerSideSeed ? static_cast<int32>(static_cast<uint32>(FixedTowerSideSeed) ^ StarterDeckSeedSalt)
+		: static_cast<int32>(GetTypeHash(FGuid::NewGuid())));
+	const TConstArrayView<ECastleTileColor> Colors = CastleTileColors::GetPlayable();
+	const auto MatchRandomAttribute = [&](const FFaceValue& Anchor)
+	{
+		return Random.RandRange(0, 1) == 0
+			? FFaceValue{Anchor.Color, Random.RandRange(1, 9)}
+			: FFaceValue{Colors[Random.RandRange(0, Colors.Num() - 1)], Anchor.Number};
+	};
+
+	const FFaceValue& Front = Sides[0];
+	const FFaceValue& Back = Sides[1];
+	const FFaceValue& Flank = Sides[Random.RandRange(2, 3)];
+	FFaceValue Chain[HandSize];
+	Chain[0] = MatchRandomAttribute(Front);
+	Chain[4] = MatchRandomAttribute(Back);
+	Chain[3] = MatchRandomAttribute(Chain[4]);
+	// C2 继承 C1 一维、继承侧面另一维。C3 保持侧面继承来的一维，并从 C4 取剩余一维。
+	// 因而 C3 同时能接 C2、C4，也能从选中的塔侧直接放到中间格，整个构造无需搜索重试。
+	if (Random.RandRange(0, 1) == 0)
+	{
+		Chain[1] = {Chain[0].Color, Flank.Number};
+		Chain[2] = {Chain[3].Color, Chain[1].Number};
+	}
+	else
+	{
+		Chain[1] = {Flank.Color, Chain[0].Number};
+		Chain[2] = {Chain[1].Color, Chain[3].Number};
+	}
+
+	// 在打乱和写入前验证门、五个相邻房间及绕行中心与侧面均满足现行 UNO 规则。
+	bool bValidChain = Front.Matches(Chain[0]) && Chain[4].Matches(Back) && Flank.Matches(Chain[2]);
+	for (int32 Index = 1; Index < HandSize; ++Index)
+	{
+		bValidChain &= Chain[Index - 1].Matches(Chain[Index]);
+	}
+	if (!bValidChain)
+	{
+		OutReason = INVTEXT("开局五张建筑牌的门到门连通自检失败。");
+		return false;
+	}
+
+	TArray<FCastleBuildingDescriptor> Hand;
+	Hand.Reserve(HandSize);
+	const int32 NormalRoomIndex = Random.RandRange(0, HandSize - 1);
+	for (int32 Index = 0; Index < HandSize; ++Index)
+	{
+		// 普通房间至少一张，其位置及其余牌的建筑类型均随机。
+		UCastleBuildingDefinition* Definition = Definitions[Index == NormalRoomIndex ? 0 : Random.RandRange(0, UE_ARRAY_COUNT(Definitions) - 1)];
+		FCastleBuildingDescriptor& Card = Hand.AddDefaulted_GetRef();
+		if (!Definition->CreateDescriptor(1, Chain[Index].Color, Chain[Index].Number, Card, OutReason))
+		{
+			OutReason = FText::Format(INVTEXT("建筑定义 {0} 无法生成开局牌：{1}"),
+				FText::FromString(Definition->GetPathName()), OutReason);
+			return false;
+		}
+	}
+	Algo::RandomShuffle(Hand, Random);
+	// 已检查主栏容量且两栏均为空，批量写入只占主栏，并一次发布背包变动。
+	if (!PrototypeBackpack->TryAddItemsAllowOverflow(Hand, OutReason)) { return false; }
+	PrototypePalette = MoveTemp(Hand);
+	SelectedPrototypeSlot = 0;
+	return true;
+}
+
 void ACastleBoard::InitializePrototypeDeck()
 {
 	PrototypePalette.Reset();
@@ -2276,6 +2393,17 @@ void ACastleBoard::InitializePrototypeDeck()
 		return;
 	}
 
+	if (PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides)
+	{
+		FText FailureReason;
+		if (!InitializeTowerSideStarterDeck(FailureReason))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 的主塔 %s 开局发牌失败：%s"),
+				*GetPathName(), *GetPathNameSafe(MainTowerActor.Get()), *FailureReason.ToString());
+		}
+		return;
+	}
+
 	if (PrototypeBackpack->GetItemCount() > 0)
 	{
 		// 允许关卡蓝图预先配置背包；检测到已有卡牌时不再偷偷追加样例卡。
@@ -2283,38 +2411,19 @@ void ACastleBoard::InitializePrototypeDeck()
 		return;
 	}
 
-	// 样例牌只从当前模式实际生成的格子取色号；塔侧模式从第一层不同面取三组。
+	// 旧地面模式的样例顺序和小棋盘行为保持原样。
 	struct FStarterMatch { ECastleTileColor Color; int32 Number; };
 	FStarterMatch Matches[3];
-	if (PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides)
+	const TArray<FCastleGroundCell>& FunctionalCells = GeneratedGroundCells;
+	if (FunctionalCells.IsEmpty())
 	{
-		FText FailureReason;
-		if (!ValidatePlacementSurface(FailureReason) || TowerSideGrid->GetCells().Num() < UE_ARRAY_COUNT(Matches))
-		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 无法按主塔 %s 的侧格准备样例牌：侧格不全。%s"),
-				*GetPathName(), *GetPathNameSafe(MainTowerActor.Get()), *FailureReason.ToString());
-			return;
-		}
-		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Matches); ++Index)
-		{
-			const FCastleTowerSideCell& Cell = TowerSideGrid->GetCells()[Index];
-			Matches[Index] = {Cell.Color, Cell.Number};
-		}
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 原型卡组初始化失败：生成结果中没有功能地面格。"), *GetPathName());
+		return;
 	}
-	else
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Matches); ++Index)
 	{
-		const TArray<FCastleGroundCell>& FunctionalCells = GeneratedGroundCells;
-		if (FunctionalCells.IsEmpty())
-		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 原型卡组初始化失败：生成结果中没有功能地面格。"), *GetPathName());
-			return;
-		}
-		// 旧地面模式的样例顺序和小棋盘行为保持原样。
-		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Matches); ++Index)
-		{
-			const FCastleGroundCell& Cell = FunctionalCells[FMath::Min(Index, FunctionalCells.Num() - 1)];
-			Matches[Index] = {Cell.Color, Cell.Number};
-		}
+		const FCastleGroundCell& Cell = FunctionalCells[FMath::Min(Index, FunctionalCells.Num() - 1)];
+		Matches[Index] = {Cell.Color, Cell.Number};
 	}
 
 	FText DefinitionReason;

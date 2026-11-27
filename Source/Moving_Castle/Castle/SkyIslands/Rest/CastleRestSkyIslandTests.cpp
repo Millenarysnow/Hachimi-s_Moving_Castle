@@ -1,6 +1,7 @@
 #if WITH_EDITOR && WITH_DEV_AUTOMATION_TESTS
 
 #include "CastleRestSkyIsland.h"
+#include "Castle/Automation/CastleTowerOverviewTestUtilities.h"
 #include "Castle/Components/CastleEconomyComponent.h"
 #include "Castle/Components/CastleMainTowerComponent.h"
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
@@ -57,7 +58,6 @@ public:
 				Test.AddError(TEXT("本局需要一个实际导演节点和玩家 Pawn。"));
 				return true;
 			}
-			ReturnLocation = Controller->GetPawn()->GetActorLocation();
 			BeforeIsland = Director->GetClearedSteps();
 			// 第一步按正式规则全是战斗节点。本测试只指定已登记节点的类型，后续完全由真实导演处理。
 			if (!Test.TestTrue(TEXT("明确指定本次测试的休息节点"),
@@ -91,7 +91,12 @@ public:
 		if (Controller && Controller->GetPawn() && Controller->GetShop())
 		{
 			Test.TestFalse(TEXT("离岛后房间商店已关闭"), Controller->GetShop()->IsShopOpen());
-			Test.TestTrue(TEXT("玩家返回塔侧原位置"), Controller->GetPawn()->GetActorLocation().Equals(ReturnLocation, 5.0));
+			const TActorIterator<ACastleBoard> Board(World);
+			if (Test.TestTrue(TEXT("返塔世界仍有主棋盘"), static_cast<bool>(Board)))
+			{
+				CastleTowerOverviewTests::Check(Test, **Board, *Controller);
+				CastleTowerOverviewTests::Capture(TEXT("04-rest-island-return-tower-overview.png"));
+			}
 		}
 		return true;
 	}
@@ -164,7 +169,6 @@ private:
 	FAutomationTestBase& Test;
 	TStrongObjectPtr<UCastleDirectorConfigDataAsset> Config;
 	const double Started = FPlatformTime::Seconds();
-	FVector ReturnLocation = FVector::ZeroVector;
 	int32 BeforeIsland = 0;
 	int32 Stage = 0;
 	double WaitUntil = 0.0;

@@ -97,18 +97,18 @@ namespace
 				1, ECastleTileColor::Red, Side->Number, OneCell, Reason))) { return; }
 			auto* Placed = Board.PlaceBuildingAtCursor(Target, OneCell, false, Reason);
 			if (!Test.TestTrue(TEXT("正式建造面登记一格"), CastleBuildingTests::CompletePlacement(Placed))) { return; }
-			Test.TestEqual(TEXT("棋盘一格加开局主栏十格"), Director.GetOwnedRoomCount(), 11);
+			Test.TestEqual(TEXT("棋盘一格加开局主栏五格"), Director.GetOwnedRoomCount(), 6);
 
 			Player->ToggleShop();
 			if (!Test.TestTrue(TEXT("正式商店模态已打开"), Shop.IsShopOpen() && Player->IsModalInputActive())) { return; }
-			CheckProgress(*ShopWidget, TEXT("主塔 Lv.1 (11/30)"), 11.0f / 30.0f);
+			CheckProgress(*ShopWidget, TEXT("主塔 Lv.1 (6/30)"), 6.0f / 30.0f);
 			if (!Test.TestTrue(TEXT("卖牌腾一个真实背包槽"), Shop.TrySellBackpackItem(0, Reason))) { return; }
-			CheckProgress(*ShopWidget, TEXT("主塔 Lv.1 (10/30)"), 10.0f / 30.0f);
+			CheckProgress(*ShopWidget, TEXT("主塔 Lv.1 (5/30)"), 5.0f / 30.0f);
 			if (!Test.TestTrue(TEXT("购买一格房间"), Shop.TryBuyOffer(0, Reason))) { return; }
-			CheckProgress(*ShopWidget, TEXT("主塔 Lv.1 (11/30)"), 11.0f / 30.0f);
+			CheckProgress(*ShopWidget, TEXT("主塔 Lv.1 (6/30)"), 6.0f / 30.0f);
 			Player->ToggleShop();
-			// 主栏已满，新发放的一级房牌全部排进临时栏，和已摆放的一格、主栏十格一起达到阈值。
-			if (!AddCells(Backpack, OneCell, 19)) { return; }
+			// 新发的 24 张先补满主栏剩余五槽，再把 19 张压入临时栏，合计恰好达阈值。
+			if (!AddCells(Backpack, OneCell, 24)) { return; }
 			Test.TestEqual(TEXT("十九张待放置的单格房排在临时栏"), Backpack.GetTempItemCount(), 19);
 			Player->ToggleShop();
 			Test.TestEqual(TEXT("导演和商店共同读到30格"), Shop.GetOwnedRoomCount(), Director.GetOwnedRoomCount());

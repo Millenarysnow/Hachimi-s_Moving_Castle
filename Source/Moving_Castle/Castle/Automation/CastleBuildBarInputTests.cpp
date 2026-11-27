@@ -46,9 +46,17 @@ namespace
 			}
 			UCastleBackpackComponent& Backpack = *Board->PrototypeBackpack;
 			UCastleShopComponent& Shop = *Controller->GetShop();
-			if (NextStep == 0 && !Test.TestEqual(TEXT("MainMap 开局有满 10 张牌"), Backpack.GetItemCount(), 10))
+			if (NextStep == 0)
 			{
-				return true;
+				if (!Test.TestEqual(TEXT("MainMap 开局有五张牌"), Backpack.GetItemCount(), 5)) { return true; }
+				// 临时补满以继续覆盖数字键 0、满栏尾槽和滚轮边界，PIE 结束自动销毁这些样本。
+				auto Cards = Backpack.GetItems();
+				FText Reason;
+				if (!Test.TestTrue(TEXT("临时补满十槽以验证满栏"), Backpack.TryAddItemsAllowOverflow(Cards, Reason)))
+				{
+					Test.AddError(Reason.ToString());
+					return true;
+				}
 			}
 			const FStep& Previous = Steps[NextStep];
 			if (!Test.TestEqual(Previous.Description, Controller->GetSelectedBackpackIndex(), Previous.ExpectedSlot)
