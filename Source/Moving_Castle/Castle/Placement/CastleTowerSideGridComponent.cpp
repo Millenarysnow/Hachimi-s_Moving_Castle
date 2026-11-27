@@ -124,8 +124,8 @@ bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, F
 			}
 
 			const FVector Outward(Face.Outward);
-			// Plane 的本地 Y 朝上、本地 Z 朝塔外；纹理只覆盖单个正面，不再生成带图案的立体窄边。
-			const FRotator Rotation = FRotationMatrix::MakeFromYZ(FVector::UpVector, Outward).Rotator();
+			// 基础 Plane 的 V=0 在本地 -Y 边，让它朝塔顶，同时让正面法线 +Z 朝塔外。
+			const FRotator Rotation = FRotationMatrix::MakeFromYZ(FVector::DownVector, Outward).Rotator();
 			const FVector Center = Outward * TowerSurfaceOffset + FVector(0, 0, (Layer + 0.5) * TowerLayerHeight);
 			UStaticMeshComponent* Panel = NewObject<UStaticMeshComponent>(Tower);
 			Cell.Panel = Panel;
@@ -256,8 +256,8 @@ bool UCastleTowerSideGridComponent::TryResolveHit(const FHitResult& Hit, FCastle
 		// 指示器自身仍是以本地 X 为法线的 Cube。由 Plane 法线重建它的朝向，并按原侧格比例生成窄边提示。
 		const FRotator IndicatorRotation = FRotationMatrix::MakeFromXZ(Normal, FVector::UpVector).Rotator();
 		const FVector PanelScale = PanelTransform.GetScale3D();
-		const FVector IndicatorLocation = PanelTransform.GetLocation()
-			+ PanelTransform.TransformVector(FVector(0.0f, -43.0f, 85.0f));
+		// 本地 +Y 指向格面下沿，+Z 指向塔外，提示条沿这两个方向偏移。
+		const FVector IndicatorLocation = PanelTransform.TransformPosition(FVector(0.0f, 43.0f, 85.0f));
 		const FVector IndicatorScale(PanelScale.Z * 0.0256f, PanelScale.X * 0.92f, PanelScale.Y * 0.07f);
 		OutTarget.IndicatorTransform = FTransform(IndicatorRotation, IndicatorLocation, IndicatorScale);
 		OutTarget.bValid = true;
