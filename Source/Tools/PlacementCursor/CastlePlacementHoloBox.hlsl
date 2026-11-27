@@ -7,8 +7,8 @@ float EdgeDistanceToBorder = min(EdgeDistance.x, EdgeDistance.y);
 float EdgeMask = 1.0 - smoothstep(EdgeWidth * 0.75, EdgeWidth * 1.25, EdgeDistanceToBorder);
 
 // 每面四角各叠加两条短线，六个面合成为八个加粗的三维 L 形角标。
-float NearVerticalEdge = 1.0 - smoothstep(EdgeWidth * 0.75, EdgeWidth * 1.25, EdgeDistance.x);
-float NearHorizontalEdge = 1.0 - smoothstep(EdgeWidth * 0.75, EdgeWidth * 1.25, EdgeDistance.y);
+float NearVerticalEdge = 1.0 - smoothstep(EdgeWidth * 1.25, EdgeWidth * 1.85, EdgeDistance.x);
+float NearHorizontalEdge = 1.0 - smoothstep(EdgeWidth * 1.25, EdgeWidth * 1.85, EdgeDistance.y);
 float CornerAlongVertical = 1.0 - smoothstep(CornerLength, CornerLength + EdgeWidth, EdgeDistance.y);
 float CornerAlongHorizontal = 1.0 - smoothstep(CornerLength, CornerLength + EdgeWidth, EdgeDistance.x);
 float CornerMask = max(NearVerticalEdge * CornerAlongVertical, NearHorizontalEdge * CornerAlongHorizontal);
