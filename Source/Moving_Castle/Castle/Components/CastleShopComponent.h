@@ -92,10 +92,10 @@ public:
 	/** 奖励事务：在临时状态中初始化（如需）、免费换批并打开，全部成功后才提交。 */
 	bool TryOpenForReward(UCastleEconomyComponent* InEconomy, ACastleBoard* InBoard, FText& OutFailureReason);
 
-	/** 导演在提交升级之前预生成免费商品，候选组件独立保存随机流和新商品。 */
+	/** 导演在提交过关奖励前预生成免费商品，候选组件独立保存随机流和新商品。 */
 	bool PrepareRewardShop(UCastleEconomyComponent* InEconomy, ACastleBoard* InBoard, int32 CandidateMaxNumber,
 		UCastleShopComponent& Candidate, FText& OutFailureReason);
-	/** 只发布已成功准备的候选，供包含成长、回血与商店的联合奖励提交。 */
+	/** 只发布已成功准备的候选，供包含金币、回血与商店的联合奖励提交。 */
 	void CommitRewardShop(UCastleShopComponent& Candidate);
 
 	/** 修改房间总上限；非正数配置拒绝并保留原值。 */
@@ -138,11 +138,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|商店")
 	int32 GetOwnedRoomCount() const;
 
+	/** 商店与导演共用占格统计，失败原因交给业务入口报告。 */
+	static bool TryCountOwnedRoomCells(const ACastleBoard* InBoard, int32& OutCells, FText& OutReason);
+
 	/** 表现层订阅此事件，避免商品操作依赖某一种 Widget。 */
 	UPROPERTY(BlueprintAssignable, Category = "移动城堡|商店")
 	FCastleShopChanged OnShopChanged;
 
 private:
+	friend class UCastleDirectorSubsystem;
+	/** 导演通过整张成长表校验并成功扩层后，一次写入已验证的新商店上限。 */
+	void CommitValidatedTowerGrowth(int32 NewRoomLimit, int32 NewMaxNumber);
+
 	/** 共用交易前置校验，防止余额事件重入交易或绕过商店开关。 */
 	bool ValidateTrade(FText& OutFailureReason) const;
 	/** 游戏世界的普通交易需要本局徽章状态；离线商店输入无世界状态可记账。 */

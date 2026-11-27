@@ -205,10 +205,11 @@ public:
 protected:
 	virtual void NativeOnInitialized() override;
 	virtual void NativeTick(const FGeometry& Geometry, float DeltaTime) override;
-	UPROPERTY(meta = (BindWidget)) TObjectPtr<UButton> ExperienceButton;
+	/** 首项领取玩法金币，绑定名称与奖励 WBP 的按钮一致。 */
+	UPROPERTY(meta = (BindWidget)) TObjectPtr<UButton> GoldButton;
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UButton> HealingButton;
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UButton> ShopButton;
-	UPROPERTY(meta = (BindWidget)) TObjectPtr<UTextBlock> ExperienceLabel;
+	UPROPERTY(meta = (BindWidget)) TObjectPtr<UTextBlock> GoldLabel;
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UTextBlock> HealingLabel;
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UTextBlock> ShopLabel;
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UTextBlock> FailureText;
@@ -217,7 +218,7 @@ protected:
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UImage> HealingIcon;
 	UFUNCTION() void ShowShopPressedIcon();
 	UFUNCTION() void ShowShopNormalIcon();
-	UFUNCTION() void ChooseExperience();
+	UFUNCTION() void ChooseGold();
 	UFUNCTION() void ChooseHealing();
 	UFUNCTION() void ChooseShop();
 };

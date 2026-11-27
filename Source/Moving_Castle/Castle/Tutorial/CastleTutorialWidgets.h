@@ -38,7 +38,8 @@ private:
 	UFUNCTION() void ChooseCopy();
 	UFUNCTION() void ClaimCard();
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UPanelWidget> Choices;
-	UPROPERTY(meta = (BindWidget)) TObjectPtr<UButton> ExperienceButton;
+	/** 教程展示金币项，当前步骤仍要求体验第三项复制功能房间。 */
+	UPROPERTY(meta = (BindWidget)) TObjectPtr<UButton> GoldButton;
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UButton> HealingButton;
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UButton> CopyButton;
 	UPROPERTY(meta = (BindWidget)) TObjectPtr<UButton> CardButton;

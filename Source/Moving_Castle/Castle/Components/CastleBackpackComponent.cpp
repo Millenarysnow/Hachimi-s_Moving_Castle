@@ -2,6 +2,7 @@
 
 #include "CastleBackpackComponent.h"
 
+#include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
 #include "Items/CastleItemTypes.h"
 #include "Moving_Castle.h"
@@ -30,6 +31,35 @@ bool UCastleBackpackComponent::HasFreeSlots(int32 RequiredSlots) const
 	}
 
 	return Items.Num() + RequiredSlots <= Capacity;
+}
+
+bool UCastleBackpackComponent::TryCountStoredRoomCells(int32& OutCells, FText& OutReason) const
+{
+	OutCells = INDEX_NONE;
+	OutReason = FText::GetEmpty();
+	// 临时栏只是延后摆放的已拥有牌。补位搬动卡牌时，两栏合计占格保持不变。
+	int64 Count = 0;
+	for (const TArray<FCastleBuildingDescriptor>* Bar : {&Items, &TempItems})
+	{
+		for (const FCastleBuildingDescriptor& Item : *Bar)
+		{
+			const int32 Cells = ACastleBuildingBase::GetExpectedFootprintCellCount(Item.Level);
+			if (Cells <= 0)
+			{
+				OutReason = FText::FromString(FString::Printf(TEXT("背包 %s 的房间卡 %s 等级 %d 无有效占格数。"),
+					*GetPathName(), *GetPathNameSafe(Item.Definition.Get()), Item.Level));
+				return false;
+			}
+			Count += Cells;
+		}
+	}
+	if (Count > MAX_int32)
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("背包 %s 的房间总格数超过整数上限。"), *GetPathName()));
+		return false;
+	}
+	OutCells = static_cast<int32>(Count);
+	return true;
 }
 
 bool UCastleBackpackComponent::TryGetItemAt(int32 Index, FCastleBuildingDescriptor& OutDescriptor) const

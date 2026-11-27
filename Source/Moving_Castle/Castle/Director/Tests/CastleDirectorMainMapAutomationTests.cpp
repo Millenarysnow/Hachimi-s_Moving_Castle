@@ -82,7 +82,7 @@ namespace
 		if (!Test->TestTrue(TEXT("真实MainMap导演已自动启动"), Director && Director->IsRunning())) { return true; }
 		Test->TestEqual(TEXT("真实开局为编辑阶段"), Director->GetPhase(), ECastleDirectorPhase::Editing);
 		Test->TestEqual(TEXT("开局等级为1"), Director->GetLevel(), 1);
-		Test->TestEqual(TEXT("开局经验为0"), Director->GetExperience(), 0);
+		Test->TestEqual(TEXT("开局 Lv1 房间上限30"), Director->GetCurrentRoomLimit(), 30);
 		int32 NodeCount = 0;
 		for (TActorIterator<ACastleDirectorNodeActor> It(World); It; ++It) { ++NodeCount; }
 		Test->TestTrue(TEXT("真实世界中生成2至3个节点"), NodeCount >= 2 && NodeCount <= 3);
@@ -93,7 +93,7 @@ namespace
 		Test->TestTrue(TEXT("正式开局的B键入口可打开商店"), Controller->GetShop()->IsShopOpen());
 		Controller->ToggleShop();
 		Test->TestFalse(TEXT("关闭后商店界面收起"), Controller->GetShop()->IsShopOpen());
-		Test->TestTrue(TEXT("真实HUD房间计数是10/15"), Director->GetHUDSummary().Contains(TEXT("房间 10/15")));
+		Test->TestTrue(TEXT("真实HUD显示开局房间计数10/30"), Director->GetHUDSummary().Contains(TEXT("房间 10/30")));
 		if (UCastleEconomyHUDWidget* Balance = FindMainMapWidget<UCastleEconomyHUDWidget>(*Test, World))
 		{
 			// 真实账户事件应该在同一帧更新 WBP，HUD 不应参与中心指针的命中测试。

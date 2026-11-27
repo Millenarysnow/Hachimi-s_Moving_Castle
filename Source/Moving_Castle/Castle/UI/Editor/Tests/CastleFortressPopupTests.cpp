@@ -60,6 +60,9 @@ bool FCastleFortressPopupBindingsTest::RunTest(const FString&)
 		}
 
 		int32 BrushCount = 0;
+		const UWidget* GoldButton = Widget->GetWidgetFromName(TEXT("GoldButton"));
+		bool bGoldRewardTexture = false;
+		bool bGoldRewardLabel = false;
 		const auto VerifyBrush = [&](const UWidget& Owner, const FSlateBrush& Brush)
 		{
 			const auto* Texture = Cast<UTexture2D>(Brush.GetResourceObject());
@@ -83,12 +86,30 @@ bool FCastleFortressPopupBindingsTest::RunTest(const FString&)
 				VerifyBrush(*Button, Style.Pressed);
 				VerifyBrush(*Button, Style.Disabled);
 			}
+			// 两个奖励面板的金币资源要位于首项按钮内，不能由其他面板的贴图引用凑数。
+			if (GoldButton)
+			{
+				for (const UWidget* Parent = Source->GetParent(); Parent; Parent = Parent->GetParent())
+				{
+					if (Parent->GetFName() != GoldButton->GetFName()) { continue; }
+					if (const UImage* Icon = Cast<UImage>(Source))
+					{
+						bGoldRewardTexture |= GetPathNameSafe(Icon->GetBrush().GetResourceObject()).EndsWith(TEXT("/Resources/T_GoldCoins.T_GoldCoins"));
+					}
+					if (const UTextBlock* Label = Cast<UTextBlock>(Source))
+					{
+						bGoldRewardLabel |= Label->GetText().ToString() == TEXT("金币 +60");
+					}
+					break;
+				}
+			}
 		});
 		TestTrue(Object + TEXT(" 实际引用堡垒贴图"), BrushCount > 0);
 
 		if (const auto* Reward = Cast<UCastleRewardChoiceWidget>(Widget))
 		{
 			TestTrue(TEXT("战后奖励具有回血图标和商店双态贴图"), Reward->HasRequiredBindings());
+			TestTrue(TEXT("战后首项显示金币图标和基础金额"), bGoldRewardTexture && bGoldRewardLabel);
 		}
 		if (const auto* GameOver = Cast<UCastleGameOverWidget>(Widget))
 		{
@@ -109,6 +130,7 @@ bool FCastleFortressPopupBindingsTest::RunTest(const FString&)
 		if (const auto* Tutorial = Cast<UCastleTutorialRewardWidget>(Widget))
 		{
 			TestTrue(TEXT("教程选项和卡牌绑定存在"), Tutorial->HasRequiredBindings());
+			TestTrue(TEXT("教程首项显示金币图标和基础金额"), bGoldRewardTexture && bGoldRewardLabel);
 		}
 		if (const auto* Replacements = Cast<UPanelWidget>(Widget->GetWidgetFromName(TEXT("ReplaceSlots"))))
 		{
