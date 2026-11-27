@@ -26,6 +26,10 @@ namespace
 
 	/** UE 基础 Plane 的本地 X/Y 边长均为 100 厘米，面法线沿本地 +Z。 */
 	constexpr float MeshSize = 100.0f;
+	// Texture 分支的 MI_Tower 使用独立底纹和字色，保持作者字色并按棋盘格设置底纹。
+	const FMaterialParameterInfo FrameParameter(TEXT("Frame (S)"));
+	const FMaterialParameterInfo BackgroundParameter(TEXT("BackgroundColor"));
+	const FMaterialParameterInfo NumberColorParameter(TEXT("NumberColor"));
 }
 
 UCastleTowerSideGridComponent::UCastleTowerSideGridComponent()
@@ -52,6 +56,17 @@ bool UCastleTowerSideGridComponent::Initialize(const FIntVector& BaseCell, const
 		OutReason = FText::FromString(FString::Printf(
 			TEXT("主塔 %s 侧格初始化失败：塔根、Plane 网格、材质 /Game/ART/Material/MI_Tower、层数、格距或侧面距离无效；棋盘格距不得小于面板宽度，侧面距离须处于半格至一格之间。"),
 			*GetPathNameSafe(Tower)));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+		return false;
+	}
+	float Frame;
+	FLinearColor Tint;
+	if (!PanelMaterial->GetScalarParameterValue(FrameParameter, Frame)
+		|| !PanelMaterial->GetVectorParameterValue(BackgroundParameter, Tint)
+		|| !PanelMaterial->GetVectorParameterValue(NumberColorParameter, Tint))
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 的侧格材质 %s 缺少 Frame (S)、BackgroundColor 或 NumberColor。"),
+			*GetPathNameSafe(Tower), *PanelMaterial->GetPathName()));
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
 	}
@@ -141,8 +156,8 @@ bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, F
 				return Reject(Cell, TEXT("无法基于 MI_Tower 创建格面动态材质。"));
 			}
 			// 3×3 图集帧从零编号，格面数字 1～9 映射到帧 0～8。
-			Material->SetVectorParameterValue(TEXT("Color"), PanelTint);
-			Material->SetScalarParameterValue(TEXT("Frame (S)"), static_cast<float>(Cell.Number - 1));
+			Material->SetVectorParameterValue(BackgroundParameter.Name, PanelTint);
+			Material->SetScalarParameterValue(FrameParameter.Name, static_cast<float>(Cell.Number - 1));
 
 			// 先配置碰撞和导航资格再注册，避免短暂暴露建造面为实体障碍或行走几何。
 			Panel->SetupAttachment(Root);
@@ -175,9 +190,18 @@ bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, F
 bool UCastleTowerSideGridComponent::ValidatePresentation(FText& OutReason) const
 {
 	OutReason = FText::GetEmpty();
-	if (!bInitialized || !IsValid(GetOwner()))
+	if (!bInitialized || !IsValid(GetOwner()) || !IsValid(PanelMaterial))
 	{
-		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 未初始化侧格。"), *GetPathNameSafe(GetOwner())));
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 未初始化侧格或 MI_Tower 材质无效。"), *GetPathNameSafe(GetOwner())));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+		return false;
+	}
+	FLinearColor ExpectedNumberColor;
+	if (!PanelMaterial->GetVectorParameterValue(NumberColorParameter, ExpectedNumberColor))
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 的侧格材质 %s 缺少 NumberColor。"),
+			*GetPathNameSafe(GetOwner()), *PanelMaterial->GetPathName()));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
 	}
 	for (const FCastleTowerSideCell& Cell : Cells)
@@ -185,21 +209,22 @@ bool UCastleTowerSideGridComponent::ValidatePresentation(FText& OutReason) const
 		const bool bPanelValid = IsValid(Cell.Panel);
 		UMaterialInstanceDynamic* Material = bPanelValid
 			? Cast<UMaterialInstanceDynamic>(Cell.Panel->GetMaterial(0)) : nullptr;
-		FLinearColor ExpectedTint;
+		FLinearColor ExpectedTint = FLinearColor::Transparent;
 		const bool bHasValidAttributes = CastleTileColors::TryGetGridTint(Cell.Color, ExpectedTint)
 			&& Cell.Number >= 1 && Cell.Number <= 9;
-		const float ActualFrame = Material ? Material->K2_GetScalarParameterValue(TEXT("Frame (S)")) : 0.0f;
-		const FLinearColor ActualTint = Material
-			? Material->K2_GetVectorParameterValue(TEXT("Color")) : FLinearColor::Transparent;
-		const bool bFrameMatches = Material
+		float ActualFrame = 0.0f;
+		FLinearColor ActualTint = FLinearColor::Transparent;
+		FLinearColor ActualNumberColor;
+		const bool bFrameMatches = Material && Material->GetScalarParameterValue(FrameParameter, ActualFrame)
 			&& FMath::IsNearlyEqual(ActualFrame, static_cast<float>(Cell.Number - 1));
-		const bool bTintMatches = Material && bHasValidAttributes
-			&& ActualTint.Equals(ExpectedTint, 0.001f);
+		const bool bTintMatches = Material && bHasValidAttributes && Material->GetVectorParameterValue(BackgroundParameter, ActualTint)
+			&& Material->GetVectorParameterValue(NumberColorParameter, ActualNumberColor)
+			&& ActualTint.Equals(ExpectedTint, 0.001f) && ActualNumberColor.Equals(ExpectedNumberColor, 0.001f);
 		if (!bPanelValid || !Cell.Panel->IsRegistered() || !Material || !bHasValidAttributes
-			|| !bFrameMatches || !bTintMatches)
+			|| Material->Parent != PanelMaterial || !bFrameMatches || !bTintMatches)
 		{
 			OutReason = FText::FromString(FString::Printf(
-				TEXT("主塔 %s 侧格 %s 面 %d 的面板或数字未注册，或纹理材质属性无效：组件有效=%s，已注册=%s，动态材质=%s，格子属性有效=%s，数字=%d，图集帧期望=%.3f 实际=%.3f，期望颜色=%s 实际颜色=%s。"),
+				TEXT("主塔 %s 侧格 %s 面 %d 的面板或数字未注册，或纹理材质属性无效（MI_Tower）：组件有效=%s，已注册=%s，动态材质=%s，格子属性有效=%s，数字=%d，图集帧期望=%.3f 实际=%.3f，期望颜色=%s 实际颜色=%s。"),
 				*GetPathNameSafe(GetOwner()), *Cell.TowerCell.ToString(), static_cast<int32>(Cell.Face),
 				bPanelValid ? TEXT("是") : TEXT("否"), bPanelValid && Cell.Panel->IsRegistered() ? TEXT("是") : TEXT("否"),
 				Material ? TEXT("是") : TEXT("否"), bHasValidAttributes ? TEXT("是") : TEXT("否"), Cell.Number,

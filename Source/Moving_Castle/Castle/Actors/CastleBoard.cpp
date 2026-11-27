@@ -919,7 +919,6 @@ void ACastleBoard::HandlePlacementFinished(UAssemblyFlightComponent* Flight, con
 		return;
 	}
 	Building->SetPlacementComplete(true);
-	RefreshHighwayMarkersAt(Building->GetOccupiedCoordinates()[0]);
 	UE_LOG(LogMoving_Castle, Display, TEXT("放置飞入完成，开始检查合并 [%s]。"), *Building->GetName());
 	if (Request.bTryMerge) { ReadyMergeRequests.Add(Building, Request.Origin); }
 	ResolveReadyMerges();
@@ -987,7 +986,6 @@ void ACastleBoard::HandleBuildingDestroyed(AActor* Actor)
 		if (GetBuildingAt(Coordinate) == Building)
 		{
 			BuildingByCoordinate.Remove(Coordinate);
-			RefreshHighwayMarkersAt(Coordinate);
 			bRemovedOccupancy = true;
 		}
 	}
@@ -1157,17 +1155,6 @@ TArray<FIntVector> ACastleBoard::GetActiveHighwayCells() const
 		if (IsHighwayCellActive(Entry.Key)) { Cells.Add(Entry.Key); }
 	}
 	return Cells;
-}
-
-void ACastleBoard::RefreshHighwayMarkersAt(const FIntVector& ChangedCell)
-{
-	for (const FIntVector& Cell : {ChangedCell, ChangedCell - FIntVector(0, 0, 1)})
-	{
-		if (ACastleBuildingBase* Building = GetBuildingAt(Cell); IsValid(Building) && Building->GetRoomTrait() == ECastleRoomTrait::Highway)
-		{
-			Building->UpdateTraitLabel(IsHighwayCellActive(Cell));
-		}
-	}
 }
 
 ACastleBoard* ACastleBoard::FindBoardForBuilding(const ACastleBuildingBase* Building)
@@ -1585,7 +1572,6 @@ bool ACastleBoard::RegisterBuilding(ACastleBuildingBase* Building, FText& OutFai
 	{
 		BuildingByCoordinate.Add(Coordinate, Building);
 	}
-	for (const FIntVector& Coordinate : OccupiedCoordinates) { RefreshHighwayMarkersAt(Coordinate); }
 	Building->OnDestroyed.AddUniqueDynamic(this, &ACastleBoard::HandleBuildingDestroyed);
 	Building->BuildingEffect->OnBoardRegistered(*this);
 	return true;
@@ -1617,7 +1603,6 @@ bool ACastleBoard::UnregisterBuilding(ACastleBuildingBase* Building, FText& OutF
 	{
 		BuildingByCoordinate.Remove(Coordinate);
 	}
-	for (const FIntVector& Coordinate : OccupiedCoordinates) { RefreshHighwayMarkersAt(Coordinate); }
 	return true;
 }
 

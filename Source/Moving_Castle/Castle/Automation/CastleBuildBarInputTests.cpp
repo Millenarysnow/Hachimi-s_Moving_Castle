@@ -9,6 +9,9 @@
 #include "CastleBoard.h"
 #include "CastlePlayerController.h"
 #include "CastleShopComponent.h"
+#include "Components/Image.h"
+#include "Components/SizeBox.h"
+#include "Components/TextBlock.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
 #include "Input/Events.h"
@@ -52,7 +55,7 @@ namespace
 			}
 			const FStep& Previous = Steps[NextStep];
 			if (!Test.TestEqual(Previous.Description, Controller->GetSelectedBackpackIndex(), Previous.ExpectedSlot)
-				|| !CheckHighlight(*World, Previous)
+				|| !CheckPresentation(*World, Backpack.GetItems(), Previous)
 				|| !Test.TestTrue(TEXT("输入步骤期间保持指定操作模式"), Controller->GetControlMode() == ExpectedMode))
 			{
 				Finish(Backpack, Shop);
@@ -190,12 +193,22 @@ namespace
 			{EAction::One, 0, TEXT("数字键 1 仍直选首槽")}
 		};
 
-		/** 用 WBP 的可见金环验证同步；空包必须没有任何槽位仍保留选中视觉。 */
-		bool CheckHighlight(UWorld& World, const FStep& Step) const
+		/** 通过正式 WBP 同时检查选中金环、独立功能图标和数字等级。 */
+		bool CheckPresentation(UWorld& World, const TArray<FCastleBuildingDescriptor>& Cards, const FStep& Step) const
 		{
 			TArray<UUserWidget*> Bars;
 			UWidgetBlueprintLibrary::GetAllWidgetsOfClass(&World, Bars, UCastleBuildBarWidget::StaticClass(), true);
 			if (!Test.TestEqual(TEXT("唯一的运行时建造栏"), Bars.Num(), 1)) { return false; }
+			// 与贴花交付表独立核对，不复用被测生产映射，防止两端同时发生同一个编号错误。
+			const TMap<ECastleBuildingType, FString> ExpectedTextures = {
+				{ECastleBuildingType::NormalRoom, TEXT("T_BuildBarIcon_0_NormalRoom")},
+				{ECastleBuildingType::Farm, TEXT("T_BuildBarIcon_1_Farm")},
+				{ECastleBuildingType::CannonTower, TEXT("T_BuildBarIcon_2_CannonTower")},
+				{ECastleBuildingType::ArcherTower, TEXT("T_BuildBarIcon_3_ArcherTower")},
+				{ECastleBuildingType::ShieldTower, TEXT("T_BuildBarIcon_4_ShieldTower")},
+				{ECastleBuildingType::BalloonTower, TEXT("T_BuildBarIcon_5_BalloonTower")},
+				{ECastleBuildingType::BeeHive, TEXT("T_BuildBarIcon_6_BeeHive")}
+			};
 			for (int32 Index = 0; Index < 10; ++Index)
 			{
 				const UUserWidget* Slot = Cast<UUserWidget>(Bars[0]->GetWidgetFromName(FName(*FString::Printf(TEXT("Slot%02d"), Index + 1))));
@@ -205,6 +218,27 @@ namespace
 				{
 					return false;
 				}
+				const auto* Area = Cast<USizeBox>(Slot->GetWidgetFromName(TEXT("PreviewArea")));
+				const auto* Stats = Cast<UTextBlock>(Slot->GetWidgetFromName(TEXT("CardStats")));
+				if (!Test.TestNotNull(TEXT("正式槽位已绑定图标区"), Area)
+					|| !Test.TestNotNull(TEXT("正式槽位已绑定卡牌数字和等级"), Stats)) { return false; }
+				const auto* Icon = Cast<UImage>(Area->GetContent());
+				if (!Cards.IsValidIndex(Index))
+				{
+					Test.TestTrue(TEXT("空槽隐藏图标区与文字并释放旧图片"), !Area->IsVisible() && !Stats->IsVisible()
+						&& (!Icon || !Icon->GetBrush().GetResourceObject()));
+					continue;
+				}
+				if (!Test.TestNotNull(TEXT("有牌的槽位使用 UImage"), Icon)) { return false; }
+				const FCastleBuildingDescriptor& Card = Cards[Index];
+				const FString* ExpectedName = ExpectedTextures.Find(Card.GetBuildingType());
+				if (!Test.TestNotNull(TEXT("当前牌类别有已声明的独立图标"), ExpectedName)) { return false; }
+				Test.TestEqual(TEXT("实际刷子纹理匹配卡牌类型"), GetNameSafe(Icon->GetBrush().GetResourceObject()), *ExpectedName);
+				FLinearColor Tint;
+				Test.TestTrue(TEXT("图标使用真实卡牌色"), CastleTileColors::TryGetGridTint(Card.Color, Tint)
+					&& Icon->GetColorAndOpacity().Equals(Tint, 0.001f));
+				Test.TestTrue(TEXT("数字与等级保持可见且与卡牌一致"), Area->IsVisible() && Stats->IsVisible()
+					&& Stats->GetText().EqualTo(FText::Format(NSLOCTEXT("CastleBuildBar", "CardStats", "{0} · Lv{1}"), Card.Number, Card.Level)));
 			}
 			return true;
 		}

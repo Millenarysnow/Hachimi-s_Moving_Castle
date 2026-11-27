@@ -53,6 +53,12 @@ bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 	FText Reason;
 	if (!TestTrue(TEXT("配置所有等级的支撑地面"), Board->ApplyGroundGenerationResult(Ground, Reason))) { return false; }
 
+	// 同时验证所有功能建筑的图集编号，覆盖枚举顺序与作者图集编号不同的类别。
+	const TMap<ECastleBuildingType, float> ExpectedIcons = {
+		{ECastleBuildingType::NormalRoom, 0}, {ECastleBuildingType::Farm, 1}, {ECastleBuildingType::CannonTower, 2},
+		{ECastleBuildingType::ArcherTower, 3}, {ECastleBuildingType::ShieldTower, 4}, {ECastleBuildingType::BalloonTower, 5},
+		{ECastleBuildingType::BeeHive, 6}
+	};
 	for (const TCHAR* Family : { TEXT("NormalRoom"), TEXT("ArcherTower"), TEXT("CannonTower"), TEXT("Farm"), TEXT("ShieldTower"), TEXT("BalloonTower"), TEXT("BeeHive") })
 	{
 		const FString DefinitionPath = FString::Printf(TEXT("/Game/MovingCastle/Data/Buildings/DA_%s.DA_%s"), Family, Family);
@@ -81,6 +87,8 @@ bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("逻辑占用遵循各等级原规则"), Building->GetOccupiedCoordinates().Num(),
 				ACastleBuildingBase::GetExpectedFootprintCellCount(Level));
 			TestNull(TEXT("实际实例不再有原生占位组件"), Building->GetDefaultSubobjectByName(TEXT("PrototypeMesh")));
+			TestNull(TEXT("实际实例不再有头顶测试底板"), Building->GetDefaultSubobjectByName(TEXT("PrototypeLabelPlate")));
+			TestNull(TEXT("实际实例不再有头顶测试浮字"), Building->GetDefaultSubobjectByName(TEXT("PrototypeLabel")));
 			// 从逻辑占格推导世界空间楼板中心，再反算为建筑局部空间；这样也覆盖绕 Z 轴旋转的竖向合成蓝图。
 			// 建筑锚点位于最低占格的底面中心；五厘米厚的楼板中心低于对应层面 2.5 厘米。
 			const TArray<FIntVector>& OccupiedCoordinates = Building->GetOccupiedCoordinates();
@@ -215,9 +223,13 @@ bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 				ExpectedFloorDecalLocations.RemoveAt(MatchingDecalIndex);
 				UMaterialInstanceDynamic* DecalMaterial = Cast<UMaterialInstanceDynamic>(Decal->GetDecalMaterial());
 				if (!TestNotNull(TEXT("每格地板使用独立动态贴花材质"), DecalMaterial)) { return false; }
+				TestEqual(TEXT("贴花使用新版父材质"), GetPathNameSafe(DecalMaterial->Parent.Get()),
+					FString(TEXT("/Game/ART/Material/MI_Floor_02.MI_Floor_02")));
 				TestTrue(TEXT("每格地板数字帧与建筑数字一致"), FMath::IsNearlyEqual(
-					DecalMaterial->K2_GetScalarParameterValue(TEXT("Frame (S)")), static_cast<float>(Building->GetBuildingNumber() - 1)));
-				TestTrue(TEXT("每格地板颜色与建筑颜色一致"), DecalMaterial->K2_GetVectorParameterValue(TEXT("Color"))
+					DecalMaterial->K2_GetScalarParameterValue(TEXT("Number")), static_cast<float>(Building->GetBuildingNumber() - 1)));
+				TestEqual(TEXT("每格地板功能图标匹配建筑类别"), DecalMaterial->K2_GetScalarParameterValue(TEXT("Icon")),
+					ExpectedIcons.FindChecked(Building->GetBuildingType()));
+				TestTrue(TEXT("每格地板底纹颜色与建筑颜色一致"), DecalMaterial->K2_GetVectorParameterValue(TEXT("BackgroundColor"))
 					.Equals(ExpectedFloorTint, 0.001f));
 			}
 			TestEqual(TEXT("每个占格都有独立楼板贴花"), FloorDecalCount, OccupiedCoordinates.Num());

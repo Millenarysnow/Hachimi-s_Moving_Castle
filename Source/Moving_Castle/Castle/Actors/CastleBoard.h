@@ -449,8 +449,6 @@ protected:
 
 	/** 从棋盘索引移除建筑的所有坐标，但不销毁 Actor。 */
 	bool UnregisterBuilding(ACastleBuildingBase* Building, FText& OutFailureReason);
-	/** 只刷新本格及其下方，其他房间的道路状态与本次占用变化无关。 */
-	void RefreshHighwayMarkersAt(const FIntVector& ChangedCell);
 
 	/** 在占用范围的底面中心生成并初始化建筑 Actor，尚未写入棋盘占用索引。 */
 	ACastleBuildingBase* SpawnBuildingActor(const FCastleBuildingDescriptor& Descriptor, const TArray<FIntVector>& OccupiedCoordinates, FText& OutFailureReason);

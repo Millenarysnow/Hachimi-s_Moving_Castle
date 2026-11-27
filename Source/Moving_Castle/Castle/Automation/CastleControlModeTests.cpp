@@ -129,9 +129,7 @@ namespace
 		{
 			return !IsValid(Component) || !Component->IsRegistered() || !Component->IsVisible()
 				|| UBuildingGameplayRootComponent::IsInGameplayHierarchy(Component)
-				|| Component == Building.GetRoomTraitComponent()
-				|| Component->GetFName() == TEXT("PrototypeLabel")
-				|| Component->GetFName() == TEXT("PrototypeLabelPlate");
+				|| Component == Building.GetRoomTraitComponent();
 		});
 		bool bSameComponentSet = !Components.IsEmpty() && Current.Num() == Components.Num();
 		for (const UPrimitiveComponent* Component : Components)
