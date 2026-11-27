@@ -27,10 +27,10 @@ bool FCastleCombatDefaultAssetTest::RunTest(const FString& Parameters)
 		if (!TestNotNull(FString::Printf(TEXT("名册含 %s"), Id), Entry)) { continue; }
 		const FString Expected = FString(TEXT("/Game/MovingCastle/Mass/DA_MassEnemy_")) + Id + TEXT(".DA_MassEnemy_") + Id;
 		TestEqual(TEXT("引用原有正式敌人 DA"), GetPathNameSafe(Entry->Configuration), Expected);
-		const bool bSwarm = Entry->EnemyId == TEXT("ShadowSwarm");
-		TestEqual(TEXT("簇下界"), Entry->MinClusterCount, bSwarm ? 6 : 1);
-		TestEqual(TEXT("簇上界"), Entry->MaxClusterCount, bSwarm ? 8 : 1);
-		TestEqual(TEXT("簇散布半径"), Entry->ClusterSpreadRadius, bSwarm ? 120.0f : 0.0f);
+		// 正式名册统一为一点一只，波次里写的基准点数就是实体数，不再按簇展开。
+		TestEqual(TEXT("簇下界"), Entry->MinClusterCount, 1);
+		TestEqual(TEXT("簇上界"), Entry->MaxClusterCount, 1);
+		TestEqual(TEXT("簇散布半径"), Entry->ClusterSpreadRadius, 0.0f);
 	}
 	// 主地图正式 DA 覆盖原生构造默认值，测试固定当前远距离刷怪环的配置。
 	TestEqual(TEXT("正式配置的刷怪内半径"), Config->SpawnInnerRadius, 10000.0f);
@@ -39,28 +39,43 @@ bool FCastleCombatDefaultAssetTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("难度曲线存在"), Config->DifficultyCurve.Get())) { return false; }
 	const auto* Curve = Config->DifficultyCurve.Get();
 	TestEqual(TEXT("曲线使用专用正式资产"), Curve->GetPathName(), FString(TEXT("/Game/MovingCastle/Data/Combat/DA_DifficultyCurve_Default.DA_DifficultyCurve_Default")));
-	TestEqual(TEXT("普通表六场"), Curve->NormalBattles.Num(), 6);
+	TestEqual(TEXT("普通表十场"), Curve->NormalBattles.Num(), 10);
 	TestEqual(TEXT("精英表两场"), Curve->EliteBattles.Num(), 2);
 	TestEqual(TEXT("初版增长率"), Curve->CountGrowthPerOrdinal, 0.25f);
 	TArray<FCastleCombatWaveDefinition> Plan;
 	if (TestTrue(TEXT("普通第一场"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 1, Plan, Failure))
-		&& TestEqual(TEXT("第一场两波"), Plan.Num(), 2))
+		&& TestEqual(TEXT("第一场一波"), Plan.Num(), 1))
 	{
 		TestTrue(TEXT("首波启用群虫曲线"), Plan[0].BugCurve.bEnabled);
 		TestEqual(TEXT("首波虫群引用名册"), Plan[0].BugCurve.BugEnemyId, FName(TEXT("ShadowSwarm")));
+		TestEqual(TEXT("第一波五只虫"), Plan[0].BugCurve.BugBase, 5);
+		TestEqual(TEXT("系数归零后虫数等于表值"), Plan[0].BugCurve.CurveK, 0.0f);
 		if (TestEqual(TEXT("首波一条带门槛的突袭"), Plan[0].RaidEntries.Num(), 1))
 		{
 			TestEqual(TEXT("龙崽需要解锁门槛"), Plan[0].RaidEntries[0].RequiredUnlockTag, FName(TEXT("Unlock.MiasmaWelp")));
 		}
 	}
-	if (TestTrue(TEXT("普通第八场外推"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 8, Plan, Failure))
-		&& TestEqual(TEXT("第八场继承一波"), Plan.Num(), 1) && TestEqual(TEXT("末场两条突袭"), Plan[0].RaidEntries.Num(), 2))
+	if (TestTrue(TEXT("普通第八场"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 8, Plan, Failure))
+		&& TestEqual(TEXT("第八场两波"), Plan.Num(), 2))
 	{
-		TestEqual(TEXT("虫群首波基数继续来自虫群曲线"), Plan[0].BugCurve.BugBase, 4);
-		TestEqual(TEXT("瘴翼 ceil(2*1.5)"), Plan[0].RaidEntries[0].Count, 3);
-		TestEqual(TEXT("巨骸 ceil(1*1.5)"), Plan[0].RaidEntries[1].Count, 2);
-		TestEqual(TEXT("瘴翼保留六秒"), Plan[0].RaidEntries[0].TriggerDelay, 6.0f);
-		TestEqual(TEXT("巨骸保留十二秒"), Plan[0].RaidEntries[1].TriggerDelay, 12.0f);
+		TestEqual(TEXT("第八场首波十四只"), Plan[0].BugCurve.BugBase, 14);
+		if (TestEqual(TEXT("第八场首波一条突袭"), Plan[0].RaidEntries.Num(), 1))
+		{
+			TestEqual(TEXT("首波突袭为巨骸"), Plan[0].RaidEntries[0].EnemyId, FName(TEXT("LavaGoliath")));
+			TestEqual(TEXT("首波两只巨骸"), Plan[0].RaidEntries[0].Count, 2);
+			TestEqual(TEXT("巨骸立即出场"), Plan[0].RaidEntries[0].TriggerDelay, 0.0f);
+		}
+		TestEqual(TEXT("第八场次波十六只"), Plan[1].BugCurve.BugBase, 16);
+		if (TestEqual(TEXT("第八场次波一条突袭"), Plan[1].RaidEntries.Num(), 1))
+		{
+			TestEqual(TEXT("次波瘴翼三只"), Plan[1].RaidEntries[0].Count, 3);
+			TestEqual(TEXT("瘴翼保留五秒"), Plan[1].RaidEntries[0].TriggerDelay, 5.0f);
+		}
+	}
+	if (TestTrue(TEXT("普通第九场"), Curve->BuildBattlePlan(ECastleBattleKind::Normal, 9, Plan, Failure))
+		&& TestEqual(TEXT("第九场三波"), Plan.Num(), 3))
+	{
+		TestEqual(TEXT("第九场末波二十只"), Plan[2].BugCurve.BugBase, 20);
 	}
 	for (int32 Index = 0; Index < 2; ++Index)
 	{
@@ -117,12 +132,15 @@ namespace CastleCombatRuntime
 				Execute(TEXT("CastleStartBattle Normal 1"));
 				Test->TestTrue(TEXT("真实命令开启普通第一场"), Combat->IsBattleActive());
 				Units->CountEnemyEntities(Count);
-				Test->TestTrue(TEXT("普通首波第一批为一簇六至八只群虫"), Count >= 6 && Count <= 8);
+				// 一点一只后按单只分批投放，开战瞬间只到首批，其余在后续帧补齐。
+				Test->TestTrue(TEXT("普通首波首批已生成群虫且不超过本波五只"), Count >= 1 && Count <= 5);
 				int32 Wave = 0, WaveCount = 0;
 				Test->TestTrue(TEXT("正式普通关返回波次进度"), Combat->GetCurrentWaveProgress(Wave, WaveCount));
 				Test->TestEqual(TEXT("正式普通关从第一波开始"), Wave, 1);
-				Test->TestEqual(TEXT("正式普通关两波"), WaveCount, 2);
+				Test->TestEqual(TEXT("正式普通关首项一波"), WaveCount, 1);
 				Test->AddExpectedError(TEXT("已在战斗中"), EAutomationExpectedErrorFlags::Contains, 2);
+				// 定向开战绕过导演，清场通知会被导演按当前阶段拒绝；普通与精英各一条，属预期。
+				Test->AddExpectedError(TEXT("导演拒绝非法或重复清场通知"), EAutomationExpectedErrorFlags::Contains, 2);
 				Execute(TEXT("CastleStartBattle Normal 2"));
 				Execute(TEXT("CastleKillAllEnemies"));
 				Stage = 2;
@@ -139,7 +157,7 @@ namespace CastleCombatRuntime
 					return false;
 				}
 				Test->TestEqual(TEXT("真实第一场清场一次"), Cleared, 1);
-				Test->TestTrue(TEXT("清场前确实进入第二波"), bSawSecondWave);
+				Test->TestTrue(TEXT("单波场次不应出现第二波"), !bSawSecondWave);
 				Execute(TEXT("CastleStartBattle Elite 2"));
 				BattleTime = World->GetTimeSeconds();
 				Units->CountEnemyEntities(Count);

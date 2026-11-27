@@ -55,8 +55,16 @@ public:
 			if (Context.WorldType == EWorldType::PIE) { World = Context.World(); break; }
 		}
 		if (!World || !World->HasBegunPlay()) { return false; }
+		// PIE 起始会先经过启动地图，此时还没有正式关卡的导演，等真正进入 MainMap 再判定。
+		if (UWorld::RemovePIEPrefix(World->GetOutermost()->GetName()) != TEXT("/Game/MovingCastle/Maps/MainMap")) { return false; }
+		if (MainMapEntered <= 0.0) { MainMapEntered = FPlatformTime::Seconds(); }
 		auto* Director = World->GetSubsystem<UCastleDirectorSubsystem>();
-		if (!Test->TestTrue(TEXT("正式地图导演已运行"), Director && Director->IsRunning())) { return true; }
+		if (!Director || !Director->IsRunning())
+		{
+			// 导演在首个游戏帧里读设置并做启动事务，首次加载资源可能跨帧，进入正式地图后给一段轮询窗口。
+			if (FPlatformTime::Seconds() - MainMapEntered > 20.0) { Test->TestTrue(TEXT("正式地图导演已运行"), false); return true; }
+			return false;
+		}
 		auto* Board = Director->Board.Get();
 		auto* Navigation = World->GetSubsystem<UCastleNavigationSubsystem>();
 		auto* Dispatch = World->GetSubsystem<UCastleTowerDispatchSubsystem>();
@@ -69,8 +77,10 @@ public:
 			auto* CombatConfig = Director->Config->CombatConfig.Get();
 			auto* Curve = DuplicateObject(CombatConfig->DifficultyCurve.Get(), CombatConfig);
 			CombatConfig->DifficultyCurve = Curve;
+			// 正式资产只要求间隔有效、普通表够用；本用例随后把节奏钉成 5 步，与资产现值解耦。
 			if (!Test->TestTrue(TEXT("正式 DA 的关卡间隔和普通表可用于空岛回归"),
-				Director->Config->EliteEveryNSteps == 5 && Curve->NormalBattles.Num() >= 5)) { return true; }
+				Director->Config->EliteEveryNSteps >= 2 && Curve->NormalBattles.Num() >= 6)) { return true; }
+			Director->Config->EliteEveryNSteps = 5;
 			// 区分普通表第 4、5 项，确保第 6 关不能沿用按实际战斗次数选出的第 4 项。
 			FCastleCombatWaveDefinition RaidWave;
 			RaidWave.BugCurve.bEnabled = false;
@@ -80,6 +90,10 @@ public:
 			Raid.SpawnInterval = 0.0f;
 			Curve->NormalBattles[3].Waves = {RaidWave};
 			Curve->NormalBattles[4].Waves = {RaidWave, RaidWave};
+			// 待命池固定 8 名，让整场战斗场景与正式资产的开局人数（现为 1 名）解耦。
+			// 运行期计数在 PIE 启动时已按资产读成 1，只改配置副本不会回写，必须一并钉住。
+			Director->Config->InitialNPCCount = 8;
+			Director->RunNPCCount = 8;
 			if (!Test->TestTrue(TEXT("临时战斗配置初始化"), Director->Combat->InitializeCombat(Director->Config->CombatConfig, Reason))) { return true; }
 			Navigation->ClearSharedRoute();
 			ACastleDirectorNodeActor* First = Director->Nodes[0];
@@ -511,6 +525,8 @@ private:
 	FAutomationTestBase* Test;
 	int32 Stage = 0;
 	double Started = FPlatformTime::Seconds();
+	/** 进入正式地图的时刻；启动地图停留时间不计入导演启动窗口。 */
+	double MainMapEntered = 0.0;
 	TWeakObjectPtr<ACastleBuildingBase> Building;
 };
 
@@ -518,6 +534,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDirectorBattleIntegrationTest, "MovingCa
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FCastleDirectorBattleIntegrationTest::RunTest(const FString& Parameters)
 {
+	// 天气蓝图（上游 b6f7a978）改成等玩家相机就绪后再初始化；自动化直开地图时相机就绪更晚，
+	// 仍会先报一次读空相机管理器的属性错误。它属已知外部噪声，声明后就近记录，不污染战斗断言。
+	AddExpectedError(TEXT("尝试读取非UClass中的"), EAutomationExpectedErrorFlags::Contains, -1);
 	// 完整战斗场景独占一次 MainMap PIE，结束后交回编辑器视口。
 	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
 	ADD_LATENT_AUTOMATION_COMMAND(FEngineWaitLatentCommand(0.2f));
