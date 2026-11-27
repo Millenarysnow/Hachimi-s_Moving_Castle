@@ -5,6 +5,7 @@
 #include "CastleDialogueScriptDataAsset.generated.h"
 
 class UTexture2D;
+class USoundBase;
 
 /** 台词由哪一侧角色发言；旁白不偏向任一立绘。 */
 UENUM(BlueprintType)
@@ -53,6 +54,13 @@ struct MOVING_CASTLE_API FCastleDialogueLine
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "对话", meta = (MultiLine = "true"))
 	FText TextTemplate;
 
+	/** 独有台词使用固定语音，旺财则在音频总表的三条短音中抽取。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "对话|语音")
+	TObjectPtr<USoundBase> VoiceLine = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "对话|语音")
+	bool bUseWangcaiVoice = false;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "对话")
 	TArray<FCastleDialogueChoice> Choices;
 
@@ -75,7 +83,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "对话")
 	float CharactersPerSecond = 35.0f;
 
+	/** 正式剧本逐行要求配音，临时剧本保留可选空语音以支持自动化构造。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "对话|语音")
+	bool bRequireVoiceLines = false;
+
 	/** 检查行 ID 唯一、分支目标存在且只有末行能结束剧本。 */
 	bool ValidateScript(FText& OutFailureReason) const;
 	int32 FindLineIndex(FName LineId) const;
+
+private:
+	/** 校验会被多次调用，每个临时剧本对象只需报告一次缺少配音。 */
+	mutable bool bReportedOptionalVoice = false;
 };

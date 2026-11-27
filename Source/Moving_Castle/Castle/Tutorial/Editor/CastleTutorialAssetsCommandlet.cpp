@@ -128,15 +128,34 @@ namespace
 		std::initializer_list<FLine> Rows)
 	{
 		auto* Asset = AuthorAsset<UCastleDialogueScriptDataAsset>(DataRoot + Name);
-		Asset->Lines.Reset();
+		// 音频作者命令独立维护配音。重跑剧本生成时，先确认已配音台词仍能逐行对应。
+		if (Asset->bRequireVoiceLines && Rows.size() != static_cast<size_t>(Asset->Lines.Num()))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("已配音剧本 %s 的行数已变化，重建前必须更新正式语音映射。"), *Asset->GetPathName());
+			return nullptr;
+		}
+		TArray<FCastleDialogueLine> NewLines;
 		for (const FLine& Source : Rows)
 		{
-			auto& Row = Asset->Lines.AddDefaulted_GetRef();
-			Row.LineId = Source.Id.IsNone() ? FName(TEXT("Line"), Asset->Lines.Num()) : Source.Id;
+			auto& Row = NewLines.AddDefaulted_GetRef();
+			Row.LineId = Source.Id.IsNone() ? FName(TEXT("Line"), NewLines.Num()) : Source.Id;
 			Row.SpeakerName = Source.bWangcai ? INVTEXT("旺财") : INVTEXT("哈基米德");
 			Row.FocusSide = Source.bWangcai ? ECastleDialogueFocusSide::Right : ECastleDialogueFocusSide::Left;
 			Row.TextTemplate = FText::AsCultureInvariant(FString(Source.Text));
 			Row.Choices = Source.Choices;
+			if (Asset->bRequireVoiceLines)
+			{
+				const auto& Original = Asset->Lines[NewLines.Num() - 1];
+				if (Row.LineId != Original.LineId || !Row.SpeakerName.EqualTo(Original.SpeakerName)
+					|| !Row.TextTemplate.EqualTo(Original.TextTemplate))
+				{
+					UE_LOG(LogMoving_Castle, Error, TEXT("已配音剧本 %s 第 %d 行的标识、发言人或正文已变化，重建前必须更新正式语音映射。"),
+						*Asset->GetPathName(), NewLines.Num());
+					return nullptr;
+				}
+				Row.VoiceLine = Original.VoiceLine;
+				Row.bUseWangcaiVoice = Original.bUseWangcaiVoice;
+			}
 			if (Source.Left)
 			{
 				Row.LeftPortrait = Portraits.FindRef(FName(*(FString(TEXT("Hachimis_")) + Source.Left)));
@@ -156,7 +175,8 @@ namespace
 				}
 			}
 		}
-		Asset->Lines.Last().bEndsScript = true;
+		NewLines.Last().bEndsScript = true;
+		Asset->Lines = MoveTemp(NewLines);
 		FText Reason;
 		return Asset->ValidateScript(Reason) && Save(*Asset) ? Asset : nullptr;
 	}

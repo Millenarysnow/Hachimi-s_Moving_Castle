@@ -1,6 +1,7 @@
 #include "CastleDialogueScriptDataAsset.h"
 
 #include "Moving_Castle.h"
+#include "Sound/SoundBase.h"
 
 bool UCastleDialogueScriptDataAsset::ValidateScript(FText& OutFailureReason) const
 {
@@ -21,6 +22,7 @@ bool UCastleDialogueScriptDataAsset::ValidateScript(FText& OutFailureReason) con
 	}
 
 	TSet<FName> LineIds;
+	FName FirstUnvoicedLine;
 	for (int32 Index = 0; Index < Lines.Num(); ++Index)
 	{
 		const FCastleDialogueLine& Line = Lines[Index];
@@ -37,6 +39,17 @@ bool UCastleDialogueScriptDataAsset::ValidateScript(FText& OutFailureReason) con
 			OutFailureReason = FText::FromString(FString::Printf(TEXT("剧本 %s 行 %s 缺少正文或姓名。"),
 				*GetPathName(), *Line.LineId.ToString()));
 			break;
+		}
+		// 正式剧本必须逐行声明语音来源，临时剧本可以只提供文案。
+		if (!IsValid(Line.VoiceLine) && !Line.bUseWangcaiVoice)
+		{
+			if (bRequireVoiceLines)
+			{
+				OutFailureReason = FText::Format(INVTEXT("剧本 {0} 行 {1} 缺少正式语音（VoiceLine 或 bUseWangcaiVoice）。"),
+					FText::FromString(GetPathName()), FText::FromName(Line.LineId));
+				break;
+			}
+			if (FirstUnvoicedLine.IsNone()) { FirstUnvoicedLine = Line.LineId; }
 		}
 		if (Line.bEndsScript && (Index != Lines.Num() - 1 || !Line.Choices.IsEmpty()))
 		{
@@ -104,6 +117,12 @@ bool UCastleDialogueScriptDataAsset::ValidateScript(FText& OutFailureReason) con
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
 		return false;
+	}
+	if (!FirstUnvoicedLine.IsNone() && !bReportedOptionalVoice)
+	{
+		bReportedOptionalVoice = true;
+		UE_LOG(LogMoving_Castle, Warning, TEXT("临时剧本 %s 存在未配置语音的台词（首行 %s），这些台词仅显示文字。"),
+			*GetPathName(), *FirstUnvoicedLine.ToString());
 	}
 	return true;
 }
