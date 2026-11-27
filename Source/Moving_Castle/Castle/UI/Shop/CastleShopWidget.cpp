@@ -352,7 +352,7 @@ void UCastleShopWidget::RefreshShop()
 		? BoundBoard->PrototypeBackpack->Capacity : FixedBenchCount;
 
 	GoldValueText->SetText(FText::AsNumber(CurrentGold));
-	RefreshTowerAndWaveHeader();
+	RefreshTowerAndWaveHeader(OwnedRooms, RoomLimit);
 
 	// 刷新按钮文案与余额预警着色。
 	const bool bFreeRefresh = Shop->RefreshCost == 0;
@@ -377,7 +377,7 @@ void UCastleShopWidget::RefreshShop()
 		return;
 	}
 
-	const bool bHasRoomAndBagCapacity = (OwnedRooms + 1 <= RoomLimit) && (BackpackItems.Num() < BackpackCapacity);
+	const bool bHasRoomAndBagCapacity = OwnedRooms >= 0 && OwnedRooms < RoomLimit && BackpackItems.Num() < BackpackCapacity;
 	for (int32 Index = 0; Index < OfferSlots.Num(); ++Index)
 	{
 		const bool bHasOffer = Offers.IsValidIndex(Index);
@@ -412,10 +412,17 @@ void UCastleShopWidget::RefreshShop()
 	RefreshHoverDetail();
 }
 
-void UCastleShopWidget::RefreshTowerAndWaveHeader()
+void UCastleShopWidget::RefreshTowerAndWaveHeader(const int32 OwnedRooms, const int32 RoomLimit)
 {
-	const int32 OwnedRooms = Shop->GetOwnedRoomCount();
-	const int32 RoomLimit = Shop->RoomLimit;
+	if (OwnedRooms == INDEX_NONE)
+	{
+		// 统计接口已记录具体错误，容量和进度均不显示无效格数。
+		RoomLimitText->SetText(INVTEXT("房间总量读取失败"));
+		TowerRoomSummaryText->SetText(RoomLimitText->GetText());
+		TowerLevelText->SetText(INVTEXT("主塔房间进度读取失败"));
+		TowerExpBar->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
 	const bool bNearLimit = OwnedRooms >= RoomLimit;
 	const FLinearColor CapacityColor = bNearLimit
 		? FLinearColor(0.96f, 0.42f, 0.34f, 1.0f)
@@ -426,16 +433,26 @@ void UCastleShopWidget::RefreshTowerAndWaveHeader()
 	RoomLimitText->SetColorAndOpacity(FSlateColor(CapacityColor));
 
 	const UCastleDirectorSubsystem* Director = GetWorld() ? GetWorld()->GetSubsystem<UCastleDirectorSubsystem>() : nullptr;
-	if (IsValid(Director) && Director->IsRunning() && IsValid(Director->GetConfig()))
+	if (IsValid(Director) && Director->IsRunning())
 	{
 		const int32 TowerLv = Director->GetLevel();
-		const int32 Exp = Director->GetExperience();
-		const int32 ExpPerLevel = FMath::Max(1, Director->GetConfig()->ExpPerLevel);
+		const int32 TowerRoomLimit = Director->GetCurrentRoomLimit();
 		const int32 NextStep = Director->GetNextStep();
+		if (TowerRoomLimit == INDEX_NONE)
+		{
+			// 统计接口已记录具体错误，隐藏进度以免展示虚假的占格比例。
+			TowerLevelText->SetText(INVTEXT("主塔房间进度读取失败"));
+			TowerExpBar->SetVisibility(ESlateVisibility::Collapsed);
+			return;
+		}
 
-		TowerLevelText->SetText(FText::Format(NSLOCTEXT("CastleShop", "TowerLvExp", "主塔 Lv.{0}   ({1}/{2})"),
-			FText::AsNumber(TowerLv), FText::AsNumber(Exp), FText::AsNumber(ExpPerLevel)));
-		TowerExpBar->SetPercent(FMath::Clamp(static_cast<float>(Exp) / static_cast<float>(ExpPerLevel), 0.0f, 1.0f));
+		// Lv4 仍有购买容量，但已无下一等级。保留原 WBP 进度条绑定，只修改其数据来源。
+		const bool bMaxLevel = TowerLv == Director->GetConfig()->TowerLevels.Num();
+		TowerLevelText->SetText(bMaxLevel
+			? FText::Format(NSLOCTEXT("CastleShop", "TowerLvMax", "主塔 Lv.{0} (已满级)"), FText::AsNumber(TowerLv))
+			: FText::Format(NSLOCTEXT("CastleShop", "TowerLvRooms", "主塔 Lv.{0} ({1}/{2})"),
+				FText::AsNumber(TowerLv), FText::AsNumber(OwnedRooms), FText::AsNumber(TowerRoomLimit)));
+		TowerExpBar->SetPercent(bMaxLevel ? 1.0f : FMath::Clamp(static_cast<float>(OwnedRooms) / TowerRoomLimit, 0.0f, 1.0f));
 		TowerExpBar->SetVisibility(ESlateVisibility::HitTestInvisible);
 
 		TowerRoomSummaryText->SetText(FText::Format(
@@ -447,7 +464,7 @@ void UCastleShopWidget::RefreshTowerAndWaveHeader()
 	}
 	else
 	{
-		// 非导演运行的测试关卡不伪造主塔等级与经验条，如实展示自由测试状态与房间上限。
+		// 没有成长表的旧入口只展示房间容量，进度条仅供导演模式使用。
 		TowerLevelText->SetText(NSLOCTEXT("CastleShop", "SandboxTowerLabel", "主塔容量"));
 		TowerExpBar->SetVisibility(ESlateVisibility::Collapsed);
 		TowerRoomSummaryText->SetText(FText::Format(

@@ -350,6 +350,15 @@ bool UCastleShopComponent::TrySetOfferNumberRange(const int32 MinNumber, const i
 	return true;
 }
 
+void UCastleShopComponent::CommitValidatedTowerGrowth(const int32 NewRoomLimit, const int32 NewMaxNumber)
+{
+	// 成长表的校验条件覆盖两个公开设置入口。这里只提交上限，已生成的商品仍保留原样。
+	check(NewRoomLimit > 0 && NewMaxNumber >= 1 && NewMaxNumber <= 9);
+	RoomLimit = NewRoomLimit;
+	MinOfferNumber = 1;
+	MaxOfferNumber = NewMaxNumber;
+}
+
 bool UCastleShopComponent::RefreshOffersInternal(const bool bRewardRefresh, FText& OutFailureReason)
 {
 	OutFailureReason = FText::GetEmpty();
@@ -439,16 +448,45 @@ bool UCastleShopComponent::RefreshOffersInternal(const bool bRewardRefresh, FTex
 
 int32 UCastleShopComponent::GetOwnedRoomCount() const
 {
-	if (!IsValid(Board) || !IsValid(Backpack))
+	// 未绑定棋盘的商店沿用公开查询原有的空状态；导演开局直接从自己的棋盘读取。
+	if (!bInitialized) { return 0; }
+	if (!IsValid(Board) || !IsValid(Backpack) || Board->PrototypeBackpack != Backpack)
 	{
-		return 0;
+		UE_LOG(LogMoving_Castle, Error, TEXT("商店 %s 房间计数失败：绑定的棋盘 %s 或背包 %s 无效。"),
+			*GetPathName(), *GetPathNameSafe(Board), *GetPathNameSafe(Backpack));
+		return INDEX_NONE;
 	}
-	int32 Count = Board->GetOccupiedRoomCellCount();
-	for (const FCastleBuildingDescriptor& Item : Backpack->GetItems())
+	int32 Cells = INDEX_NONE;
+	FText Reason;
+	if (!TryCountOwnedRoomCells(Board, Cells, Reason))
 	{
-		Count += ACastleBuildingBase::GetExpectedFootprintCellCount(Item.Level);
+		UE_LOG(LogMoving_Castle, Error, TEXT("商店 %s 房间计数失败：%s"), *GetPathName(), *Reason.ToString());
 	}
-	return Count;
+	return Cells;
+}
+
+bool UCastleShopComponent::TryCountOwnedRoomCells(const ACastleBoard* InBoard, int32& OutCells, FText& OutReason)
+{
+	OutCells = INDEX_NONE;
+	OutReason = FText::GetEmpty();
+	if (!IsValid(InBoard) || !IsValid(InBoard->PrototypeBackpack))
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("棋盘 %s 或其背包无效，无法统计已拥有的房间。"),
+			*GetPathNameSafe(InBoard)));
+		return false;
+	}
+	const UCastleBackpackComponent* Storage = InBoard->PrototypeBackpack;
+	int32 StoredCells = 0;
+	if (!Storage->TryCountStoredRoomCells(StoredCells, OutReason)) { return false; }
+	const int32 OccupiedCells = InBoard->GetOccupiedRoomCellCount();
+	if (StoredCells > MAX_int32 - OccupiedCells)
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("棋盘 %s 与背包 %s 合计房间总格数超过整数上限。"),
+			*InBoard->GetPathName(), *Storage->GetPathName()));
+		return false;
+	}
+	OutCells = OccupiedCells + StoredCells;
+	return true;
 }
 
 TArray<FCastleBuildingDescriptor> UCastleShopComponent::GetBackpackItems() const
@@ -467,7 +505,13 @@ bool UCastleShopComponent::TryBuyOffer(int32 OfferIndex, FText& OutFailureReason
 		OutFailureReason = FText::FromString(TEXT("该商品槽位无效或已经售罄，请刷新商店。"));
 		return false;
 	}
-	if (RoomLimit < 1 || GetOwnedRoomCount() + 1 > RoomLimit)
+	const int32 OwnedCells = GetOwnedRoomCount();
+	if (OwnedCells == INDEX_NONE)
+	{
+		OutFailureReason = INVTEXT("房间总量读取失败，无法购买，详见错误日志。");
+		return false;
+	}
+	if (RoomLimit < 1 || OwnedCells >= RoomLimit)
 	{
 		OutFailureReason = FText::FromString(TEXT("房间总量已达到上限，无法继续购买。"));
 		return false;

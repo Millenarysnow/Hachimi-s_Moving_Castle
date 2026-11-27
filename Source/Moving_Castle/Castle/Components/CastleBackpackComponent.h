@@ -72,6 +72,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|背包")
 	int32 GetTempItemCount() const { return TempItems.Num(); }
 
+	/** 直接统计两栏占格，供导演逐帧检查，避免复制含临时队列的卡牌数组。 */
+	bool TryCountStoredRoomCells(int32& OutCells, FText& OutReason) const;
+
 	/** 在指定槽位插入建筑卡牌，供放置失败时恢复原有槽位顺序。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|背包")
 	bool TryInsertItemAt(int32 Index, const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason);

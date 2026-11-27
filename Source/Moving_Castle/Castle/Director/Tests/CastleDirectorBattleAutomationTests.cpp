@@ -294,9 +294,10 @@ public:
 			Test->AddExpectedError(TEXT("导演拒绝非法或重复清场通知"), EAutomationExpectedErrorFlags::Contains, 1);
 			Director->Combat->OnBattleCleared.Broadcast(ECastleBattleKind::Normal, 1);
 			Test->TestEqual(TEXT("重复通知不重复记关"), Director->ClearedSteps, 1);
-			if (!Test->TestTrue(TEXT("选择经验恢复编辑"), Director->TryChooseReward(ECastleDirectorReward::Experience, Reason))) { return true; }
+			const int32 GoldBeforeReward = Director->Controller->GetEconomy()->GetGold();
+			if (!Test->TestTrue(TEXT("选择金币恢复编辑"), Director->TryChooseReward(ECastleDirectorReward::Gold, Reason))) { return true; }
 			Test->TestFalse(TEXT("选择奖励后显示塔侧格"), Board->IsPlacementSurfacePresentationHidden());
-			Test->TestEqual(TEXT("实际经验60"), Director->Experience, 60);
+			Test->TestEqual(TEXT("实际发放60金币"), Director->Controller->GetEconomy()->GetGold() - GoldBeforeReward, 60);
 			Test->TestTrue(TEXT("下一关节点已生成"), Director->Nodes.Num() >= 2);
 			Test->TestFalse(TEXT("奖励关闭恢复移动"), Director->Controller->IsMoveInputIgnored());
 			Test->TestFalse(TEXT("奖励关闭恢复视角"), Director->Controller->IsLookInputIgnored());
@@ -305,7 +306,7 @@ public:
 		}
 		if (Stage == 4)
 		{
-			// 升级新增塔身碰撞会重建正式导航，玩家需等新快照就绪才可选择战斗。
+			// 等待正式门到门导航的当前快照就绪后选择战斗节点。
 			if (!Navigation->IsNavigationReady()) { return false; }
 			// 第二关在 Mass 处理作用域中记录选择；边界内禁止创建 NPC，随后由导演 Tick 消费。
 			if (Director->ClearedSteps == 1)
@@ -362,7 +363,7 @@ public:
 				return false;
 			}
 			if (!Test->TestEqual(TEXT("普通战斗清场进入奖励"), Director->GetPhase(), ECastleDirectorPhase::Reward)) { return true; }
-			ECastleDirectorReward Reward = ECastleDirectorReward::Experience;
+			ECastleDirectorReward Reward = ECastleDirectorReward::Gold;
 			if (Director->ClearedSteps == 3)
 			{
 				Director->Tower->ApplyDamage(500);
@@ -379,13 +380,10 @@ public:
 			if (!Test->TestTrue(TEXT("实际奖励应用"), Director->TryChooseReward(Reward, Reason))) { Test->AddError(Reason.ToString()); return true; }
 			if (Director->ClearedSteps == 2)
 			{
-				Test->TestEqual(TEXT("第二次经验升到2级"), Director->Level, 2);
-				Test->TestEqual(TEXT("2级房间上限250"), Director->Controller->GetShop()->RoomLimit, 250);
-				Test->TestEqual(TEXT("Lv2 有三项待领取"), Director->UpgradeRewards.Num(), 3);
-				Director->ClaimTowerUpgradeReward(0);
-				Test->TestEqual(TEXT("点击只消耗一项"), Director->UpgradeRewards.Num(), 2);
-				Director->DiscardTowerUpgradeRewards();
-				Test->TestTrue(TEXT("关闭清空未领取项"), Director->UpgradeRewards.IsEmpty());
+				// 主塔成长由房间占格驱动，连续领取金币不能推进等级。
+				Test->TestEqual(TEXT("第二次金币奖励到账60"), Director->Controller->GetEconomy()->GetGold() - Gold, 60);
+				Test->TestEqual(TEXT("第二次领奖后仍是Lv1"), Director->Level, 1);
+				Test->TestTrue(TEXT("房间未达标没有升级奖励"), Director->UpgradeRewards.IsEmpty());
 			}
 			if (Director->ClearedSteps == 3)
 			{
@@ -441,7 +439,7 @@ public:
 		{
 			if (Director->ClearedSteps != 0 || Director->GetPhase() != ECastleDirectorPhase::Editing) { return false; }
 			Test->TestEqual(TEXT("重新加载重置等级"), Director->Level, 1);
-			Test->TestEqual(TEXT("重新加载重置经验"), Director->Experience, 0);
+			Test->TestEqual(TEXT("重新加载重置房间上限"), Director->GetCurrentRoomLimit(), 30);
 			Test->TestEqual(TEXT("重新加载恢复 5×5×9 棋盘容量"), Board->GridSize, FIntVector(5, 5, 9));
 			Test->TestEqual(TEXT("重新加载恢复主塔开局三层"), Board->GetUnlockedLayerCount(), 3);
 			Test->TestTrue(TEXT("重新加载生成第一关节点"), Director->Nodes.Num() >= 2);

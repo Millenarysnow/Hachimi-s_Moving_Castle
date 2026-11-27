@@ -365,12 +365,12 @@ bool FCastleDirectorFoundationTest::RunTest(const FString& Parameters)
 	Config->HealFraction = 1.1f;
 	TestFalse(TEXT("超出回血比例拒绝"), Config->ValidateConfig(Reason));
 	Config->HealFraction = 0.3f;
-	Config->ExpPerLevel = 0;
-	TestFalse(TEXT("零升级经验拒绝"), Config->ValidateConfig(Reason));
-	Config->ExpPerLevel = 100;
+	Config->RewardGold = 0;
+	TestFalse(TEXT("零基础金币奖励拒绝"), Config->ValidateConfig(Reason));
+	Config->RewardGold = 60;
 	Config->TowerLevels[1].RoomLimit = -1;
 	TestFalse(TEXT("负房间上限拒绝"), Config->ValidateConfig(Reason));
-	Config->TowerLevels[1].RoomLimit = 250;
+	Config->TowerLevels[1].RoomLimit = 80;
 	UCastleShopComponent* RewardShop = NewObject<UCastleShopComponent>();
 	Board->BuildingDefinitions.Reset();
 	TestFalse(TEXT("首个商店奖励初始化失败明确拒绝"), RewardShop->TryOpenForReward(Economy, Board, Reason));
