@@ -733,18 +733,19 @@ bool ACastleGambleSkyIsland::TryResolveIslandGridCursorTarget(const FVector& Sta
 	};
 	FIntVector Adjacent = Cell;
 	if (!bGround) { Adjacent[Axis] += bPositive ? 1 : -1; }
-	const double Skin = Config->MiniBoardCellScale;
-	FVector Center = GetMiniCellBase(Cell) + FVector::UpVector * (bGround ? 0.0 : MiniLayerHeight * 0.5);
-	Center[Axis] = Transform.InverseTransformPosition(Hit.ImpactPoint)[Axis] + Normal[Axis] * 1.5 * Skin;
-	FVector Size(MiniTileSize, MiniTileSize, MiniLayerHeight);
-	Size[Axis] = 2.0 * Skin;
+	// 地面与房间面均使用业务落点格 Adjacent 的中心，不再沿命中面压缩成薄片。
+	const FVector LocalBoxCenter = GetMiniCellBase(Adjacent) + FVector::UpVector * (MiniLayerHeight * 0.5);
+	const FVector LocalBoxSize(
+		MiniCellSize * 0.98,
+		MiniCellSize * 0.98,
+		MiniLayerHeight * 0.98);
 	OutTarget.Cell = Cell;
 	OutTarget.Face = Faces[Axis][bPositive];
 	OutTarget.AdjacentCell = Adjacent;
 	OutTarget.Surface = bGround ? ECastleGridCursorSurface::Ground : ECastleGridCursorSurface::Building;
 	OutTarget.WorldNormal = Hit.ImpactNormal;
-	OutTarget.IndicatorTransform = FTransform(Transform.GetRotation(), Transform.TransformPosition(Center),
-		Size * Transform.GetScale3D() / 100.0);
+	OutTarget.IndicatorTransform = FTransform(Transform.GetRotation(), Transform.TransformPosition(LocalBoxCenter),
+		LocalBoxSize * Transform.GetScale3D() / 100.0);
 	OutTarget.bValid = true;
 	return true;
 }

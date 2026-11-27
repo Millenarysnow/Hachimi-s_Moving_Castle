@@ -184,7 +184,7 @@ bool FCastleMainTowerSideGrowthTest::RunTest(const FString& Parameters)
 	UCastleTowerSideGridComponent* Grid = NewObject<UCastleTowerSideGridComponent>(Tower);
 	Grid->RegisterComponent();
 	FText Reason;
-	if (!TestTrue(TEXT("生成开局三层"), Grid->Initialize(FIntVector::ZeroValue, 3, 500.0f, 560.0f, 290.0f, 17, Reason)))
+	if (!TestTrue(TEXT("生成开局三层"), Grid->Initialize(FIntVector::ZeroValue, 3, 500.0f, 515.0f, 560.0f, 290.0f, 17, Reason)))
 	{
 		AddError(Reason.ToString());
 		return false;
@@ -369,6 +369,14 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 					{
 						FCastleGridCursorTarget& Target = HighestTargets.AddDefaulted_GetRef();
 						if (!TestTrue(TEXT("最高开放层由实际命中解析建造面"), Grid->TryResolveHit(Hit, Target))) { return false; }
+						const FVector ExpectedCenter = Board->GetGridWorldLocation(Target.AdjacentCell);
+						const FVector ExpectedSize(Board->CellSize * 0.98f, Board->CellSize * 0.98f,
+							Board->LayerHeight * 0.98f);
+						const FVector ActualSize = Target.IndicatorTransform.GetScale3D() * 100.0f;
+						TestTrue(TEXT("塔侧邻格中心与棋盘三维格心重合"),
+							Target.IndicatorTransform.GetLocation().Equals(ExpectedCenter, 1.0f));
+						TestTrue(TEXT("塔侧全息盒为 98% 棋盘格宽深与层高"),
+							ActualSize.Equals(ExpectedSize * Board->GetActorScale3D(), 1.0f));
 					}
 				}
 			}

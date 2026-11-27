@@ -329,7 +329,7 @@ bool ACastleBoard::SpawnMainTower(FText& OutFailureReason)
 		TowerActor->AddInstanceComponent(Grid);
 		Grid->RegisterComponent();
 		const int32 RunSeed = bUseFixedTowerSideSeed ? FixedTowerSideSeed : static_cast<int32>(GetTypeHash(FGuid::NewGuid()));
-		if (!Grid->Initialize(GetBoardCenterCoordinate(), GetUnlockedLayerCount(), GroundTileSize, LayerHeight,
+		if (!Grid->Initialize(GetBoardCenterCoordinate(), GetUnlockedLayerCount(), GroundTileSize, CellSize, LayerHeight,
 			TowerSideSurfaceOffset, RunSeed, OutFailureReason))
 		{
 			TowerActor->Destroy();
@@ -1428,7 +1428,6 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 	}
 
 	const FTransform BoardTransform = GetActorTransform();
-	const FVector LocalImpactPoint = BoardTransform.InverseTransformPosition(HitResult.ImpactPoint);
 	const FVector LocalNormal = BoardTransform.InverseTransformVectorNoScale(HitResult.ImpactNormal).GetSafeNormal();
 	if (LocalNormal.IsNearlyZero())
 	{
@@ -1440,64 +1439,39 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 		return false;
 	}
 
-	BuildGridCursorTarget(HitCell, LocalImpactPoint, LocalNormal, OutTarget);
+	BuildGridCursorTarget(HitCell, LocalNormal, bHitGroundTile, OutTarget);
 	OutTarget.Surface = bHitGroundTile ? ECastleGridCursorSurface::Ground : ECastleGridCursorSurface::Building;
 	return OutTarget.bValid;
 }
 
-void ACastleBoard::BuildGridCursorTarget(const FIntVector& Cell, const FVector& LocalImpactPoint, const FVector& LocalNormal, FCastleGridCursorTarget& OutTarget) const
+void ACastleBoard::BuildGridCursorTarget(const FIntVector& Cell, const FVector& LocalNormal,
+	const bool bGroundTarget, FCastleGridCursorTarget& OutTarget) const
 {
 	if (!IsCoordinateWithinBoard(Cell) && !IsValid(GetBuildingAt(Cell)))
 	{
 		return;
 	}
 
-	const FIntVector RelativeCoordinate = Cell - GridOrigin;
-	const FVector LocalCellCenter(
-		static_cast<float>(RelativeCoordinate.X) * CellSize,
-		static_cast<float>(RelativeCoordinate.Y) * CellSize,
-		WorldBaseHeight + static_cast<float>(RelativeCoordinate.Z) * LayerHeight);
-
 	const ECastleGridFace Face = GetGridFaceFromNormal(LocalNormal);
-	FVector LocalPlaneCenter = LocalCellCenter;
-	FVector LocalPlaneScale(
-		GroundTileSize / 100.0f,
-		GroundTileSize / 100.0f,
-		2.0f / 100.0f);
-
-	// 指示器使用薄立方体模拟平面；根据命中面切换薄轴，并把其他轴吸附到当前格中心。
-	switch (Face)
-	{
-	case ECastleGridFace::Up:
-	case ECastleGridFace::Down:
-		LocalPlaneCenter.Z = LocalImpactPoint.Z;
-		break;
-	case ECastleGridFace::PositiveX:
-	case ECastleGridFace::NegativeX:
-		LocalPlaneCenter.X = LocalImpactPoint.X;
-		LocalPlaneScale = FVector(2.0f / 100.0f, GroundTileSize / 100.0f, LayerHeight * 0.94f / 100.0f);
-		break;
-	case ECastleGridFace::PositiveY:
-	case ECastleGridFace::NegativeY:
-		LocalPlaneCenter.Y = LocalImpactPoint.Y;
-		LocalPlaneScale = FVector(GroundTileSize / 100.0f, 2.0f / 100.0f, LayerHeight * 0.94f / 100.0f);
-		break;
-	default:
-		return;
-	}
-
-	// 轻微离开实际表面，避免薄片与地面或建筑产生深度冲突。
-	LocalPlaneCenter += LocalNormal * 1.5f;
+	const FIntVector AdjacentCell = Cell + GetGridFaceOffset(Face);
+	const FIntVector PlacementCoordinate = bGroundTarget ? Cell : AdjacentCell;
+	const FIntVector RelativePlacementCoordinate = PlacementCoordinate - GridOrigin;
+	const FVector LocalBoxCenter(
+		static_cast<float>(RelativePlacementCoordinate.X) * CellSize,
+		static_cast<float>(RelativePlacementCoordinate.Y) * CellSize,
+		WorldBaseHeight + static_cast<float>(RelativePlacementCoordinate.Z) * LayerHeight);
+	// 三维盒略小于完整格距，避免与地面、相邻建筑或主塔墙面共面闪烁。
+	const FVector LocalBoxSize(CellSize * 0.98f, CellSize * 0.98f, LayerHeight * 0.98f);
 
 	const FTransform BoardTransform = GetActorTransform();
 	OutTarget.Cell = Cell;
 	OutTarget.Face = Face;
-	OutTarget.AdjacentCell = Cell + GetGridFaceOffset(Face);
+	OutTarget.AdjacentCell = AdjacentCell;
 	OutTarget.WorldNormal = BoardTransform.TransformVectorNoScale(LocalNormal).GetSafeNormal();
 	OutTarget.IndicatorTransform = FTransform(
 		BoardTransform.GetRotation(),
-		BoardTransform.TransformPosition(LocalPlaneCenter),
-		LocalPlaneScale * BoardTransform.GetScale3D());
+		BoardTransform.TransformPosition(LocalBoxCenter),
+		LocalBoxSize * BoardTransform.GetScale3D() / 100.0f);
 	OutTarget.bValid = true;
 }
 

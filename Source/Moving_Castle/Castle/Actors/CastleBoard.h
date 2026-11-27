@@ -418,7 +418,8 @@ protected:
 	void DestroyGroundTileActors();
 
 	/** 根据命中信息生成一个完整的网格指针结果。 */
-	void BuildGridCursorTarget(const FIntVector& Cell, const FVector& LocalImpactPoint, const FVector& LocalNormal, FCastleGridCursorTarget& OutTarget) const;
+	void BuildGridCursorTarget(const FIntVector& Cell, const FVector& LocalNormal, bool bGroundTarget,
+		FCastleGridCursorTarget& OutTarget) const;
 
 	/** 在屏幕上显示当前原型操作结果和失败原因。 */
 	void ShowPrototypeMessage(const FString& Message, const FColor& Color = FColor::White) const;
