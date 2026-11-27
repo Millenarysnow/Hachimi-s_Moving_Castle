@@ -55,7 +55,7 @@ public:
 	bool TryResolveHit(const FHitResult& Hit, FCastleGridCursorTarget& OutTarget) const;
 
 private:
-	/** 使用与旧地块同一正式几何和调色材质，不在缺失时生成替代物。 */
+	/** 单面 Plane 只显示格面正面；缺少网格或材质时初始化直接失败。 */
 	UPROPERTY(Transient) TObjectPtr<UStaticMesh> PanelMesh;
 	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> PanelMaterial;
 	UPROPERTY(Transient) TArray<FCastleTowerSideCell> Cells;

@@ -24,15 +24,14 @@ namespace
 		{ECastleGridFace::PositiveX, FIntVector(1, 0, 0)}, {ECastleGridFace::PositiveY, FIntVector(0, 1, 0)}
 	};
 
-	/** 面板局部 X 朝外、局部 Z 朝上；保留墙面装饰和相邻格间的缝隙。 */
-	constexpr float PanelThickness = 8.0f;
+	/** UE 基础 Plane 的本地 X/Y 边长均为 100 厘米，面法线沿本地 +Z。 */
 	constexpr float MeshSize = 100.0f;
 }
 
 UCastleTowerSideGridComponent::UCastleTowerSideGridComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> Mesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> Mesh(TEXT("/Engine/BasicShapes/Plane.Plane"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Game/ART/Material/MI_Tower.MI_Tower"));
 	PanelMesh = Mesh.Object;
 	PanelMaterial = Material.Object;
@@ -50,7 +49,7 @@ bool UCastleTowerSideGridComponent::Initialize(const FIntVector& BaseCell, const
 		|| SurfaceOffset <= CellWidth * 0.5f || SurfaceOffset >= CellWidth)
 	{
 		OutReason = FText::FromString(FString::Printf(
-			TEXT("主塔 %s 侧格初始化失败：塔根、Cube 网格、材质 /Game/ART/Material/MI_Tower、层数或侧面距离无效；侧面距离须处于半格至一格之间。"),
+			TEXT("主塔 %s 侧格初始化失败：塔根、Plane 网格、材质 /Game/ART/Material/MI_Tower、层数或侧面距离无效；侧面距离须处于半格至一格之间。"),
 			*GetPathNameSafe(Tower)));
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
@@ -69,7 +68,7 @@ bool UCastleTowerSideGridComponent::ExpandToLayerCount(const int32 TargetLayerCo
 {
 	if (!ValidatePresentation(OutReason))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+		// ValidatePresentation 已按失效组件和属性写出完整 Error，调用层直接返回以免重复记录同一故障。
 		return false;
 	}
 	if (TargetLayerCount <= GeneratedLayerCount || TargetLayerCount > 64)
@@ -125,7 +124,8 @@ bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, F
 			}
 
 			const FVector Outward(Face.Outward);
-			const FRotator Rotation = FRotationMatrix::MakeFromXZ(Outward, FVector::UpVector).Rotator();
+			// Plane 的本地 Y 朝上、本地 Z 朝塔外；纹理只覆盖单个正面，不再生成带图案的立体窄边。
+			const FRotator Rotation = FRotationMatrix::MakeFromYZ(FVector::UpVector, Outward).Rotator();
 			const FVector Center = Outward * TowerSurfaceOffset + FVector(0, 0, (Layer + 0.5) * TowerLayerHeight);
 			UStaticMeshComponent* Panel = NewObject<UStaticMeshComponent>(Tower);
 			Cell.Panel = Panel;
@@ -145,7 +145,8 @@ bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, F
 			// 先配置碰撞和导航资格再注册，避免短暂暴露建造面为实体障碍或行走几何。
 			Panel->SetupAttachment(Root);
 			Panel->SetRelativeLocationAndRotation(Center, Rotation);
-			Panel->SetRelativeScale3D(FVector(PanelThickness, PanelWidth, PanelHeight) / MeshSize);
+			// Plane 的本地 X/Y 分别控制宽度和高度，本地 Z 保持单位缩放以留作其零厚度碰撞面。
+			Panel->SetRelativeScale3D(FVector(PanelWidth, PanelHeight, MeshSize) / MeshSize);
 			Panel->SetCanEverAffectNavigation(false);
 			Panel->SetGenerateOverlapEvents(false);
 			Panel->SetCollisionResponseToAllChannels(ECR_Ignore);
@@ -179,20 +180,28 @@ bool UCastleTowerSideGridComponent::ValidatePresentation(FText& OutReason) const
 	}
 	for (const FCastleTowerSideCell& Cell : Cells)
 	{
-		UMaterialInstanceDynamic* Material = IsValid(Cell.Panel)
+		const bool bPanelValid = IsValid(Cell.Panel);
+		UMaterialInstanceDynamic* Material = bPanelValid
 			? Cast<UMaterialInstanceDynamic>(Cell.Panel->GetMaterial(0)) : nullptr;
 		FLinearColor ExpectedTint;
 		const bool bHasValidAttributes = CastleTileColors::TryGetGridTint(Cell.Color, ExpectedTint)
 			&& Cell.Number >= 1 && Cell.Number <= 9;
-		const bool bFrameMatches = Material && FMath::IsNearlyEqual(
-			Material->K2_GetScalarParameterValue(TEXT("Frame (S)")), static_cast<float>(Cell.Number - 1));
+		const float ActualFrame = Material ? Material->K2_GetScalarParameterValue(TEXT("Frame (S)")) : 0.0f;
+		const FLinearColor ActualTint = Material
+			? Material->K2_GetVectorParameterValue(TEXT("Color")) : FLinearColor::Transparent;
+		const bool bFrameMatches = Material
+			&& FMath::IsNearlyEqual(ActualFrame, static_cast<float>(Cell.Number - 1));
 		const bool bTintMatches = Material && bHasValidAttributes
-			&& Material->K2_GetVectorParameterValue(TEXT("Color")).Equals(ExpectedTint, 0.001f);
-		if (!IsValid(Cell.Panel) || !Cell.Panel->IsRegistered() || !Material || !bHasValidAttributes
+			&& ActualTint.Equals(ExpectedTint, 0.001f);
+		if (!bPanelValid || !Cell.Panel->IsRegistered() || !Material || !bHasValidAttributes
 			|| !bFrameMatches || !bTintMatches)
 		{
-			OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 侧格 %s 面 %d 的纹理面板、颜色或数字帧无效。"),
-				*GetPathNameSafe(GetOwner()), *Cell.TowerCell.ToString(), static_cast<int32>(Cell.Face)));
+			OutReason = FText::FromString(FString::Printf(
+				TEXT("主塔 %s 侧格 %s 面 %d 的面板或数字未注册，或纹理材质属性无效：组件有效=%s，已注册=%s，动态材质=%s，格子属性有效=%s，数字=%d，图集帧期望=%.3f 实际=%.3f，期望颜色=%s 实际颜色=%s。"),
+				*GetPathNameSafe(GetOwner()), *Cell.TowerCell.ToString(), static_cast<int32>(Cell.Face),
+				bPanelValid ? TEXT("是") : TEXT("否"), bPanelValid && Cell.Panel->IsRegistered() ? TEXT("是") : TEXT("否"),
+				Material ? TEXT("是") : TEXT("否"), bHasValidAttributes ? TEXT("是") : TEXT("否"), Cell.Number,
+				static_cast<float>(Cell.Number - 1), ActualFrame, *ExpectedTint.ToString(), *ActualTint.ToString()));
 			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 			return false;
 		}
@@ -234,7 +243,7 @@ bool UCastleTowerSideGridComponent::TryResolveHit(const FHitResult& Hit, FCastle
 	if (!Cell) { return false; }
 
 	const FTransform& PanelTransform = Cell->Panel->GetComponentTransform();
-	const FVector Normal = PanelTransform.GetUnitAxis(EAxis::X);
+	const FVector Normal = PanelTransform.GetUnitAxis(EAxis::Z);
 	if (FVector::DotProduct(Normal, Hit.ImpactNormal) < 0.99) { return false; }
 	for (const FTowerFace& Face : TowerFaces)
 	{
@@ -244,9 +253,13 @@ bool UCastleTowerSideGridComponent::TryResolveHit(const FHitResult& Hit, FCastle
 		OutTarget.AdjacentCell = Cell->TowerCell + Face.Outward;
 		OutTarget.Surface = ECastleGridCursorSurface::MainTowerSide;
 		OutTarget.WorldNormal = Normal;
-		// 使用边缘色条反馈可放/不可放，不用原来的整格不透明高亮盖掉塔侧的颜色和数字。
-		OutTarget.IndicatorTransform = FTransform(PanelTransform.GetRotation(),
-			PanelTransform.TransformPosition(FVector(85.0, 0.0, -43.0)), PanelTransform.GetScale3D() * FVector(0.32, 0.92, 0.07));
+		// 指示器自身仍是以本地 X 为法线的 Cube。由 Plane 法线重建它的朝向，并按原侧格比例生成窄边提示。
+		const FRotator IndicatorRotation = FRotationMatrix::MakeFromXZ(Normal, FVector::UpVector).Rotator();
+		const FVector PanelScale = PanelTransform.GetScale3D();
+		const FVector IndicatorLocation = PanelTransform.GetLocation()
+			+ PanelTransform.TransformVector(FVector(0.0f, -43.0f, 85.0f));
+		const FVector IndicatorScale(PanelScale.Z * 0.0256f, PanelScale.X * 0.92f, PanelScale.Y * 0.07f);
+		OutTarget.IndicatorTransform = FTransform(IndicatorRotation, IndicatorLocation, IndicatorScale);
 		OutTarget.bValid = true;
 		return true;
 	}
