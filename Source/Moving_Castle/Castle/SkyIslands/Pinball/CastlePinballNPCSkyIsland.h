@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Castle/Input/CastleControlMode.h"
 #include "Castle/SkyIslands/CastleSkyIslandBase.h"
 #include "CastlePinballNPCSkyIsland.generated.h"
 
@@ -39,6 +40,10 @@ private:
 	bool TryLaunchCoin(FText& OutReason);
 	void LaunchFromInput();
 	void ExitAimMode();
+	/** E 只在经典模式退出瞄准，设计模式将其保留为升降键并由 AimInput 阻止下传。 */
+	void ExitAimModeFromE();
+	/** 模式切换时立即刷新瞄准面板中的投币与退出按键说明。 */
+	void HandleAimControlModeChanged(ECastleControlMode NewMode);
 	void UpdateLauncher(float DeltaSeconds);
 	void RefreshStatus();
 #if !UE_BUILD_SHIPPING

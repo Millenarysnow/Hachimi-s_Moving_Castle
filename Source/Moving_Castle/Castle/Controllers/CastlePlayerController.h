@@ -250,9 +250,10 @@ protected:
 	UFUNCTION()
 	void HandleItemBadgeChanged();
 	void InteractWithSkyIsland();
-	/** 编辑阶段的 E 只消费准星命中的房间内置门体。 */
+	/** 经典模式的 E 输入沿准星访问门体；设计模式的主点击也复用同一条精确门体射线。 */
 	void InteractWithRoomPortal();
-	bool TryInteractWithRoomPortalFromRay(const FVector& Start, const FVector& End, FText& OutReason);
+	/** 按传入射线访问房间内置门体；命中标志用于区分门体业务拒绝与普通表面未命中。 */
+	bool TryInteractWithRoomPortalFromRay(const FVector& Start, const FVector& End, FText& OutReason, bool* bOutHitPortal = nullptr);
 #if WITH_DEV_AUTOMATION_TESTS
 	friend class FCastlePortalRoomTraitTest;
 #endif

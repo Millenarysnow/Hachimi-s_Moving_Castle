@@ -42,8 +42,10 @@ void UCastleControlSettingsWidget::RefreshMode(ECastleControlMode Mode)
 	};
 	const FText HoldKey = CastleControlInput::GetKeyDisplayText(
 		CastleControlInput::GetBindings(ECastleControlMode::Design).Get(ECastleWorldInputAction::HoldCameraLook));
-	ClassicKeys->SetText(FormatKeys(ECastleControlMode::Classic, INVTEXT("移动鼠标转动视角")));
-	DesignKeys->SetText(FormatKeys(ECastleControlMode::Design, FText::Format(INVTEXT("按住{0}转动视角"), HoldKey)));
+	ClassicKeys->SetText(FormatKeys(ECastleControlMode::Classic,
+		INVTEXT("移动鼠标转动视角 · Space/Ctrl 升降 · E 空岛交互")));
+	DesignKeys->SetText(FormatKeys(ECastleControlMode::Design,
+		FText::Format(INVTEXT("按住{0}转动视角 · Q 下降 / E 上升"), HoldKey)));
 	ClassicButton->SetIsEnabled(Mode != ECastleControlMode::Classic);
 	DesignButton->SetIsEnabled(Mode != ECastleControlMode::Design);
 }

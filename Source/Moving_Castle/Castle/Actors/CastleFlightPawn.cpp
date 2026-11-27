@@ -92,10 +92,11 @@ void ACastleFlightPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 	PlayerInputComponent->BindKey(EKeys::SpaceBar, IE_Released, this, &ACastleFlightPawn::AscendReleased);
 	PlayerInputComponent->BindKey(EKeys::LeftControl, IE_Pressed, this, &ACastleFlightPawn::DescendPressed);
 	PlayerInputComponent->BindKey(EKeys::LeftControl, IE_Released, this, &ACastleFlightPawn::DescendReleased);
-	PlayerInputComponent->BindKey(EKeys::Q, IE_Pressed, this, &ACastleFlightPawn::DesignAscendPressed);
-	PlayerInputComponent->BindKey(EKeys::Q, IE_Released, this, &ACastleFlightPawn::AscendReleased);
-	PlayerInputComponent->BindKey(EKeys::E, IE_Pressed, this, &ACastleFlightPawn::DesignDescendPressed);
-	PlayerInputComponent->BindKey(EKeys::E, IE_Released, this, &ACastleFlightPawn::DescendReleased);
+	// 经典模式仍由 Space / Ctrl 升降，设计模式只由 Q / E 升降，两个预设共享回调但互不激活。
+	PlayerInputComponent->BindKey(EKeys::Q, IE_Pressed, this, &ACastleFlightPawn::DesignDescendPressed);
+	PlayerInputComponent->BindKey(EKeys::Q, IE_Released, this, &ACastleFlightPawn::DescendReleased);
+	PlayerInputComponent->BindKey(EKeys::E, IE_Pressed, this, &ACastleFlightPawn::DesignAscendPressed);
+	PlayerInputComponent->BindKey(EKeys::E, IE_Released, this, &ACastleFlightPawn::AscendReleased);
 
 	// 鼠标轴只传入相对移动量；当前模式及模态门控由控制器查询。
 	PlayerInputComponent->BindAxisKey(EKeys::MouseX, this, &ACastleFlightPawn::HandleMouseYaw);
@@ -227,7 +228,7 @@ void ACastleFlightPawn::DesignAscendPressed()
 	const ACastlePlayerController* CastleController = Cast<ACastlePlayerController>(Controller);
 	if (!IsValid(CastleController))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("飞行 Pawn %s 无法处理设计模式 Q 键：玩家控制器 %s 不是有效的 CastlePlayerController。"),
+		UE_LOG(LogMoving_Castle, Error, TEXT("飞行 Pawn %s 无法处理设计模式 E 键：玩家控制器 %s 不是有效的 CastlePlayerController。"),
 			*GetPathName(), *GetNameSafe(Controller));
 		return;
 	}
@@ -242,7 +243,7 @@ void ACastleFlightPawn::DesignDescendPressed()
 	const ACastlePlayerController* CastleController = Cast<ACastlePlayerController>(Controller);
 	if (!IsValid(CastleController))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("飞行 Pawn %s 无法处理设计模式 E 键：玩家控制器 %s 不是有效的 CastlePlayerController。"),
+		UE_LOG(LogMoving_Castle, Error, TEXT("飞行 Pawn %s 无法处理设计模式 Q 键：玩家控制器 %s 不是有效的 CastlePlayerController。"),
 			*GetPathName(), *GetNameSafe(Controller));
 		return;
 	}

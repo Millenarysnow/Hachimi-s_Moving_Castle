@@ -61,8 +61,17 @@ namespace
 			ShowFailure(Reason);
 			return;
 		}
-		Controller->ShowDirectorMessage(FText::Format(INVTEXT("已到达赌博空岛。对准机台或离开传送门并按 {0}。"),
-			Config->SkyIslandInteractKey.GetDisplayName()));
+		if (Controller->GetControlMode() == ECastleControlMode::Design)
+		{
+			// 设计模式以鼠标主交互点击机台或传送门，提示读取控制器当前主交互键。
+			Controller->ShowDirectorMessage(FText::Format(INVTEXT("已到达空岛。将鼠标对准物件并按{0}交互。"),
+				Controller->GetPrimaryPlaceInteractKeyDisplayText()));
+		}
+		else
+		{
+			Controller->ShowDirectorMessage(FText::Format(INVTEXT("已到达空岛。瞄准物件并按 {0} 交互。"),
+				Config->SkyIslandInteractKey.GetDisplayName()));
+		}
 	}
 
 	FAutoConsoleCommandWithWorld GambleAcceptanceCommand(TEXT("CastleTestGambleSkyIsland"),
@@ -94,7 +103,8 @@ bool ACastleGambleAcceptanceIsland::Enter(const FCastleSkyIslandContext& Context
 	Controller->HideDirectorEditingPresentation();
 	FixtureInput = NewObject<UInputComponent>(this);
 	FixtureInput->Priority = 100;
-	FixtureInput->BindKey(InteractKey, IE_Pressed, this, &ACastleGambleAcceptanceIsland::Interact).bConsumeInput = true;
+	// 验收键只在经典模式触发交互且不吞掉 Pawn 输入，设计模式的 E 必须继续作为上升键。
+	FixtureInput->BindKey(InteractKey, IE_Pressed, this, &ACastleGambleAcceptanceIsland::Interact).bConsumeInput = false;
 	Controller->PushInputComponent(FixtureInput);
 	OnDepartureRequested.AddWeakLambda(this, [this]
 	{
@@ -109,7 +119,15 @@ bool ACastleGambleAcceptanceIsland::Enter(const FCastleSkyIslandContext& Context
 void ACastleGambleAcceptanceIsland::Interact()
 {
 	ACastlePlayerController* Controller = GetIslandContext().Controller.Get();
-	if (!Controller || Controller->IsMoveInputIgnored() || Controller->IsLookInputIgnored() || bDepartureQueued) { return; }
+	// 不能从已失效的验收玩家解析操作模式或射线，输出具体验收岛供排查。
+	if (!IsValid(Controller))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("赌博验收岛 %s 无法处理交互：入岛玩家控制器已失效。"), *GetPathName());
+		return;
+	}
+	// 设计模式的岛内机台和离岛门由左键主交互路由处理，配置 E 键不再触发物件交互。
+	if (Controller->GetControlMode() == ECastleControlMode::Design) { return; }
+	if (Controller->IsMoveInputIgnored() || Controller->IsLookInputIgnored() || bDepartureQueued) { return; }
 	FVector Start;
 	FRotator View;
 	Controller->GetPlayerViewPoint(Start, View);

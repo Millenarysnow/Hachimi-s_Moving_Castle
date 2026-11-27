@@ -85,8 +85,9 @@ void ACastlePinballNPCSkyIsland::StartAcceptanceVisit(UWorld* World)
 	Controller->SetControlRotation(Arrival.Rotator());
 	Island->AcceptancePawn = Pawn;
 	Island->AcceptanceInput = NewObject<UInputComponent>(Island);
+	// 验收 E 仅用于经典模式交互且不消费输入，让设计模式下 Pawn 仍能收到 E 上升。
 	Island->AcceptanceInput->BindKey(DirectorConfig->SkyIslandInteractKey, IE_Pressed,
-		Island, &ACastlePinballNPCSkyIsland::InteractForAcceptance);
+		Island, &ACastlePinballNPCSkyIsland::InteractForAcceptance).bConsumeInput = false;
 	Controller->PushInputComponent(Island->AcceptanceInput.Get());
 	Island->OnDepartureRequested.AddUObject(Island, &ACastlePinballNPCSkyIsland::QueueAcceptanceReturn);
 	ShowPinballAcceptanceMessage(INVTEXT("已到达弹珠机验收场地。对准投币台交互，结束后从离开传送门返回。"), false);
@@ -95,6 +96,8 @@ void ACastlePinballNPCSkyIsland::StartAcceptanceVisit(UWorld* World)
 void ACastlePinballNPCSkyIsland::InteractForAcceptance()
 {
 	auto* Controller = GetIslandContext().Controller.Get();
+	// 设计模式已改由主交互鼠标键点击本岛物件，验收 E 回调不执行交互。
+	if (Controller && Controller->GetControlMode() == ECastleControlMode::Design) { return; }
 	if (!Controller || Controller->GetPawn() != AcceptancePawn.Get())
 	{
 		ShowPinballAcceptanceMessage(INVTEXT("弹珠机验收失去了入岛时的玩家。"), true);
