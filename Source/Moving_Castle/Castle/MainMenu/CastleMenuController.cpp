@@ -45,7 +45,8 @@ namespace
 
 	FMargin DesignRect(FVector2D Position, FVector2D Size)
 	{
-		return FMargin(Position.X, Position.Y, Size.X, Size.Y);
+		// 约束画布的四个 Margin 是左右上下边界偏移，不是位置与宽高。
+		return FMargin(Position.X, Position.Y, Position.X + Size.X, Position.Y + Size.Y);
 	}
 
 	FString ValidateMenuAssets(const ACastleMenuStage& Stage)
