@@ -1,10 +1,12 @@
 #include "CastleDialogueSubsystem.h"
 
+#include "Audio/CastleAudioSubsystem.h"
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Dialogue/CastleDialogueScriptDataAsset.h"
 #include "Castle/Dialogue/CastleDialogueWidget.h"
 #include "Engine/World.h"
 #include "Moving_Castle.h"
+#include "Sound/SoundBase.h"
 #include "UObject/SoftObjectPath.h"
 
 namespace
@@ -193,7 +195,10 @@ void UCastleDialogueSubsystem::ShowCurrentLine()
 		UE_LOG(LogMoving_Castle, Error, TEXT("对话子系统 %s 无法展示无效的当前行 %d。"), *GetPathName(), CurrentLineIndex);
 		return;
 	}
-	CurrentWidget->DisplayLine(CurrentScript->Lines[CurrentLineIndex], GetResolvedCurrentLineText(), CurrentScript->CharactersPerSecond);
+	const FCastleDialogueLine& Line = CurrentScript->Lines[CurrentLineIndex];
+	// 只有实际切行才发出语音请求；补全文字或重新解析按键不会重播当前句。
+	if (auto* Audio = UCastleAudioSubsystem::GetForWorld(GetWorld())) { Audio->PlayDialogueVoice(Line.VoiceLine, Line.bUseWangcaiVoice); }
+	CurrentWidget->DisplayLine(Line, GetResolvedCurrentLineText(), CurrentScript->CharactersPerSecond);
 }
 
 int32 UCastleDialogueSubsystem::FindLineIndex(const FName LineId) const
@@ -208,6 +213,8 @@ void UCastleDialogueSubsystem::CancelForController(const ACastlePlayerController
 
 void UCastleDialogueSubsystem::FinishDialogue(const bool bCompleted)
 {
+	// 先停止旧句，再通知观察者，避免回调立即开启新剧本后误停新句。
+	if (auto* Audio = UCastleAudioSubsystem::GetForWorld(GetWorld())) { Audio->StopDialogueVoice(); }
 	if (ACastlePlayerController* Controller = CurrentController.Get())
 	{
 		Controller->SetPresentationModalState(false, CurrentWidget);
