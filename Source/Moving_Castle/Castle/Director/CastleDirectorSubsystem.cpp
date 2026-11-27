@@ -582,7 +582,16 @@ bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirector
 	else { DestroyNodes(); }
 	SetPhase(ECastleDirectorPhase::SkyIsland);
 	if (ArrivalWidget) { Dialogue->StartPreparedSkyIslandDialogue(Type, *ArrivalScript, *Controller.Get(), *ArrivalWidget); }
-	ShowMessage(FText::Format(INVTEXT("已到达空岛。瞄准物件并按 {0} 交互。"), IslandConfig.SkyIslandInteractKey.GetDisplayName()), false);
+	if (Controller->GetControlMode() == ECastleControlMode::Design)
+	{
+		// 设计模式的物件交互使用当前主交互键，避免继续提示已被升降占用的 E 键。
+		ShowMessage(FText::Format(INVTEXT("已到达空岛。将鼠标对准物件并按{0}交互。"),
+			Controller->GetPrimaryPlaceInteractKeyDisplayText()), false);
+	}
+	else
+	{
+		ShowMessage(FText::Format(INVTEXT("已到达空岛。瞄准物件并按 {0} 交互。"), IslandConfig.SkyIslandInteractKey.GetDisplayName()), false);
+	}
 	UE_LOG(LogMoving_Castle, Display, TEXT("导演进入空岛 %s，第 %d 步。"), *Island->GetPathName(), GetNextStep());
 	return true;
 }
@@ -705,7 +714,8 @@ bool UCastleDirectorSubsystem::TryEnterBonusSkyIslandFromPortal(ACastleBuildingB
 	return TryEnterConfiguredSkyIsland(*Config, Type, Random.GetCurrentSeed(), nullptr, OutReason, PortalRoom);
 }
 
-bool UCastleDirectorSubsystem::TryInteractWithSkyIsland(const FVector& Start, const FVector& End, FText& OutReason)
+bool UCastleDirectorSubsystem::TryInteractWithSkyIsland(
+	const FVector& Start, const FVector& End, FText& OutReason, bool bShowMissPrompt)
 {
 	if (!ValidateIslandAction(ActiveSkyIsland, OutReason)) { return false; }
 	FHitResult Hit;
@@ -715,7 +725,8 @@ bool UCastleDirectorSubsystem::TryInteractWithSkyIsland(const FVector& Start, co
 	if (!Target) { Target = Cast<ICastleSkyIslandInteractable>(Hit.GetActor()); }
 	if (!Target)
 	{
-		OutReason = INVTEXT("请将中心准星对准可交互的空岛物件。");
+		// 活动岛校验成功时已清空原因，只在经典准星交互未命中时填入引导提示。
+		if (bShowMissPrompt) { OutReason = INVTEXT("请将中心准星对准可交互的空岛物件。"); }
 		return false;
 	}
 	const FCastleSkyIslandInteractContext Context{ActiveSkyIsland.Get(), Controller.Get(), Hit};

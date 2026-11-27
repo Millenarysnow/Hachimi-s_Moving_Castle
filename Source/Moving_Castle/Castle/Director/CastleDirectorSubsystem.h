@@ -63,7 +63,8 @@ public:
 	bool AddRunNPCCount(int32 Delta, FText& OutReason);
 	void ClaimTowerUpgradeReward(int32 Index);
 	void DiscardTowerUpgradeRewards();
-	bool TryInteractWithSkyIsland(const FVector& Start, const FVector& End, FText& OutReason);
+	/** 沿指定射线交互。设计模式的鼠标点击关闭空地提示，仍返回活动岛校验与物件行为的失败原因。 */
+	bool TryInteractWithSkyIsland(const FVector& Start, const FVector& End, FText& OutReason, bool bShowMissPrompt = true);
 	/** 额外空岛使用当前节点的进度；从离岛门返塔后仍停留在同一关。 */
 	bool TryEnterBonusSkyIslandFromPortal(ACastleBuildingBase* PortalRoom, FText& OutReason);
 	bool RequestIslandRoomShop(ACastleSkyIslandBase* Island, FText& OutReason);

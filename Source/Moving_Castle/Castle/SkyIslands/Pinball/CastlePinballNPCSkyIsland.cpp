@@ -177,11 +177,14 @@ bool ACastlePinballNPCSkyIsland::EnterAimMode(ACastlePlayerController& Controlle
 		});
 		AimInput->KeyBindings.Add(MoveTemp(Binding));
 	}
-	for (const FKey& Key : {EKeys::E, EKeys::Tab, EKeys::Escape})
+	// Tab / Esc 在两种模式均退出；E 的回调按当前模式门控，避免瞄准期间切换模式后仍错误退出。
+	for (const FKey& Key : {EKeys::Tab, EKeys::Escape})
 	{
 		AimInput->BindKey(Key, IE_Pressed, this, &ACastlePinballNPCSkyIsland::ExitAimMode);
 	}
+	AimInput->BindKey(EKeys::E, IE_Pressed, this, &ACastlePinballNPCSkyIsland::ExitAimModeFromE);
 	AimController = &Controller;
+	Controller.OnControlModeChanged.AddUObject(this, &ACastlePinballNPCSkyIsland::HandleAimControlModeChanged);
 	Controller.GetPawn()->GetMovementComponent()->StopMovementImmediately();
 	Controller.SetIgnoreMoveInput(true);
 	Controller.SetIgnoreLookInput(true);
@@ -202,6 +205,7 @@ void ACastlePinballNPCSkyIsland::ExitAimMode()
 	if (!AimInput) { return; }
 	if (ACastlePlayerController* Controller = AimController.Get())
 	{
+		Controller->OnControlModeChanged.RemoveAll(this);
 		// 只归还本岛加上的一份忽略计数，保留控制器其他模态输入的计数。
 		Controller->PopInputComponent(AimInput);
 		Controller->SetIgnoreMoveInput(false);
@@ -215,6 +219,24 @@ void ACastlePinballNPCSkyIsland::ExitAimMode()
 		StatusWidget = nullptr;
 	}
 	UE_LOG(LogMoving_Castle, Display, TEXT("弹珠机 %s 已归还投币输入。"), *GetPathName());
+}
+
+void ACastlePinballNPCSkyIsland::ExitAimModeFromE()
+{
+	// E 仅保留经典模式的旧退出语义；设计模式的瞄准输入层继续阻挡该键，不让它触发飞行或交互。
+	const ACastlePlayerController* Controller = AimController.Get();
+	if (!IsValid(Controller))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("弹珠机 %s 无法处理瞄准态 E 键：瞄准玩家控制器已失效。"), *GetPathName());
+		return;
+	}
+	if (Controller->GetControlMode() == ECastleControlMode::Classic) { ExitAimMode(); }
+}
+
+void ACastlePinballNPCSkyIsland::HandleAimControlModeChanged(ECastleControlMode /*NewMode*/)
+{
+	// 模式切换已经提交给控制器，立即让面板读取当前生效的投币与退出键。
+	RefreshStatus();
 }
 
 void ACastlePinballNPCSkyIsland::UpdateLauncher(float DeltaSeconds)
@@ -268,7 +290,8 @@ void ACastlePinballNPCSkyIsland::RefreshStatus()
 	if (StatusWidget && AimController.IsValid())
 	{
 		StatusWidget->RefreshStatus(AimController->GetEconomy()->GetGold(), Config->CoinLaunchCost,
-			Simulation->GetRecruitedCount(), Config->InitialNPCCount, LauncherPosition, LauncherAngle);
+			Simulation->GetRecruitedCount(), Config->InitialNPCCount, LauncherPosition, LauncherAngle,
+			AimController->GetControlMode());
 	}
 }
 

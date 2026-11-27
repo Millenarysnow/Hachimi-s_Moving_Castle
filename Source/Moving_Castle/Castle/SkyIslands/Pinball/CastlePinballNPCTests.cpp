@@ -11,6 +11,7 @@
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "CastleBoard.h"
 #include "CastlePlayerController.h"
+#include "Components/TextBlock.h"
 #include "Editor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -257,17 +258,19 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 			++Stage;
 			return false;
 		}
-		if (Stage == 2 || Stage == 4 || Stage == 7 || Stage == 10)
+		if (Stage == 2 || Stage == 5 || Stage == 8 || Stage == 11)
 		{
 			if (!TestNotNull(TEXT("当前步骤的弹珠机空岛"), Island)) { return true; }
 			const USceneComponent* Interactable = Island->Console.Get();
-			if (Stage == 4 || Stage == 10) { Interactable = Island->FindComponentByClass<UCastleSkyIslandDepartureComponent>(); }
+			if (Stage == 5 || Stage == 11) { Interactable = Island->FindComponentByClass<UCastleSkyIslandDepartureComponent>(); }
 			if (!TestNotNull(TEXT("当前步骤的交互组件"), Interactable)) { return true; }
-			if (Stage == 4 && !bAimedAtAcceptancePortal)
+			if (Stage == 5 && !bAimedAtAcceptancePortal)
 			{
 				// 退出瞄准后再设置传送门视角，给输入层和相机缓存各自完成更新的机会。
 				if (Island->StatusWidget && FPlatformTime::Seconds() - Started < 30.0) { return false; }
-				if (!TestFalse(TEXT("验收岛退出瞄准后移除状态面板"), Island->StatusWidget != nullptr)) { return true; }
+				if (!TestFalse(TEXT("设计模式 Tab 退出瞄准并移除状态面板"), Island->StatusWidget != nullptr)) { return true; }
+				// Tab 退出已在设计模式下完成，切回经典模式继续原有 E 离岛流程。
+				Controller->SetControlMode(ECastleControlMode::Classic, false);
 				PinballAimAt(*Controller, *Interactable);
 				bAimedAtAcceptancePortal = true;
 				return false;
@@ -285,12 +288,26 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 			{
 				return true;
 			}
-			// 用专用退出键移除瞄准层，传送门仍通过真实交互键验收。
+			// 在已由 E 进入瞄准态后切换设计模式，下一阶段验证 E 不能移除瞄准层。
+			Controller->SetControlMode(ECastleControlMode::Design, false);
+			PinballPressKey(*Controller, EKeys::E);
+			++Stage;
+			return false;
+		}
+		if (Stage == 4)
+		{
+			auto* Controls = Island && Island->StatusWidget
+				? Cast<UTextBlock>(Island->StatusWidget->GetWidgetFromName(TEXT("ControlsText"))) : nullptr;
+			TestTrue(TEXT("设计模式 E 不退出瞄准且提示仅保留 Tab / Esc"), Island && Island->StatusWidget && Controls
+				&& Controls->GetText().ToString().Contains(TEXT("鼠标左键 / 空格 投币"))
+				&& Controls->GetText().ToString().Contains(TEXT("Tab / Esc 退出"))
+				&& !Controls->GetText().ToString().Contains(TEXT("E / Tab")));
+			// 保持设计模式派发 Tab，下一阶段验证本模式确实释放瞄准层和状态面板。
 			PinballPressKey(*Controller, EKeys::Tab);
 			++Stage;
 			return false;
 		}
-		if (Stage == 5)
+		if (Stage == 6)
 		{
 			if (Island && FPlatformTime::Seconds() - Started < 30.0) { return false; }
 			if (!TestFalse(TEXT("命令离岛销毁验收岛"), IsValid(Island))) { return true; }
@@ -301,7 +318,7 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 			++Stage;
 			return false;
 		}
-		if (Stage == 6)
+		if (Stage == 7)
 		{
 			if (!Island && FPlatformTime::Seconds() - Started < 30.0) { return false; }
 			if (!TestNotNull(TEXT("真实导演生成 NPC 空岛"), Island)) { return true; }
@@ -319,7 +336,7 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 			++Stage;
 			return false;
 		}
-		if (Stage == 9)
+		if (Stage == 10)
 		{
 			TestFalse(TEXT("退出投币模式移除 HUD"), Island && Island->StatusWidget);
 			auto* Portal = Island ? Island->FindComponentByClass<UCastleSkyIslandDepartureComponent>() : nullptr;
@@ -328,7 +345,7 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 			++Stage;
 			return false;
 		}
-		if (Stage == 11)
+		if (Stage == 12)
 		{
 			if (VisitedIsland.IsValid() && FPlatformTime::Seconds() - Started < 30.0) { return false; }
 			TestFalse(TEXT("导演离岛后自动销毁空岛"), VisitedIsland.IsValid());
