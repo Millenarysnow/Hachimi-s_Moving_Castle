@@ -1,5 +1,7 @@
-"""在 UE 编辑器中从项目源图发布开始界面的纹理、纸面材质与独立关卡。"""
+"""在 UE 编辑器中使用指定的 Hachimis 切图目录发布开始地图。"""
+import json
 from pathlib import Path
+import sys
 
 import unreal
 
@@ -7,6 +9,15 @@ import unreal
 UI = "/Game/MovingCastle/UI/MainMenu"
 MAP = "/Game/MovingCastle/Maps/StartMenu"
 SOURCE = Path(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir())) / "RawContent/MainMenu"
+# 顺序与 CastleMenuController.cpp 的设计图层及舞台贴图数组一致。
+SPRITES = (
+    ("title_top", "TitleTop"), ("title_bottom", "TitleBottom"), ("accent_red", "AccentRed"),
+    ("accent_blue", "AccentBlue"), ("accent_gold", "AccentGold"), ("accent_green", "AccentGreen"),
+    ("tutorial_label", "TutorialLabel"), ("tutorial_marker", "TutorialMarker"),
+    ("start_label", "StartLabel"), ("start_marker", "StartMarker"),
+    ("exit_label", "ExitLabel"), ("exit_marker", "ExitMarker"),
+    ("focus_fill", "FocusFill"), ("focus_arrow", "FocusArrow"),
+)
 
 
 def require(value, message):
@@ -16,11 +27,12 @@ def require(value, message):
     return value
 
 
-def import_texture(filename, name, for_ui):
+def import_texture(source, destination, name, for_ui):
     """纸纹使用线性光照采样，透明字标使用 UI 压缩保留笔画边缘。"""
     task = unreal.AssetImportTask()
-    task.filename = str(SOURCE / filename)
-    task.destination_path = UI
+    require(source.is_file(), "缺少贴图源文件 " + str(source))
+    task.filename = str(source)
+    task.destination_path = destination
     task.destination_name = name
     task.automated = True
     task.replace_existing = True
@@ -28,7 +40,9 @@ def import_texture(filename, name, for_ui):
     # 显式指定 TextureFactory，避免不同编辑器的 Interchange 设置改变目标文件名。
     task.factory = unreal.TextureFactory()
     unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
-    texture = require(unreal.load_asset(UI + "/" + name), "导入纹理失败 " + name)
+    imported = task.get_objects()
+    require(len(imported) == 1 and isinstance(imported[0], unreal.Texture2D), "导入纹理失败 " + str(source))
+    texture = imported[0]
     texture.set_editor_property("srgb", True)
     texture.set_editor_property("never_stream", True)
     if for_ui:
@@ -77,10 +91,17 @@ def paper_material(paper):
     return mat
 
 
-def publish():
+def publish_kit(kit, paper):
     """仅更新指定的菜单舞台。已有菜单地图保持原世界，重复发布不会增加重复 Actor。"""
-    title = import_texture("Logo_Title.png", "T_StartMenuLogo", True)
-    paper = paper_material(import_texture("Paper_Crumpled.png", "T_StartMenuPaper", False))
+    layout = json.loads((kit / "layout.json").read_text(encoding="utf-8"))
+    require(layout["assetScale"] == 2 and set(layout["sprites"]) == {key for key, _ in SPRITES}, "Hachimis 切图表不完整")
+    textures = []
+    for key, name in SPRITES:
+        row = layout["sprites"][key]
+        texture = import_texture(kit / row["file"], UI + "/HachimisKit", "T_" + name, True)
+        require(texture.blueprint_get_size_x() == row["imageWidth"] and texture.blueprint_get_size_y() == row["imageHeight"],
+                "Hachimis 切图尺寸错误 " + row["file"])
+        textures.append(texture)
     font = require(unreal.load_asset("/Game/MovingCastle/Fonts/MicrosoftYaHei_Font"), "缺少菜单中文字体")
     stage_class = require(unreal.load_class(None, "/Script/Moving_Castle.CastleMenuStage"), "缺少菜单舞台 C++ 类")
     mode = require(unreal.load_class(None, "/Script/Moving_Castle.CastleMenuGameMode"), "缺少菜单模式 C++ 类")
@@ -95,7 +116,7 @@ def publish():
         require(unreal.EditorLoadingAndSavingUtils.new_blank_map(False), "创建菜单空关卡失败")
         stage = require(editor.spawn_actor_from_class(stage_class, unreal.Vector()), "创建菜单舞台失败")
     stage.set_actor_label("开始界面")
-    stage.set_editor_property("title_texture", title)
+    stage.set_editor_property("menu_textures", textures)
     stage.set_editor_property("menu_font", font)
     stage.set_editor_property("paper_material", paper)
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
@@ -105,4 +126,6 @@ def publish():
 
 
 if __name__ == "__main__":
-    publish()
+    require(len(sys.argv) == 2, "请传入含 layout.json 的 Hachimis_UI_Kit 目录")
+    paper = paper_material(import_texture(SOURCE / "Paper_Crumpled.png", UI, "T_StartMenuPaper", False))
+    publish_kit(Path(sys.argv[1]), paper)
