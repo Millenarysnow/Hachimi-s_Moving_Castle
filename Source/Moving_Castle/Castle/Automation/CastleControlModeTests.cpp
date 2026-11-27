@@ -4,32 +4,51 @@
 
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Camera/CameraActor.h"
+#include "Castle/Actors/CastleFlightPawn.h"
 #include "Castle/Actors/CastleBoard.h"
 #include "Castle/Actors/CastleBuildingBase.h"
 #include "Castle/Automation/CastlePIEAutomation.h"
+#include "Castle/Automation/CastleBuildingTestUtilities.h"
+#include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Castle/Components/CastleBackpackComponent.h"
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Data/CastleBuildingDefinition.h"
+#include "Castle/Director/CastleDirectorSubsystem.h"
+#include "Castle/Items/CastleRoomTraitComponent.h"
+#include "Castle/Placement/CastleTowerSideGridComponent.h"
+#include "Castle/SkyIslands/CastleSkyIslandBase.h"
+#include "Castle/SkyIslands/Gamble/CastleGambleAcceptanceIsland.h"
 #include "Castle/UI/Cards/CastleCardPortraitSubsystem.h"
 #include "Castle/UI/Cards/CastleShopCardWidget.h"
 #include "Castle/UI/Common/CastleBuildingDemolishMenuWidget.h"
 #include "Castle/UI/Common/CastleControlSettingsWidget.h"
 #include "Castle/UI/Common/CastleHUDControls.h"
 #include "Castle/UI/Director/CastleDirectorWidgets.h"
+#include "Castle/Rendering/CastleHoverHighlightSubsystem.h"
 #include "Components/Animation/BuildingMergeComponent.h"
 #include "Components/Button.h"
+#include "Components/PrimitiveComponent.h"
+#include "Components/TextBlock.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "EngineUtils.h"
+#include "HAL/IConsoleManager.h"
 #include "GameFramework/Pawn.h"
 #include "InputKeyEventArgs.h"
+#include "Interaction/CastlePatrolRoute.h"
+#include "Kismet/GameplayStatics.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/OutputDeviceNull.h"
 #include "Tests/AutomationCommon.h"
 #include "TextureResource.h"
 
+
 namespace
 {
+	// PlayerTick 将零时长视为暂停。取一帧的正时长让普通按键和鼠标键走非暂停输入栈。
+	constexpr float InputTickSeconds = 1.0f / 60.0f;
+
 	/** 通过 PlayerInput 注入按键和轴，等待真实输入栈在下一帧派发。 */
 	void SendInput(ACastlePlayerController& Player, const FKey& Key, EInputEvent Event, float Amount)
 	{
@@ -40,6 +59,41 @@ namespace
 	{
 		SendInput(Player, Key, IE_Pressed, 1.0f);
 		SendInput(Player, Key, IE_Released, 0.0f);
+	}
+
+	/** 执行正常的玩家输入栈与飞行 Pawn Tick，再读取移动组件即将消费的垂直向量。 */
+	double ReadVerticalFlightInput(ACastlePlayerController& Player, ACastleFlightPawn& Pawn)
+	{
+		// 在本测试步骤内数值采样，避免视口失焦或组件 Tick 顺序清掉本次事件及向量。
+		Player.PlayerTick(InputTickSeconds);
+		Pawn.ConsumeMovementInputVector();
+		static_cast<AActor&>(Pawn).Tick(0.0f);
+		Pawn.ConsumeMovementInputVector();
+		return Pawn.GetLastMovementInputVector().Z;
+	}
+
+	/** 按下和松开均通过真实绑定派发，验证当前模式的方向以及松开复位。 */
+	void CheckFlightKey(FAutomationTestBase& Test, ACastlePlayerController& Player, ACastleFlightPawn& Pawn,
+		const FKey& Key, double ExpectedZ)
+	{
+		const FString KeyLabel = FString::Printf(TEXT("%s模式 %s"),
+			Player.GetControlMode() == ECastleControlMode::Design ? TEXT("设计") : TEXT("经典"), *Key.ToString());
+		SendInput(Player, Key, IE_Pressed, 1.0f);
+		Test.TestEqual(KeyLabel + TEXT(" 按下的垂直飞行输入"), ReadVerticalFlightInput(Player, Pawn), ExpectedZ);
+		SendInput(Player, Key, IE_Released, 0.0f);
+		Test.TestEqual(KeyLabel + TEXT(" 松开后的垂直飞行输入"), ReadVerticalFlightInput(Player, Pawn), 0.0);
+	}
+
+	/** 使用正式视口投影移动设计模式指针，下一步可由世界主点击重算射线。 */
+	bool AimDesignPointerAt(ACastlePlayerController& Player, ACameraActor& Camera, const FVector& Eye, const FVector& Target)
+	{
+		Camera.SetActorLocationAndRotation(Eye, (Target - Eye).Rotation());
+		Player.SetViewTarget(&Camera);
+		Player.PlayerCameraManager->UpdateCamera(0.0f);
+		FVector2D ScreenPosition;
+		if (!Player.ProjectWorldLocationToScreen(Target, ScreenPosition)) { return false; }
+		Player.SetMouseLocation(FMath::RoundToInt(ScreenPosition.X), FMath::RoundToInt(ScreenPosition.Y));
+		return true;
 	}
 
 	ACastlePlayerController* GetViewportPlayer()
@@ -57,7 +111,37 @@ namespace
 		return Widgets.Num() == 1 ? Cast<TWidget>(Widgets[0]) : nullptr;
 	}
 
-	/** 正式 HUD 的齿轮和两张设置按钮驱动模式，再检查 Pawn 对鼠标轴输入的实际响应。 */
+	/** 按控制器同一视觉过滤条件验证建筑整体高亮集合与路径编辑门控。 */
+	bool CheckBuildingHover(FAutomationTestBase& Test, ACastlePlayerController& Player,
+		ACastleBuildingBase& Building, const TCHAR* Message, const bool bExpected)
+	{
+		auto* Highlight = Player.GetWorld()->GetSubsystem<UCastleHoverHighlightSubsystem>();
+		if (!Test.TestNotNull(TEXT("建筑悬停子系统"), Highlight)) { return false; }
+		const TArray<UPrimitiveComponent*> Current = Highlight->GetHighlightedPrimitives();
+		if (!bExpected)
+		{
+			return Test.TestTrue(Message, Current.IsEmpty());
+		}
+
+		TArray<UPrimitiveComponent*> Components;
+		Building.GetComponents<UPrimitiveComponent>(Components);
+		Components.RemoveAll([&Building](const UPrimitiveComponent* Component)
+		{
+			return !IsValid(Component) || !Component->IsRegistered() || !Component->IsVisible()
+				|| UBuildingGameplayRootComponent::IsInGameplayHierarchy(Component)
+				|| Component == Building.GetRoomTraitComponent()
+				|| Component->GetFName() == TEXT("PrototypeLabel")
+				|| Component->GetFName() == TEXT("PrototypeLabelPlate");
+		});
+		bool bSameComponentSet = !Components.IsEmpty() && Current.Num() == Components.Num();
+		for (const UPrimitiveComponent* Component : Components)
+		{
+			bSameComponentSet &= Current.Contains(Component);
+		}
+		return Test.TestTrue(Message, bSameComponentSet);
+	}
+
+	/** 正式 HUD 的齿轮和设置按钮切换模式，再检查鼠标旋转门控与实际垂直输入。 */
 	class FCheckControlModes final : public IAutomationLatentCommand
 	{
 	public:
@@ -80,18 +164,23 @@ namespace
 					&& !Player->bShowMouseCursor && Player->ShouldDrawCenterCrosshair());
 				Test.TestTrue(TEXT("经典主交互为右键，拆除为左键"), Player->GetPrimaryPlaceInteractKey() == EKeys::RightMouseButton
 					&& Player->GetDemolishKey() == EKeys::LeftMouseButton);
-				Rotation = Player->GetControlRotation();
-				SendInput(*Player, EKeys::MouseX, IE_Axis, 36.0f);
 				return false;
 			case 1:
 			{
-				Test.TestFalse(TEXT("经典自由鼠标轴改变视角"), Player->GetControlRotation().Equals(Rotation));
+				Test.TestTrue(TEXT("经典模式允许鼠标旋转相机"), Player->CanRotateCameraFromMouse());
 				auto* HUD = FindWidget<UCastleDirectorHUDWidget>(*Player);
 				auto* Settings = HUD ? Cast<UCastleHUDIconButtonWidget>(HUD->GetWidgetFromName(TEXT("SettingsButton"))) : nullptr;
 				if (!Test.TestNotNull(TEXT("正式 HUD 齿轮"), Settings)) { return true; }
 				Settings->OnButtonClicked.Broadcast();
 				auto* Panel = FindWidget<UCastleControlSettingsWidget>(*Player);
 				if (!Test.TestNotNull(TEXT("齿轮挂载正式设置 WBP"), Panel)) { return true; }
+				auto* ClassicKeys = Cast<UTextBlock>(Panel->GetWidgetFromName(TEXT("ClassicKeys")));
+				auto* DesignKeys = Cast<UTextBlock>(Panel->GetWidgetFromName(TEXT("DesignKeys")));
+				Test.TestTrue(TEXT("设置文案说明经典模式 E 交互与 Space/Ctrl 升降"), ClassicKeys
+					&& ClassicKeys->GetText().ToString().Contains(TEXT("E 空岛交互"))
+					&& ClassicKeys->GetText().ToString().Contains(TEXT("Space/Ctrl 升降")));
+				Test.TestTrue(TEXT("设置文案说明设计模式 Q 下降与 E 上升"), DesignKeys
+					&& DesignKeys->GetText().ToString().Contains(TEXT("Q 下降 / E 上升")));
 				auto* Design = Cast<UButton>(Panel->GetWidgetFromName(TEXT("DesignButton")));
 				if (!Test.TestNotNull(TEXT("设计模式按钮已绑定"), Design)) { return true; }
 				Test.TestTrue(TEXT("设置是模态界面"), Player->IsModalInputActive() && Player->IsLookInputIgnored());
@@ -116,76 +205,54 @@ namespace
 				Test.TestTrue(TEXT("设计模式瞄准读取偏离视口中心的鼠标位置"), Player->TryGetAimScreenPosition(X, Y)
 					&& FMath::IsNearlyEqual(X, static_cast<float>(Width / 4), 2.0f)
 					&& FMath::IsNearlyEqual(Y, static_cast<float>(Height / 3), 2.0f));
-				Rotation = Player->GetControlRotation();
-				SendInput(*Player, EKeys::MouseX, IE_Axis, 36.0f);
 				return false;
 			}
 			case 3:
-				Test.TestTrue(TEXT("设计模式松开中键时鼠标轴不改变视角"), Player->GetControlRotation().Equals(Rotation));
+			{
+				auto* FlightPawn = Cast<ACastleFlightPawn>(Player->GetPawn());
+				if (!Test.TestNotNull(TEXT("MainMap 正式飞行 Pawn"), FlightPawn)) { return true; }
+				Test.TestFalse(TEXT("设计模式松开中键时不允许鼠标旋转相机"), Player->CanRotateCameraFromMouse());
+				Test.TestEqual(TEXT("设计模式相机旋转门控绑定中键"),
+					CastleControlInput::GetBindings(ECastleControlMode::Design).Get(ECastleWorldInputAction::HoldCameraLook),
+					EKeys::MiddleMouseButton);
 				SendInput(*Player, EKeys::MiddleMouseButton, IE_Pressed, 1.0f);
-				SendInput(*Player, EKeys::MouseX, IE_Axis, 36.0f);
-				return false;
-			case 4:
-				Test.TestFalse(TEXT("设计模式按住中键后鼠标轴改变视角"), Player->GetControlRotation().Equals(Rotation));
+				Player->PlayerTick(InputTickSeconds);
+				Test.TestTrue(TEXT("设计模式按住中键时允许鼠标旋转相机"), Player->CanRotateCameraFromMouse());
 				SendInput(*Player, EKeys::MiddleMouseButton, IE_Released, 0.0f);
-				// 飞行角色会将按键转换成移动组件的最终输入向量，即使地图碰撞阻挡位移也能验证方向。
-				SendInput(*Player, EKeys::W, IE_Pressed, 1.0f);
-				SendInput(*Player, EKeys::Q, IE_Pressed, 1.0f);
-				return false;
-			case 5:
-				return false;
-			case 6:
-				if (APawn* Pawn = Player->GetPawn(); Test.TestNotNull(TEXT("正式飞行 Pawn"), Pawn))
-				{
-					const FVector Input = Pawn->GetLastMovementInputVector();
-					Test.TestTrue(TEXT("设计模式 W 与 Q 传入水平和上升飞行输入"), Input.SizeSquared2D() > 0 && Input.Z > 0);
-				}
-				SendInput(*Player, EKeys::W, IE_Released, 0.0f);
-				SendInput(*Player, EKeys::Q, IE_Released, 0.0f);
-				SendInput(*Player, EKeys::E, IE_Pressed, 1.0f);
-				return false;
-			case 7:
-				return false;
-			case 8:
-				Test.TestTrue(TEXT("设计模式 E 传入下降飞行输入"),
-					Player->GetPawn() && Player->GetPawn()->GetLastMovementInputVector().Z < 0);
-				SendInput(*Player, EKeys::E, IE_Released, 0.0f);
-				SendInput(*Player, EKeys::SpaceBar, IE_Pressed, 1.0f);
-				return false;
-			case 9:
-				Test.TestFalse(TEXT("设计模式空格不再触发上升"),
-					Player->GetPawn() && Player->GetPawn()->GetLastMovementInputVector().Z > 0);
-				SendInput(*Player, EKeys::SpaceBar, IE_Released, 0.0f);
+				// MainMap 导演的 E 绑定仍在输入栈中，测到正向向量即证明该绑定向飞行 Pawn 透传。
+				CheckFlightKey(Test, *Player, *FlightPawn, EKeys::Q, -1.0);
+				CheckFlightKey(Test, *Player, *FlightPawn, EKeys::E, 1.0);
+				CheckFlightKey(Test, *Player, *FlightPawn, EKeys::SpaceBar, 0.0);
+				CheckFlightKey(Test, *Player, *FlightPawn, EKeys::LeftControl, 0.0);
 				Player->SetControlMode(ECastleControlMode::Classic, false);
-				SendInput(*Player, EKeys::SpaceBar, IE_Pressed, 1.0f);
 				return false;
-			case 10:
-				Test.TestTrue(TEXT("经典模式空格传入上升飞行输入"),
-					Player->GetPawn() && Player->GetPawn()->GetLastMovementInputVector().Z > 0);
-				SendInput(*Player, EKeys::SpaceBar, IE_Released, 0.0f);
-				SendInput(*Player, EKeys::LeftControl, IE_Pressed, 1.0f);
-				return false;
-			case 11:
-				Test.TestTrue(TEXT("经典模式左 Ctrl 传入下降飞行输入"),
-					Player->GetPawn() && Player->GetPawn()->GetLastMovementInputVector().Z < 0);
-				SendInput(*Player, EKeys::LeftControl, IE_Released, 0.0f);
+			}
+			case 4:
+			{
+				auto* FlightPawn = Cast<ACastleFlightPawn>(Player->GetPawn());
+				if (!Test.TestNotNull(TEXT("经典模式正式飞行 Pawn"), FlightPawn)) { return true; }
+				CheckFlightKey(Test, *Player, *FlightPawn, EKeys::SpaceBar, 1.0);
+				CheckFlightKey(Test, *Player, *FlightPawn, EKeys::LeftControl, -1.0);
+				CheckFlightKey(Test, *Player, *FlightPawn, EKeys::Q, 0.0);
+				CheckFlightKey(Test, *Player, *FlightPawn, EKeys::E, 0.0);
 				SendInput(*Player, EKeys::LeftAlt, IE_Pressed, 1.0f);
 				return false;
-			case 12:
+			}
+			case 5:
 				Test.TestTrue(TEXT("经典按住左 Alt 释放 HUD 指针并停用视角"), Player->bShowMouseCursor
 					&& !Player->CanRotateCameraFromMouse() && !Player->ShouldDrawCenterCrosshair());
 				SendInput(*Player, EKeys::LeftAlt, IE_Released, 0.0f);
 				return false;
-			case 13:
+			case 6:
 				Test.TestTrue(TEXT("松开左 Alt 恢复经典准星与自由视角"), !Player->bShowMouseCursor
 					&& Player->CanRotateCameraFromMouse() && Player->ShouldDrawCenterCrosshair());
 				Press(*Player, EKeys::O);
 				return false;
-			case 14:
+			case 7:
 				Test.TestNotNull(TEXT("O 键打开设置 WBP"), FindWidget<UCastleControlSettingsWidget>(*Player));
 				Press(*Player, EKeys::Escape);
 				return false;
-			case 15:
+			case 8:
 				Test.TestNull(TEXT("Esc 关闭设置 WBP"), FindWidget<UCastleControlSettingsWidget>(*Player));
 				return true;
 			default:
@@ -197,7 +264,258 @@ namespace
 		FAutomationTestBase& Test;
 		const double StartupDeadline = FPlatformTime::Seconds() + 20.0;
 		int32 Stage = -2;
-		FRotator Rotation = FRotator::ZeroRotator;
+	};
+
+	/** MainMap 驱动真实验收空岛输入栈，验证 E 上升不离岛且设计主键点击离岛门。 */
+	class FCheckDesignSkyIslandRouting final : public IAutomationLatentCommand
+	{
+	public:
+		explicit FCheckDesignSkyIslandRouting(FAutomationTestBase& InTest) : Test(InTest) {}
+
+		bool Update() override
+		{
+			UWorld* World = GEditor->PlayWorld;
+			auto* Player = World ? Cast<ACastlePlayerController>(World->GetFirstPlayerController()) : nullptr;
+			if (!Player || !World->HasBegunPlay())
+			{
+				if (FPlatformTime::Seconds() < Deadline) { return false; }
+				Test.AddError(TEXT("设计模式空岛交互测试未能取得 PIE 玩家控制器。"));
+				return true;
+			}
+			auto* Director = World->GetSubsystem<UCastleDirectorSubsystem>();
+			if (!Director || !Director->IsRunning())
+			{
+				if (FPlatformTime::Seconds() < Deadline) { return false; }
+				Test.AddError(TEXT("设计模式空岛交互测试未能取得正式导演。"));
+				return true;
+			}
+			switch (Stage++)
+			{
+			case 0:
+			{
+				Player->SetControlMode(ECastleControlMode::Design, false);
+				ReturnLocation = Player->GetPawn()->GetActorLocation();
+				FOutputDeviceNull Output;
+				Test.TestTrue(TEXT("调用 MainMap 赌博空岛验收命令"), IConsoleManager::Get().ProcessUserConsoleInput(
+					TEXT("CastleTestGambleSkyIsland"), Output, World));
+				return false;
+			}
+			case 1:
+			{
+				const TActorIterator<ACastleGambleAcceptanceIsland> IslandIterator(World);
+				if (!Test.TestTrue(TEXT("验收命令已生成赌博空岛"), static_cast<bool>(IslandIterator))) { return true; }
+				Island = *IslandIterator;
+				Test.TestTrue(TEXT("编辑阶段验收岛已登记给玩家控制器"),
+					Director->GetPhase() == ECastleDirectorPhase::Editing && Player->GetInteractiveSkyIsland() == Island.Get());
+				Departure = Island->FindComponentByClass<UCastleSkyIslandDepartureComponent>();
+				if (!Test.TestNotNull(TEXT("验收岛离开传送门组件"), Departure.Get())) { return true; }
+				Camera = World->SpawnActor<ACameraActor>();
+				if (!Test.TestNotNull(TEXT("设计模式空岛交互测试相机"), Camera.Get())) { return true; }
+				// 先对准微缩地块范围外的平台空地，验证左键不会落入主棋盘建造流程。
+				const FVector GroundTarget = Island->GetActorLocation() + FVector(0.0, 900.0, 0.0);
+				return !Test.TestTrue(TEXT("空岛平台空地点投影到设计模式鼠标坐标"),
+					AimDesignPointerAt(*Player, *Camera, GroundTarget + FVector::UpVector * 700.0, GroundTarget));
+			}
+			case 2:
+			{
+				FVector RayStart, RayDirection;
+				FHitResult Hit;
+				const FCollisionQueryParams Query(SCENE_QUERY_STAT(CastleDesignSkyIslandAcceptanceTest), false, Player->GetPawn());
+				if (!Test.TestTrue(TEXT("鼠标射线实际命中微缩棋盘外的平台空地"), Player->TryGetAimWorldRay(RayStart, RayDirection)
+					&& World->LineTraceSingleByChannel(Hit, RayStart, RayStart + RayDirection * 100000.0, ECC_Visibility, Query)
+					&& Hit.GetActor() == Island.Get() && Hit.GetComponent() != Departure.Get())) { return true; }
+				FCastleGridCursorTarget GridTarget;
+				Test.TestFalse(TEXT("平台空地点不属于赌博空岛微缩棋盘"),
+					Island->TryResolveIslandGridCursorTarget(RayStart, RayStart + RayDirection * 100000.0, GridTarget));
+				// 先清掉进岛消息，再验证本次空地点击没有生成新的控制器操作提示。
+				GEngine->RemoveOnScreenDebugMessage(20261108);
+				Press(*Player, Player->GetPrimaryPlaceInteractKey());
+				Player->PlayerTick(InputTickSeconds);
+				Test.TestFalse(TEXT("空地点按左键不显示操作提示"), GEngine->OnScreenDebugMessageExists(20261108));
+				return false;
+			}
+			case 3:
+			{
+				Test.TestTrue(TEXT("空岛平台空地点按左键后仍留在验收空岛"),
+					Island.IsValid() && Player->GetInteractiveSkyIsland() == Island.Get()
+					&& Director->GetPhase() == ECastleDirectorPhase::Editing);
+				if (!Test.TestNotNull(TEXT("空地点按后保留离开门"), Departure.Get())) { return true; }
+				const FVector Target = Departure->GetComponentLocation();
+				return !Test.TestTrue(TEXT("离开门投影到设计模式鼠标坐标"), AimDesignPointerAt(
+					*Player, *Camera, Target - Departure->GetForwardVector() * 420.0, Target));
+			}
+			case 4:
+			{
+				FVector RayStart, RayDirection;
+				FHitResult Hit;
+				const FCollisionQueryParams Query(SCENE_QUERY_STAT(CastleDesignSkyIslandAcceptanceDoorTest), false, Player->GetPawn());
+				Test.TestTrue(TEXT("鼠标射线实际命中离开门"), Player->TryGetAimWorldRay(RayStart, RayDirection)
+					&& World->LineTraceSingleByChannel(Hit, RayStart, RayStart + RayDirection * 100000.0, ECC_Visibility, Query)
+					&& Hit.GetComponent() == Departure.Get());
+				// 离开门处于鼠标射线中时，E 仍要越过导演和验收输入层到达飞行 Pawn。
+				auto* FlightPawn = Cast<ACastleFlightPawn>(Player->GetPawn());
+				if (!Test.TestNotNull(TEXT("空岛上的正式飞行 Pawn"), FlightPawn)) { return true; }
+				CheckFlightKey(Test, *Player, *FlightPawn, EKeys::E, 1.0);
+				Test.TestTrue(TEXT("设计模式 E 不销毁验收空岛"), Island.IsValid());
+				Test.TestEqual(TEXT("设计模式 E 不改变导演编辑阶段"), Director->GetPhase(), ECastleDirectorPhase::Editing);
+				Test.TestTrue(TEXT("验收空岛仍由控制器登记"), Player->GetInteractiveSkyIsland() == Island.Get());
+				return false;
+			}
+			case 5:
+				if (!Test.TestTrue(TEXT("派发完 E 后玩家仍在验收空岛"), Island.IsValid())) { return true; }
+				Press(*Player, Player->GetPrimaryPlaceInteractKey());
+				return false;
+			case 6:
+				if (Island.IsValid() && FPlatformTime::Seconds() < Deadline) { --Stage; return false; }
+				Test.TestFalse(TEXT("设计模式鼠标左键触发离开门并销毁验收岛"), Island.IsValid());
+				const FVector ReturnedLocation = Player->GetPawn()->GetActorLocation();
+				Test.TestTrue(FString::Printf(TEXT("左键离岛返回原飞行位置，角色胶囊因落地碰撞允许 100 cm 容差，原位置 %s，返回位置 %s"),
+					*ReturnLocation.ToCompactString(), *ReturnedLocation.ToCompactString()), ReturnedLocation.Equals(ReturnLocation, 100.0));
+				// 恢复 PIE 飞行视角并销毁测试相机，随后由 StopPIE 退出地图。
+				Player->SetViewTarget(Player->GetPawn());
+				Camera->Destroy();
+				return true;
+			default:
+				return true;
+			}
+		}
+
+	private:
+		FAutomationTestBase& Test;
+		double Deadline = FPlatformTime::Seconds() + 55.0;
+		int32 Stage = 0;
+		FVector ReturnLocation = FVector::ZeroVector;
+		TWeakObjectPtr<ACastleGambleAcceptanceIsland> Island;
+		TWeakObjectPtr<UCastleSkyIslandDepartureComponent> Departure;
+		TWeakObjectPtr<ACameraActor> Camera;
+	};
+
+	/** 在 MainMap 放置正式传送门房间，比较经典验收岛与设计模式对同一门体的实际输入路由。 */
+	class FCheckDesignRoomPortalRouting final : public IAutomationLatentCommand
+	{
+	public:
+		explicit FCheckDesignRoomPortalRouting(FAutomationTestBase& InTest) : Test(InTest) {}
+
+		bool Update() override
+		{
+			auto* Player = GetViewportPlayer();
+			auto* Director = Player ? Player->GetWorld()->GetSubsystem<UCastleDirectorSubsystem>() : nullptr;
+			if (!Player || !Director || !Director->IsRunning())
+			{
+				if (FPlatformTime::Seconds() < Deadline) { return false; }
+				Test.AddError(TEXT("房间传送门输入验收未取得 MainMap 正式玩家和导演。"));
+				return true;
+			}
+			UWorld& World = *Player->GetWorld();
+			const int32 CurrentStage = Stage++;
+			if (CurrentStage == 0)
+			{
+				Player->SetControlMode(ECastleControlMode::Design, false);
+				const TActorIterator<ACastleBoard> BoardIterator(&World);
+				if (!Test.TestTrue(TEXT("MainMap 已生成可构筑棋盘"), static_cast<bool>(BoardIterator))) { return true; }
+				auto* Board = *BoardIterator;
+				// MainMap 从塔侧格起建。使用首层 -X 格的实际射线和色号构造传送门卡。
+				const FIntVector Base = Board->GetBoardCenterCoordinate();
+				const FVector Center = Board->GetGridWorldLocation(Base);
+				const FVector Probe = Board->GetActorTransform().TransformVector(FVector(-2.0 * Board->CellSize, 0.0, 0.0));
+				FCastleGridCursorTarget SideTarget;
+				if (!Test.TestTrue(TEXT("首层 -X 射线命中正式塔侧格"),
+					Board->TryResolveGridCursorTarget(Center + Probe, Center, SideTarget)
+					&& SideTarget.Surface == ECastleGridCursorSurface::MainTowerSide
+					&& SideTarget.Face == ECastleGridFace::NegativeX)) { return true; }
+				const auto* SideCell = Board->FindTowerSideCell(Base, SideTarget.Face);
+				if (!Test.TestNotNull(TEXT("取得塔侧格颜色和数字"), SideCell)) { return true; }
+				const auto* Definition = Board->FindBuildingDefinition(ECastleBuildingType::NormalRoom);
+				if (!Test.TestNotNull(TEXT("棋盘使用的普通房定义"), Definition)) { return true; }
+				FCastleBuildingDescriptor Card;
+				FText Reason;
+				if (!Definition->CreateDescriptor(1, SideCell->Color, SideCell->Number, Card, Reason))
+				{
+					Test.AddError(Reason.ToString());
+					return true;
+				}
+				// 使用背包正常放置，并等同于飞入完成后再读取已经注册的门体碰撞。
+				Card.RoomTrait = ECastleRoomTrait::SkyIslandPortal;
+				// MainMap 的开局建筑栏已填满，先移除临时 PIE 的第一张牌给测试门卡腾出一格。
+				FCastleBuildingDescriptor RemovedStarter;
+				int32 BackpackIndex;
+				if (!Board->PrototypeBackpack->TryRemoveItemAt(0, RemovedStarter, Reason)
+					|| !Board->PrototypeBackpack->TryAddItem(Card, BackpackIndex, Reason))
+				{
+					Test.AddError(Reason.ToString());
+					return true;
+				}
+				Room = Board->PlaceBackpackBuildingAtCursor(SideTarget, BackpackIndex, Reason);
+				if (!Test.TestTrue(TEXT("正式放置传送门房间并完成飞入"), CastleBuildingTests::CompletePlacement(Room.Get())))
+				{
+					Test.AddError(Reason.ToString());
+					return true;
+				}
+				auto* Door = Room->GetRoomTraitComponent();
+				auto* Camera = World.SpawnActor<ACameraActor>();
+				if (!Test.TestNotNull(TEXT("放置后生成可用门体"), Door)
+					|| !Test.TestNotNull(TEXT("测试观察相机"), Camera)) { return true; }
+				const FVector Target = Door->GetComponentLocation();
+				// 相机在门体前的室内位置，防止屋外墙面先截住指针射线。
+				return !Test.TestTrue(TEXT("房间门体投影到设计模式鼠标坐标"),
+					AimDesignPointerAt(*Player, *Camera, Target - Door->GetForwardVector() * 80.0, Target));
+			}
+			if (CurrentStage == 1)
+			{
+				// 保留指向房间门的测试相机，进入真实验收岛以推入其高优先级 E 输入组件。
+				Player->SetControlMode(ECastleControlMode::Classic, false);
+				FOutputDeviceNull Output;
+				return !Test.TestTrue(TEXT("为经典 E 优先级启动赌博验收岛"), IConsoleManager::Get().ProcessUserConsoleInput(
+					TEXT("CastleTestGambleSkyIsland"), Output, &World));
+			}
+			if (CurrentStage == 3)
+			{
+				// 按验收岛离开流程返回后再恢复设计模式，避免测试的两次 E 共用验收输入层。
+				if (Player->GetInteractiveSkyIsland() && FPlatformTime::Seconds() < Deadline) { --Stage; return false; }
+				if (!Test.TestNull(TEXT("经典优先级测试的验收岛已注销"), Player->GetInteractiveSkyIsland())) { return true; }
+				Player->SetControlMode(ECastleControlMode::Design, false);
+				return false;
+			}
+
+			FVector RayStart, RayDirection;
+			FHitResult Hit;
+			const FCollisionQueryParams Query(SCENE_QUERY_STAT(CastleDesignRoomPortalTest), false, Player->GetPawn());
+			if (!Test.TestTrue(TEXT("当前模式的真实射线直接命中房间门体"), Room.IsValid()
+				&& Player->TryGetAimWorldRay(RayStart, RayDirection)
+				&& World.LineTraceSingleByChannel(Hit, RayStart, RayStart + RayDirection * 100000.0, ECC_Visibility, Query)
+				&& Hit.GetComponent() == Room->GetRoomTraitComponent())) { return true; }
+			if (CurrentStage == 2)
+			{
+				auto* AcceptanceIsland = Cast<ACastleGambleAcceptanceIsland>(Player->GetInteractiveSkyIsland());
+				if (!Test.TestNotNull(TEXT("当前经典交互由验收岛接管"), AcceptanceIsland)) { return true; }
+				// 验收岛正在处理经典 E，即使准星直射房间门也不能在同一次输入中再次传送。
+				Press(*Player, EKeys::E);
+				Player->PlayerTick(InputTickSeconds);
+				if (!Test.TestTrue(TEXT("经典验收岛 E 保留岛内路由与房间门体"), Director->GetPhase() == ECastleDirectorPhase::Editing
+					&& Player->GetInteractiveSkyIsland() == AcceptanceIsland && Room->GetRoomTraitComponent()
+					&& Room->GetRoomTraitComponent()->IsPortalAvailable())) { return true; }
+				// 复用正式的延迟离岛回调结束夹具，本用例的离岛键覆盖由空岛测试负责。
+				AcceptanceIsland->OnDepartureRequested.Broadcast();
+				return false;
+			}
+			auto* FlightPawn = Cast<ACastleFlightPawn>(Player->GetPawn());
+			if (!Test.TestNotNull(TEXT("房间门前的正式飞行 Pawn"), FlightPawn)) { return true; }
+			CheckFlightKey(Test, *Player, *FlightPawn, EKeys::E, 1.0);
+			Test.TestTrue(TEXT("设计模式 E 保留编辑阶段与可用门体"),
+				Director->GetPhase() == ECastleDirectorPhase::Editing && Room->GetRoomTraitComponent()
+				&& Room->GetRoomTraitComponent()->IsPortalAvailable());
+			Press(*Player, EKeys::LeftMouseButton);
+			Player->PlayerTick(InputTickSeconds);
+			Test.TestTrue(TEXT("设计模式左键经主交互进入额外空岛并消耗门体"),
+				Director->GetPhase() == ECastleDirectorPhase::SkyIsland && Room->GetRoomTrait() == ECastleRoomTrait::None);
+			return true;
+		}
+
+	private:
+		FAutomationTestBase& Test;
+		const double Deadline = FPlatformTime::Seconds() + 35.0;
+		int32 Stage = 0;
+		TWeakObjectPtr<ACastleBuildingBase> Room;
 	};
 
 	/** 当前地图每次由自动化重载。使用正式资产生成普通房和合成塔，保留真实可见性碰撞。 */
@@ -237,10 +555,63 @@ namespace
 				++Stage;
 				return false;
 			case 2:
-				Press(*Player, Player->GetDemolishKey());
-				++Stage;
-				return false;
+			{
+				auto* Route = Cast<ACastlePatrolRoute>(UGameplayStatics::GetActorOfClass(
+					Player->GetWorld(), ACastlePatrolRoute::StaticClass()));
+				if (!Test.TestNotNull(TEXT("MainMap 路径编辑入口"), Route)) { return true; }
+				auto* Building = Board->GetBuildingAt(RoomCell);
+				if (!Test.TestNotNull(TEXT("路径门控使用真实普通房"), Building)) { return true; }
+				switch (PathHoverSubstage)
+				{
+				case 0:
+					if (!CheckBuildingHover(Test, *Player, *Building, TEXT("经典准星命中可拆除房间后高亮全部可见外观"), true))
+					{
+						return true;
+					}
+					Press(*Player, EKeys::P);
+					PathHoverSubstage = 1;
+					return false;
+				case 1:
+					if (!Test.TestTrue(TEXT("P 键进入正式路径编辑模式"), Route->IsEditing())
+						|| !CheckBuildingHover(Test, *Player, *Building, TEXT("路径编辑期间清空建筑悬停描边"), false))
+					{
+						return true;
+					}
+					Press(*Player, EKeys::P);
+					PathHoverSubstage = 2;
+					return false;
+				case 2:
+					if (!Test.TestFalse(TEXT("再次按 P 退出路径编辑"), Route->IsEditing())
+						|| !CheckBuildingHover(Test, *Player, *Building, TEXT("退出路径编辑后恢复建筑悬停描边"), true))
+					{
+						return true;
+					}
+					SendInput(*Player, EKeys::LeftAlt, IE_Pressed, 1.0f);
+					PathHoverSubstage = 3;
+					return false;
+				case 3:
+					if (!Test.TestFalse(TEXT("左 Alt 临时 HUD 指针期间不能旋转视角"),
+						Player->CanRotateCameraFromMouse())
+						|| !CheckBuildingHover(Test, *Player, *Building, TEXT("左 Alt 临时 HUD 指针期间清空描边"), false))
+					{
+						return true;
+					}
+					SendInput(*Player, EKeys::LeftAlt, IE_Released, 0.0f);
+					PathHoverSubstage = 4;
+					return false;
+				case 4:
+					if (!CheckBuildingHover(Test, *Player, *Building, TEXT("松开左 Alt 后恢复建筑悬停描边"), true))
+					{
+						return true;
+					}
+					Press(*Player, Player->GetDemolishKey());
+					++Stage;
+					return false;
+				}
+				return true;
+			}
 			case 3:
+				if (!CheckBuildingHover(Test, *Player, *Room, TEXT("拆除菜单打开后清空原建筑悬停描边"), false)) { return true; }
 				if (!CheckCard(*Player, *Room, RoomCell)) { return true; }
 				Test.TestTrue(TEXT("经典菜单显示鼠标并停用相机鼠标轴"), Player->bShowMouseCursor && !Player->CanRotateCameraFromMouse());
 				if (!ClickDemolish(*Player)) { return true; }
@@ -257,12 +628,27 @@ namespace
 				int32 Width, Height;
 				Player->GetViewportSize(Width, Height);
 				Player->SetMouseLocation(Width / 2, Height / 2);
-				Press(*Player, Player->GetDemolishKey());
-				++Stage;
-				return false;
+				if (DesignHoverSubstage == 0)
+				{
+					DesignHoverSubstage = 1;
+					return false;
+				}
+				if (DesignHoverSubstage == 1)
+				{
+					if (!CheckBuildingHover(Test, *Player, *Tower,
+						TEXT("设计模式系统鼠标命中升级塔后高亮全部可见外观"), true))
+					{
+						return true;
+					}
+					Press(*Player, Player->GetDemolishKey());
+					++Stage;
+					return false;
+				}
+				return true;
 			}
 			case 5:
 			{
+				if (!CheckBuildingHover(Test, *Player, *Tower, TEXT("设计模式拆除菜单打开后清空建筑描边"), false)) { return true; }
 				if (!CheckCard(*Player, *Tower, TowerCell)) { return true; }
 				// 这段地图从未开店。使用菜单同一摄影请求，等待真实 RHI 生成一级建筑画面。
 				auto* Studio = Player->GetWorld()->GetSubsystem<UCastleCardPortraitSubsystem>();
@@ -439,6 +825,8 @@ namespace
 		FAutomationTestBase& Test;
 		double Deadline = FPlatformTime::Seconds() + 40.0;
 		int32 Stage = 0;
+		int32 PathHoverSubstage = 0;
+		int32 DesignHoverSubstage = 0;
 		ACastleBoard* Board = nullptr;
 		ACameraActor* Camera = nullptr;
 		ACastleBuildingBase* Room = nullptr;
@@ -458,6 +846,30 @@ bool FCastleControlModesTest::RunTest(const FString& Parameters)
 {
 	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
 	ADD_LATENT_AUTOMATION_COMMAND(FCheckControlModes(*this));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDesignSkyIslandInteractionTest, "MovingCastle.ControlModes.DesignSkyIslandInteraction",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleDesignSkyIslandInteractionTest::RunTest(const FString& Parameters)
+{
+	// MainMap 提供正式导演、正式 Pawn 输入栈与命令入口，验收岛由现有命令按正式初始化流程生成。
+	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
+	ADD_LATENT_AUTOMATION_COMMAND(FCheckDesignSkyIslandRouting(*this));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDesignRoomPortalInteractionTest, "MovingCastle.ControlModes.DesignRoomPortalInteraction",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleDesignRoomPortalInteractionTest::RunTest(const FString& Parameters)
+{
+	// 使用正式 MainMap 的门体碰撞与输入栈，覆盖辅助射线单测之外的按键入口。
+	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
+	ADD_LATENT_AUTOMATION_COMMAND(FCheckDesignRoomPortalRouting(*this));
 	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
 	return true;
 }

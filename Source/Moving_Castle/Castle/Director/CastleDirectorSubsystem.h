@@ -49,6 +49,12 @@ public:
 	bool IsShopAccessAllowed(FText& OutReason) const;
 	ECastleDirectorPhase GetPhase() const { return Phase; }
 	int32 GetLevel() const { return Level; }
+	/** 已拥有的房间格数包含场上、主建筑栏和临时栏；棋盘或背包失效时报告错误并返回 INDEX_NONE。 */
+	int32 GetOwnedRoomCount() const;
+	/** 查询当前已提交等级的房间容量；配置或等级无效时报告错误并返回 INDEX_NONE。 */
+	int32 GetCurrentRoomLimit() const;
+	/** 检查并提交可能的自动升级。无需升级或被模态延后时检查成功，事务失败时返回原因。 */
+	bool TryCheckTowerUpgrade(FText& OutReason);
 	/** 阶段门控保证上场战斗的受击增益不会泄漏到下一场。 */
 	bool IsFirstTowerDamageTriggeredInBattle() const { return Phase == ECastleDirectorPhase::Battle && bFirstTowerDamageInBattle; }
 	/** 本局已解锁的出牌数字上限，供功能塔领奖及万能卡共用。 */
@@ -57,7 +63,8 @@ public:
 	bool AddRunNPCCount(int32 Delta, FText& OutReason);
 	void ClaimTowerUpgradeReward(int32 Index);
 	void DiscardTowerUpgradeRewards();
-	bool TryInteractWithSkyIsland(const FVector& Start, const FVector& End, FText& OutReason);
+	/** 沿指定射线交互。设计模式的鼠标点击关闭空地提示，仍返回活动岛校验与物件行为的失败原因。 */
+	bool TryInteractWithSkyIsland(const FVector& Start, const FVector& End, FText& OutReason, bool bShowMissPrompt = true);
 	/** 额外空岛使用当前节点的进度；从离岛门返塔后仍停留在同一关。 */
 	bool TryEnterBonusSkyIslandFromPortal(ACastleBuildingBase* PortalRoom, FText& OutReason);
 	bool RequestIslandRoomShop(ACastleSkyIslandBase* Island, FText& OutReason);
@@ -69,7 +76,6 @@ public:
 	bool TryEnterSkyIslandByTypeForDebug(ECastleSkyIslandType Type, FText& OutReason);
 	bool TryEnterSkyIslandFixture(FText& OutReason);
 #endif
-	int32 GetExperience() const { return Experience; }
 	/** 战斗清场或空岛成功返塔后提交，节点与正式战斗都读取同一关卡进度。 */
 	int32 GetClearedSteps() const { return ClearedSteps; }
 	int32 GetNextStep() const { return ClearedSteps + 1; }
@@ -141,7 +147,8 @@ private:
 	bool TryDepartSkyIsland(FText& OutReason);
 	bool ValidateIslandAction(const ACastleSkyIslandBase* Island, FText& OutReason) const;
 	bool RecallBattleNPCs(FText& OutReason);
-	bool TryCommitRewards(bool bExperience, bool bHealing, bool bShop, FText& OutReason);
+	/** 普通战由三选一触发，精英战在清场边界联合提交三笔效果。 */
+	bool TryCommitRewards(bool bGold, bool bHealing, bool bShop, FText& OutReason, int32 EliteClearedStage = INDEX_NONE);
 	bool OpenWildcardPicker(UCastlePendingRoomReward* Reward, FText& OutReason);
 	UFUNCTION() void HandleWildcardClosed(bool bClaimed);
 	void HandleBattleCleared(ECastleBattleKind Kind, int32 Stage);
@@ -190,7 +197,9 @@ private:
 	FText StatusMessage;
 	FText GameOverFailure;
 	int32 Level = 1;
-	int32 Experience = 0;
+	/** 同一轮无模态编辑期间，同一占格数下只尝试一次失败的升级。 */
+	TOptional<int32> FailedTowerUpgradeRoomCount;
+	FText TowerUpgradeFailure;
 	int32 ClearedSteps = 0;
 	int32 RunNPCCount = 0;
 	bool bRunning = false;

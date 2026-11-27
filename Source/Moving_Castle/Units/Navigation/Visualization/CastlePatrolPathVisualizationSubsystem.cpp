@@ -111,7 +111,7 @@ namespace
 			Output.Log(TEXT("Castle.ShowPatrolPath：设置失败，原因见 LogMoving_Castle。"));
 			return;
 		}
-		const TCHAR* Message = bEnable ? TEXT("NPC 巡逻线已开启；有可走路段的有效巡逻闭环才会显示。")
+		const TCHAR* Message = bEnable ? TEXT("NPC 巡逻线已开启；有可走路段的有效巡逻路线才会显示。")
 			: TEXT("NPC 巡逻线已关闭；地面圆圈、悬浮编号与巡逻保持不变。");
 		UE_LOG(LogMoving_Castle, Display, TEXT("Castle.ShowPatrolPath：%s"), Message);
 		Output.Log(Message);
@@ -134,6 +134,18 @@ void UCastlePatrolPathVisualizationSubsystem::Initialize(FSubsystemCollectionBas
 		return;
 	}
 	Navigation->OnSharedPathChanged.AddDynamic(this, &UCastlePatrolPathVisualizationSubsystem::HandleSharedPathChanged);
+}
+
+void UCastlePatrolPathVisualizationSubsystem::OnWorldBeginPlay(UWorld& InWorld)
+{
+	Super::OnWorldBeginPlay(InWorld);
+	// 世界开始播放时子系统均已完成 PostInitialize，因此可以复用带完整门控和资产校验的正式开关入口。
+	// 专用服务器没有渲染视图，沿用 SetPathDrawingEnabled 的既有限制，不启动巡逻线绘制。
+	if (InWorld.GetNetMode() != NM_DedicatedServer)
+	{
+		// 开启失败时 SetPathDrawingEnabled 已通过 RejectDrawing 输出资产及失败原因，不用默认资源继续运行。
+		SetPathDrawingEnabled(true);
+	}
 }
 
 bool UCastlePatrolPathVisualizationSubsystem::SetPathDrawingEnabled(bool bEnabled)
@@ -230,9 +242,14 @@ bool UCastlePatrolPathVisualizationSubsystem::BuildPathSegments(const FCastleSha
 	// 仍按 NPC 的贴地采样构建，不用示例样条重新走捷径；偏移只写入临时渲染顶点。
 	const TArray<FVector>& Points = Path.PatrolPoints;
 	const TArray<double>& Distances = Path.PatrolDistances;
-	if (Distances.Num() != Points.Num() || Distances[0] != 0.0 || !Points.Last().Equals(Points[0], 0.01))
+	// 两类路线都必须保持采样点与累计距离一一对应，并从零距离起步；只有闭环才要求末点回到起点。
+	if (Distances.Num() != Points.Num() || Distances[0] != 0.0)
 	{
-		return RejectDrawing(FString::Printf(TEXT("巡逻快照 %d 的累计距离不匹配或采样首尾没有闭合。"), Path.PathRevision));
+		return RejectDrawing(FString::Printf(TEXT("巡逻快照 %d 的累计距离数量或起点距离无效。"), Path.PathRevision));
+	}
+	if (Path.bClosedLoop && !Points.Last().Equals(Points[0], 0.01))
+	{
+		return RejectDrawing(FString::Printf(TEXT("巡逻闭环快照 %d 的采样首尾没有闭合。"), Path.PathRevision));
 	}
 	const int32 NumSpans = Points.Num() - 1;
 	TArray<FPatrolRenderSpan> Spans;
@@ -255,14 +272,27 @@ bool UCastlePatrolPathVisualizationSubsystem::BuildPathSegments(const FCastleSha
 	const FVector Extent = LineMesh->GetBounds().BoxExtent;
 	const double LineDiameter = 2.0 * FMath::Max(Extent.Y * DashCrossSection.X, Extent.Z * DashCrossSection.Y);
 	SeparateReverseLanes(Points, PathBounds, LineDiameter, Spans);
-	// 前后段共用显示端点来连续通过采样接缝。离开重叠区时侧移平滑收回，折返点的两个反向偏移相消。
 	TArray<FVector> KnotOffsets;
 	KnotOffsets.Reserve(Points.Num());
-	for (int32 Index = 0; Index < NumSpans; ++Index)
+	if (Path.bClosedLoop)
 	{
-		KnotOffsets.Add(0.5 * (Spans[(Index + NumSpans - 1) % NumSpans].LaneOffset + Spans[Index].LaneOffset));
+		// 闭环首尾共用同一偏移；相邻线段的偏移均值让侧向分道平滑通过采样接缝。
+		for (int32 Index = 0; Index < NumSpans; ++Index)
+		{
+			KnotOffsets.Add(0.5 * (Spans[(Index + NumSpans - 1) % NumSpans].LaneOffset + Spans[Index].LaneOffset));
+		}
+		KnotOffsets.Add(FVector(KnotOffsets[0]));
 	}
-	KnotOffsets.Add(FVector(KnotOffsets[0]));
+	else
+	{
+		// 主塔开环从门 A 到门 B，不把两端误认为相邻；仅对内部接缝平均前后段的显示偏移。
+		KnotOffsets.Add(Spans[0].LaneOffset);
+		for (int32 Index = 1; Index < NumSpans; ++Index)
+		{
+			KnotOffsets.Add(0.5 * (Spans[Index - 1].LaneOffset + Spans[Index].LaneOffset));
+		}
+		KnotOffsets.Add(Spans[NumSpans - 1].LaneOffset);
+	}
 
 	TArray<FDashSegment> Segments;
 	Segments.Reserve(NumSpans);

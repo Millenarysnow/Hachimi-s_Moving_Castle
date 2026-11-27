@@ -36,7 +36,7 @@ public:
 	UCastleTowerSideGridComponent();
 
 	/** 以塔底为局部原点生成四面；失败时调用方不提交主塔及本批侧格。 */
-	bool Initialize(const FIntVector& BaseCell, int32 LayerCount, float CellWidth, float LayerHeight,
+	bool Initialize(const FIntVector& BaseCell, int32 LayerCount, float CellWidth, float GridCellSize, float LayerHeight,
 		float SurfaceOffset, int32 Seed, FText& OutReason);
 
 	/** 仅追加新开放的塔层，完整生成之后才加入原侧格索引。 */
@@ -67,6 +67,8 @@ private:
 	int32 GeneratedLayerCount = 0;
 	int32 RunSeed = 0;
 	float TowerCellWidth = 0.0f;
+	/** 水平占格中心距；与视觉面板宽度分开保存，正确定位外侧逻辑邻格。 */
+	float TowerGridCellSize = 0.0f;
 	float TowerLayerHeight = 0.0f;
 	float TowerSurfaceOffset = 0.0f;
 

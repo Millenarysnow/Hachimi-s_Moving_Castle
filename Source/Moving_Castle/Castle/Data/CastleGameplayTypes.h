@@ -138,11 +138,11 @@ struct MOVING_CASTLE_API FCastleGridCursorTarget
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")
 	ECastleGridCursorSurface Surface = ECastleGridCursorSurface::Building;
 
-	/** 指示平面在世界中的法线方向。 */
+	/** 当前命中建造面的世界法线方向，供全息盒标出来源贴面。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")
 	FVector WorldNormal = FVector::UpVector;
 
-	/** 指示平面的完整世界变换，包含位置、朝向和尺寸。 */
+	/** 目标单格全息盒的完整世界变换，包含格心、朝向和三维尺寸。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")
 	FTransform IndicatorTransform = FTransform::Identity;
 

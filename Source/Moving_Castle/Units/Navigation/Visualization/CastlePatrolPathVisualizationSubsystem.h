@@ -28,6 +28,8 @@ public:
 protected:
 	virtual bool DoesSupportWorldType(EWorldType::Type WorldType) const override;
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
+	/** 世界开始播放时自动开启巡逻线；专用服务器不启用渲染。 */
+	virtual void OnWorldBeginPlay(UWorld& InWorld) override;
 	virtual void OnWorldEndPlay(UWorld& InWorld) override;
 	virtual void Deinitialize() override;
 

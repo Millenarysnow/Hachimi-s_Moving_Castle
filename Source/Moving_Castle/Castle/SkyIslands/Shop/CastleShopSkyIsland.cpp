@@ -215,6 +215,15 @@ bool UCastleShopSkyIslandOffer::CanInteract(const FCastleSkyIslandInteractContex
 	return true;
 }
 
+bool UCastleShopSkyIslandOffer::CanHighlightInteract(const FCastleSkyIslandInteractContext& Context) const
+{
+	// 金币余额不决定商品是否可交互。这里只排除已售罄和正在提交的货位，不刷提示日志。
+	const auto* Island = Cast<ACastleShopSkyIsland>(GetOwner());
+	return IsValid(Island) && Context.Island == Island && Island->IsIslandController(Context.Controller)
+		&& Context.Hit.GetComponent() == this && IsValid(OfferMaterialInstance) && IsValid(Sign)
+		&& !bSold && !bSubmitting;
+}
+
 bool UCastleShopSkyIslandOffer::ExecuteInteract(const FCastleSkyIslandInteractContext& Context, FText& OutReason)
 {
 	if (!CanInteract(Context, OutReason)) { return false; }
@@ -235,6 +244,7 @@ ACastleShopSkyIsland::ACastleShopSkyIsland()
 {
 	// 绑定该玩法的岛体，位置沿用作者对齐的岛面中心。
 	SetIslandArtMesh(TEXT("SM_SkyIsland_Shop"));
+	SetDepartureArtMesh(TEXT("SM_SkyIsland_Departure_Shop"));
 	ConfigAsset = TSoftObjectPtr<UCastleShopSkyIslandDataAsset>(FSoftObjectPath(
 		TEXT("/Game/MovingCastle/Data/SkyIslands/DA_ShopSkyIsland.DA_ShopSkyIsland")));
 }

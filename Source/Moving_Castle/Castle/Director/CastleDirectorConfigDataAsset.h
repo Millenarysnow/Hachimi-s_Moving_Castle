@@ -30,7 +30,8 @@ struct FCastleTowerLevelConfig
 	UPROPERTY(EditAnywhere, Category = "成长") int32 Level = 1;
 	UPROPERTY(EditAnywhere, Category = "成长") int32 MaxShopNumber = 3;
 	UPROPERTY(EditAnywhere, Category = "成长") int32 UnlockedLayers = 3;
-	UPROPERTY(EditAnywhere, Category = "成长") int32 RoomLimit = 150;
+	/** 本级房间容量，同时也是未满级时触发下一级的占格阈值。 */
+	UPROPERTY(EditAnywhere, Category = "成长") int32 RoomLimit = 30;
 	UPROPERTY(EditAnywhere, Category = "成长") int32 BalloonCount = 5;
 	/** 基础最大生命，当前已持有徽章倍率由主塔组件另行乘算。 */
 	UPROPERTY(EditAnywhere, Category = "成长") float BaseMaxHealth = 1000.0f;
@@ -107,12 +108,9 @@ public:
 	UPROPERTY(EditAnywhere, Category = "导演|NPC") int32 InitialNPCCount = 8;
 	UPROPERTY(EditAnywhere, Category = "导演|成长") int32 InitialPathPointLimit = 2;
 
-	/** 通关奖励与成长参数。 */
+	/** 过关金币基础值，实际到账金额由经济组件按当前金币徽章计算。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|成长", meta = (ClampMin = "1"))
-	int32 RewardExp = 60;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|成长", meta = (ClampMin = "1"))
-	int32 ExpPerLevel = 100;
+	int32 RewardGold = 60;
 
 	/** 恰好四行，商店、建造面和主塔共用这份等级数据。 */
 	UPROPERTY(EditAnywhere, Category = "导演|成长") TArray<FCastleTowerLevelConfig> TowerLevels;

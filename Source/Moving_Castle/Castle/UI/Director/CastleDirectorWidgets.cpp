@@ -593,7 +593,7 @@ void UCastleRewardChoiceWidget::NativeOnInitialized()
 		UE_LOG(LogMoving_Castle, Error, TEXT("奖励 WBP %s 的必需控件、回血图标或商店普通/按下笔刷无效，请检查资源与显示尺寸。"), *GetClass()->GetPathName());
 		return;
 	}
-	ExperienceButton->OnClicked.AddDynamic(this, &UCastleRewardChoiceWidget::ChooseExperience);
+	GoldButton->OnClicked.AddDynamic(this, &UCastleRewardChoiceWidget::ChooseGold);
 	HealingButton->OnClicked.AddDynamic(this, &UCastleRewardChoiceWidget::ChooseHealing);
 	ShopButton->OnClicked.AddDynamic(this, &UCastleRewardChoiceWidget::ChooseShop);
 	// 图标只是按钮内容，按下/释放只切换图像；点击仍走原有奖励事务。
@@ -615,19 +615,20 @@ void UCastleRewardChoiceWidget::NativeTick(const FGeometry& Geometry, const floa
 {
 	Super::NativeTick(Geometry, DeltaTime);
 	UCastleDirectorSubsystem* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
-	if (Director && ExperienceLabel && HealingLabel && ShopLabel && FailureText)
+	if (Director && GoldLabel && HealingLabel && ShopLabel && FailureText)
 	{
-		ExperienceLabel->SetText(Director->GetRewardLabel(ECastleDirectorReward::Experience));
+		// 面板展示基础奖励，实际含徽章到账由导演提交后记录。
+		GoldLabel->SetText(Director->GetRewardLabel(ECastleDirectorReward::Gold));
 		HealingLabel->SetText(Director->GetRewardLabel(ECastleDirectorReward::Healing));
 		ShopLabel->SetText(Director->GetRewardLabel(ECastleDirectorReward::Shop));
 		FailureText->SetText(Director->GetStatusMessage());
 	}
 }
 
-void UCastleRewardChoiceWidget::ChooseExperience()
+void UCastleRewardChoiceWidget::ChooseGold()
 {
 	FText Reason;
-	GetWorld()->GetSubsystem<UCastleDirectorSubsystem>()->TryChooseReward(ECastleDirectorReward::Experience, Reason);
+	GetWorld()->GetSubsystem<UCastleDirectorSubsystem>()->TryChooseReward(ECastleDirectorReward::Gold, Reason);
 }
 void UCastleRewardChoiceWidget::ChooseHealing()
 {
@@ -683,7 +684,7 @@ void UCastleGameOverWidget::Restart()
 
 bool UCastleRewardChoiceWidget::HasRequiredBindings() const
 {
-	return ExperienceButton && HealingButton && ShopButton && ExperienceLabel && HealingLabel && ShopLabel && FailureText
+	return GoldButton && HealingButton && ShopButton && GoldLabel && HealingLabel && ShopLabel && FailureText
 		&& CastleHUDControls::HasValidTextureBrush(HealingIcon) && HasDirectorActionIconBrushes(ShopIconStates);
 }
 

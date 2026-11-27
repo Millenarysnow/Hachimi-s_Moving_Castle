@@ -1,4 +1,5 @@
 #include "CastleFortressUIPublisher.h"
+#include "Moving_Castle.h"
 
 #if WITH_EDITOR
 #include "Algo/Find.h"
@@ -36,7 +37,6 @@
 #include "Engine/Texture2D.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/PackageName.h"
-#include "Moving_Castle.h"
 #include "UObject/SavePackage.h"
 #include "WidgetBlueprint.h"
 
@@ -452,8 +452,9 @@ namespace CastleFortressUI
 			const FVector2D Source = L.Palette.SourceSize(Key);
 			return L.Image(Key, Source * (63.0 / Source.GetMax()), Name);
 		};
-		L.Place(Canvas, *L.Reward(TEXT("ExperienceButton"), TEXT("ExperienceLabel"), TEXT("主塔经验"),
-			*Icon(TEXT("Resources/T_CastleCrest"))), {28, 205}, {549, 112});
+		// 预览展示正式配置的基础金币，运行时标签读取导演配置。
+		L.Place(Canvas, *L.Reward(TEXT("GoldButton"), TEXT("GoldLabel"), TEXT("金币 +60"),
+			*Icon(TEXT("Resources/T_GoldCoins"))), {28, 205}, {549, 112});
 		L.Place(Canvas, *L.Reward(TEXT("HealingButton"), TEXT("HealingLabel"), TEXT("主塔回血"),
 			*Icon(TEXT("Resources/T_TowerBalloons"), TEXT("HealingIcon"))), {28, 331}, {549, 112});
 		L.Place(Canvas, *L.Reward(TEXT("ShopButton"), TEXT("ShopLabel"), TEXT("房间商店"),
@@ -473,7 +474,8 @@ namespace CastleFortressUI
 			Slot->SetPadding(FMargin(0, 0, 0, 12));
 			Slot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 		};
-		Reward(TEXT("ExperienceButton"), TEXT("主塔经验"), TEXT("Resources/T_CastleCrest"));
+		// 教程第一项只显示基础金币，实际可领的复制奖励仍是第三项。
+		Reward(TEXT("GoldButton"), TEXT("金币 +60"), TEXT("Resources/T_GoldCoins"));
 		Reward(TEXT("HealingButton"), TEXT("主塔回血"), TEXT("Resources/T_TowerBalloons"));
 		Reward(TEXT("CopyButton"), TEXT("获得复制的随机功能房间"), TEXT("Resources/T_RoomHouse"));
 		L.Place(Canvas, *Choices, {28, 205}, {549, 375});
@@ -684,11 +686,13 @@ namespace CastleFortressUI
 		void (*Build)(FLayout&);
 	};
 
+	const FTarget RewardChoiceTarget{TEXT("Director/WBP_RewardChoice"), BuildRewardChoice};
+	const FTarget TutorialRewardTarget{TEXT("Dialogue/WBP_CastleTutorialReward"), BuildTutorialReward};
 	const FTarget Targets[] = {
 		{TEXT("Items/WBP_WildcardRoomPicker"), BuildWorkshop},
 		{TEXT("Common/WBP_ControlSettings"), BuildSettings},
-		{TEXT("Director/WBP_RewardChoice"), BuildRewardChoice},
-		{TEXT("Dialogue/WBP_CastleTutorialReward"), BuildTutorialReward},
+		RewardChoiceTarget,
+		TutorialRewardTarget,
 		{TEXT("Director/WBP_TowerUpgradeRewards"), BuildTowerReward},
 		{TEXT("Dialogue/WBP_CastleDialogue"), nullptr},
 		{TEXT("Dialogue/WBP_CastleGuidePopup"), [](FLayout& L) { BuildGuide(L, false); }},
@@ -761,6 +765,29 @@ namespace CastleFortressUI
 		UE_LOG(LogMoving_Castle, Display, TEXT("堡垒弹窗已生成：%s"), *Asset.GetPathName());
 		return true;
 	}
+
+	/** 整批准备和编译通过后才保存，编辑期专项发布与 Commandlet 共用这条路径。 */
+	bool Publish(TConstArrayView<FTarget> Batch)
+	{
+		FPalette Palette;
+		if (!Palette.Load()) { return false; }
+		TArray<UWidgetBlueprint*> Assets;
+		for (const FTarget& Target : Batch)
+		{
+			UWidgetBlueprint* Asset = LoadTarget(Target);
+			if (!Asset) { return false; }
+			Assets.Add(Asset);
+		}
+		for (int32 Index = 0; Index < Assets.Num(); ++Index)
+		{
+			if (!Prepare(*Assets[Index], Batch[Index], Palette)) { return false; }
+		}
+		for (UWidgetBlueprint* Asset : Assets)
+		{
+			if (!Save(*Asset)) { return false; }
+		}
+		return true;
+	}
 }
 
 UClass* PublishCastleFortressTutorialPopup(FName Name)
@@ -784,29 +811,23 @@ UClass* PublishCastleFortressTutorialPopup(FName Name)
 }
 #endif
 
+bool UCastleFortressUIPublisherLibrary::PublishGoldRewardWidgets()
+{
+#if WITH_EDITOR
+	using namespace CastleFortressUI;
+	const FTarget Batch[] = {RewardChoiceTarget, TutorialRewardTarget};
+	return Publish(Batch);
+#else
+	UE_LOG(LogMoving_Castle, Error, TEXT("金币奖励 WBP 发布须在编辑器中执行。"));
+	return false;
+#endif
+}
+
 int32 UCastleFortressUIPublisherCommandlet::Main(const FString& Params)
 {
 #if WITH_EDITOR
 	using namespace CastleFortressUI;
-	FPalette Palette;
-	if (!Palette.Load()) { return 1; }
-	TArray<UWidgetBlueprint*> Assets;
-	for (const FTarget& Target : Targets)
-	{
-		auto* Asset = LoadTarget(Target);
-		if (!Asset) { return 1; }
-		Assets.Add(Asset);
-	}
-	for (int32 Index = 0; Index < Assets.Num(); ++Index)
-	{
-		if (!Prepare(*Assets[Index], Targets[Index], Palette)) { return 1; }
-	}
-	// 任何编译失败都会在此批保存之前退出，磁盘保持上一版资产。
-	for (UWidgetBlueprint* Asset : Assets)
-	{
-		if (!Save(*Asset)) { return 1; }
-	}
-	return 0;
+	return Publish(Targets) ? 0 : 1;
 #else
 	return 1;
 #endif

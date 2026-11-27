@@ -50,5 +50,7 @@ class MOVING_CASTLE_API ICastleSkyIslandInteractable
 public:
 	virtual FText GetInteractPrompt() const = 0;
 	virtual bool CanInteract(const FCastleSkyIslandInteractContext& Context, FText& OutReason) const = 0;
+	/** 每帧悬停探测使用的纯查询，不得输出日志或触发玩法副作用。 */
+	virtual bool CanHighlightInteract(const FCastleSkyIslandInteractContext& Context) const = 0;
 	virtual bool ExecuteInteract(const FCastleSkyIslandInteractContext& Context, FText& OutFailureReason) = 0;
 };

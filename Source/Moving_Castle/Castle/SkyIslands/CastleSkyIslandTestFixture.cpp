@@ -20,6 +20,13 @@ bool UCastleSkyIslandFixtureInteractComponent::CanInteract(const FCastleSkyIslan
 	return true;
 }
 
+bool UCastleSkyIslandFixtureInteractComponent::CanHighlightInteract(
+	const FCastleSkyIslandInteractContext& Context) const
+{
+	// 测试物件复用相同所有权和命中约束，查询期间不修改交互计数或屏幕消息。
+	return Context.Island == GetOwner() && Context.Hit.GetComponent() == this;
+}
+
 bool UCastleSkyIslandFixtureInteractComponent::ExecuteInteract(const FCastleSkyIslandInteractContext& Context, FText& OutFailureReason)
 {
 	if (!CanInteract(Context, OutFailureReason)) { return false; }

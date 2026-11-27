@@ -63,12 +63,12 @@ namespace CastlePatrolDemoTests
 			{
 			case 0:
 				if (!Navigation->GetSharedPath().bValid || Spawner->SpawnedUnits.Num() != 32) { return false; }
-				Test->TestFalse(TEXT("新游戏世界的巡逻线初始关闭"), Drawing->IsPathDrawingEnabled());
-				FindLineActor(0);
+				Test->TestTrue(TEXT("新游戏世界开始播放后巡逻线自动开启"), Drawing->IsPathDrawingEnabled());
+				CheckLineGeometry(true);
 				InitialWaypoints = Navigation->GetRequestedWaypoints();
 				Test->AddExpectedMessagePlain(TEXT("Castle.ShowPatrolPath：只接受 0 或 1"), ELogVerbosity::Error);
 				ExecDrawing(TEXT("Castle.ShowPatrolPath 2"));
-				Test->TestFalse(TEXT("非法参数不能改变开关"), Drawing->IsPathDrawingEnabled());
+				Test->TestTrue(TEXT("非法参数不能关闭已自动开启的巡逻线"), Drawing->IsPathDrawingEnabled());
 				if (!ToggleDrawing(true)) { return true; }
 				CheckLineGeometry(true);
 				CheckMarkers(4);

@@ -27,6 +27,7 @@
 #include "Castle/Support/CastleSupportFlightActors.h"
 #include "Castle/Support/CastleSupportTowerSubsystem.h"
 #include "Castle/SkyIslands/CastleSkyIslandBase.h"
+#include "Castle/SkyIslands/CastleSkyIslandTypes.h"
 #include "Blueprint/GameViewportSubsystem.h"
 #include "Blueprint/UserWidget.h"
 #include "Castle/Items/CastleBadgeSubsystem.h"
@@ -161,6 +162,7 @@ void ACastlePlayerController::Tick(float DeltaSeconds)
 		// 失焦会清空 PlayerInput 的按键状态，未送达的 Alt 松键也必须归还经典指针。
 		if (bHoldingTemporaryHUDPointer && !IsInputKeyDown(EKeys::LeftAlt)) { EndTemporaryHUDPointer(); }
 		UpdateTowerDispatchInput();
+		UpdateHoverHighlight();
 		FText EditReason;
 		if (BuildingDemolishMenu)
 		{
@@ -322,7 +324,12 @@ void ACastlePlayerController::UpdateGridCursor(ACastleSkyIslandBase* Island)
 			CurrentGridCursorTarget = NewTarget;
 			GridCursor->ApplyTarget(NewTarget, Island->CanPlaceCardAtIslandCursor(NewTarget, SelectedBackpackIndex));
 		}
-		else { HideDirectorEditingPresentation(); }
+		else
+		{
+			// 空岛上的交易机台和离开门没有放置网格。无网格目标时只收起放置指示，保留当前交互描边。
+			CurrentGridCursorTarget = FCastleGridCursorTarget();
+			GridCursor->HideCursor();
+		}
 		return;
 	}
 	if (ActiveBoard->TryResolveGridCursorTarget(RayOrigin, RayEnd, NewTarget))
@@ -509,17 +516,61 @@ void ACastlePlayerController::PlacePrototypeBuildingAtCursor()
 	// 气球点击属于战斗操作，在构筑门控前消费。
 	FVector Origin, End;
 	const bool bHasRay = TryGetDispatchAim(Origin, End);
-	if (ACastleSkyIslandBase* Island = GetInteractiveSkyIsland(); Island && bHasRay)
+	if (ACastleSkyIslandBase* Island = GetInteractiveSkyIsland())
 	{
-		// 点击重新解析射线，避免放置或撤回后还使用上一帧的命中面。
-		FCastleGridCursorTarget Target;
-		if (Island->TryResolveIslandGridCursorTarget(Origin, End, Target))
+		if (bHasRay)
 		{
-			FText Reason;
-			if (!Island->TryPlaceBackpackAtIslandCursor(Target, SelectedBackpackIndex, Reason))
+			// 点击重新解析射线，避免放置或撤回后还使用上一帧的命中面。
+			FCastleGridCursorTarget Target;
+			if (Island->TryResolveIslandGridCursorTarget(Origin, End, Target))
 			{
-				ShowDirectorMessage(Reason);
+				FText Reason;
+				if (!Island->TryPlaceBackpackAtIslandCursor(Target, SelectedBackpackIndex, Reason))
+				{
+					ShowDirectorMessage(Reason);
+				}
+				return;
 			}
+
+			// 设计模式在正式或验收空岛上把主点击交给岛内物件。未命中交互物件时仍在此返回，
+			// 避免空地点按继续落入主棋盘构筑门控并弹出无关提示。
+			if (ControlMode == ECastleControlMode::Design)
+			{
+				FText Reason;
+				auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
+				if (Director && Director->GetPhase() == ECastleDirectorPhase::SkyIsland)
+				{
+					// 正式空岛由导演校验活动岛和物件业务，只抑制点中空地时的瞄准提示。
+					if (!Director->TryInteractWithSkyIsland(Origin, End, Reason, /*bShowMissPrompt=*/false) && !Reason.IsEmpty())
+					{
+						ShowDirectorMessage(Reason);
+					}
+				}
+				else
+				{
+					// 验收空岛由控制器登记。只把点击交给当前验收岛的命中物件，由物件校验并执行。
+					FHitResult Hit;
+					FCollisionQueryParams Params(SCENE_QUERY_STAT(CastleDesignSkyIslandInteract), false, GetPawn());
+					if (GetWorld()->LineTraceSingleByChannel(Hit, Origin, End, ECC_Visibility, Params) && Hit.GetActor() == Island)
+					{
+						ICastleSkyIslandInteractable* IslandInteractable = Cast<ICastleSkyIslandInteractable>(Hit.GetComponent());
+						if (!IslandInteractable) { IslandInteractable = Cast<ICastleSkyIslandInteractable>(Hit.GetActor()); }
+						if (IslandInteractable)
+						{
+							const FCastleSkyIslandInteractContext Context{Island, this, Hit};
+							const bool bInteracted = IslandInteractable->CanInteract(Context, Reason)
+								&& IslandInteractable->ExecuteInteract(Context, Reason);
+							if (!bInteracted && !Reason.IsEmpty()) { ShowDirectorMessage(Reason); }
+						}
+					}
+				}
+				return;
+			}
+		}
+		else if (ControlMode == ECastleControlMode::Design)
+		{
+			// 空岛上的设计模式主点击必须取得射线后才能判断是否命中物件或地块。
+			UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s 无法为设计模式空岛主点击取得世界射线。"), *GetPathName());
 			return;
 		}
 	}
@@ -544,6 +595,18 @@ void ACastlePlayerController::PlacePrototypeBuildingAtCursor()
 		return;
 	}
 	if (!bCanEdit) { ShowDirectorMessage(EditReason); return; }
+	if (ControlMode == ECastleControlMode::Design && bHasRay)
+	{
+		// 编辑阶段的设计模式主点击先精确检测门体组件；命中即消费点击，屋顶、墙面和地面仍可放房。
+		FText PortalReason;
+		bool bHitPortal = false;
+		const bool bEnteredPortal = TryInteractWithRoomPortalFromRay(Origin, End, PortalReason, &bHitPortal);
+		if (bHitPortal)
+		{
+			if (!bEnteredPortal && !PortalReason.IsEmpty()) { ShowDirectorMessage(PortalReason); }
+			return;
+		}
+	}
 	if (ActiveBoard == nullptr)
 	{
 		FindActiveBoard();
@@ -830,6 +893,7 @@ void ACastlePlayerController::SetPresentationModalState(const bool bOpen, UUserW
 
 void ACastlePlayerController::HideDirectorEditingPresentation()
 {
+	ClearHoverHighlight();
 	CloseBuildingDemolishMenu();
 	CurrentGridCursorTarget = FCastleGridCursorTarget();
 	if (IsValid(GridCursor)) { GridCursor->HideCursor(); }
@@ -956,20 +1020,27 @@ bool ACastlePlayerController::BindSkyIslandInput(const FKey& Key, FText& OutReas
 		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s：%s"), *GetPathName(), *OutReason.ToString());
 		return false;
 	}
-	InputComponent->BindKey(Key, IE_Pressed, this, &ACastlePlayerController::InteractWithSkyIsland);
+	// 非消费绑定使配置交互键继续下传给 Pawn；设计模式回调会退出，因此 E 仍可稳定用于上升。
+	InputComponent->BindKey(Key, IE_Pressed, this, &ACastlePlayerController::InteractWithSkyIsland).bConsumeInput = false;
 	// 默认 E 与离岛物件共用绑定，避免一次按键刚进岛又触发岛上物件。配置其他岛内交互键时，房间门仍用 E。
-	if (Key != EKeys::E) { InputComponent->BindKey(EKeys::E, IE_Pressed, this, &ACastlePlayerController::InteractWithRoomPortal); }
+	if (Key != EKeys::E)
+	{
+		InputComponent->BindKey(EKeys::E, IE_Pressed, this, &ACastlePlayerController::InteractWithRoomPortal).bConsumeInput = false;
+	}
 	return true;
 }
 
 void ACastlePlayerController::InteractWithSkyIsland()
 {
+	// 设计模式的 E 专用于飞行上升，岛内交互统一由鼠标左键的主交互路由处理。
+	if (ControlMode == ECastleControlMode::Design) { return; }
 	auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
 	if (!Director || bModalInputActive) { return; }
 	const auto* Config = Director->GetConfig();
 	if (Director->GetPhase() == ECastleDirectorPhase::Editing && Config && Config->SkyIslandInteractKey == EKeys::E)
 	{
-		InteractWithRoomPortal();
+		// 验收岛在编辑阶段用自己的输入层处理同一个 E。该层已改为透传，仍保留原来的独占交互范围。
+		if (!ActiveSkyIsland.IsValid()) { InteractWithRoomPortal(); }
 		return;
 	}
 	if (Director->GetPhase() != ECastleDirectorPhase::SkyIsland) { return; }
@@ -984,15 +1055,19 @@ void ACastlePlayerController::InteractWithSkyIsland()
 
 void ACastlePlayerController::InteractWithRoomPortal()
 {
+	// 设计模式的 E 专用于飞行上升，房间门只由主交互点击路由访问。
+	if (ControlMode == ECastleControlMode::Design) { return; }
 	FVector Start, End;
 	if (!TryGetDispatchAim(Start, End)) { return; }
 	FText Reason;
 	if (!TryInteractWithRoomPortalFromRay(Start, End, Reason) && !Reason.IsEmpty()) { ShowDirectorMessage(Reason); }
 }
 
-bool ACastlePlayerController::TryInteractWithRoomPortalFromRay(const FVector& Start, const FVector& End, FText& OutReason)
+bool ACastlePlayerController::TryInteractWithRoomPortalFromRay(
+	const FVector& Start, const FVector& End, FText& OutReason, bool* bOutHitPortal)
 {
 	OutReason = FText::GetEmpty();
+	if (bOutHitPortal) { *bOutHitPortal = false; }
 	auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
 	if (!Director || Director->GetPhase() != ECastleDirectorPhase::Editing || bModalInputActive || bHoldingTemporaryHUDPointer) { return false; }
 	FHitResult Hit;
@@ -1000,6 +1075,7 @@ bool ACastlePlayerController::TryInteractWithRoomPortalFromRay(const FVector& St
 	if (!GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params)) { return false; }
 	// 只有门体自身是目标。命中屋顶、墙面或被遮挡时不能通过房间 Actor 间接传送。
 	auto* Portal = Cast<UCastleRoomTraitComponent>(Hit.GetComponent());
+	if (Portal && bOutHitPortal) { *bOutHitPortal = true; }
 	return Portal && Portal->TryInteractWithPortal(OutReason);
 }
 
@@ -1023,6 +1099,7 @@ void ACastlePlayerController::RefreshModalInput(const bool bForceRefresh)
 	if (bHigherModalOpen) { RemoveControlSettingsWidget(); }
 	const bool bNewOpen = bHigherModalOpen || ControlSettings != nullptr;
 	if (bNewOpen) { RemoveBuildingDemolishWidget(); }
+	if (bNewOpen || BuildingDemolishMenu || bHoldingTemporaryHUDPointer) { ClearHoverHighlight(); }
 	// 普通商店的购买/刷新通知不改变开关，沿用旧行为，不重设模式或抢回焦点。
 	if (bNewOpen == bModalInputActive && !bForceRefresh) { return; }
 	if (bNewOpen != bModalInputActive)

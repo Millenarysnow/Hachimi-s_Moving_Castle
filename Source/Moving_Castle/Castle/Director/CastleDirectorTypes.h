@@ -30,7 +30,7 @@ enum class ECastleDirectorNodeKind : uint8
 UENUM(BlueprintType)
 enum class ECastleDirectorReward : uint8
 {
-	Experience,
+	Gold,
 	Healing,
 	Shop
 };

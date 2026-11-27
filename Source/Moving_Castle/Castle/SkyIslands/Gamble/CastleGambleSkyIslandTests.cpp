@@ -112,6 +112,10 @@ bool FCastleGambleIslandAutomationTest::RunTest(const FString& Parameters)
 	Island->MiniCellSize = 40.0;
 	Island->MiniTileSize = 38.0;
 	Island->MiniLayerHeight = 43.0;
+	// 远离机台布置隔离的测试微缩棋盘，并使用旋转、缩放整岛验证局部到世界变换。
+	Island->MiniOrigin = FVector(5000.0, 5000.0, 100.0);
+	Island->SetActorTransform(FTransform(FRotator(0.0f, 35.0f, 0.0f), FVector(120.0f, -80.0f, 300.0f),
+		FVector(1.5f)));
 	UCastleBackpackComponent& Backpack = *Island->Backpack;
 	FCastleBuildingDescriptor RedOne, RedTwo, BlueOne, GreenThree;
 	if (!TestTrue(TEXT("生成正式测试房间"),
@@ -125,10 +129,51 @@ bool FCastleGambleIslandAutomationTest::RunTest(const FString& Parameters)
 		{FIntVector::ZeroValue, ECastleTileColor::Red, 9}, {FIntVector(1, 0, 0), ECastleTileColor::Yellow, 8}
 	};
 	if (!TestTrue(TEXT("初始化带色号的测试地面"), Island->MiniBoard.InitializeGround(Ground, FIntPoint(2, 1), Reason))) { return false; }
+	// 放置真实微缩地块，验证地面目标按 Adjacent=Cell 的格心生成 98% 三维盒。
+	FActorSpawnParameters TileParameters;
+	TileParameters.Owner = Island;
+	const double MiniScale = 0.5;
+	const FVector GroundBase = Island->GetMiniCellBase(FIntVector::ZeroValue);
+	const FTransform LocalTile(FQuat::Identity, GroundBase - FVector::UpVector * (6.0 * MiniScale), FVector(MiniScale));
+	ACastleGroundTileActor* MiniTile = World->SpawnActor<ACastleGroundTileActor>(
+		ACastleGroundTileActor::StaticClass(), LocalTile * Island->GetActorTransform(), TileParameters);
+	if (!TestNotNull(TEXT("生成可命中测试微缩地块"), MiniTile)
+		|| !TestTrue(TEXT("初始化测试微缩地块"), MiniTile->InitializeGroundCell(Ground[0], 38.0f, 43.0f))) { return false; }
+	MiniTile->AttachToActor(Island, FAttachmentTransformRules::KeepWorldTransform);
+	Island->MiniTiles.Add(FIntVector::ZeroValue, MiniTile);
+	FCastleGridCursorTarget MiniGroundTarget;
+	const FTransform IslandTransform = Island->GetActorTransform();
+	const FVector MiniGroundRayStart = IslandTransform.TransformPosition(GroundBase + FVector::UpVector * 40.0);
+	const FVector MiniGroundRayEnd = IslandTransform.TransformPosition(GroundBase - FVector::UpVector * 40.0);
+	if (!TestTrue(TEXT("真实射线解析微缩地面格"),
+		Island->TryResolveIslandGridCursorTarget(MiniGroundRayStart, MiniGroundRayEnd, MiniGroundTarget))) { return false; }
+	const FVector ExpectedMiniGroundCenter = IslandTransform.TransformPosition(
+		GroundBase + FVector::UpVector * (Island->MiniLayerHeight * 0.5));
+	const FVector ExpectedMiniBoxSize(Island->MiniCellSize * 0.98, Island->MiniCellSize * 0.98,
+		Island->MiniLayerHeight * 0.98);
+	TestTrue(TEXT("微缩地面盒中心对齐落点格心"),
+		MiniGroundTarget.IndicatorTransform.GetLocation().Equals(ExpectedMiniGroundCenter, 1.0f));
+	TestTrue(TEXT("微缩地面盒尺寸为 98% 格距和层高"),
+		(MiniGroundTarget.IndicatorTransform.GetScale3D() * 100.0).Equals(
+			ExpectedMiniBoxSize * IslandTransform.GetScale3D(), 1.0));
 	if (!TestTrue(TEXT("填入测试牌"), Backpack.TryAddItemsAllowOverflow(Initial, Reason))) { return false; }
 	TestFalse(TEXT("空微缩区拒绝开转"), Island->TrySpinRoulette(ECastleRouletteColor::Black, Reason));
 	TestFalse(TEXT("首块不能放在不同色且不同号的地面"), Island->TryPlaceCard(0, FIntVector(1, 0, 0), Reason));
 	if (!TestTrue(TEXT("首块可与地面同色放置"), Island->TryPlaceCard(0, FIntVector::ZeroValue, Reason))) { return false; }
+	// 第一张正式微缩房间提供真实六面碰撞盒，验证房间面外侧邻格的完整三维目标变换。
+	FCastleGridCursorTarget MiniRoomTarget;
+	const FVector MiniRoomCenter = GroundBase + FVector::UpVector * (Island->MiniLayerHeight * 0.5);
+	const FVector MiniRoomRayStart = IslandTransform.TransformPosition(MiniRoomCenter + FVector::XAxisVector * 80.0);
+	const FVector MiniRoomRayEnd = IslandTransform.TransformPosition(MiniRoomCenter - FVector::XAxisVector * 80.0);
+	if (!TestTrue(TEXT("真实射线解析微缩房间 +X 面"),
+		Island->TryResolveIslandGridCursorTarget(MiniRoomRayStart, MiniRoomRayEnd, MiniRoomTarget))) { return false; }
+	const FVector ExpectedMiniRoomCenter = IslandTransform.TransformPosition(
+		Island->GetMiniCellBase(MiniRoomTarget.AdjacentCell) + FVector::UpVector * (Island->MiniLayerHeight * 0.5));
+	TestTrue(TEXT("微缩房间外侧盒中心对齐 Adjacent 格心"),
+		MiniRoomTarget.IndicatorTransform.GetLocation().Equals(ExpectedMiniRoomCenter, 1.0f));
+	TestTrue(TEXT("微缩房间外侧盒使用完整 98% 微缩格体积"),
+		(MiniRoomTarget.IndicatorTransform.GetScale3D() * 100.0).Equals(
+			ExpectedMiniBoxSize * IslandTransform.GetScale3D(), 1.0));
 	TestFalse(TEXT("异色且异号被拒"), Island->TryPlaceCard(0, FIntVector(1, 0, 0), Reason));
 	TestEqual(TEXT("拒绝后仍有三张"), Backpack.GetItemCount(), 3);
 	TestTrue(TEXT("同色横向相邻"), Island->TryPlaceCard(1, FIntVector(1, 0, 0), Reason));

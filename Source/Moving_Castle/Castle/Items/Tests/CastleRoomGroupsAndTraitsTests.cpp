@@ -744,7 +744,10 @@ bool FCastlePortalRoomTraitTest::RunTest(const FString& Parameters)
 	const FVector Aim = Door->GetComponentLocation();
 	const FVector Offset(-200, 0, 0);
 	const FVector Miss(0, 200, 0);
-	TestFalse(TEXT("准星射线未命中门体不进岛"), Controller->TryInteractWithRoomPortalFromRay(Aim + Offset + Miss, Aim + Miss, Reason));
+	bool bHitPortal = false;
+	TestFalse(TEXT("准星射线未命中门体不进岛"),
+		Controller->TryInteractWithRoomPortalFromRay(Aim + Offset + Miss, Aim + Miss, Reason, &bHitPortal));
+	TestFalse(TEXT("普通表面射线未标记门体命中"), bHitPortal);
 	Director->SetPhaseForAutomation(ECastleDirectorPhase::Battle);
 	TestFalse(TEXT("战斗阶段 E 不触发"), Controller->TryInteractWithRoomPortalFromRay(Aim + Offset, Aim, Reason));
 	Director->SetPhaseForAutomation(ECastleDirectorPhase::Editing);
@@ -761,18 +764,19 @@ bool FCastlePortalRoomTraitTest::RunTest(const FString& Parameters)
 	{
 		Config->SkyIslandClasses.Add(Type, ACastleSkyIslandTestFixture::StaticClass());
 	}
-
 	TSet<FString> IslandTypes;
 	for (int32 Visit = 0; Visit < 16 && IslandTypes.Num() < 4; ++Visit)
 	{
 		Door = Room->GetRoomTraitComponent();
 		const FVector Center = Door->GetComponentLocation();
-		if (!TestTrue(TEXT("由控制器的 E 射线入口成功进岛"),
-			Controller->TryInteractWithRoomPortalFromRay(Center + Offset, Center, Reason)))
+		bHitPortal = false;
+		if (!TestTrue(TEXT("控制器门体射线入口成功进岛"),
+			Controller->TryInteractWithRoomPortalFromRay(Center + Offset, Center, Reason, &bHitPortal)))
 		{
 			AddError(Reason.ToString());
 			return false;
 		}
+		TestTrue(TEXT("控制器标记射线直接命中门体组件"), bHitPortal);
 		ACastleSkyIslandBase* Island = Director->ActiveSkyIsland;
 		if (!TestNotNull(TEXT("本次传送创建实际空岛 Actor"), Island)) { return false; }
 		auto* Label = Island->FindComponentByClass<UTextRenderComponent>();

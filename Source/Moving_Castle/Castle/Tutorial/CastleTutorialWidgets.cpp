@@ -29,7 +29,7 @@ void UCastleTutorialRewardWidget::NativeOnInitialized()
 
 bool UCastleTutorialRewardWidget::HasRequiredBindings() const
 {
-	if (!Choices || !ExperienceButton || !HealingButton || !CopyButton || !CardButton)
+	if (!Choices || !GoldButton || !HealingButton || !CopyButton || !CardButton)
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("教程奖励界面 %s 缺少选择容器、奖励按钮或单卡容器。"), *GetClass()->GetPathName());
 		return false;
@@ -42,9 +42,10 @@ bool UCastleTutorialRewardWidget::Configure(ACastleTutorialDirector& Director)
 	if (!HasRequiredBindings()) { return false; }
 	OwnerDirector = &Director;
 	const FText Locked = INVTEXT("本次教学请先体验复制功能房间");
-	ExperienceButton->SetToolTipText(Locked);
+	// 金币与回血仅展示通关选项。教学导演仍通过复制牌引导后续合成。
+	GoldButton->SetToolTipText(Locked);
 	HealingButton->SetToolTipText(Locked);
-	ExperienceButton->SetIsEnabled(false);
+	GoldButton->SetIsEnabled(false);
 	HealingButton->SetIsEnabled(false);
 	Choices->SetVisibility(ESlateVisibility::Visible);
 	CardButton->SetVisibility(ESlateVisibility::Collapsed);

@@ -38,18 +38,19 @@ UCastleTowerSideGridComponent::UCastleTowerSideGridComponent()
 }
 
 bool UCastleTowerSideGridComponent::Initialize(const FIntVector& BaseCell, const int32 LayerCount, const float CellWidth,
-	const float LayerHeight, const float SurfaceOffset, const int32 Seed, FText& OutReason)
+	const float GridCellSize, const float LayerHeight, const float SurfaceOffset, const int32 Seed, FText& OutReason)
 {
 	OutReason = FText::GetEmpty();
 	AActor* Tower = GetOwner();
 	USceneComponent* Root = IsValid(Tower) ? Tower->GetRootComponent() : nullptr;
 	if (bInitialized || !IsValid(Root) || !IsValid(PanelMesh) || !IsValid(PanelMaterial)
 		|| LayerCount < 1 || LayerCount > 64 || !FMath::IsFinite(CellWidth) || CellWidth < 20.0f
+		|| !FMath::IsFinite(GridCellSize) || GridCellSize < CellWidth
 		|| !FMath::IsFinite(LayerHeight) || LayerHeight < 20.0f || !FMath::IsFinite(SurfaceOffset)
 		|| SurfaceOffset <= CellWidth * 0.5f || SurfaceOffset >= CellWidth)
 	{
 		OutReason = FText::FromString(FString::Printf(
-			TEXT("主塔 %s 侧格初始化失败：塔根、Plane 网格、材质 /Game/ART/Material/MI_Tower、层数或侧面距离无效；侧面距离须处于半格至一格之间。"),
+			TEXT("主塔 %s 侧格初始化失败：塔根、Plane 网格、材质 /Game/ART/Material/MI_Tower、层数、格距或侧面距离无效；棋盘格距不得小于面板宽度，侧面距离须处于半格至一格之间。"),
 			*GetPathNameSafe(Tower)));
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
@@ -57,6 +58,7 @@ bool UCastleTowerSideGridComponent::Initialize(const FIntVector& BaseCell, const
 
 	TowerBaseCell = BaseCell;
 	TowerCellWidth = CellWidth;
+	TowerGridCellSize = GridCellSize;
 	TowerLayerHeight = LayerHeight;
 	TowerSurfaceOffset = SurfaceOffset;
 	RunSeed = Seed;
@@ -253,13 +255,27 @@ bool UCastleTowerSideGridComponent::TryResolveHit(const FHitResult& Hit, FCastle
 		OutTarget.AdjacentCell = Cell->TowerCell + Face.Outward;
 		OutTarget.Surface = ECastleGridCursorSurface::MainTowerSide;
 		OutTarget.WorldNormal = Normal;
-		// 指示器自身仍是以本地 X 为法线的 Cube。由 Plane 法线重建它的朝向，并按原侧格比例生成窄边提示。
-		const FRotator IndicatorRotation = FRotationMatrix::MakeFromXZ(Normal, FVector::UpVector).Rotator();
-		const FVector PanelScale = PanelTransform.GetScale3D();
-		// 本地 +Y 指向格面下沿，+Z 指向塔外，提示条沿这两个方向偏移。
-		const FVector IndicatorLocation = PanelTransform.TransformPosition(FVector(0.0f, 43.0f, 85.0f));
-		const FVector IndicatorScale(PanelScale.Z * 0.0256f, PanelScale.X * 0.92f, PanelScale.Y * 0.07f);
-		OutTarget.IndicatorTransform = FTransform(IndicatorRotation, IndicatorLocation, IndicatorScale);
+		// 塔根位于底层格心下方半层；外侧目标格中心沿完整棋盘格距和半层高推算。
+		const USceneComponent* TowerRoot = GetOwner()->GetRootComponent();
+		if (!IsValid(TowerRoot))
+		{
+			UE_LOG(LogMoving_Castle, Error,
+				TEXT("主塔 %s 的侧格 %s 缺少塔根组件，无法定位三维全息盒。"),
+				*GetPathNameSafe(GetOwner()), *Cell->TowerCell.ToString());
+			return false;
+		}
+		const FTransform RootTransform = TowerRoot->GetComponentTransform();
+		const FVector Outward(Face.Outward);
+		const FVector LocalBoxCenter(
+			Outward.X * TowerGridCellSize,
+			Outward.Y * TowerGridCellSize,
+			(Cell->TowerCell.Z - TowerBaseCell.Z + 0.5f) * TowerLayerHeight);
+		const FVector LocalBoxSize(
+			TowerGridCellSize * 0.98f,
+			TowerGridCellSize * 0.98f,
+			TowerLayerHeight * 0.98f);
+		OutTarget.IndicatorTransform = FTransform(RootTransform.GetRotation(),
+			RootTransform.TransformPosition(LocalBoxCenter), LocalBoxSize * RootTransform.GetScale3D() / 100.0f);
 		OutTarget.bValid = true;
 		return true;
 	}

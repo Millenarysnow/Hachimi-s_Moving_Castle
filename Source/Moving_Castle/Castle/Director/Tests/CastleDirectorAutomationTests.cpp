@@ -8,6 +8,7 @@
 #include "CastlePlayerController.h"
 #include "CastleMainTowerComponent.h"
 #include "CastleShopComponent.h"
+#include "CastleEconomyComponent.h"
 #include "CastleBackpackComponent.h"
 #include "CastleBuildingTestUtilities.h"
 #include "Engine/World.h"
@@ -94,11 +95,11 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 			Board->FindBuildingDefinition(ECastleBuildingType::ArcherTower), 1, ECastleTileColor::Red, 3, AddedIndex, Reason));
 	}
 	TestFalse(TEXT("HUD读取不提前初始化商店"), Controller->GetShop()->IsInitialized());
-	TestTrue(TEXT("商店未初始化时HUD已有正确占用格数"), Director->GetHUDSummary().Contains(TEXT("房间 2/150")));
+	TestTrue(TEXT("商店未初始化时HUD已有正确占用格数"), Director->GetHUDSummary().Contains(TEXT("房间 2/30")));
 	// 正式单局的编辑阶段从开局起允许使用普通商店，奖励是否选店只影响免费换批事务。
 	TestTrue(TEXT("开局编辑可用"), Director->IsEditingAllowed(Reason));
 	TestTrue(TEXT("正式单局开局即可使用普通商店"), Director->IsShopAccessAllowed(Reason));
-	TestEqual(TEXT("开局上限150"), Controller->GetShop()->RoomLimit, 150);
+	TestEqual(TEXT("开局房间上限30"), Controller->GetShop()->RoomLimit, 30);
 	Director->SetPhaseForAutomation(ECastleDirectorPhase::Battle);
 	TestFalse(TEXT("战斗禁止编辑"), Director->IsEditingAllowed(Reason));
 	TestFalse(TEXT("战斗阶段仍禁止打开普通商店"), Director->IsShopAccessAllowed(Reason));
@@ -106,11 +107,13 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("奖励禁止编辑"), Director->IsEditingAllowed(Reason));
 	TestFalse(TEXT("奖励选择期间仍禁止打开普通商店"), Director->IsShopAccessAllowed(Reason));
 	// 独立地面关卡保留原有奖励与失败验证，正式塔身成长由 MainMap 集成测试覆盖。
-	if (!TestTrue(TEXT("经验奖励成功"), Director->TryChooseReward(ECastleDirectorReward::Experience, Reason))) { AddError(Reason.ToString()); return false; }
+	UCastleEconomyComponent* Economy = Controller->GetEconomy();
+	const int32 InitialGold = Economy->GetGold();
+	if (!TestTrue(TEXT("金币奖励成功"), Director->TryChooseReward(ECastleDirectorReward::Gold, Reason))) { AddError(Reason.ToString()); return false; }
 	TestTrue(TEXT("未选择商店奖励也保持普通商店可用"), Director->IsShopAccessAllowed(Reason));
-	TestEqual(TEXT("本次经验未达到升级阈值"), Director->GetLevel(), 1);
-	TestEqual(TEXT("剩余60经验"), Director->GetExperience(), 60);
-	TestEqual(TEXT("房间上限仍为150"), Controller->GetShop()->RoomLimit, 150);
+	TestEqual(TEXT("金币奖励不改变主塔等级"), Director->GetLevel(), 1);
+	TestEqual(TEXT("净发放60金币"), Economy->GetGold() - InitialGold, 60);
+	TestEqual(TEXT("房间上限仍为30"), Controller->GetShop()->RoomLimit, 30);
 	Director->SetPhaseForAutomation(ECastleDirectorPhase::Reward);
 	Tower->ApplyDamage(500.0f);
 	const int32 AttackCount = Tower->AttackCount;
@@ -132,7 +135,7 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 	Director->SetPhaseForAutomation(ECastleDirectorPhase::Battle);
 	Director->SetPhaseForAutomation(ECastleDirectorPhase::Reward);
 	const int32 BeforeLevel = Director->GetLevel();
-	const int32 BeforeExp = Director->GetExperience();
+	const int32 BeforeGold = Economy->GetGold();
 	const int32 BeforeLimit = Controller->GetShop()->RoomLimit;
 	const float BeforeHealth = Tower->CurrentHealth;
 	const auto BeforeOffers = Controller->GetShop()->GetOffers();
@@ -146,7 +149,7 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("商品池失效拒绝奖励"), Director->TryChooseReward(ECastleDirectorReward::Shop, Reason));
 	TestEqual(TEXT("失败保留奖励阶段"), Director->GetPhase(), ECastleDirectorPhase::Reward);
 	TestEqual(TEXT("失败保留等级"), Director->GetLevel(), BeforeLevel);
-	TestEqual(TEXT("失败保留经验"), Director->GetExperience(), BeforeExp);
+	TestEqual(TEXT("失败保留金币"), Economy->GetGold(), BeforeGold);
 	TestEqual(TEXT("失败保留房间上限"), Controller->GetShop()->RoomLimit, BeforeLimit);
 	TestEqual(TEXT("失败保留生命"), Tower->CurrentHealth, BeforeHealth);
 	const auto& AfterOffers = Controller->GetShop()->GetOffers();

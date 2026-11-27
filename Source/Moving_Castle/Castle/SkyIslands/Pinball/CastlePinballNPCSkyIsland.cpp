@@ -18,6 +18,7 @@ ACastlePinballNPCSkyIsland::ACastlePinballNPCSkyIsland()
 {
 	// 绑定该玩法的岛体，位置沿用作者对齐的岛面中心。
 	SetIslandArtMesh(TEXT("SM_SkyIsland_PinballNPC"));
+	SetDepartureArtMesh(TEXT("SM_SkyIsland_Departure_PinballNPC"));
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = false;
 	Playfield = CreateDefaultSubobject<USceneComponent>(TEXT("PinballPlayfield"));
@@ -28,12 +29,12 @@ ACastlePinballNPCSkyIsland::ACastlePinballNPCSkyIsland()
 	Console = CreateDefaultSubobject<UCastlePinballNPCConsoleComponent>(TEXT("PinballConsole"));
 	Console->SetupAttachment(Playfield);
 
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
-	// 盘面美术包含投币台外形。这个方盒只负责通过可见性射线选择操作台。
-	Console->SetStaticMesh(Cube.Object);
+	// 投币台独立网格的坐标相对原盘面组件原点保存，和盘面共用倾斜坐标系。
+	Console->SetStaticMesh(LoadIslandArt(TEXT("SM_Pinball_Console")));
 	Console->SetRelativeLocation(FVector(CastlePinball::HalfLength + 65.0, 0.0, 39.0));
-	Console->SetRelativeScale3D(FVector(0.9, 1.4, 0.78));
-	Console->SetVisibility(false);
+	Console->SetRelativeScale3D(FVector::OneVector);
+	Console->SetCanEverAffectNavigation(false);
+	Console->SetVisibility(true);
 	BoardMesh = LoadIslandArt(TEXT("SM_Pinball_Board"));
 	PegMesh = LoadIslandArt(TEXT("SM_Pinball_Peg"));
 	GateMesh = LoadIslandArt(TEXT("SM_Pinball_Gate"));
@@ -56,7 +57,7 @@ bool ACastlePinballNPCSkyIsland::OnInitializeIsland(const FCastleSkyIslandContex
 	Config = IslandConfig.LoadSynchronous();
 	if (!Config || !Console->GetStaticMesh())
 	{
-		OutFailureReason = INVTEXT("弹珠机缺少配置资产或投币台查询网格。");
+		OutFailureReason = INVTEXT("弹珠机缺少配置资产或独立投币台网格。");
 		UE_LOG(LogMoving_Castle, Error, TEXT("空岛 %s，配置 %s：%s"), *GetPathName(),
 			*IslandConfig.ToSoftObjectPath().ToString(), *OutFailureReason.ToString());
 		return false;
@@ -176,11 +177,14 @@ bool ACastlePinballNPCSkyIsland::EnterAimMode(ACastlePlayerController& Controlle
 		});
 		AimInput->KeyBindings.Add(MoveTemp(Binding));
 	}
-	for (const FKey& Key : {EKeys::E, EKeys::Tab, EKeys::Escape})
+	// Tab / Esc 在两种模式均退出；E 的回调按当前模式门控，避免瞄准期间切换模式后仍错误退出。
+	for (const FKey& Key : {EKeys::Tab, EKeys::Escape})
 	{
 		AimInput->BindKey(Key, IE_Pressed, this, &ACastlePinballNPCSkyIsland::ExitAimMode);
 	}
+	AimInput->BindKey(EKeys::E, IE_Pressed, this, &ACastlePinballNPCSkyIsland::ExitAimModeFromE);
 	AimController = &Controller;
+	Controller.OnControlModeChanged.AddUObject(this, &ACastlePinballNPCSkyIsland::HandleAimControlModeChanged);
 	Controller.GetPawn()->GetMovementComponent()->StopMovementImmediately();
 	Controller.SetIgnoreMoveInput(true);
 	Controller.SetIgnoreLookInput(true);
@@ -189,6 +193,7 @@ bool ACastlePinballNPCSkyIsland::EnterAimMode(ACastlePlayerController& Controlle
 	Controller.GetPlayerViewPoint(ViewLocation, ViewRotation);
 	Controller.SetControlRotation((Playfield->GetComponentLocation() - ViewLocation).Rotation());
 	Controller.PushInputComponent(AimInput);
+	Controller.ClearHoverHighlight();
 	StatusWidget->SetFeedback(FText::GetEmpty());
 	RefreshStatus();
 	UE_LOG(LogMoving_Castle, Display, TEXT("弹珠机 %s 已接管投币输入。"), *GetPathName());
@@ -200,6 +205,7 @@ void ACastlePinballNPCSkyIsland::ExitAimMode()
 	if (!AimInput) { return; }
 	if (ACastlePlayerController* Controller = AimController.Get())
 	{
+		Controller->OnControlModeChanged.RemoveAll(this);
 		// 只归还本岛加上的一份忽略计数，保留控制器其他模态输入的计数。
 		Controller->PopInputComponent(AimInput);
 		Controller->SetIgnoreMoveInput(false);
@@ -213,6 +219,24 @@ void ACastlePinballNPCSkyIsland::ExitAimMode()
 		StatusWidget = nullptr;
 	}
 	UE_LOG(LogMoving_Castle, Display, TEXT("弹珠机 %s 已归还投币输入。"), *GetPathName());
+}
+
+void ACastlePinballNPCSkyIsland::ExitAimModeFromE()
+{
+	// E 仅保留经典模式的旧退出语义；设计模式的瞄准输入层继续阻挡该键，不让它触发飞行或交互。
+	const ACastlePlayerController* Controller = AimController.Get();
+	if (!IsValid(Controller))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("弹珠机 %s 无法处理瞄准态 E 键：瞄准玩家控制器已失效。"), *GetPathName());
+		return;
+	}
+	if (Controller->GetControlMode() == ECastleControlMode::Classic) { ExitAimMode(); }
+}
+
+void ACastlePinballNPCSkyIsland::HandleAimControlModeChanged(ECastleControlMode /*NewMode*/)
+{
+	// 模式切换已经提交给控制器，立即让面板读取当前生效的投币与退出键。
+	RefreshStatus();
 }
 
 void ACastlePinballNPCSkyIsland::UpdateLauncher(float DeltaSeconds)
@@ -266,7 +290,8 @@ void ACastlePinballNPCSkyIsland::RefreshStatus()
 	if (StatusWidget && AimController.IsValid())
 	{
 		StatusWidget->RefreshStatus(AimController->GetEconomy()->GetGold(), Config->CoinLaunchCost,
-			Simulation->GetRecruitedCount(), Config->InitialNPCCount, LauncherPosition, LauncherAngle);
+			Simulation->GetRecruitedCount(), Config->InitialNPCCount, LauncherPosition, LauncherAngle,
+			AimController->GetControlMode());
 	}
 }
 

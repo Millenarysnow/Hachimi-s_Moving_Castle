@@ -338,6 +338,46 @@ bool FCastleBadgesFullCatalogueTest::RunTest(const FString&)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleBadgesFullEconomyTest, "MovingCastle.Items.Badges.Full.GameplayGoldAndRun",
 	CastleBadgesFullTests::Flags)
 
+/** 通关金币走真实账户和徽章库存，溢出时保留奖励机会及全部待提交状态。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDirectorCoinPurseRewardTest, "MovingCastle.Director.GoldRewardCoinPurseAndOverflow",
+	CastleBadgesFullTests::Flags)
+
+bool FCastleDirectorCoinPurseRewardTest::RunTest(const FString&)
+{
+	using namespace CastleBadgesFullTests;
+	FGame Game(*this);
+	if (!Game.Ground() || !Game.Equip(EBadge::CoinPurse)) { return false; }
+	UCastleMainTowerComponent* Tower = Game.MakeTower();
+	auto* Config = NewObject<UCastleDirectorConfigDataAsset>(Game.World);
+	Game.Director->ConfigureForAutomation(Config, Game.Board, Game.Player, Tower);
+	FText Reason;
+	TestEqual(TEXT("首项提示基础值"), Game.Director->GetRewardLabel(ECastleDirectorReward::Gold).ToString(), FString(TEXT("金币 +60")));
+	Game.Director->SetPhaseForAutomation(ECastleDirectorPhase::Reward);
+	const int32 GoldBefore = Game.Economy->GetGold();
+	if (!TestTrue(TEXT("通关奖励走玩法金币入口"), Game.Director->TryChooseReward(ECastleDirectorReward::Gold, Reason)))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	TestEqual(TEXT("零钱袋使60金实际增加66"), Game.Economy->GetGold() - GoldBefore, 66);
+	TestEqual(TEXT("领取后回到编辑"), Game.Director->GetPhase(), ECastleDirectorPhase::Editing);
+
+	// 余额能装入基础值 60，却装不下含徽章的 66，确保预检查也计算徽章。
+	Game.Director->SetPhaseForAutomation(ECastleDirectorPhase::Reward);
+	if (!TestTrue(TEXT("准备仅剩60空间的账户"), Game.Economy->TryAddGold(MAX_int32 - 60 - Game.Economy->GetGold(), Reason))
+		|| !TestTrue(TEXT("清场后等待领奖期间隐藏建造面"), Game.Board->SetPlacementSurfacePresentationHidden(true, Reason))) { return false; }
+	const int32 Cleared = Game.Director->GetClearedSteps();
+	AddExpectedError(TEXT("导演奖励失败"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestFalse(TEXT("含徽章的奖励会溢出，因此拒绝提交"), Game.Director->TryChooseReward(ECastleDirectorReward::Gold, Reason));
+	TestTrue(TEXT("溢出原因可见"), Reason.ToString().Contains(TEXT("超出整数上限")));
+	TestEqual(TEXT("失败不入账"), Game.Economy->GetGold(), MAX_int32 - 60);
+	TestEqual(TEXT("失败不推进关号"), Game.Director->GetClearedSteps(), Cleared);
+	TestEqual(TEXT("三选一继续保留"), Game.Director->GetPhase(), ECastleDirectorPhase::Reward);
+	TestTrue(TEXT("建造面仍隐藏"), Game.Board->IsPlacementSurfacePresentationHidden());
+	TestFalse(TEXT("金币失败不打开商店"), Game.Player->GetShop()->IsShopOpen());
+	return true;
+}
+
 bool FCastleBadgesFullEconomyTest::RunTest(const FString&)
 {
 	using namespace CastleBadgesFullTests;
