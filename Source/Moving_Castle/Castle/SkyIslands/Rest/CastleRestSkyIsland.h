@@ -35,6 +35,7 @@ class UCastleRestSkyIslandStation : public UStaticMeshComponent, public ICastleS
 public:
 	virtual FText GetInteractPrompt() const override;
 	virtual bool CanInteract(const FCastleSkyIslandInteractContext& Context, FText& OutReason) const override;
+	virtual bool CanHighlightInteract(const FCastleSkyIslandInteractContext& Context) const override;
 	virtual bool ExecuteInteract(const FCastleSkyIslandInteractContext& Context, FText& OutReason) override;
 
 private:

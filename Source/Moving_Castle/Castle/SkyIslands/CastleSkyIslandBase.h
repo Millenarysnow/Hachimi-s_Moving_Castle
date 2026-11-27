@@ -19,6 +19,7 @@ class MOVING_CASTLE_API UCastleSkyIslandDepartureComponent : public UStaticMeshC
 public:
 	virtual FText GetInteractPrompt() const override;
 	virtual bool CanInteract(const FCastleSkyIslandInteractContext& Context, FText& OutReason) const override;
+	virtual bool CanHighlightInteract(const FCastleSkyIslandInteractContext& Context) const override;
 	virtual bool ExecuteInteract(const FCastleSkyIslandInteractContext& Context, FText& OutFailureReason) override;
 };
 
@@ -54,6 +55,8 @@ protected:
 	const FCastleSkyIslandContext& GetIslandContext() const { return IslandContext; }
 	/** 绑定由导演生成的正式岛体。岛面中心为局部原点，各部件均使用厘米。 */
 	void SetIslandArtMesh(const TCHAR* AssetName);
+	/** 加载与当前玩法岛匹配的独立离开门外观，门体仍由该组件接收交互射线。 */
+	void SetDepartureArtMesh(const TCHAR* AssetName);
 	/** 构造期间解析同一目录的美术资产，记录加载失败的完整路径供入岛事务报告。 */
 	UStaticMesh* LoadIslandArt(const TCHAR* AssetName);
 
@@ -66,6 +69,8 @@ private:
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UCastleSkyIslandDepartureComponent> Departure;
 	/** 保存预期资产路径，使初始化失败日志能指出缺失的具体美术网格。 */
 	FString MissingIslandArtPath;
+	/** 离开门网格缺失时拒绝初始化，绝不保留默认方盒作为运行时替代外观。 */
+	FString MissingDepartureArtPath;
 	FCastleSkyIslandContext IslandContext;
 	bool bInitialized = false;
 };

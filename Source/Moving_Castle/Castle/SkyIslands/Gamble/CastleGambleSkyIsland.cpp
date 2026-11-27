@@ -109,6 +109,17 @@ bool UCastleGambleMachineComponent::CanInteract(const FCastleSkyIslandInteractCo
 	return Island->CanUseMachine(Context, OutReason);
 }
 
+bool UCastleGambleMachineComponent::CanHighlightInteract(const FCastleSkyIslandInteractContext& Context) const
+{
+	// 每帧悬停不能调用会写 Warning/Error 的玩法检查，但必须维持相同玩家和交易门控。
+	const auto* Island = Cast<ACastleGambleSkyIsland>(GetOwner());
+	const auto* Controller = Context.Controller;
+	return IsValid(Island) && Context.Island == Island && IsValid(Controller)
+		&& Controller == Island->GetIslandContext().Controller.Get() && Context.Hit.GetComponent() == this
+		&& IsValid(Island->Config) && !Island->bTransacting
+		&& !Controller->IsMoveInputIgnored() && !Controller->IsLookInputIgnored();
+}
+
 bool UCastleGambleMachineComponent::ExecuteInteract(const FCastleSkyIslandInteractContext& Context, FText& OutReason)
 {
 	if (!CanInteract(Context, OutReason)) { return false; }
@@ -126,6 +137,7 @@ ACastleGambleSkyIsland::ACastleGambleSkyIsland()
 {
 	// 绑定该玩法的岛体，位置沿用作者对齐的岛面中心。
 	SetIslandArtMesh(TEXT("SM_SkyIsland_Gamble"));
+	SetDepartureArtMesh(TEXT("SM_SkyIsland_Departure_Gamble"));
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = false;
 	ConfigAsset = TSoftObjectPtr<UCastleGambleSkyIslandDataAsset>(FSoftObjectPath(
@@ -133,20 +145,26 @@ ACastleGambleSkyIsland::ACastleGambleSkyIsland()
 	RoulettePanelClass = TSoftClassPtr<UCastleGambleRouletteWidget>(FSoftObjectPath(
 		TEXT("/Game/MovingCastle/UI/SkyIslands/Gamble/WBP_GambleRoulettePanel.WBP_GambleRoulettePanel_C")));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cylinder(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> RouletteMesh(
+		TEXT("/Game/MovingCastle/Model/SkyIslands/SM_Gamble_Roulette.SM_Gamble_Roulette"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> SlotMachineMesh(
+		TEXT("/Game/MovingCastle/Model/SkyIslands/SM_Gamble_SlotMachine.SM_Gamble_SlotMachine"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> BalloonRecyclerMesh(
+		TEXT("/Game/MovingCastle/Model/SkyIslands/SM_Gamble_BalloonRecycler.SM_Gamble_BalloonRecycler"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
 	CubeMesh = Cube.Object;
 	TintMaterial = Material.Object;
-	const auto MakeMachine = [this](const FName Name, ECastleGambleMachine Kind, UStaticMesh* Mesh, FVector Position, FVector Scale)
+	const auto MakeMachine = [this](const FName Name, ECastleGambleMachine Kind, UStaticMesh* Mesh, FVector Position)
 	{
 		auto* Machine = CreateDefaultSubobject<UCastleGambleMachineComponent>(Name);
 		Machine->Machine = Kind;
 		Machine->SetupAttachment(GetRootComponent());
-		// 整岛保留机台的多材质外形；这里的不可见网格专门接收玩法射线。
+		// 源模型坐标只平移到组件原点，真实机台网格与可见性射线保持同一空间。
 		Machine->SetStaticMesh(Mesh);
-		Machine->SetVisibility(false);
+		Machine->SetVisibility(true);
 		Machine->SetRelativeLocation(Position);
-		Machine->SetRelativeScale3D(Scale);
+		Machine->SetRelativeScale3D(FVector::OneVector);
+		Machine->SetCanEverAffectNavigation(false);
 		Machine->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 		Machine->SetCollisionResponseToAllChannels(ECR_Ignore);
 		Machine->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
@@ -175,9 +193,9 @@ ACastleGambleSkyIsland::ACastleGambleSkyIsland()
 	};
 
 	// 三台机台从到达点前方展开，平台中央留出通往离开传送门的航线。
-	Roulette = MakeMachine(TEXT("Roulette"), ECastleGambleMachine::Roulette, Cylinder.Object, {-80, -550, 66}, {2.8, 2.8, 1.3});
-	Slot = MakeMachine(TEXT("SlotMachine"), ECastleGambleMachine::Slot, CubeMesh, {-10, 10, 114}, {1.85, 1.55, 2.25});
-	Recycler = MakeMachine(TEXT("BalloonRecycler"), ECastleGambleMachine::Recycler, CubeMesh, {-40, 530, 116}, {1.65, 1.7, 2.3});
+	Roulette = MakeMachine(TEXT("Roulette"), ECastleGambleMachine::Roulette, RouletteMesh.Object, {-80, -550, 66});
+	Slot = MakeMachine(TEXT("SlotMachine"), ECastleGambleMachine::Slot, SlotMachineMesh.Object, {-10, 10, 114});
+	Recycler = MakeMachine(TEXT("BalloonRecycler"), ECastleGambleMachine::Recycler, BalloonRecyclerMesh.Object, {-40, 530, 116});
 	MakeLabel(TEXT("RouletteSign"), TEXT("ROULETTE"), {-120, -550, 250}, 36);
 	MakeLabel(TEXT("SlotSign"), TEXT("SLOT MACHINE"), {-50, 10, 295}, 33);
 	MakeLabel(TEXT("RecyclerSign"), TEXT("BALLOON RECYCLER"), {-70, 530, 295}, 32);
@@ -206,9 +224,10 @@ bool ACastleGambleSkyIsland::OnInitializeIsland(const FCastleSkyIslandContext& C
 		return Reject(FText::Format(INVTEXT("缺少赌博空岛配置 {0}。"), FText::FromString(ConfigAsset.ToString())), OutReason);
 	}
 	if (!Config->Validate(OutReason)) { return false; }
-	if (Context.Type != ECastleSkyIslandType::Gamble || !CubeMesh || !TintMaterial || !Roulette->GetStaticMesh())
+	if (Context.Type != ECastleSkyIslandType::Gamble || !CubeMesh || !TintMaterial
+		|| !Roulette->GetStaticMesh() || !Slot->GetStaticMesh() || !Recycler->GetStaticMesh())
 	{
-		return Reject(INVTEXT("赌博岛类型、占位网格或着色材质无效。"), OutReason);
+		return Reject(INVTEXT("赌博岛类型、独立机台网格、占位部件或着色材质无效。"), OutReason);
 	}
 	// 从本局棋盘接入同一背包，房间组的候选定义由赌博岛配置显式提供。
 	ACastleBoard* Board = nullptr;

@@ -22,6 +22,14 @@ bool UCastlePinballNPCConsoleComponent::CanInteract(
 	return true;
 }
 
+bool UCastlePinballNPCConsoleComponent::CanHighlightInteract(
+	const FCastleSkyIslandInteractContext& Context) const
+{
+	// 纯查询不进入投币瞄准模式，也不复用错误日志型交互入口。
+	return IsValid(GetOwner()) && Context.Island == GetOwner() && IsValid(Context.Controller)
+		&& Context.Hit.GetComponent() == this;
+}
+
 bool UCastlePinballNPCConsoleComponent::ExecuteInteract(
 	const FCastleSkyIslandInteractContext& Context, FText& OutFailureReason)
 {

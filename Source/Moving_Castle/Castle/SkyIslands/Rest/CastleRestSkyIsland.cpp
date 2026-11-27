@@ -47,6 +47,14 @@ bool UCastleRestSkyIslandStation::CanInteract(const FCastleSkyIslandInteractCont
 	return true;
 }
 
+bool UCastleRestSkyIslandStation::CanHighlightInteract(const FCastleSkyIslandInteractContext& Context) const
+{
+	// 领取完成或正在提交时不再高亮；此纯查询不复用会记录失败提示的 CanInteract。
+	const auto* Island = Cast<ACastleRestSkyIsland>(GetOwner());
+	return IsValid(Island) && Context.Island == Island && Island->IsIslandController(Context.Controller)
+		&& Context.Hit.GetComponent() == this && IsValid(Tint) && IsValid(Sign) && !bClaimed && !bClaiming;
+}
+
 bool UCastleRestSkyIslandStation::ExecuteInteract(const FCastleSkyIslandInteractContext& Context, FText& OutReason)
 {
 	if (!CanInteract(Context, OutReason)) { return false; }
@@ -72,6 +80,7 @@ ACastleRestSkyIsland::ACastleRestSkyIsland()
 {
 	// 绑定该玩法的岛体，位置沿用作者对齐的岛面中心。
 	SetIslandArtMesh(TEXT("SM_SkyIsland_Rest"));
+	SetDepartureArtMesh(TEXT("SM_SkyIsland_Departure_Rest"));
 	ConfigAsset = TSoftObjectPtr<UCastleRestSkyIslandDataAsset>(FSoftObjectPath(
 		TEXT("/Game/MovingCastle/Data/SkyIslands/DA_RestSkyIsland.DA_RestSkyIsland")));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
