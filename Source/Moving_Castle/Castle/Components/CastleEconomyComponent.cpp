@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleEconomyComponent.h"
+#include "Audio/CastleAudioSubsystem.h"
 #include "Items/CastleBadgeSubsystem.h"
 #include "Moving_Castle.h"
 
@@ -52,6 +53,7 @@ bool UCastleEconomyComponent::TryAddGold(int32 Amount, FText& OutFailureReason)
 	{
 		const int32 PreviousGold = Gold;
 		Gold += Amount;
+		UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Gold);
 		OnGoldChanged.Broadcast(PreviousGold, Gold);
 	}
 	return true;
@@ -88,6 +90,8 @@ bool UCastleEconomyComponent::TryAddGameplayGold(const int32 BaseAmount, const i
 	const int32 PreviousGold = Gold;
 	Gold = static_cast<int32>(NewGold);
 	OutFinalAmount = Amount;
+	// 有成本的收入仍按真实到账后的净余额决定是否响铃。
+	if (Gold > PreviousGold) { UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Gold); }
 	if (Gold != PreviousGold) { OnGoldChanged.Broadcast(PreviousGold, Gold); }
 	return true;
 }

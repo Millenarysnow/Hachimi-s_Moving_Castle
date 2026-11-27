@@ -1,4 +1,5 @@
 #include "CastleMassEnemyRangedAttackProcessor.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "CastleMainTowerComponent.h"
 #include "CastleMassEnemyRangedAttackFragments.h"
@@ -152,6 +153,8 @@ void UCastleMassEnemyRangedAttackProcessor::Execute(FMassEntityManager& EntityMa
 					return;
 				}
 				if (!UnitSubsystem->SpawnEnemyProjectiles(Configuration, {Launch}, Projectiles, Reason)) { return; }
+				// 延迟命令成功创建吐息弹后才反馈开火。
+				UCastleAudioSubsystem::PlaySFX(World.Get(), ECastleSFXEvent::DragonFire);
 				if (Manager.IsEntityActive(Launch.Attacker.Entity))
 				{
 					if (auto* State = Manager.GetFragmentDataPtr<FCastleMassEnemyRangedAttackFragment>(Launch.Attacker.Entity))

@@ -1,4 +1,5 @@
 #include "CastleDialogueWidget.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Dialogue/CastleDialogueSubsystem.h"
@@ -131,6 +132,7 @@ void UCastleDialogueWidget::NativeDestruct()
 
 void UCastleDialogueWidget::HandleContinueClicked()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (!IsValid(DialogueSubsystem))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("对话 WBP %s 点击推进失败：对话子系统已失效。"), *GetPathName());
@@ -152,6 +154,7 @@ void UCastleDialogueWidget::HandleControlModeChanged(const ECastleControlMode)
 
 void UCastleDialogueWidget::Choose(const FName TargetLineId)
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (IsValid(DialogueSubsystem)) { DialogueSubsystem->SelectChoice(TargetLineId); }
 }
 

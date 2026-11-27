@@ -1,4 +1,5 @@
 #include "Items/CastleItemGrantLibrary.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
@@ -431,6 +432,7 @@ bool UCastleItemGrantLibrary::TryCommitPreparedRoomGroup(const FCastlePreparedRo
 	}
 	Backpack->ApplyValidatedItemBatch(Prepared.Cards, After, bRefill);
 	Prepared.bCommitted = true;
+	UCastleAudioSubsystem::PlaySFX(Backpack->GetWorld(), ECastleSFXEvent::Reward);
 	UE_LOG(LogMoving_Castle, Display, TEXT("已发放房间组 %s（%s）：新增 %d 张建筑卡。"),
 		*Prepared.Group->DisplayName.ToString(), *Prepared.Group->GetPathName(), Prepared.Cards.Num());
 	Backpack->OnBackpackChanged.Broadcast();

@@ -1,4 +1,5 @@
 #if WITH_EDITOR && WITH_DEV_AUTOMATION_TESTS && !UE_BUILD_SHIPPING
+#include "Audio/CastleAudioSubsystem.h"
 #include "Castle/Automation/CastlePIEAutomation.h"
 #include "Blueprint/SlateBlueprintLibrary.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
@@ -43,6 +44,7 @@
 #include "MassEntityConfigAsset.h"
 #include "Misc/AutomationTest.h"
 #include "Slate/SceneViewport.h"
+#include "Sound/SoundBase.h"
 #include "Tests/AutomationCommon.h"
 #include "Widgets/SWindow.h"
 
@@ -91,6 +93,8 @@ public:
 			return true;
 		}
 		if (Step == 0) { return Wait(TEXT("教学导演未初始化")); }
+		const auto* Audio = UCastleAudioSubsystem::GetForWorld(World);
+		if (!Audio) { return Fail(TEXT("教程没有音频子系统")); }
 		if (Step == 1 && !bTutorialHealthLockChecked)
 		{
 			auto* MainTowerSubsystem = World->GetSubsystem<UCastleMainTowerSubsystem>();
@@ -112,6 +116,8 @@ public:
 		if (Step != LastStep)
 		{
 			Test.TestEqual(TEXT("逐步推进，无跳步"), Step, LastStep + 1);
+			Test.TestEqual(TEXT("仅 S10 战斗期间切换战斗 BGM"), Audio->GetCurrentBGMTrack(),
+				Step == 10 ? ECastleBGMTrack::Battle : ECastleBGMTrack::Build);
 			Test.TestFalse(TEXT("正式导演在 TutorialMap 保持关闭"), World->GetSubsystem<UCastleDirectorSubsystem>()->IsRunning());
 			LastStep = Step;
 			Action = 0;
@@ -239,6 +245,8 @@ public:
 				Test.TestFalse(TEXT("手动点塔前拒绝开启自动出兵"), Dispatch->SetAutoDispatchEnabled(true));
 				Test.TestFalse(TEXT("拒绝自动出兵时尚未产生城主气泡"), Tutorial->HasShownDispatchBubble());
 				if (!Dispatch->BeginManualDispatch(Reason)) { return Fail(Reason.ToString()); }
+				Test.TestEqual(TEXT("城主派出气泡选择独立配音"), GetNameSafe(Audio->GetCurrentVoiceSound()),
+					FString(TEXT("SW_Voice_CryBubble")));
 				Dispatch->StopManualDispatch();
 			}
 			break;

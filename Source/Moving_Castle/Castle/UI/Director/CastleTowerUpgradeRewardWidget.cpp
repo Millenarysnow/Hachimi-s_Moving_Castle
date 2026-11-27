@@ -1,4 +1,5 @@
 #include "CastleTowerUpgradeRewardWidget.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/UI/Items/CastleWildcardRoomPickerWidget.h"
@@ -78,5 +79,6 @@ void UCastleTowerUpgradeRewardWidget::RefreshRewards(const TConstArrayView<FCast
 
 void UCastleTowerUpgradeRewardWidget::Continue()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (UCastleDirectorSubsystem* Source = Director.Get()) { Source->DiscardTowerUpgradeRewards(); }
 }

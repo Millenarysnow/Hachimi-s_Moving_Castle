@@ -455,7 +455,11 @@ foreach ($entry in $testEntries) {
           elseif ($entry.PSObject.Properties['status']) { [string]$entry.status }
           else { '' }
 
-    $warns = if ($entry.PSObject.Properties['warnings'] -and $null -ne $entry.warnings) { @($entry.warnings) } else { @() }
+    # PowerShell 会把 if 表达式中的单元素数组展开成标量；先赋空数组再单独赋值，确保 .Count 对 0/1/多条 Warning 都有效。
+    $warns = @()
+    if ($entry.PSObject.Properties['warnings'] -and $null -ne $entry.warnings) {
+        $warns = @($entry.warnings)
+    }
     $totalWarnings += $warns.Count
 
     if ($st -in @('Success', 'passed', 'Passed')) {

@@ -1,4 +1,5 @@
 #include "Items/CastleWildcardRoomPickerWidget.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Blueprint/WidgetTree.h"
 #include "CastleBoard.h"
@@ -20,6 +21,8 @@ void UCastleWildcardChoiceButton::BindChoice(FSimpleDelegate InAction)
 
 void UCastleWildcardChoiceButton::Choose()
 {
+	// 同一类动态按钮用于万能卡属性与主塔升级奖励。
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	Action.ExecuteIfBound();
 }
 
@@ -51,6 +54,7 @@ bool UCastleWildcardRoomPickerWidget::BindReward(UCastlePendingRoomReward* InRew
 
 void UCastleWildcardRoomPickerWidget::OpenReward()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	FText Failure;
 	BeginBoundReward(Failure);
 }
@@ -212,6 +216,7 @@ void UCastleWildcardRoomPickerWidget::ClearCardPreview()
 
 void UCastleWildcardRoomPickerWidget::Confirm()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (!Reward || !bChoosing || !Options.Definitions.IsValidIndex(DefinitionIndex) || !Options.Colors.IsValidIndex(ColorIndex)
 		|| !Options.Numbers.IsValidIndex(NumberIndex) || !ConfirmButton->GetIsEnabled())
 	{
@@ -232,6 +237,7 @@ void UCastleWildcardRoomPickerWidget::Confirm()
 
 void UCastleWildcardRoomPickerWidget::Cancel()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (!Reward || !bChoosing)
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("万能卡弹窗 %s 没有可取消的奖励。"), *GetPathName());
@@ -248,6 +254,7 @@ void UCastleWildcardRoomPickerWidget::Cancel()
 
 void UCastleWildcardRoomPickerWidget::Finish(const bool bClaimed)
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::ClosePanel);
 	bChoosing = false;
 	Options = {};
 	DefinitionChoices->ClearChildren();

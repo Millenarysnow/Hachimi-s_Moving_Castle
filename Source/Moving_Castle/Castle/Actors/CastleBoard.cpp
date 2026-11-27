@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleBoard.h"
+#include "Audio/CastleAudioSubsystem.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/Items/CastleBadgeSubsystem.h"
 #include "Castle/Placement/CastleTowerSideGridComponent.h"
@@ -920,6 +921,8 @@ void ACastleBoard::HandlePlacementFinished(UAssemblyFlightComponent* Flight, con
 	}
 	Building->SetPlacementComplete(true);
 	RefreshHighwayMarkersAt(Building->GetOccupiedCoordinates()[0]);
+	// 飞入并提交有效占格后才反馈建造成功。
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Build);
 	UE_LOG(LogMoving_Castle, Display, TEXT("放置飞入完成，开始检查合并 [%s]。"), *Building->GetName());
 	if (Request.bTryMerge) { ReadyMergeRequests.Add(Building, Request.Origin); }
 	ResolveReadyMerges();

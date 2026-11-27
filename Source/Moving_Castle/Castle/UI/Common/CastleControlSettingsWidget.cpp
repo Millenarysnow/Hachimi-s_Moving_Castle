@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleControlSettingsWidget.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "CastlePlayerController.h"
 #include "Components/Button.h"
@@ -52,16 +53,19 @@ void UCastleControlSettingsWidget::RefreshMode(ECastleControlMode Mode)
 
 void UCastleControlSettingsWidget::SelectClassic()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (auto* Controller = SettingsController.Get()) { Controller->SetControlMode(ECastleControlMode::Classic); }
 }
 
 void UCastleControlSettingsWidget::SelectDesign()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (auto* Controller = SettingsController.Get()) { Controller->SetControlMode(ECastleControlMode::Design); }
 }
 
 void UCastleControlSettingsWidget::CloseSettings()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	// 与齿轮和 O 键复用关闭入口，让控制器按当前预设恢复输入焦点。
 	if (auto* Controller = SettingsController.Get())
 	{

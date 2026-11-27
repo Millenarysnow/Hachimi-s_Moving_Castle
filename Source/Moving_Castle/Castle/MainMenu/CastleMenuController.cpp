@@ -1,4 +1,5 @@
 #include "CastleMenuController.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "CastleMenuModel.h"
 #include "CastleMenuStage.h"
@@ -154,6 +155,7 @@ void ACastleMenuController::BeginPlay()
 	FString Error;
 	const UCastleMenuModel* Model = UCastleMenuModel::LoadForMenu(this, Error);
 	if (!Model || !Stage->ShowModel(*Model, Error)) { Report(Error); return; }
+	UCastleAudioSubsystem::SetBGM(GetWorld(), ECastleBGMTrack::MainMenu);
 	UE_LOG(LogMoving_Castle, Display, TEXT("开始界面已就绪：主塔 %d 组、房间 %d 组，城堡每秒旋转 2 度。"), Model->Tower.Num(), Model->Rooms.Num());
 }
 
@@ -161,6 +163,7 @@ FReply ACastleMenuController::Choose(const ECastleMenuAction Action)
 {
 	// 同一帧的触摸和确认事件只派发一次旅行；旅行失败后恢复显式选择。
 	if (bLeaving) { return FReply::Handled(); }
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (Action == ECastleMenuAction::Quit)
 	{
 		bLeaving = true;
@@ -182,6 +185,8 @@ FReply ACastleMenuController::Choose(const ECastleMenuAction Action)
 		return FReply::Handled();
 	}
 	bLeaving = true;
+	// 只有地图检查通过后才播放进入游戏的跨图短音。
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::EnterGame);
 	UGameplayStatics::OpenLevel(this, FName(Map));
 	return FReply::Handled();
 }

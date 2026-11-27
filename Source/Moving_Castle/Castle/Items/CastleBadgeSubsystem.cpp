@@ -1,4 +1,5 @@
 #include "Items/CastleBadgeSubsystem.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Moving_Castle.h"
 #include "Engine/GameInstance.h"
@@ -53,6 +54,7 @@ bool UCastleBadgeSubsystem::TryAcquireBadge(const FCastleBadgeDefinition& Badge,
 	else
 	{
 		Badges.Add(Badge);
+		UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Reward);
 		UE_LOG(LogMoving_Castle, Display, TEXT("已领取徽章 %s，占用 %d/%d 槽。"),
 			*Badge.GetDisplayName().ToString(), Badges.Num(), MaxBadges);
 	}
@@ -79,6 +81,8 @@ bool UCastleBadgeSubsystem::TryReplaceBadgeAt(const int32 ReplaceSlotIndex, cons
 
 	Badges[ReplaceSlotIndex] = PendingBadge.GetValue();
 	PendingBadge.Reset();
+	// 槽满时只有确认替换才是实际领取，候选弹窗本身不播放奖励音。
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Reward);
 	UE_LOG(LogMoving_Castle, Display, TEXT("徽章槽 %d 已替换为 %s。"),
 		ReplaceSlotIndex, *Badges[ReplaceSlotIndex].GetDisplayName().ToString());
 	OnBadgesChanged.Broadcast();

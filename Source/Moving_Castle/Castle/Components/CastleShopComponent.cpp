@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleShopComponent.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
@@ -182,6 +183,7 @@ void UCastleShopComponent::CloseShop()
 	if (bOpen && !bTrading)
 	{
 		bOpen = false;
+		UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::ClosePanel);
 		OnShopChanged.Broadcast();
 	}
 }
@@ -442,6 +444,8 @@ bool UCastleShopComponent::RefreshOffersInternal(const bool bRewardRefresh, FTex
 				*Backpack->GetPathName());
 		}
 	}
+	// 新货架已经原子提交，刷新拒绝或预备奖励商店时不提示翻页。
+	if (!bRewardRefresh) { UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::PageTurn); }
 	OnShopChanged.Broadcast();
 	return true;
 }

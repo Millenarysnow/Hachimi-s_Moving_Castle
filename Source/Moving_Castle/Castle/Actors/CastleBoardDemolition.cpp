@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleBoard.h"
+#include "Audio/CastleAudioSubsystem.h"
 #include "Algo/MinElement.h"
 #include "BuildingMergeComponent.h"
 #include "CastleBackpackComponent.h"
@@ -351,5 +352,7 @@ bool ACastleBoard::DemolishBuildingCellToBackpack(ACastleBuildingBase* Building,
 		}));
 	OnLayoutCommitted.Broadcast(this, ChangeOrigin);
 	Backpack->OnBackpackChanged.Broadcast();
+	// 重组与返还卡牌均已提交，每次合法拆除只反馈一次。
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Demolish);
 	return true;
 }

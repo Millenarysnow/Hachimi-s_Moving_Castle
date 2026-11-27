@@ -1,5 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
+#include "Audio/CastleAudioSubsystem.h"
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 #include "Castle/Automation/CastlePIEAutomation.h"
@@ -57,6 +58,18 @@ public:
 		if (!World || !World->HasBegunPlay()) { return false; }
 		auto* Director = World->GetSubsystem<UCastleDirectorSubsystem>();
 		if (!Test->TestTrue(TEXT("正式地图导演已运行"), Director && Director->IsRunning())) { return true; }
+		const auto* Audio = UCastleAudioSubsystem::GetForWorld(World);
+		if (!Test->TestNotNull(TEXT("正式局音频实例"), Audio)) { return true; }
+		// 战斗流程测试通过原本的节点事务驱动每一阶段，音频须在同一帧与阶段一致。
+		switch (Director->GetPhase())
+		{
+		case ECastleDirectorPhase::Editing:
+		case ECastleDirectorPhase::Reward: Test->TestEqual(TEXT("编辑及奖励阶段使用建造 BGM"), Audio->GetCurrentBGMTrack(), ECastleBGMTrack::Build); break;
+		case ECastleDirectorPhase::Battle: Test->TestEqual(TEXT("正式战斗使用战斗 BGM"), Audio->GetCurrentBGMTrack(), ECastleBGMTrack::Battle); break;
+		case ECastleDirectorPhase::SkyIsland: Test->TestEqual(TEXT("正式空岛使用空岛 BGM"), Audio->GetCurrentBGMTrack(), ECastleBGMTrack::SkyIsland); break;
+		case ECastleDirectorPhase::GameOver: Test->TestEqual(TEXT("结束阶段停止音乐"), Audio->GetCurrentBGMTrack(), ECastleBGMTrack::None); break;
+		case ECastleDirectorPhase::Inactive: break;
+		}
 		auto* Board = Director->Board.Get();
 		auto* Navigation = World->GetSubsystem<UCastleNavigationSubsystem>();
 		auto* Dispatch = World->GetSubsystem<UCastleTowerDispatchSubsystem>();

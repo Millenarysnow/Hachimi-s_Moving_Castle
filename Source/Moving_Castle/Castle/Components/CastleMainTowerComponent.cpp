@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleMainTowerComponent.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "CastleMainTowerBalloonComponent.h"
 #include "Engine/World.h"
@@ -109,6 +110,8 @@ bool UCastleMainTowerComponent::ApplyDamageInternal(const float Damage, const bo
 	CurrentHealth = NextHealth;
 	const float AppliedDamage = PreviousHealth - CurrentHealth;
 	++AttackCount;
+	// 保命和锁血均可能抵消伤害，只在确实受到敌人伤害时反馈。
+	if (bEnemyAttack && AppliedDamage > 0.0f) { UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::AttackMainTower); }
 	// 破球警钟只由真实掉血引发；若气球扣保留了受击前的生命，本次通知的掉血量为零。
 	NotifyHealthChanged(PreviousHealth, AppliedDamage);
 

@@ -1,5 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #include "CastleDirectorSubsystem.h"
+#include "Audio/CastleAudioSubsystem.h"
 #include "Castle/MainMenu/CastleMenuModel.h"
 #include "Castle/Support/CastleSupportTowerSubsystem.h"
 #include "Castle/Items/CastleBadgeSubsystem.h"
@@ -730,7 +731,9 @@ bool UCastleDirectorSubsystem::TryInteractWithSkyIsland(
 		return false;
 	}
 	const FCastleSkyIslandInteractContext Context{ActiveSkyIsland.Get(), Controller.Get(), Hit};
-	return Target->CanInteract(Context, OutReason) && Target->ExecuteInteract(Context, OutReason);
+	const bool bInteracted = Target->CanInteract(Context, OutReason) && Target->ExecuteInteract(Context, OutReason);
+	if (bInteracted) { UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Interact); }
+	return bInteracted;
 }
 
 bool UCastleDirectorSubsystem::RequestIslandRoomShop(ACastleSkyIslandBase* Island, FText& OutReason)
@@ -825,6 +828,7 @@ void UCastleDirectorSubsystem::HandleBattleCleared(const ECastleBattleKind Kind,
 	{
 		// 精英的关号在三项奖励均可提交后才推进。金币预检失败时仍保持原战斗阶段。
 		if (!TryCommitRewards(true, true, true, Failure, Stage)) { return; }
+		UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Victory);
 		const FText AllGranted = INVTEXT("精英通关奖励已全部获得：金币、主塔回血、免费换批并开放商店");
 		ShowMessage(AllGranted, false);
 		UE_LOG(LogMoving_Castle, Display, TEXT("%s"), *AllGranted.ToString());
@@ -838,6 +842,7 @@ void UCastleDirectorSubsystem::HandleBattleCleared(const ECastleBattleKind Kind,
 	// 普通清场的道具事件属于本次胜利，结算一次后才进入三选一。
 	OnBattleClearedForItems.Broadcast(Kind, Stage);
 	SetPhase(ECastleDirectorPhase::Reward);
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Victory);
 	ShowMessage(FText::FromString(TEXT("通关奖励：请选择一项")), false);
 	UE_LOG(LogMoving_Castle, Display, TEXT("导演清场：已通过 %d 关，进入三选一，建造面保持隐藏。"), ClearedSteps);
 }
@@ -973,6 +978,9 @@ bool UCastleDirectorSubsystem::TryCommitRewards(const bool bGold, const bool bHe
 	if (bHealing) { Tower->ApplyHealing(Tower->MaxHealth * Config->HealFraction); }
 	if (PreparedShop.IsValid()) { Shop->CommitRewardShop(*PreparedShop); }
 	Nodes = MoveTemp(Candidates);
+	// 三选一合模态时提示关闭，两类通关奖励只在事务成功后提示发放。
+	if (Phase == ECastleDirectorPhase::Reward) { UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::ClosePanel); }
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Reward);
 	SetPhase(ECastleDirectorPhase::Editing);
 	if (!OrbitingRound.Rewards.IsEmpty()) { Backpack->OnBackpackChanged.Broadcast(); }
 	for (ACastleDirectorNodeActor* Candidate : Nodes) { Candidate->ActivateNode(); }
@@ -1194,6 +1202,7 @@ void UCastleDirectorSubsystem::HandleWildcardClosed(const bool bClaimed)
 void UCastleDirectorSubsystem::DiscardTowerUpgradeRewards()
 {
 	if (WildcardPicker || UpgradeRewards.IsEmpty()) { return; }
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::ClosePanel);
 	UE_LOG(LogMoving_Castle, Display, TEXT("主塔升级面板关闭，丢弃 %d 个未领取项。"), UpgradeRewards.Num());
 	UpgradeRewards.Reset();
 	UpgradeRoomRewards.Reset();
@@ -1211,6 +1220,16 @@ void UCastleDirectorSubsystem::SetPhase(const ECastleDirectorPhase NewPhase)
 		bFirstTowerDamageInBattle = false;
 	}
 	Phase = NewPhase;
+	// 正式局沿同一条曲目复用编辑与领奖，空岛和战斗各切换独立音乐。
+	switch (Phase)
+	{
+	case ECastleDirectorPhase::Editing:
+	case ECastleDirectorPhase::Reward: UCastleAudioSubsystem::SetBGM(GetWorld(), ECastleBGMTrack::Build); break;
+	case ECastleDirectorPhase::Battle: UCastleAudioSubsystem::SetBGM(GetWorld(), ECastleBGMTrack::Battle); break;
+	case ECastleDirectorPhase::SkyIsland: UCastleAudioSubsystem::SetBGM(GetWorld(), ECastleBGMTrack::SkyIsland); break;
+	case ECastleDirectorPhase::GameOver: UCastleAudioSubsystem::SetBGM(GetWorld(), ECastleBGMTrack::None); break;
+	case ECastleDirectorPhase::Inactive: break;
+	}
 	UpdatePresentation();
 	OnDirectorPhaseChanged.Broadcast(Phase);
 	if (bEnteredEditing) { OnEditingPhaseEntered.Broadcast(); }
@@ -1271,6 +1290,7 @@ void UCastleDirectorSubsystem::EnterGameOver(const FText& Failure)
 	Controller->GetShop()->CloseShop();
 	DestroyNodes();
 	SetPhase(ECastleDirectorPhase::GameOver);
+	if (IsValid(Tower) && !Tower->IsAlive()) { UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Defeat); }
 	if (!bAutomation && !Controller->SetPause(true))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("导演游戏结束：SetPause(true) 失败。"));

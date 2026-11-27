@@ -1,4 +1,5 @@
 #include "Items/CastleBadgeReplaceModalWidget.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Castle/Items/CastleBadgeSubsystem.h"
 #include "Components/Button.h"
@@ -135,6 +136,7 @@ bool UCastleBadgeReplaceModalWidget::UpdateBadgeSlots(const UCastleBadgeSubsyste
 
 void UCastleBadgeReplaceModalWidget::Replace(const int32 SlotIndex)
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	UCastleBadgeSubsystem* Source = Badges.Get();
 	FCastleBadgeDefinition Pending;
 	if (!Source || !Source->TryGetPendingBadge(Pending))
@@ -143,11 +145,12 @@ void UCastleBadgeReplaceModalWidget::Replace(const int32 SlotIndex)
 		return;
 	}
 	FText Failure;
-	Source->TryReplaceBadgeAt(SlotIndex, Pending, Failure);
+	if (Source->TryReplaceBadgeAt(SlotIndex, Pending, Failure)) { UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::ClosePanel); }
 }
 
 void UCastleBadgeReplaceModalWidget::Discard()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (UCastleBadgeSubsystem* Source = Badges.Get())
 	{
 		Source->DiscardPendingBadge();

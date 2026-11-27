@@ -1,5 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #include "CastleDirectorWidgets.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Castle/Combat/CastleCombatSubsystem.h"
 #include "Castle/Controllers/CastlePlayerController.h"
@@ -627,16 +628,19 @@ void UCastleRewardChoiceWidget::NativeTick(const FGeometry& Geometry, const floa
 
 void UCastleRewardChoiceWidget::ChooseGold()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	FText Reason;
 	GetWorld()->GetSubsystem<UCastleDirectorSubsystem>()->TryChooseReward(ECastleDirectorReward::Gold, Reason);
 }
 void UCastleRewardChoiceWidget::ChooseHealing()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	FText Reason;
 	GetWorld()->GetSubsystem<UCastleDirectorSubsystem>()->TryChooseReward(ECastleDirectorReward::Healing, Reason);
 }
 void UCastleRewardChoiceWidget::ChooseShop()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	FText Reason;
 	GetWorld()->GetSubsystem<UCastleDirectorSubsystem>()->TryChooseReward(ECastleDirectorReward::Shop, Reason);
 }
@@ -679,6 +683,7 @@ void UCastleGameOverWidget::NativeTick(const FGeometry& Geometry, const float De
 
 void UCastleGameOverWidget::Restart()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	GetWorld()->GetSubsystem<UCastleDirectorSubsystem>()->RestartCurrentMap();
 }
 
