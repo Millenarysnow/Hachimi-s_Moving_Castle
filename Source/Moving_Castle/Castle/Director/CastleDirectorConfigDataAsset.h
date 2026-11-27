@@ -9,7 +9,7 @@
 #include "CastleDirectorConfigDataAsset.generated.h"
 
 class UMassEntityConfigAsset;
-class UStaticMesh;
+class UNiagaraSystem;
 class UCastleDirectorHUDWidget;
 class UCastleRewardChoiceWidget;
 class UCastleGameOverWidget;
@@ -93,12 +93,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|节点", meta = (Units = "cm"))
 	float NodeTriggerRadius = 300.0f;
 
-	/** 节点视觉网格与缩放。 */
+	/** 圆形门户 Niagara 资产必须公开 User.Size 和 User.Color，分别用于尺寸和节点类型配色。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|节点")
-	TObjectPtr<UStaticMesh> NodeMesh;
+	TObjectPtr<UNiagaraSystem> NodePortalSystem;
 
+	/** 写入门户的 User.Size 参数，使 Niagara 的世界空间粒子也统一受缩放。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|节点", meta = (ClampMin = "0.01"))
-	float NodeMeshScale = 4.0f;
+	float NodePortalScale = 1.0f;
 
 	/** 正式出兵策略和 NPC 模板分别显式指定，配置校验在单局启动时完成。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|NPC")

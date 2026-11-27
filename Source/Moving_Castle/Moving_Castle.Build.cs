@@ -33,7 +33,8 @@ public class Moving_Castle : ModuleRules
 			"SlateCore"
 		});
 
-		PrivateDependencyModuleNames.AddRange(new string[] { });
+		// 导演浮空门户由原生 Niagara 组件播放，交互仍由节点的触发球负责。
+		PrivateDependencyModuleNames.AddRange(new string[] { "Niagara" });
 		// 几何身份在编辑器离线生成；正式游戏只读取目录，不依赖 MeshDescription 或 CPU 顶点。
 		if (Target.bBuildEditor)
 		{

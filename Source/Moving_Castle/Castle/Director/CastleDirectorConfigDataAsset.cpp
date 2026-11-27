@@ -3,7 +3,7 @@
 #include "CastleDirectorConfigDataAsset.h"
 
 #include "MassEntityConfigAsset.h"
-#include "Engine/StaticMesh.h"
+#include "NiagaraSystem.h"
 #include "Blueprint/UserWidget.h"
 #include "Castle/UI/Director/CastleDirectorWidgets.h"
 #include "Castle/UI/Director/CastleTowerUpgradeRewardWidget.h"
@@ -100,8 +100,18 @@ bool UCastleDirectorConfigDataAsset::ValidateConfig(FText& OutFailureReason) con
 		return Reject(TEXT("NodeArcDegrees"), FString::SanitizeFloat(NodeArcDegrees));
 	}
 	if (!FMath::IsFinite(NodeTriggerRadius) || NodeTriggerRadius <= 0.0f) { return Reject(TEXT("NodeTriggerRadius"), FString::SanitizeFloat(NodeTriggerRadius)); }
-	if (!IsValid(NodeMesh)) { return Reject(TEXT("NodeMesh"), TEXT("None")); }
-	if (!FMath::IsFinite(NodeMeshScale) || NodeMeshScale <= 0.0f) { return Reject(TEXT("NodeMeshScale"), FString::SanitizeFloat(NodeMeshScale)); }
+	if (!IsValid(NodePortalSystem)) { return Reject(TEXT("NodePortalSystem"), TEXT("None")); }
+	if (!FMath::IsFinite(NodePortalScale) || NodePortalScale <= 0.0f)
+	{
+		return Reject(TEXT("NodePortalScale"), FString::SanitizeFloat(NodePortalScale));
+	}
+	// Niagara 参数缺失时拒绝开局，避免出现显示尺寸或颜色却无法按配置应用的门户。
+	const auto& PortalParameters = NodePortalSystem->GetExposedParameters();
+	if (PortalParameters.IndexOf(FNiagaraVariableBase(FNiagaraTypeDefinition::GetFloatDef(), TEXT("User.Size"))) == INDEX_NONE
+		|| PortalParameters.IndexOf(FNiagaraVariableBase(FNiagaraTypeDefinition::GetColorDef(), TEXT("User.Color"))) == INDEX_NONE)
+	{
+		return Reject(TEXT("NodePortalSystem"), NodePortalSystem->GetPathName() + TEXT("（缺少浮点 User.Size 或颜色 User.Color）"));
+	}
 	if (!IsValid(NPCConfiguration)) { return Reject(TEXT("NPCConfiguration"), TEXT("None")); }
 	if (!IsValid(DispatchConfig)) { return Reject(TEXT("DispatchConfig"), TEXT("None")); }
 	if (!DispatchConfig->ValidateConfiguration(OutFailureReason)) { return false; }
