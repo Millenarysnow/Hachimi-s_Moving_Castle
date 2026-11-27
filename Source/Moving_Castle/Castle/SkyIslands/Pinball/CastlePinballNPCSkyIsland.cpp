@@ -18,6 +18,7 @@ ACastlePinballNPCSkyIsland::ACastlePinballNPCSkyIsland()
 {
 	// 绑定该玩法的岛体，位置沿用作者对齐的岛面中心。
 	SetIslandArtMesh(TEXT("SM_SkyIsland_PinballNPC"));
+	SetDepartureArtMesh(TEXT("SM_SkyIsland_Departure_PinballNPC"));
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = false;
 	Playfield = CreateDefaultSubobject<USceneComponent>(TEXT("PinballPlayfield"));
@@ -28,12 +29,12 @@ ACastlePinballNPCSkyIsland::ACastlePinballNPCSkyIsland()
 	Console = CreateDefaultSubobject<UCastlePinballNPCConsoleComponent>(TEXT("PinballConsole"));
 	Console->SetupAttachment(Playfield);
 
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
-	// 盘面美术包含投币台外形。这个方盒只负责通过可见性射线选择操作台。
-	Console->SetStaticMesh(Cube.Object);
+	// 投币台独立网格的坐标相对原盘面组件原点保存，和盘面共用倾斜坐标系。
+	Console->SetStaticMesh(LoadIslandArt(TEXT("SM_Pinball_Console")));
 	Console->SetRelativeLocation(FVector(CastlePinball::HalfLength + 65.0, 0.0, 39.0));
-	Console->SetRelativeScale3D(FVector(0.9, 1.4, 0.78));
-	Console->SetVisibility(false);
+	Console->SetRelativeScale3D(FVector::OneVector);
+	Console->SetCanEverAffectNavigation(false);
+	Console->SetVisibility(true);
 	BoardMesh = LoadIslandArt(TEXT("SM_Pinball_Board"));
 	PegMesh = LoadIslandArt(TEXT("SM_Pinball_Peg"));
 	GateMesh = LoadIslandArt(TEXT("SM_Pinball_Gate"));
@@ -56,7 +57,7 @@ bool ACastlePinballNPCSkyIsland::OnInitializeIsland(const FCastleSkyIslandContex
 	Config = IslandConfig.LoadSynchronous();
 	if (!Config || !Console->GetStaticMesh())
 	{
-		OutFailureReason = INVTEXT("弹珠机缺少配置资产或投币台查询网格。");
+		OutFailureReason = INVTEXT("弹珠机缺少配置资产或独立投币台网格。");
 		UE_LOG(LogMoving_Castle, Error, TEXT("空岛 %s，配置 %s：%s"), *GetPathName(),
 			*IslandConfig.ToSoftObjectPath().ToString(), *OutFailureReason.ToString());
 		return false;

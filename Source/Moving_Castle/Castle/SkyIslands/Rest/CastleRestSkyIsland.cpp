@@ -72,6 +72,7 @@ ACastleRestSkyIsland::ACastleRestSkyIsland()
 {
 	// 绑定该玩法的岛体，位置沿用作者对齐的岛面中心。
 	SetIslandArtMesh(TEXT("SM_SkyIsland_Rest"));
+	SetDepartureArtMesh(TEXT("SM_SkyIsland_Departure_Rest"));
 	ConfigAsset = TSoftObjectPtr<UCastleRestSkyIslandDataAsset>(FSoftObjectPath(
 		TEXT("/Game/MovingCastle/Data/SkyIslands/DA_RestSkyIsland.DA_RestSkyIsland")));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));

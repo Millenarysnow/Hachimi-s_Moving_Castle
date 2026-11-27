@@ -19,6 +19,7 @@
 #include "CastleMainTowerComponent.h"
 #include "CastlePlayerController.h"
 #include "CastleShopComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Editor.h"
 #include "EngineUtils.h"
 #include "Engine/StaticMesh.h"
@@ -41,15 +42,20 @@ namespace
 		ECastleSkyIslandType Type;
 		const TCHAR* Command;
 		const TCHAR* ArtMeshName;
+		const TCHAR* DepartureMeshName;
 		UClass* (*GetClass)();
 	};
 
 	// 先验证首步没有空岛节点时也能直入，再让四次访问共用同一个正式单局。
 	const FIslandVisit Visits[] = {
-		{ECastleSkyIslandType::Rest, TEXT("CastleEnterSkyIsland Rest"), TEXT("SM_SkyIsland_Rest"), &ACastleRestSkyIsland::StaticClass},
-		{ECastleSkyIslandType::Shop, TEXT("CastleEnterSkyIsland Shop"), TEXT("SM_SkyIsland_Shop"), &ACastleShopSkyIsland::StaticClass},
-		{ECastleSkyIslandType::NPC, TEXT("CastleEnterSkyIsland NPC"), TEXT("SM_SkyIsland_PinballNPC"), &ACastlePinballNPCSkyIsland::StaticClass},
-		{ECastleSkyIslandType::Gamble, TEXT("CastleEnterSkyIsland Gamble"), TEXT("SM_SkyIsland_Gamble"), &ACastleGambleSkyIsland::StaticClass}
+		{ECastleSkyIslandType::Rest, TEXT("CastleEnterSkyIsland Rest"), TEXT("SM_SkyIsland_Rest"),
+			TEXT("SM_SkyIsland_Departure_Rest"), &ACastleRestSkyIsland::StaticClass},
+		{ECastleSkyIslandType::Shop, TEXT("CastleEnterSkyIsland Shop"), TEXT("SM_SkyIsland_Shop"),
+			TEXT("SM_SkyIsland_Departure_Shop"), &ACastleShopSkyIsland::StaticClass},
+		{ECastleSkyIslandType::NPC, TEXT("CastleEnterSkyIsland NPC"), TEXT("SM_SkyIsland_PinballNPC"),
+			TEXT("SM_SkyIsland_Departure_PinballNPC"), &ACastlePinballNPCSkyIsland::StaticClass},
+		{ECastleSkyIslandType::Gamble, TEXT("CastleEnterSkyIsland Gamble"), TEXT("SM_SkyIsland_Gamble"),
+			TEXT("SM_SkyIsland_Departure_Gamble"), &ACastleGambleSkyIsland::StaticClass}
 	};
 	// 三个奖励岛各重访一次，继续复用同一 GameInstance 验证已读标记。
 	constexpr int32 FirstVisitCount = UE_ARRAY_COUNT(Visits);
@@ -154,6 +160,11 @@ namespace
 			Test.TestTrue(TEXT("岛面直径约 24 米且中心与岛根对齐"), FMath::IsNearlyEqual(Span.X, 2400.0, 20.0)
 				&& FMath::IsNearlyEqual(Span.Y, 2400.0, 20.0) && Art->GetRelativeLocation().IsNearlyZero());
 			Test.TestEqual(TEXT("整岛装饰让交互组件接收射线"), Art->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
+			auto* Departure = FindObjectFast<UCastleSkyIslandDepartureComponent>(ActiveIsland.Get(), TEXT("DeparturePortal"));
+			if (!Test.TestTrue(TEXT("离开门使用独立可见网格且不影响导航"), Departure && Departure->IsVisible()
+				&& Departure->GetStaticMesh() && Departure->GetStaticMesh()->GetName() == Visit.DepartureMeshName
+				&& !Departure->CanEverAffectNavigation())) { return false; }
+			Test.TestEqual(TEXT("离开门使用可见性查询碰撞"), Departure->GetCollisionEnabled(), ECollisionEnabled::QueryOnly);
 			++Island;
 			Test.TestFalse(TEXT("重复或上次空岛没有残留"), static_cast<bool>(Island));
 			Test.TestEqual(TEXT("进入空岛阶段"), Director.GetPhase(), ECastleDirectorPhase::SkyIsland);
@@ -220,7 +231,12 @@ namespace
 				break;
 			}
 			case ECastleSkyIslandType::NPC:
-				if (!Interact(Director, Island.FindComponentByClass<UCastlePinballNPCConsoleComponent>(),
+			{
+				auto* Console = Island.FindComponentByClass<UCastlePinballNPCConsoleComponent>();
+				if (!Test.TestTrue(TEXT("弹珠机投币台使用独立可见静态网格"), Console && Console->IsVisible()
+					&& Console->GetStaticMesh() && Console->GetStaticMesh()->GetName() == TEXT("SM_Pinball_Console")
+					&& !Console->CanEverAffectNavigation())) { return false; }
+				if (!Interact(Director, Console,
 					TEXT("NPC 岛弹珠机控制台"))) { return false; }
 				Test.TestTrue(TEXT("瞄准实际锁定移动和视角"), Controller.IsMoveInputIgnored() && Controller.IsLookInputIgnored());
 				PinballStartingGold = GoldBefore;
@@ -229,9 +245,21 @@ namespace
 				Stage = EStage::PinballLaunch;
 				Deadline = FPlatformTime::Seconds() + 5.0;
 				return true;
+			}
 			case ECastleSkyIslandType::Gamble:
 			{
 				const auto* Gamble = CastChecked<ACastleGambleSkyIsland>(&Island);
+				const TCHAR* MachineNames[] = {TEXT("Roulette"), TEXT("SlotMachine"), TEXT("BalloonRecycler")};
+				const TCHAR* MeshNames[] = {TEXT("SM_Gamble_Roulette"), TEXT("SM_Gamble_SlotMachine"),
+					TEXT("SM_Gamble_BalloonRecycler")};
+				for (int32 MachineIndex = 0; MachineIndex < UE_ARRAY_COUNT(MachineNames); ++MachineIndex)
+				{
+					auto* Machine = FindObjectFast<UCastleGambleMachineComponent>(&Island, MachineNames[MachineIndex]);
+					if (!Test.TestTrue(TEXT("赌博机台使用独立可见静态网格"), Machine && Machine->IsVisible()
+						&& Machine->GetStaticMesh() && Machine->GetStaticMesh()->GetName() == MeshNames[MachineIndex]
+						&& !Machine->CanEverAffectNavigation())) { return false; }
+					if (!VerifyVisibilityRayHit(Machine, MachineNames[MachineIndex])) { return false; }
+				}
 				auto* Recycler = FindObjectFast<UCastleGambleMachineComponent>(&Island, TEXT("BalloonRecycler"));
 				auto* Tower = Island.GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>()->GetRegisteredMainTower();
 				if (!Test.TestNotNull(TEXT("赌博岛绑定正式主塔"), Tower)) { return false; }
@@ -309,6 +337,19 @@ namespace
 			const FVector Location = Target->GetComponentLocation();
 			const bool bInteracted = Director.TryInteractWithSkyIsland(Location + FVector::UpVector * 450.0, Location, Reason);
 			return Test.TestTrue(FString::Printf(TEXT("交互 %s %s"), Name, *Reason.ToString()), bInteracted);
+		}
+
+		bool VerifyVisibilityRayHit(const UPrimitiveComponent* Target, const TCHAR* Name)
+		{
+			if (!Test.TestNotNull(Name, Target)) { return false; }
+			UWorld* World = Target->GetWorld();
+			const FVector Location = Target->GetComponentLocation();
+			FHitResult Hit;
+			const FCollisionQueryParams Params(SCENE_QUERY_STAT(CastleSkyIslandMeshAcceptance), false);
+			const bool bHit = World && World->LineTraceSingleByChannel(
+				Hit, Location + FVector::UpVector * 450.0, Location, ECC_Visibility, Params);
+			return Test.TestTrue(FString::Printf(TEXT("Visibility 射线命中独立网格 %s"), Name),
+				bHit && Hit.GetComponent() == Target);
 		}
 
 		void RunCommand(UWorld& World, const TCHAR* Command)

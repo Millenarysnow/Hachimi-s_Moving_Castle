@@ -79,10 +79,30 @@ UStaticMesh* ACastleSkyIslandBase::LoadIslandArt(const TCHAR* AssetName)
 
 void ACastleSkyIslandBase::SetIslandArtMesh(const TCHAR* AssetName)
 {
-	// 正式岛体和原生碰撞共享厘米坐标；测试夹具保留自带的白盒地面和出口。
+	// 正式岛体和原生碰撞共享厘米坐标；出口由单独的美术网格组件负责显示。
 	IslandArt->SetStaticMesh(LoadIslandArt(AssetName));
 	Platform->SetVisibility(false);
 	Departure->SetVisibility(false);
+}
+
+void ACastleSkyIslandBase::SetDepartureArtMesh(const TCHAR* AssetName)
+{
+	const FString Path = FString::Printf(TEXT("/Game/MovingCastle/Model/SkyIslands/%s.%s"), AssetName, AssetName);
+	ConstructorHelpers::FObjectFinder<UStaticMesh> Mesh(*Path);
+	if (!Mesh.Succeeded())
+	{
+		MissingDepartureArtPath = Path;
+		Departure->SetStaticMesh(nullptr);
+		Departure->SetVisibility(false);
+		UE_LOG(LogMoving_Castle, Error, TEXT("空岛 %s 缺少独立离开门网格 %s。"), *GetPathName(), *Path);
+		return;
+	}
+
+	// 该资产已将源网格局部坐标平移到门组件原点，因此门体和射线碰撞共享原有世界位置。
+	Departure->SetStaticMesh(Mesh.Object);
+	Departure->SetRelativeScale3D(FVector::OneVector);
+	Departure->SetCanEverAffectNavigation(false);
+	Departure->SetVisibility(true);
 }
 
 bool ACastleSkyIslandBase::InitializeIsland(const FCastleSkyIslandContext& Context, FText& OutFailureReason)
@@ -93,6 +113,14 @@ bool ACastleSkyIslandBase::InitializeIsland(const FCastleSkyIslandContext& Conte
 			FText::FromString(MissingIslandArtPath));
 		UE_LOG(LogMoving_Castle, Error, TEXT("空岛 %s 的美术网格资产 %s：%s"),
 			*GetPathName(), *MissingIslandArtPath, *OutFailureReason.ToString());
+		return false;
+	}
+	if (!MissingDepartureArtPath.IsEmpty())
+	{
+		OutFailureReason = FText::Format(INVTEXT("空岛离开门网格资产 {0} 未加载。"),
+			FText::FromString(MissingDepartureArtPath));
+		UE_LOG(LogMoving_Castle, Error, TEXT("空岛 %s 的离开门网格资产 %s：%s"),
+			*GetPathName(), *MissingDepartureArtPath, *OutFailureReason.ToString());
 		return false;
 	}
 	if (bInitialized || Context.Step < 1 || !Context.Director.IsValid() || !Context.Controller.IsValid()

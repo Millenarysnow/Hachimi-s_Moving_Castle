@@ -235,6 +235,7 @@ ACastleShopSkyIsland::ACastleShopSkyIsland()
 {
 	// 绑定该玩法的岛体，位置沿用作者对齐的岛面中心。
 	SetIslandArtMesh(TEXT("SM_SkyIsland_Shop"));
+	SetDepartureArtMesh(TEXT("SM_SkyIsland_Departure_Shop"));
 	ConfigAsset = TSoftObjectPtr<UCastleShopSkyIslandDataAsset>(FSoftObjectPath(
 		TEXT("/Game/MovingCastle/Data/SkyIslands/DA_ShopSkyIsland.DA_ShopSkyIsland")));
 }
