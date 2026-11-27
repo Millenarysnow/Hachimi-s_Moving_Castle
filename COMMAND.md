@@ -31,7 +31,7 @@
 
 | 可复制示例 | 参数与运行条件 | 效果与反馈 |
 | --- | --- | --- |
-| `Castle.ShowPatrolPath 1` / `Castle.ShowPatrolPath 0` | Game 或 PIE。`1` 开启，`0` 关闭 | 开关当前世界的 NPC 共享巡逻线。已发布的有效巡逻轨迹含可走路段时会画线。 |
+| `Castle.ShowPatrolPath 1` / `Castle.ShowPatrolPath 0` | Game 或 PIE。世界开始播放时自动开启；`1` / `0` 可临时开启或关闭 | 调试当前世界的 NPC 共享巡逻线。已发布的有效巡逻轨迹含可走路段时会画线。 |
 | `CastleSpawnPatrolNPCs 32` | 数量为正整数，可省略，默认 `32`。需要项目玩家控制器、`DA_MassNPCBase` 和有效共享闭环 | 沿路线生成一批巡逻 NPC。先执行命令时会等待闭环就绪，重复执行会替换上一批调试 NPC。 |
 | `CastleAddPatrolWaypoints 3` | 增减量为整数，可为负数，调整后的上限须在 `1`～`99`。当前世界需要巡逻路线 Actor | 调整草稿路点上限，屏幕显示新上限。处于路径编辑模式时，HUD 的 `剩余路径点：X / Y` 同步刷新。 |
 | `CastleStartTowerDispatch` | 需要主塔出兵配置、允许编辑的状态和已提交的路点。按 `P` 进入路线编辑，放点后按 `Enter` 提交 | 开启主塔出兵会话，按配置设置 NPC 待命数量，屏幕显示自动出兵按键。 |
