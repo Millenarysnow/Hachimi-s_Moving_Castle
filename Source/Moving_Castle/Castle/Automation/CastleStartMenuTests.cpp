@@ -11,6 +11,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Misc/ConfigCacheIni.h"
 #include "UnrealClient.h"
+#include "Widgets/SWidget.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleStartMenuSessionTest, "MovingCastle.UI.StartMenu.Session",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -64,6 +65,12 @@ bool FCastleStartMenuSessionTest::RunTest(const FString& Parameters)
 			}
 			TestFalse(TEXT("首次选择标记初始为假"), Session->bHasChosenControlModeThisSession);
 			if (++CaptureFrames < 8) { return false; }
+			// 比较 Slate 实际布局值，避免仅验证资源引用而漏掉热区被放大或偏移的情况。
+			const TSharedPtr<SWidget> PlayButton = Menu->GetPlayButtonForAutomation();
+			if (!TestTrue(TEXT("开始游戏按钮已构建"), PlayButton.IsValid())) { return true; }
+			const FVector2D ButtonSize = PlayButton->GetCachedGeometry().GetLocalSize();
+			TestTrue(TEXT("开始游戏热区使用设计尺寸"), ButtonSize.Equals(FVector2D(333, 60)));
+			TestTrue(TEXT("默认键盘焦点位于开始游戏"), PlayButton->HasKeyboardFocus());
 			FScreenshotRequest::RequestScreenshot(Screenshots / TEXT("StartMenu.png"), true, false);
 			CaptureFrames = 0;
 			++Phase;

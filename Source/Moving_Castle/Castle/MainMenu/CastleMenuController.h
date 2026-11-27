@@ -44,6 +44,10 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 private:
 	friend class FCastleStartMenuSessionTest;
+#if WITH_DEV_AUTOMATION_TESTS
+	/** 供 PIE 核对实际绘制的开始按钮尺寸和焦点。 */
+	TSharedPtr<SWidget> GetPlayButtonForAutomation() const;
+#endif
 	/** 两个确认按钮与已确认玩家共用地图包校验和单次旅行门控。 */
 	FReply TravelTo(FName Map, TOptional<ECastleControlMode> NewMode = {});
 	void FocusMenuWidget(const TSharedPtr<SWidget>& Widget);

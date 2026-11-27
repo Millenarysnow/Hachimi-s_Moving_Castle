@@ -45,8 +45,8 @@ namespace
 
 	FMargin DesignRect(FVector2D Position, FVector2D Size)
 	{
-		// 约束画布的四个 Margin 是左右上下边界偏移，不是位置与宽高。
-		return FMargin(Position.X, Position.Y, Position.X + Size.X, Position.Y + Size.Y);
+		// 固定锚点的 Slate 槽位用左上坐标和宽高表示；调用点显式采用左上对齐。
+		return FMargin(Position.X, Position.Y, Size.X, Size.Y);
 	}
 
 	FString ValidateMenuAssets(const ACastleMenuStage& Stage)
@@ -125,7 +125,7 @@ public:
 		const auto Canvas = SNew(SConstraintCanvas).Visibility(EVisibility::SelfHitTestInvisible);
 		for (int32 Index = 0; Index < UE_ARRAY_COUNT(TitlePositions); ++Index)
 		{
-			Canvas->AddSlot().Offset(DesignRect(TitlePositions[Index], SpriteSizes[Index]))
+			Canvas->AddSlot().Alignment(FVector2D::ZeroVector).Offset(DesignRect(TitlePositions[Index], SpriteSizes[Index]))
 			[ SNew(SImage).Image(&Brushes[Index]).Visibility(EVisibility::HitTestInvisible) ];
 		}
 		TutorialChoice = AddChoice(*Canvas, *Args._Controller, INVTEXT("新手教程"), ECastleMenuAction::Tutorial, 569, 34, TutorialLabel, TutorialMarker);
@@ -204,14 +204,14 @@ private:
 				Image->SetVisibility(TAttribute<EVisibility>::CreateSP(&Button.Get(), &SCastleMenuSpriteButton::FocusVisibility));
 			}
 			if (bTint) { Image->SetColorAndOpacity(TAttribute<FSlateColor>::CreateSP(&Button.Get(), &SCastleMenuSpriteButton::FillTint)); }
-			Art->AddSlot().Offset(DesignRect(Offset, SpriteSizes[Sprite]))[Image];
+			Art->AddSlot().Alignment(FVector2D::ZeroVector).Offset(DesignRect(Offset, SpriteSizes[Sprite]))[Image];
 		};
 		AddArt(FocusFill, {-3, -3}, true, true);
 		AddArt(TextSprite, {LabelX, 9}, false, false);
 		AddArt(MarkerSprite, {9, 10}, false, false);
 		AddArt(FocusArrow, {289, 20}, true, false);
 		Button->SetContent(Art);
-		Canvas.AddSlot().Offset(DesignRect({183, Y}, {333, 60}))[Button];
+		Canvas.AddSlot().Alignment(FVector2D::ZeroVector).Offset(DesignRect({183, Y}, {333, 60}))[Button];
 		return Button;
 	}
 
@@ -258,6 +258,13 @@ bool ACastleMenuController::IsMenuReady() const
 {
 	return Menu.IsValid() && Menu->Error.IsEmpty();
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+TSharedPtr<SWidget> ACastleMenuController::GetPlayButtonForAutomation() const
+{
+	return Menu->FirstChoice;
+}
+#endif
 
 void ACastleMenuController::BeginPlay()
 {
