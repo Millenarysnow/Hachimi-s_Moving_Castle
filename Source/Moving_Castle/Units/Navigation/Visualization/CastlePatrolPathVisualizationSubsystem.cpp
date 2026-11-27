@@ -136,6 +136,18 @@ void UCastlePatrolPathVisualizationSubsystem::Initialize(FSubsystemCollectionBas
 	Navigation->OnSharedPathChanged.AddDynamic(this, &UCastlePatrolPathVisualizationSubsystem::HandleSharedPathChanged);
 }
 
+void UCastlePatrolPathVisualizationSubsystem::OnWorldBeginPlay(UWorld& InWorld)
+{
+	Super::OnWorldBeginPlay(InWorld);
+	// 世界开始播放时子系统均已完成 PostInitialize，因此可以复用带完整门控和资产校验的正式开关入口。
+	// 专用服务器没有渲染视图，沿用 SetPathDrawingEnabled 的既有限制，不启动巡逻线绘制。
+	if (InWorld.GetNetMode() != NM_DedicatedServer)
+	{
+		// 开启失败时 SetPathDrawingEnabled 已通过 RejectDrawing 输出资产及失败原因，不用默认资源继续运行。
+		SetPathDrawingEnabled(true);
+	}
+}
+
 bool UCastlePatrolPathVisualizationSubsystem::SetPathDrawingEnabled(bool bEnabled)
 {
 	const UWorld* World = GetWorld();
