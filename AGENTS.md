@@ -69,3 +69,11 @@
 
 - 项目安装了 UE5.8 官方 MCP，需要阅读使用文档 `Docs\UE5.8官方MCP使用指南.md` 
 
+## 协调器与自动化测试脚本
+
+> 本机 Windows PowerShell 默认限制脚本执行策略，调用以下脚本时统一使用 `powershell -NoProfile -ExecutionPolicy Bypass -File "<脚本路径>" ...`。
+
+- `Source/Tools/Coordinator/Invoke-CoordinatorTask.ps1`：Agent UE Coordinator 阻塞式任务封装脚本。支持 `-Action Register|Build|OpenEditor|Status|CloseTask|Disconnect`，自动将 `agentId`、`sessionToken`、`activeEditorTaskId` 与 `mcpUrl` 持久化到工作区 `Saved/Coordinator/coord_state.json`，并在脚本内部循环等待至编译 `succeeded`、Editor `ready` 或任务进程完全退出释放工作区，避免在对话轮次中手动高频轮询 `ue_task_status` 或因上下文压缩丢失 `taskId`。
+- `Source/Tools/Coordinator/Invoke-UeMcpTests.ps1`：受管 Editor 官方 MCP 自动化测试阻塞式封装脚本。默认读取 `Saved/Coordinator/coord_state.json` 中的 `mcpUrl`，自动完成会话握手、`DiscoverTests`、正则或精确名称校验、`RunTests` 阻塞等待与 `GetTestResults` 落盘，控制台仅输出精简统计与失败用例报错详情，避免全量原始测试 JSON 挤占上下文。
+
+

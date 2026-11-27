@@ -93,6 +93,8 @@ Test-NetConnection 127.0.0.1 -Port 9876
 
 `AutomationTestToolset.AutomationTestToolset` 在列出或运行测试前需要先调用 `DiscoverTests`。随后按需求调用 `ListTests`，检查测试名后再运行 `RunTests`；运行结束使用 `GetTestStatus` 和 `GetTestResults` 查看状态、错误及警告。一次运行中的测试尚未结束前，不要启动重叠的测试调用。
 
+在 Agent UE Coordinator 托管多工作区场景下，Editor MCP 监听的是协调器动态分配的端口（而非固定 `9876`）。此时优先使用仓库脚本 `Source/Tools/Coordinator/Invoke-CoordinatorTask.ps1` 管理编译与受管 Editor 启停，并使用 `Source/Tools/Coordinator/Invoke-UeMcpTests.ps1` 自动读取 `Saved/Coordinator/coord_state.json` 中的 `mcpUrl` 阻塞执行测试并输出精简汇总，避免手写临时轮询脚本或将大段原始测试 JSON 读入对话上下文。
+
 ## 官方参考
 
 - [Epic Unreal MCP in Unreal Editor（UE 5.8）](https://dev.epicgames.com/documentation/unreal-engine/unreal-mcp-in-unreal-editor)
