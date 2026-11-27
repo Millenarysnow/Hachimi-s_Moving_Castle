@@ -16,6 +16,11 @@ bool UCastleAudioConfigDataAsset::SetImportedAudioAssets(const TArray<USoundWave
 			static_cast<int32>(ECastleSFXEvent::Count), InWangcaiVoices.Num());
 		return false;
 	}
+	const auto PreviousBackgroundMusic = BackgroundMusicTracks;
+	const auto PreviousSoundEffects = SoundEffects;
+	const TObjectPtr<USoundWave> PreviousTowerHit = AlternateMainTowerHit;
+	const auto PreviousWangcaiVoices = WangcaiVoices;
+	const TObjectPtr<USoundWave> PreviousCryBubble = CryBubbleVoice;
 	const auto CopySounds = [](const TArray<USoundWave*>& Source, TArray<TObjectPtr<USoundWave>>& Destination)
 	{
 		Destination.Reset();
@@ -27,7 +32,14 @@ bool UCastleAudioConfigDataAsset::SetImportedAudioAssets(const TArray<USoundWave
 	CopySounds(InWangcaiVoices, WangcaiVoices);
 	CryBubbleVoice = InCryBubbleVoice;
 	FText Reason;
-	return ValidateConfiguration(Reason);
+	if (ValidateConfiguration(Reason)) { return true; }
+	// 校验失败时回滚整张总表，避免留下部分新导入引用。
+	BackgroundMusicTracks = PreviousBackgroundMusic;
+	SoundEffects = PreviousSoundEffects;
+	AlternateMainTowerHit = PreviousTowerHit;
+	WangcaiVoices = PreviousWangcaiVoices;
+	CryBubbleVoice = PreviousCryBubble;
+	return false;
 }
 
 bool UCastleAudioConfigDataAsset::ValidateConfiguration(FText& OutReason) const
