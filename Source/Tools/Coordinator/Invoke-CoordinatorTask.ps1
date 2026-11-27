@@ -91,6 +91,15 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
+# 本机回环地址直连，避免系统 HTTP_PROXY（如本机代理端口）拦截 127.0.0.1 导致 502
+$coordUriObj = [System.Uri]$CoordinatorUrl
+if ($coordUriObj.Host -in @('127.0.0.1', 'localhost', '::1')) {
+    $env:NO_PROXY = '127.0.0.1,localhost'
+    $env:HTTP_PROXY = ''
+    $env:HTTPS_PROXY = ''
+    [System.Net.WebRequest]::DefaultWebProxy = $null
+}
+
 # 校验 .uproject 文件路径真实存在且后缀正确
 if (-not (Test-Path -LiteralPath $ProjectFile -PathType Leaf)) {
     Write-Error "[Invoke-CoordinatorTask] 项目文件不存在: '$ProjectFile'"

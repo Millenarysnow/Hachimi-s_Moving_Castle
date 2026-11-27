@@ -103,6 +103,15 @@ if (-not $ListOnly -and [string]::IsNullOrWhiteSpace($TestRegex) -and ($null -eq
     exit 1
 }
 
+# 本机回环地址直连，避免 HTTP_PROXY 环境变量拦截 127.0.0.1 请求返回 502
+$mcpUriObj = [System.Uri]$McpUrl
+if ($mcpUriObj.Host -in @('127.0.0.1', 'localhost', '::1')) {
+    $env:NO_PROXY = '127.0.0.1,localhost'
+    $env:HTTP_PROXY = ''
+    $env:HTTPS_PROXY = ''
+    [System.Net.WebRequest]::DefaultWebProxy = $null
+}
+
 $script:RpcId = 0
 $script:SessionId = $null
 
@@ -331,18 +340,21 @@ if ($discoveredNames.Count -eq 0) {
     exit 1
 }
 
-# 3. 根据参数筛选并严格校验目标测试集
+# 3. 根据参数筛选并严格校验目标测试集（兼容 powershell -File 传入逗号分隔字符串）
 $selectedTests = @()
 if ($null -ne $TestNames -and $TestNames.Count -gt 0) {
+    $normalizedInputNames = @(
+        $TestNames | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
     $discoveredSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($dn in $discoveredNames) { $null = $discoveredSet.Add($dn) }
 
-    $missingNames = @($TestNames | Where-Object { -not $discoveredSet.Contains($_) })
+    $missingNames = @($normalizedInputNames | Where-Object { -not $discoveredSet.Contains($_) })
     if ($missingNames.Count -gt 0) {
         Write-Error ("[Invoke-UeMcpTests] 以下指定的测试名称在 Editor 注册表中不存在（禁止静默跳过）: {0}" -f ($missingNames -join ', '))
         exit 1
     }
-    $selectedTests = @($TestNames)
+    $selectedTests = @($normalizedInputNames)
 }
 if (-not [string]::IsNullOrWhiteSpace($TestRegex)) {
     $regexMatched = @($discoveredNames | Where-Object { $_ -match $TestRegex })

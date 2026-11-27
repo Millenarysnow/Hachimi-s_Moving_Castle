@@ -74,7 +74,12 @@ orchestrator 用的模型通常最强也最贵，worker 更便宜。混用的目
 - 会话名要让用户一眼看出任务。
 - 同一个功能不同时派发多个 worker，除非满足拆分判定。
 - **Codex Worker 启动/恢复必传参数：**
-  - 通过 PowerShell 管道喂入中文提示词前，显式设置无 BOM UTF-8 编码：`[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [System.Text.UTF8Encoding]::new($false)`。
+  - 通过 PowerShell 管道喂入中文提示词前，显式设置无 BOM UTF-8 编码与本机回环免代理（防止系统 `HTTP_PROXY` 拦截 `127.0.0.1` 控制面或受管 Editor 端口引发 `502`）：
+    ```powershell
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $env:NO_PROXY = '127.0.0.1,localhost'
+    ```
   - 统一附加配置覆盖参数，强制关闭会导致 300s 超时的 `node_repl`、项目禁止的内置 Computer Use 插件，以及在协调器动态端口模式下未启用的静态 `unreal-mcp`（`:9876`，避免启动时 `HTTP 502` 重连）：
     ```powershell
     codex exec -m gpt-6.2-sol `
