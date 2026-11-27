@@ -31,6 +31,9 @@ public:
 	/** 专供已锁定的敌方投射物追踪位置；不进行重新索敌。 */
 	bool GetActiveShieldLocation(uint64 ShieldId, FVector& OutLocation) const;
 
+	/** 整面耗尽剩余次数最多的已展开护盾，成功时返回耗尽前的次数并通知破盾表现。 */
+	bool TryConsumeStrongestActiveShield(int64& OutConsumedBlocks);
+
 	FCastleShieldStateChanged OnShieldStateChanged;
 
 private:

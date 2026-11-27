@@ -6,6 +6,7 @@
 #include "Camera/CameraActor.h"
 #include "Castle/Actors/CastleBoard.h"
 #include "Castle/Actors/CastleBuildingBase.h"
+#include "Castle/Automation/CastlePIEAutomation.h"
 #include "Castle/Components/CastleBackpackComponent.h"
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Data/CastleBuildingDefinition.h"
@@ -43,7 +44,8 @@ namespace
 
 	ACastlePlayerController* GetViewportPlayer()
 	{
-		UWorld* World = GEngine->GameViewport ? GEngine->GameViewport->GetWorld() : nullptr;
+		// 仅取本用例启动的 PIE 控制器，避免向其他测试的临时世界发送输入。
+		UWorld* World = GEditor->PlayWorld;
 		return World ? Cast<ACastlePlayerController>(World->GetFirstPlayerController()) : nullptr;
 	}
 
@@ -64,6 +66,8 @@ namespace
 		bool Update() override
 		{
 			auto* Player = GetViewportPlayer();
+			// 请求在编辑器 Tick 启动，首个潜伏帧不保证正式玩家已经就绪。
+			if (!Player && FPlatformTime::Seconds() < StartupDeadline) { return false; }
 			if (!Test.TestNotNull(TEXT("真实视口控制器"), Player)) { return true; }
 			switch (Stage++)
 			{
@@ -126,7 +130,7 @@ namespace
 				SendInput(*Player, EKeys::MiddleMouseButton, IE_Released, 0.0f);
 				// 飞行角色会将按键转换成移动组件的最终输入向量，即使地图碰撞阻挡位移也能验证方向。
 				SendInput(*Player, EKeys::W, IE_Pressed, 1.0f);
-				SendInput(*Player, EKeys::SpaceBar, IE_Pressed, 1.0f);
+				SendInput(*Player, EKeys::Q, IE_Pressed, 1.0f);
 				return false;
 			case 5:
 				return false;
@@ -134,38 +138,54 @@ namespace
 				if (APawn* Pawn = Player->GetPawn(); Test.TestNotNull(TEXT("正式飞行 Pawn"), Pawn))
 				{
 					const FVector Input = Pawn->GetLastMovementInputVector();
-					Test.TestTrue(TEXT("设计模式 W 与空格传入水平和上升飞行输入"), Input.SizeSquared2D() > 0 && Input.Z > 0);
+					Test.TestTrue(TEXT("设计模式 W 与 Q 传入水平和上升飞行输入"), Input.SizeSquared2D() > 0 && Input.Z > 0);
 				}
 				SendInput(*Player, EKeys::W, IE_Released, 0.0f);
-				SendInput(*Player, EKeys::SpaceBar, IE_Released, 0.0f);
-				SendInput(*Player, EKeys::LeftControl, IE_Pressed, 1.0f);
+				SendInput(*Player, EKeys::Q, IE_Released, 0.0f);
+				SendInput(*Player, EKeys::E, IE_Pressed, 1.0f);
 				return false;
 			case 7:
 				return false;
 			case 8:
-				Test.TestTrue(TEXT("设计模式左 Ctrl 传入下降飞行输入"),
+				Test.TestTrue(TEXT("设计模式 E 传入下降飞行输入"),
 					Player->GetPawn() && Player->GetPawn()->GetLastMovementInputVector().Z < 0);
-				SendInput(*Player, EKeys::LeftControl, IE_Released, 0.0f);
-				Player->SetControlMode(ECastleControlMode::Classic, false);
+				SendInput(*Player, EKeys::E, IE_Released, 0.0f);
+				SendInput(*Player, EKeys::SpaceBar, IE_Pressed, 1.0f);
 				return false;
 			case 9:
-				SendInput(*Player, EKeys::LeftAlt, IE_Pressed, 1.0f);
+				Test.TestFalse(TEXT("设计模式空格不再触发上升"),
+					Player->GetPawn() && Player->GetPawn()->GetLastMovementInputVector().Z > 0);
+				SendInput(*Player, EKeys::SpaceBar, IE_Released, 0.0f);
+				Player->SetControlMode(ECastleControlMode::Classic, false);
+				SendInput(*Player, EKeys::SpaceBar, IE_Pressed, 1.0f);
 				return false;
 			case 10:
+				Test.TestTrue(TEXT("经典模式空格传入上升飞行输入"),
+					Player->GetPawn() && Player->GetPawn()->GetLastMovementInputVector().Z > 0);
+				SendInput(*Player, EKeys::SpaceBar, IE_Released, 0.0f);
+				SendInput(*Player, EKeys::LeftControl, IE_Pressed, 1.0f);
+				return false;
+			case 11:
+				Test.TestTrue(TEXT("经典模式左 Ctrl 传入下降飞行输入"),
+					Player->GetPawn() && Player->GetPawn()->GetLastMovementInputVector().Z < 0);
+				SendInput(*Player, EKeys::LeftControl, IE_Released, 0.0f);
+				SendInput(*Player, EKeys::LeftAlt, IE_Pressed, 1.0f);
+				return false;
+			case 12:
 				Test.TestTrue(TEXT("经典按住左 Alt 释放 HUD 指针并停用视角"), Player->bShowMouseCursor
 					&& !Player->CanRotateCameraFromMouse() && !Player->ShouldDrawCenterCrosshair());
 				SendInput(*Player, EKeys::LeftAlt, IE_Released, 0.0f);
 				return false;
-			case 11:
+			case 13:
 				Test.TestTrue(TEXT("松开左 Alt 恢复经典准星与自由视角"), !Player->bShowMouseCursor
 					&& Player->CanRotateCameraFromMouse() && Player->ShouldDrawCenterCrosshair());
 				Press(*Player, EKeys::O);
 				return false;
-			case 12:
+			case 14:
 				Test.TestNotNull(TEXT("O 键打开设置 WBP"), FindWidget<UCastleControlSettingsWidget>(*Player));
 				Press(*Player, EKeys::Escape);
 				return false;
-			case 13:
+			case 15:
 				Test.TestNull(TEXT("Esc 关闭设置 WBP"), FindWidget<UCastleControlSettingsWidget>(*Player));
 				return true;
 			default:
@@ -175,6 +195,7 @@ namespace
 
 	private:
 		FAutomationTestBase& Test;
+		const double StartupDeadline = FPlatformTime::Seconds() + 20.0;
 		int32 Stage = -2;
 		FRotator Rotation = FRotator::ZeroRotator;
 	};
@@ -435,8 +456,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleControlModesTest, "MovingCastle.ControlM
 
 bool FCastleControlModesTest::RunTest(const FString& Parameters)
 {
-	if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/MainMap"), true)) { return false; }
+	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
 	ADD_LATENT_AUTOMATION_COMMAND(FCheckControlModes(*this));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
 	return true;
 }
 
@@ -448,8 +470,9 @@ bool FCastleDemolishMenuTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("右下角触发时面板完全留在逻辑视口内"),
 		UCastleBuildingDemolishMenuWidget::ClampPopupPosition(FVector2D(1278, 718), FVector2D(220, 300), FVector2D(1280, 720)),
 		FVector2D(1060, 420));
-	if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/Test/TestMap1"), true)) { return false; }
+	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/Test/TestMap1"))) { return false; }
 	ADD_LATENT_AUTOMATION_COMMAND(FCheckDemolishMenu(*this));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
 	return true;
 }
 

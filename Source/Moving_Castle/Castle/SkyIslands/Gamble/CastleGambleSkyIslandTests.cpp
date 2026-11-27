@@ -11,6 +11,7 @@
 #include "Camera/CameraActor.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
+#include "Castle/SkyIslands/Shop/CastleShopSkyIslandDataAsset.h"
 #include "CastleBackpackComponent.h"
 #include "CastleBuildingDefinition.h"
 #include "CastleEconomyComponent.h"
@@ -20,6 +21,7 @@
 #include "Components/Button.h"
 #include "Components/BoxComponent.h"
 #include "Components/InputComponent.h"
+#include "Components/PanelWidget.h"
 #include "Components/TextBlock.h"
 #include "Engine/Font.h"
 #include "Editor.h"
@@ -82,17 +84,22 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleGambleIslandAutomationTest, "MovingCastl
 
 bool FCastleGambleIslandAutomationTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	auto* Instance = NewObject<UGameInstance>(GEngine);
+	Instance->InitializeStandalone();
+	UWorld* World = Instance->GetWorld();
 	if (!TestNotNull(TEXT("隔离游戏世界"), World)) { return false; }
-	ON_SCOPE_EXIT { World->DestroyWorld(false); };
+	// 账户与机台从同一个 GameInstance 读徽章，覆盖零钱袋真正的查找链路。
+	ON_SCOPE_EXIT
+	{
+		Instance->Shutdown();
+		GEngine->DestroyWorldContext(World);
+		World->DestroyWorld(false);
+	};
 	FText Reason;
 	auto* Config = LoadGambleConfig();
 	auto* Definition = LoadObject<UCastleBuildingDefinition>(nullptr,
 		TEXT("/Game/MovingCastle/Data/Buildings/DA_NormalRoom.DA_NormalRoom"));
-	if (!TestNotNull(TEXT("赌博岛正式 DA"), Config) || !TestNotNull(TEXT("正式普通房"), Definition)
-		|| !TestTrue(TEXT("赌博岛配置合法"), Config->Validate(Reason))) { return false; }
-	TestEqual(TEXT("八个房间组"), Config->RoomGroups.Num(), 8);
-	TestEqual(TEXT("七个徽章"), Config->Badges.Num(), 7);
+	if (!TestNotNull(TEXT("赌博岛正式 DA"), Config) || !TestNotNull(TEXT("正式普通房"), Definition)) { return false; }
 
 	auto* Island = World->SpawnActor<ACastleGambleSkyIsland>();
 	if (!TestNotNull(TEXT("原生赌博岛"), Island)) { return false; }
@@ -101,7 +108,7 @@ bool FCastleGambleIslandAutomationTest::RunTest(const FString& Parameters)
 	Island->Backpack = NewObject<UCastleBackpackComponent>(Island);
 	Island->Economy = NewObject<UCastleEconomyComponent>(Island);
 	Island->Tower = NewObject<UCastleMainTowerComponent>(Island);
-	Island->Badges = NewObject<UCastleBadgeSubsystem>(NewObject<UGameInstance>());
+	Island->Badges = Instance->GetSubsystem<UCastleBadgeSubsystem>();
 	Island->MiniCellSize = 40.0;
 	Island->MiniTileSize = 38.0;
 	Island->MiniLayerHeight = 43.0;
@@ -174,15 +181,59 @@ bool FCastleGambleIslandAutomationTest::RunTest(const FString& Parameters)
 	Island->Config->SlotWeights = {0, 0, 12, 0, 0};
 	TestTrue(TEXT("金币大奖档结算"), Island->TryPlaySlot(Reason));
 	TestEqual(TEXT("五倍档净赚四十金"), Island->Economy->GetGold(), 140);
-	Island->Config->SlotWeights = {0, 0, 0, 12, 0};
-	for (const auto& Group : Config->RoomGroups)
+	const auto* CoinPurse = LoadObject<UCastleBadgeDataAsset>(nullptr,
+		TEXT("/Game/MovingCastle/Data/Items/Badges/DA_Badge_02_CoinPurse.DA_Badge_02_CoinPurse"));
+	bool bNeedsReplacement = false;
+	if (!TestTrue(TEXT("装备正式零钱袋"), UCastleItemGrantLibrary::TryGrantBadge(CoinPurse, Island->Badges, bNeedsReplacement, Reason))) { return false; }
+	Island->Config->SlotWeights = {0, 30, 0, 0, 0};
+	TestTrue(TEXT("零钱袋生效时两倍档结算"), Island->TryPlaySlot(Reason));
+	TestEqual(TEXT("投 10 金，实收 22 金"), Island->Economy->GetGold(), 152);
+	Island->Config->SlotWeights = {0, 0, 12, 0, 0};
+	TestTrue(TEXT("零钱袋生效时五倍档结算"), Island->TryPlaySlot(Reason));
+	TestEqual(TEXT("投 10 金，实收 55 金"), Island->Economy->GetGold(), 197);
+
+	// 这笔两倍奖的基础净额恰好可入账，应用零钱袋才会超出上限。
+	const int32 NearLimit = MAX_int32 - Island->Config->SlotMachineCost;
+	const int32 FillGold = NearLimit - Island->Economy->GetGold();
+	TestTrue(TEXT("准备临界余额"), Island->Economy->TryAddGold(FillGold, Reason));
+	Island->Config->SlotWeights = {0, 30, 0, 0, 0};
+	const int32 LimitSeed = Island->SlotRandom.GetCurrentSeed();
+	AddExpectedError(TEXT("拒绝玩法收入 20"), EAutomationExpectedErrorFlags::Contains, 1);
+	AddExpectedError(TEXT("老虎机金币奖励未结算"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestFalse(TEXT("加成后溢出拒绝结算"), Island->TryPlaySlot(Reason));
+	TestEqual(TEXT("溢出时余额未变化"), Island->Economy->GetGold(), NearLimit);
+	TestEqual(TEXT("溢出不消耗随机流"), Island->SlotRandom.GetCurrentSeed(), LimitSeed);
+	TestTrue(TEXT("恢复临界测试前余额"), Island->Economy->TrySpendGold(FillGold, Reason));
+
+	// 真实归一化奖品消费首牌，再将六张蓝 1 放入主栏及临时栏。筹码和库存由机台一次提交。
+	auto* Normalize = LoadObject<UCastleRoomGroupDataAsset>(nullptr,
+		TEXT("/Game/MovingCastle/Data/Items/RoomGroups/DA_RoomGroup_20_Normalize.DA_RoomGroup_20_Normalize"));
+	if (!TestNotNull(TEXT("正式归一化奖品"), Normalize)) { return false; }
+	int32 SourceSlot = INDEX_NONE;
+	if (!TestTrue(TEXT("准备归一化首牌"), Island->Backpack->TryAddBuilding(Definition, 1, ECastleTileColor::Blue, 6, SourceSlot, Reason))) { return false; }
+	Island->Config->RoomGroups = {Normalize};
+	Island->Config->SlotWeights = {0, 0, 0, 1, 0};
+	if (!TestTrue(TEXT("正式老虎机房间组触发背包变换"), Island->TryPlaySlot(Reason))) { return false; }
+	TestEqual(TEXT("归一化仅扣一次投币成本"), Island->Economy->GetGold(), 187);
+	TArray<FCastleBuildingDescriptor> Normalized = Island->Backpack->GetItems();
+	Normalized.Append(Island->Backpack->GetTempItems());
+	TestEqual(TEXT("蓝 6 拆为六张房间卡"), Normalized.Num(), 6);
+	for (const auto& Card : Normalized)
 	{
-		if (Group->GroupType != ECastleRoomGroupType::ThreeNumberFourArchers) { continue; }
-		Island->Config->RoomGroups = {Group};
-		TestTrue(TEXT("房间组档发放正式箭塔牌"), Island->TryPlaySlot(Reason));
-		TestEqual(TEXT("三张箭塔含临时栏溢出"), Island->Backpack->GetItemCount() + Island->Backpack->GetTempItemCount(), 3);
+		TestTrue(TEXT("归一化保留定义和蓝色，数字变为 1"),
+			Card.Definition == Definition && Card.Color == ECastleTileColor::Blue && Card.Number == 1);
 	}
-	TestEqual(TEXT("房间组档花十金"), Island->Economy->GetGold(), 130);
+	// 模拟已初始化的机台奖品失效，验证拒绝时不会提交投币与随机流。
+	Island->Config->RoomGroups = {nullptr};
+	Island->Config->RoomDefinitions = {Definition};
+	Island->Config->SlotWeights = {0, 0, 0, 12, 0};
+	const int32 SeedBefore = Island->SlotRandom.GetCurrentSeed();
+	const int32 CardsBefore = Island->Backpack->GetItemCount() + Island->Backpack->GetTempItemCount();
+	AddExpectedError(TEXT("老虎机抽中的房间组资产失效"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestFalse(TEXT("房间组奖项失效时拒绝投币"), Island->TryPlaySlot(Reason));
+	TestEqual(TEXT("房间组档失败不扣金币"), Island->Economy->GetGold(), 187);
+	TestEqual(TEXT("房间组档失败不消耗随机流"), Island->SlotRandom.GetCurrentSeed(), SeedBefore);
+	TestEqual(TEXT("房间组档失败不发卡"), Island->Backpack->GetItemCount() + Island->Backpack->GetTempItemCount(), CardsBefore);
 
 	Island->Tower->MaxHealth = 400;
 	Island->Tower->MaxBalloons = 2;
@@ -190,92 +241,92 @@ bool FCastleGambleIslandAutomationTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("主塔初始化两球"), Island->Tower->InitializeHealth());
 	TestTrue(TEXT("回收一球"), Island->TryRecycleBalloon(Reason));
 	TestEqual(TEXT("扣一球血量"), Island->Tower->CurrentHealth, 200.0f);
-	TestEqual(TEXT("发三十金"), Island->Economy->GetGold(), 160);
+	TestEqual(TEXT("回收发三十金，零钱袋不加成"), Island->Economy->GetGold(), 217);
 	AddExpectedError(TEXT("回收后需要保留至少一个存活气球"), EAutomationExpectedErrorFlags::Contains, 1);
 	TestFalse(TEXT("最后一球拒绝回收"), Island->TryRecycleBalloon(Reason));
 	TestTrue(TEXT("最后一球仍存活且未当作受击"), Island->Tower->IsAlive() && Island->Tower->AttackCount == 0);
-	TestEqual(TEXT("拒绝时不发币"), Island->Economy->GetGold(), 160);
+	TestEqual(TEXT("拒绝时不发币"), Island->Economy->GetGold(), 217);
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleGambleLuckAutomationTest, "MovingCastle.SkyIslands.Gamble.LuckAndAssets",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleGambleCatalogTest, "MovingCastle.SkyIslands.Gamble.ConfigValidation",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FCastleGambleLuckAutomationTest::RunTest(const FString& Parameters)
+bool FCastleGambleCatalogTest::RunTest(const FString& Parameters)
+{
+	const auto* Gamble = LoadGambleConfig();
+	const auto* Shop = LoadObject<UCastleShopSkyIslandDataAsset>(nullptr,
+		TEXT("/Game/MovingCastle/Data/SkyIslands/DA_ShopSkyIsland.DA_ShopSkyIsland"));
+	if (!TestNotNull(TEXT("正式赌博配置"), Gamble) || !TestNotNull(TEXT("正式商店配置"), Shop)) { return false; }
+	FText Reason;
+	TestTrue(TEXT("赌博配置通过原生校验"), Gamble->Validate(Reason));
+	TestTrue(TEXT("老虎机使用商店校验过的正式房间组目录"), Shop->Validate(Reason));
+	TestEqual(TEXT("房间组 26 个"), Gamble->RoomGroups.Num(), 26);
+	TestEqual(TEXT("徽章 25 枚"), Gamble->Badges.Num(), 25);
+	for (const auto& Group : Shop->RoomGroupPool)
+	{
+		TestTrue(GetPathNameSafe(Group) + TEXT(" 同时是赌博奖品"), Gamble->RoomGroups.Contains(Group));
+	}
+	for (const auto& Badge : Shop->BadgePool)
+	{
+		TestTrue(GetPathNameSafe(Badge) + TEXT(" 同时是赌博奖品"), Gamble->Badges.Contains(Badge));
+	}
+
+	// 七个正式建筑定义就是随机房间池，也用于校验自定义选项里的硬引用。
+	const TCHAR* DefinitionNames[] = {
+		TEXT("DA_NormalRoom"), TEXT("DA_ArcherTower"), TEXT("DA_CannonTower"), TEXT("DA_Farm"),
+		TEXT("DA_ShieldTower"), TEXT("DA_BeeHive"), TEXT("DA_BalloonTower")
+	};
+	TestEqual(TEXT("随机房间仅包含普通房和六类功能塔"), Gamble->RoomDefinitions.Num(), static_cast<int32>(UE_ARRAY_COUNT(DefinitionNames)));
+	for (const TCHAR* Name : DefinitionNames)
+	{
+		const auto* Definition = LoadObject<UCastleBuildingDefinition>(nullptr,
+			*FString::Printf(TEXT("/Game/MovingCastle/Data/Buildings/%s.%s"), Name, Name));
+		if (!TestNotNull(Name, Definition)) { return false; }
+		TestTrue(FString(Name) + TEXT(" 属于赌博房间定义池"), Gamble->RoomDefinitions.Contains(Definition));
+	}
+	for (const UCastleRoomGroupDataAsset* Group : Gamble->RoomGroups)
+	{
+		if (!TestNotNull(TEXT("房间组资产"), Group)) { return false; }
+		if (Group->bChooseInPicker)
+		{
+			FCastleWildcardRoomOptions Options;
+			TestTrue(Group->GetName() + TEXT(" 的 RoomSpec 可从正式池解析"),
+				Group->RoomSpec.TryResolveOptions(Gamble->RoomDefinitions, Options, Reason));
+			TestEqual(Group->GetName() + TEXT(" 有四种玩法色"), Options.Colors.Num(), 4);
+			TestTrue(Group->GetName() + TEXT(" 数字候选是 1 至 6"), Options.Numbers == TArray<int32>{1, 2, 3, 4, 5, 6});
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleGambleOddsAutomationTest, "MovingCastle.SkyIslands.Gamble.OddsAndPanel",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleGambleOddsAutomationTest::RunTest(const FString& Parameters)
 {
 	auto* Config = LoadGambleConfig();
 	if (!TestNotNull(TEXT("赌博空岛 DA"), Config)) { return false; }
-	auto* BadgeAsset = LoadObject<UCastleBadgeDataAsset>(nullptr,
-		TEXT("/Game/MovingCastle/Data/Items/DA_Badge_GambleLuck.DA_Badge_GambleLuck"));
-	if (!TestNotNull(TEXT("正式幸运徽章"), BadgeAsset)) { return false; }
-	auto* BadgeSource = NewObject<UCastleBadgeSubsystem>(NewObject<UGameInstance>());
-	bool bReplace = false;
-	FText Reason;
-	const double Baseline = BadgeSource->GetGambleLuckBonus();
-	if (!TestTrue(TEXT("获得一枚正式幸运徽章"), BadgeSource->TryAcquireBadge(BadgeAsset->Badge, bReplace, Reason))) { return false; }
-	const double Lucky = BadgeSource->GetGambleLuckBonus();
-	TestTrue(TEXT("幸运值严格增加"), Lucky > Baseline);
-	int32 RouletteHits[2] = {};
-	int32 SlotHits[2] = {};
+	int32 SlotHits = 0;
 	int32 RouletteFrequency[3] = {};
 	FRandomStream Random(1352227);
 	constexpr int32 Samples = 100000;
+	// 和实际机台一样按基础权重抽样，保留轮盘分布与老虎机中奖率回归。
 	for (int32 Index = 0; Index < Samples; ++Index)
 	{
 		const double Sample = Random.GetUnsignedInt() / 4294967296.0;
-		for (int32 HasBadge = 0; HasBadge < 2; ++HasBadge)
-		{
-			ECastleRouletteColor Color;
-			ECastleSlotPrize Prize;
-			int32 Slot = INDEX_NONE;
-			const double Luck = HasBadge ? Lucky : Baseline;
-			if (!Config->TryRollRoulette(ECastleRouletteColor::Black, Luck, Sample, Color, Slot)
-				|| !Config->TryRollSlot(Luck, Sample, Prize)) { AddError(TEXT("有效样本落在概率区间外")); return false; }
-			RouletteHits[HasBadge] += Color == ECastleRouletteColor::Black;
-			SlotHits[HasBadge] += Prize != ECastleSlotPrize::None;
-			if (!HasBadge) { ++RouletteFrequency[static_cast<uint8>(Color)]; }
-		}
+		ECastleRouletteColor Color;
+		ECastleSlotPrize Prize;
+		int32 Slot = INDEX_NONE;
+		if (!Config->TryRollRoulette(ECastleRouletteColor::Black, 0.0, Sample, Color, Slot)
+			|| !Config->TryRollSlot(0.0, Sample, Prize)) { AddError(TEXT("有效样本落在概率区间外")); return false; }
+		++RouletteFrequency[static_cast<uint8>(Color)];
+		SlotHits += Prize != ECastleSlotPrize::None;
 	}
-	TestTrue(TEXT("无徽章黑色接近 18/37"), FMath::Abs(RouletteFrequency[0] / double(Samples) - 18.0 / 37.0) < 0.005);
-	TestTrue(TEXT("无徽章红色接近 18/37"), FMath::Abs(RouletteFrequency[1] / double(Samples) - 18.0 / 37.0) < 0.005);
-	TestTrue(TEXT("无徽章绿色接近 1/37"), FMath::Abs(RouletteFrequency[2] / double(Samples) - 1.0 / 37.0) < 0.005);
-	TestTrue(TEXT("无徽章老虎机中奖率接近 60%"), FMath::Abs(SlotHits[0] / double(Samples) - 0.60) < 0.005);
-	TestTrue(TEXT("幸运徽章使轮盘押中率严格提高"), RouletteHits[1] > RouletteHits[0]);
-	TestTrue(TEXT("幸运徽章使老虎机中奖率严格提高"), SlotHits[1] > SlotHits[0]);
-	// 逐项使用真实奖池，验证每个建筑定义和候选规格都能交给正式发放入口。
-	int32 DirectGroups = 0;
-	int32 ChoiceGroups = 0;
-	for (const UCastleRoomGroupDataAsset* Group : Config->RoomGroups)
-	{
-		auto* Backpack = NewObject<UCastleBackpackComponent>();
-		UCastlePendingRoomReward* Pending = nullptr;
-		if (!TestTrue(FString::Printf(TEXT("发放房间组 %s"), *GetNameSafe(Group)),
-			UCastleItemGrantLibrary::TryGrantRoomGroup(Group, Backpack, Config->RoomDefinitions, Random, Pending, Reason))) { continue; }
-		if (Pending)
-		{
-			++ChoiceGroups;
-			FCastleWildcardRoomOptions Options;
-			TestTrue(TEXT("待领奖品可开启选择并提供正式候选"), Pending->TryBeginClaim(Options, Reason)
-				&& !Options.Definitions.IsEmpty() && !Options.Colors.IsEmpty() && !Options.Numbers.IsEmpty());
-		}
-		else
-		{
-			++DirectGroups;
-			TestTrue(TEXT("确定房间组已真实入包"), Backpack->GetItemCount() > 0);
-		}
-	}
-	TestEqual(TEXT("房间奖池的每个条目均验证"), DirectGroups + ChoiceGroups, 8);
-	TestTrue(TEXT("房间奖池同时包含确定牌和选择牌"), DirectGroups > 0 && ChoiceGroups > 0);
-	BadgeSource->ClearAllBadgesForTesting();
-	for (int32 Index = 0; Index < Config->Badges.Num(); ++Index)
-	{
-		TestTrue(TEXT("奖池徽章可沿正式发放入口处理"),
-			UCastleItemGrantLibrary::TryGrantBadge(Config->Badges[Index], BadgeSource, bReplace, Reason));
-		TestEqual(TEXT("前六个入槽，最后一个等待替换"), bReplace, Index == 6);
-	}
-	TestEqual(TEXT("徽章系统保留六个已持有槽位"), BadgeSource->GetBadges().Num(), 6);
-	FCastleBadgeDefinition PendingBadge;
-	TestTrue(TEXT("满槽时保留待替换徽章"), BadgeSource->TryGetPendingBadge(PendingBadge));
+	TestTrue(TEXT("黑色接近 18/37"), FMath::Abs(RouletteFrequency[0] / double(Samples) - 18.0 / 37.0) < 0.005);
+	TestTrue(TEXT("红色接近 18/37"), FMath::Abs(RouletteFrequency[1] / double(Samples) - 18.0 / 37.0) < 0.005);
+	TestTrue(TEXT("绿色接近 1/37"), FMath::Abs(RouletteFrequency[2] / double(Samples) - 1.0 / 37.0) < 0.005);
+	TestTrue(TEXT("老虎机中奖率接近 60%"), FMath::Abs(SlotHits / double(Samples) - 0.60) < 0.005);
 
 	UClass* Panel = LoadClass<UCastleGambleRouletteWidget>(nullptr,
 		TEXT("/Game/MovingCastle/UI/SkyIslands/Gamble/WBP_GambleRoulettePanel.WBP_GambleRoulettePanel_C"));
@@ -368,6 +419,12 @@ public:
 		for (const auto& Entry : Island->MiniTiles)
 		{
 			Tiles.Add(Entry.Value.Get());
+			// 以真实地块的外沿验收正式五格布局，覆盖旧位置压到树和花坛、或旧资产比例使地板越界的回归。
+			const FVector Center = Island->GetActorTransform().InverseTransformPosition(Entry.Value->GetActorLocation());
+			const double HalfTile = Island->MiniTileSize * 0.5;
+			Test.TestTrue(FString::Printf(TEXT("微缩地块 %s 完整落在轮盘外侧草地"), *Entry.Key.ToString()),
+				Center.X - HalfTile >= -385.0 && Center.X + HalfTile <= 25.0 &&
+				Center.Y - HalfTile >= -1100.0 && Center.Y + HalfTile <= -695.0);
 			const FCastleGroundCell Cell = Entry.Value->GetGroundCell();
 			if (Cell.Color == Card.Color || Cell.Number == Card.Number) { Match = Entry.Value.Get(); }
 			else { Mismatch = Entry.Value.Get(); }
@@ -480,7 +537,7 @@ public:
 		Island->Config = DuplicateObject(Island->Config.Get(), Island);
 		const auto Group = Island->Config->RoomGroups.FindByPredicate([](const UCastleRoomGroupDataAsset* Entry)
 		{
-			return Entry->GroupType == ECastleRoomGroupType::CustomNormalRoom;
+			return Entry && Entry->GetFName() == TEXT("DA_RoomGroup_04_CustomNormalRoom");
 		});
 		if (!Test.TestNotNull(TEXT("获取可打开万能卡的正式房间组"), Group)) { return true; }
 		const TObjectPtr<UCastleRoomGroupDataAsset> WildcardGroup = *Group;
@@ -493,6 +550,23 @@ public:
 		if (!Test.TestNotNull(TEXT("万能卡取消按钮"), Cancel)) { return true; }
 		Cancel->OnClicked.Broadcast();
 		Test.TestTrue(TEXT("万能卡结束后释放鼠标和飞行输入"), !Island->Picker && !Controller->bShowMouseCursor && !Controller->IsMoveInputIgnored());
+		// 再次投币确认同类正式卡包，设定牌面通过真实选牌按钮进入背包。
+		const int32 BeforePick = Backpack->GetItemCount() + Backpack->GetTempItemCount();
+		const int32 BeforePickGold = Island->Economy->GetGold();
+		if (!Test.TestTrue(TEXT("再次投币打开选牌"), Island->TryPlaySlot(Reason) && Island->Picker)) { return true; }
+		for (const FName Panel : {FName(TEXT("DefinitionChoices")), FName(TEXT("ColorChoices")), FName(TEXT("NumberChoices"))})
+		{
+			const auto* Choices = Cast<UPanelWidget>(Island->Picker->GetWidgetFromName(Panel));
+			auto* Choice = Choices ? Cast<UButton>(Choices->GetChildAt(0)) : nullptr;
+			if (!Test.TestNotNull(Panel.ToString(), Choice)) { return true; }
+			Choice->OnClicked.Broadcast();
+		}
+		auto* Confirm = Cast<UButton>(Island->Picker->GetWidgetFromName(TEXT("ConfirmButton")));
+		if (!Test.TestNotNull(TEXT("万能卡确认按钮"), Confirm)) { return true; }
+		Confirm->OnClicked.Broadcast();
+		Test.TestNull(TEXT("确认正式卡后关闭选牌窗"), Island->Picker.Get());
+		Test.TestEqual(TEXT("选牌确认只提交一次投币费"), Island->Economy->GetGold(), BeforePickGold - Island->Config->SlotMachineCost);
+		Test.TestEqual(TEXT("正式普通房卡到账"), Backpack->GetItemCount() + Backpack->GetTempItemCount(), BeforePick + 1);
 
 		Island->Config->SlotWeights = {0, 0, 0, 0, 1};
 		while (Island->Badges->GetBadges().Num() < UCastleBadgeSubsystem::MaxBadges)

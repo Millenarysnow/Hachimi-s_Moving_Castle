@@ -147,9 +147,10 @@ void UCastleMassEnemyLaserAttackProcessor::Execute(FMassEntityManager& EntityMan
 			Attacker.World = World;
 			Attacker.Entity = Chunk.GetEntity(It);
 			int64 RemainingBlocks = 0;
+			// 与敌方飞弹、近战共用主塔敌伤入口，护盾和气球仍由各自目标结算。
 			const bool bApplied = bBalloonTarget ? Support->DamageBalloon(BalloonId, Attack.AttackDamage)
 				: (bShieldTarget ? Shields->ApplyAttackToShield(ShieldId, Attacker, RemainingBlocks)
-					: Main->ApplyMainTowerDamage(Attack.AttackDamage));
+					: Main->ApplyEnemyMainTowerDamage(Attack.AttackDamage));
 			if (bApplied)
 			{
 				++Attack.AttackCount;

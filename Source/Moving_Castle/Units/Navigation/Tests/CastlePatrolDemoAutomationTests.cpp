@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
+#include "Castle/Automation/CastlePIEAutomation.h"
 #include "CastleMassSpawner.h"
 #include "CastleMassUnitSubsystem.h"
 #include "CastleNavigationSubsystem.h"
@@ -39,9 +40,11 @@ namespace CastlePatrolDemoTests
 			if (FPlatformTime::Seconds() > Deadline) { Test->AddError(TEXT("可见 Mass 巡逻演示或输入测试超时。")); return true; }
 			if (!World)
 			{
+				// PIE 世界来自本用例启动的演示地图，独立进程仍读取客户端世界。
+				const EWorldType::Type ExpectedWorld = GIsEditor ? EWorldType::PIE : EWorldType::Game;
 				for (const FWorldContext& Context : GEngine->GetWorldContexts())
 				{
-					if (Context.WorldType == EWorldType::Game) { World = Context.World(); break; }
+					if (Context.WorldType == ExpectedWorld && Context.World()) { World = Context.World(); break; }
 				}
 				if (!World) { return false; }
 				for (TActorIterator<ACastlePatrolRoute> It(World); It; ++It) { Route = *It; break; }
@@ -440,11 +443,17 @@ namespace CastlePatrolDemoTests
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePatrolDemoTest, "MovingCastle.PatrolDemo.Runtime",
-	EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 
 bool FCastlePatrolDemoTest::RunTest(const FString& Parameters)
 {
+	// 编辑器回归使用正式演示关卡和明确的独立 PIE 视口，沿用客户端的输入与截图断言。
+	if (GIsEditor && !CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/Test/L_MassPatrolDemo"), FIntPoint(1280, 720))) { return false; }
 	ADD_LATENT_AUTOMATION_COMMAND(CastlePatrolDemoTests::FDemoCommand(this));
+	if (GIsEditor)
+	{
+		FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
+	}
 	return true;
 }
 

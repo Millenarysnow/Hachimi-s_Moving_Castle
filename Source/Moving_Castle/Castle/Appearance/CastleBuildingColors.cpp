@@ -45,7 +45,7 @@ namespace CastleBuildingColors
 		const bool bRoomTrim = Type == ECastleBuildingType::NormalRoom &&
 			(Stem == TEXT("Deck_PerimeterCoping") || Stem == TEXT("Deck_EndApron") || Stem == TEXT("Deck_SideApron"));
 		const bool bStructure = StructuralNodes.Contains(Stem) || bRoomTrim;
-		if (SurfaceGroups.Contains(Group) || bStructure || Group == TEXT("SpeedRoomShell"))
+		if (SurfaceGroups.Contains(Group) || bStructure)
 		{
 			Component.SetCustomPrimitiveDataFloat(SurfaceIndex, static_cast<uint8>(Color));
 		}

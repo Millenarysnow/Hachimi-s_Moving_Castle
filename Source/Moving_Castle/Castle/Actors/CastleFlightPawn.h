@@ -14,7 +14,8 @@ struct FInputActionValue;
  * 移动城堡的自有飞行玩家 Pawn。
  *
  * 这是独立于第三人称模板的控制对象。玩家始终处于飞行移动模式，WASD 在
- * 相机水平朝向上移动，空格/左 Ctrl 控制升降，鼠标用于旋转视角。
+ * 相机水平朝向上移动。经典模式以空格/左 Ctrl 升降，设计模式以 Q/E 升降，
+ * 鼠标用于旋转视角。
  */
 UCLASS()
 class MOVING_CASTLE_API ACastleFlightPawn : public ACharacter
@@ -84,6 +85,8 @@ protected:
 	void AscendReleased();
 	void DescendPressed();
 	void DescendReleased();
+	void DesignAscendPressed();
+	void DesignDescendPressed();
 
 	/** 鼠标轴回调，输入值来自锁定在屏幕中心的系统鼠标。 */
 	void HandleMouseYaw(float AxisValue);

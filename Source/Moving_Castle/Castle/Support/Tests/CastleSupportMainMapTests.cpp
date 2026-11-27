@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
+#include "Castle/Automation/CastlePIEAutomation.h"
 #include "Castle/Support/CastleSupportFlightActors.h"
 #include "Castle/Support/CastleSupportTowerSubsystem.h"
 #include "CastleBoard.h"
@@ -66,7 +67,7 @@ namespace
 				auto* Controller = Cast<ACastlePlayerController>(World->GetFirstPlayerController());
 				if (!Test->TestNotNull(TEXT("正式玩家控制器"), Controller)) { return true; }
 				bool bConsumed = false;
-				// 无头 PIE 不创建有效视口，直接向正式左键射线入口提供确定的瞄准线；不绕过碰撞或命中判定。
+				// 给正式左键入口提供确定的可见性射线，命中判定与玩家在视口中手点一致。
 				if (!Test->TestTrue(TEXT("左键 Visibility 射线锁定真实气球并释放货箱"),
 					Controller->TryPopBalloonFromRay(Location + FVector(-650, 0, 180), Location, bConsumed) && bConsumed)) { return true; }
 				FVector Unused;
@@ -103,35 +104,6 @@ namespace
 		double Deadline = FPlatformTime::Seconds() + 28.0;
 		int32 Stage = 0;
 	};
-
-	/** 复用项目已有的编辑器停止接口，确保 PIE 释放后再继续执行其他测试。 */
-	class FStopSupportPIE final : public IAutomationLatentCommand
-	{
-	public:
-		explicit FStopSupportPIE(FAutomationTestBase* InTest) : Test(InTest) {}
-		virtual bool Update() override
-		{
-			if (!FindSupportPIE()) { return true; }
-			if (bRequested)
-			{
-				if (FPlatformTime::Seconds() <= Deadline) { return false; }
-				Test->AddError(TEXT("支援塔验证 PIE 停止超时。"));
-				return true;
-			}
-			UClass* Tool = FindObject<UClass>(nullptr, TEXT("/Script/EditorToolset.EditorAppToolset"));
-			UFunction* Stop = Tool ? Tool->FindFunctionByName(TEXT("StopPIE")) : nullptr;
-			if (!Stop) { Test->AddError(TEXT("缺少项目既有的 StopPIE 工具。")); return true; }
-			struct FParams { UObject* ReturnValue = nullptr; } Params;
-			Tool->GetDefaultObject()->ProcessEvent(Stop, &Params);
-			bRequested = true;
-			Deadline = FPlatformTime::Seconds() + 10.0;
-			return false;
-		}
-	private:
-		FAutomationTestBase* Test;
-		bool bRequested = false;
-		double Deadline = 0.0;
-	};
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleSupportMainMapTest, "MovingCastle.Support.MainMapBlueAirdrop",
@@ -139,9 +111,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleSupportMainMapTest, "MovingCastle.Suppor
 
 bool FCastleSupportMainMapTest::RunTest(const FString& Parameters)
 {
-	if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/MainMap"), true)) { return false; }
+	// 与其它主图回归共用 PIE 生命周期。引擎通用入口可能把前一用例的世界当作本次有效世界。
+	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
 	ADD_LATENT_AUTOMATION_COMMAND(FExerciseSupportMainMap(this));
-	ADD_LATENT_AUTOMATION_COMMAND(FStopSupportPIE(this));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
 	return true;
 }
 

@@ -13,11 +13,15 @@ class USceneComponent;
 class UStaticMesh;
 class UStaticMeshComponent;
 class UTextRenderComponent;
+class UDecalComponent;
+class ACastleBoard;
 class UBuildingMergeComponent;
 class UAssemblyFlightComponent;
 class UBuildingGameplayRootComponent;
 class UCastleBuildingEffectComponent;
 class UCastleBuildingPCGComponent;
+class UCastleDirectorSubsystem;
+class UCastleRoomTraitComponent;
 
 /**
  * 所有可放置建筑的共同 Actor 基类。
@@ -121,12 +125,19 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
 	FCastleBuildingDescriptor GetBuildingDescriptor() const;
 
+	/** 特质随原建筑实例保留，普通房间和炮塔仍沿用原有建造与合并身份。 */
+	ECastleRoomTrait GetRoomTrait() const { return RoomTrait; }
+	UCastleRoomTraitComponent* GetRoomTraitComponent() const { return RoomTraitComponent; }
+
 	/** 返回卡牌、场上建筑和升级结果共享的同一份建筑定义。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
 	UCastleBuildingDefinition* GetBuildingDefinition() const { return BuildingDefinition; }
 
 	/** 根据当前 Actor 自身的美术组件配置视觉与标签；缺少美术模型时返回明确错误。 */
 	bool ConfigureBuildingVisual(float InCellSize, float InLayerHeight, FText& OutFailureReason);
+
+	/** 依照棋盘每个占格的真实楼板标高，创建颜色和数字与建筑卡一致的地板贴花。 */
+	bool ConfigureFloorDecals(const ACastleBoard& Board, FText& OutFailureReason);
 
 	/** 返回当前 Actor 直接拥有的可见模型包围盒，供标签和卡片预览取景使用。 */
 	FBox GetVisualBounds() const;
@@ -172,6 +183,14 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "建筑模型")
 	TObjectPtr<USceneComponent> VisualRoot;
 
+	/** Texture 分支提供的楼板 Deferred Decal 材质；缺失时建筑生成明确失败。 */
+	UPROPERTY()
+	TObjectPtr<UMaterialInterface> FloorDecalMaterial;
+
+	/** 每个逻辑占格各自拥有一个贴花，随建筑销毁且不参与碰撞或导航。 */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UDecalComponent>> FloorDecals;
+
 	/** 仅供数字标签底牌使用的引擎资源，不得用于替代缺失的建筑模型。 */
 	UPROPERTY()
 	TObjectPtr<UStaticMesh> LabelPlateMesh;
@@ -215,4 +234,21 @@ protected:
 	/** 建筑标签的深色底牌，确保数字在各种建筑颜色上都能读取。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "建筑标签")
 	TObjectPtr<class UStaticMeshComponent> PrototypeLabelPlate;
+
+private:
+	friend class ACastleBoard;
+	friend class UCastleDirectorSubsystem;
+
+	/** 由棋盘在当前格及上方相邻格占用变化时刷新道路标识。 */
+	void UpdateTraitLabel(bool bHighwayActive);
+
+	/** 只在导演成功传送的提交点调用，同时移除门体的显示和准星碰撞。 */
+	void ConsumeSkyIslandPortal();
+
+	UPROPERTY(Transient)
+	TObjectPtr<UCastleRoomTraitComponent> RoomTraitComponent;
+	UPROPERTY(Transient)
+	ECastleRoomTrait RoomTrait = ECastleRoomTrait::None;
+	UPROPERTY(Transient)
+	int32 TraitRemainingRounds = 0;
 };

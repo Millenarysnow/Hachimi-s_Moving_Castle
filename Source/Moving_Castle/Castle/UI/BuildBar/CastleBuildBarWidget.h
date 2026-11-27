@@ -96,6 +96,7 @@ private:
 	void RefreshScreenVisibility();
 	void HandleDirectorPhaseChanged(ECastleDirectorPhase NewPhase);
 	void HandlePatrolEditingChanged(bool bIsEditing);
+	void HandleBuildBarSlotClicked(int32 SlotIndex);
 
 	UFUNCTION()
 	void HandleShopChanged();

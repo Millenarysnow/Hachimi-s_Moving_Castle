@@ -2,6 +2,7 @@
 #include "Castle/Actors/CastleBoard.h"
 #include "Castle/Actors/CastleBuildingBase.h"
 #include "Castle/Actors/CastleGroundTileActor.h"
+#include "Castle/Automation/CastlePIEAutomation.h"
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Components/CastleBackpackComponent.h"
 #include "Castle/Data/CastleBuildingDefinition.h"
@@ -111,14 +112,11 @@ namespace CastleCannonPlayerInputTests
 	private:
 		bool Initialize()
 		{
-			for (const auto& Context:GEngine->GetWorldContexts())
+			// 测试显式拥有 TestMap1 的 PIE，不能从其他 Game 上下文借棋盘。
+			World = GEditor->PlayWorld;
+			if (World && World->HasBegunPlay())
 			{
-				if (Context.WorldType==EWorldType::PIE||Context.WorldType==EWorldType::Game)
-				{
-					World=Context.World();
-					for (TActorIterator<ACastleBoard> It(World);It;++It) { Board=*It; break; }
-					if (Board) { break; }
-				}
+				for (TActorIterator<ACastleBoard> It(World); It; ++It) { Board = *It; break; }
 			}
 			// TestMap1 允许流送初始化；给原生加载流程时间，不将首帧未出现误判为资产缺失。
 			// 超过明确的初始化等待时间仍不存在时失败，绝不补建棋盘或切换地图。
@@ -288,17 +286,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleCannonPlayerInputTest,"MovingCastle.Cast
 	EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FCastleCannonPlayerInputTest::RunTest(const FString& Parameters)
 {
-	// 编辑器单独运行时显式加载TestMap1并启动PIE；已有Game/PIE世界时使用调用者加载的地图。
-	// TestMap1 提供本测试所需的正式棋盘及导航输入；FCommand仍明确拒绝缺失的棋盘或视口。
-	bool bHasGameWorld=false;
-	for (const auto& Context:GEngine->GetWorldContexts())
-	{
-		bHasGameWorld |= Context.WorldType==EWorldType::Game || Context.WorldType==EWorldType::PIE;
-	}
-	if (GIsEditor&&!bHasGameWorld&&!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/Test/TestMap1"),true))
-	{
-		AddError(TEXT("无法为真实输入测试加载TestMap1 PIE。")); return false;
-	}
-	ADD_LATENT_AUTOMATION_COMMAND(CastleCannonPlayerInputTests::FCommand(this)); return true;
+	// TestMap1 提供正式棋盘和导航输入，由本用例独立启动并收尾。
+	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/Test/TestMap1"))) { return false; }
+	ADD_LATENT_AUTOMATION_COMMAND(CastleCannonPlayerInputTests::FCommand(this));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
+	return true;
 }
 #endif

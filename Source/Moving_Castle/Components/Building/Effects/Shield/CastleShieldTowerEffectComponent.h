@@ -30,6 +30,8 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** 连通分量仅替换本塔结算数字，保留其他盾塔及房间的有效数字。 */
+	bool CalculateShieldBlocksForTrigger(int64 NumberBonus, int64& OutBlocks) const;
 	/** 先验证显式组件与资源，再连接通知，避免注册出没有可见反馈的护盾。 */
 	bool PreparePresentation();
 	void HandleShieldStateChanged(UObject* Owner, int64 Blocks);

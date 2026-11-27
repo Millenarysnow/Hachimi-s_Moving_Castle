@@ -1,7 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
-#if WITH_DEV_AUTOMATION_TESTS
+#if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 #include "Misc/AutomationTest.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
+#include "Castle/Automation/CastlePIEAutomation.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/SkyIslands/Rest/CastleRestSkyIsland.h"
@@ -20,7 +21,6 @@
 #include "Components/Button.h"
 #include "Components/TextBlock.h"
 #include "Components/StaticMeshComponent.h"
-#include "Components/TextRenderComponent.h"
 #include "Components/WidgetSwitcher.h"
 #include "CastleShopComponent.h"
 #include "Engine/Engine.h"
@@ -30,6 +30,7 @@
 #include "InputKeyEventArgs.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/OutputDeviceNull.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Tests/AutomationCommon.h"
 #include "Units/Navigation/Interaction/CastlePatrolRoute.h"
 
@@ -67,12 +68,10 @@ namespace
   explicit FCheckDirectorMainMap(FAutomationTestBase* InTest) : Test(InTest) {}
   virtual bool Update() override
   {
-	UWorld* World = nullptr;
-	for (const FWorldContext& Context : GEngine->GetWorldContexts())
-	{
-		if (Context.WorldType == EWorldType::PIE && Context.World()) { World = Context.World(); break; }
-	}
-	if (!Test->TestNotNull(TEXT("独立游戏世界存在"), World)) { return true; }
+	UWorld* World = GEditor->PlayWorld;
+	// 正式地图的 BeginPlay 完成后才检查导演、HUD 和视口输入。
+	if (FPlatformTime::Seconds() < StartupDeadline && (!World || !World->HasBegunPlay())) { return false; }
+	if (!Test->TestTrue(TEXT("独立 MainMap PIE 已开始游戏"), World && World->HasBegunPlay())) { return true; }
 	UCastleDirectorSubsystem* Director = World->GetSubsystem<UCastleDirectorSubsystem>();
 	ACastlePlayerController* Controller = Cast<ACastlePlayerController>(World->GetFirstPlayerController());
 	if (!Test->TestNotNull(TEXT("本地控制器类型正确"), Controller)) { return true; }
@@ -221,6 +220,7 @@ namespace
   }
  private:
   FAutomationTestBase* Test;
+  const double StartupDeadline = FPlatformTime::Seconds() + 20.0;
   int32 Stage = 0;
  };
 #if !UE_BUILD_SHIPPING
@@ -232,7 +232,7 @@ namespace
 
   bool Update() override
   {
-	UWorld* World = AutomationCommon::GetAnyGameWorld();
+	UWorld* World = GEditor->PlayWorld;
 	auto* Director = World ? World->GetSubsystem<UCastleDirectorSubsystem>() : nullptr;
 	if (!Director || !Director->IsRunning()) { return WaitForDirector(TEXT("MainMap 导演未就绪")); }
 	auto* Controller = Cast<ACastlePlayerController>(World->GetFirstPlayerController());
@@ -343,7 +343,7 @@ namespace
   explicit FCheckMainTowerSidePlacement(FAutomationTestBase* InTest) : Test(InTest) {}
   bool Update() override
   {
-   UWorld* World = AutomationCommon::GetAnyGameWorld();
+   UWorld* World = GEditor->PlayWorld;
    if (!World || !World->HasBegunPlay())
    {
     if (FPlatformTime::Seconds() <= Deadline) { return false; }
@@ -395,9 +395,18 @@ namespace
      Probe.Color = Data->Color;
      Probe.Number = Data->Number;
      Test->TestTrue(TEXT("实际命中的每个侧格都可摆放匹配房间"), Board->CanPlaceBuildingAtCursor(Target, Probe, Reason));
-     Test->TestTrue(TEXT("面板及数字可见，不占实体碰撞或导航"), Data->Panel->IsVisible() && Data->Label->IsVisible()
-         && Data->Panel->GetCollisionEnabled() == ECollisionEnabled::QueryOnly && !Data->Panel->CanEverAffectNavigation()
-         && !Data->Label->CanEverAffectNavigation() && Data->Label->Text.ToString() == FString::FromInt(Data->Number));
+     UMaterialInstanceDynamic* PanelMaterial = Cast<UMaterialInstanceDynamic>(Data->Panel->GetMaterial(0));
+     FLinearColor ExpectedTint;
+     Test->TestTrue(TEXT("纹理面板可见且仅参与可见性查询，不占实体碰撞或导航"), Data->Panel->IsVisible()
+         && Data->Panel->GetCollisionEnabled() == ECollisionEnabled::QueryOnly
+         && !Data->Panel->CanEverAffectNavigation() && PanelMaterial != nullptr);
+     if (PanelMaterial)
+     {
+         Test->TestTrue(TEXT("棋盘贴图数字帧与格子数字一致"), FMath::IsNearlyEqual(
+             PanelMaterial->K2_GetScalarParameterValue(TEXT("Frame (S)")), static_cast<float>(Data->Number - 1)));
+         Test->TestTrue(TEXT("棋盘贴图颜色与格子颜色一致"), CastleTileColors::TryGetGridTint(Data->Color, ExpectedTint)
+             && PanelMaterial->K2_GetVectorParameterValue(TEXT("Color")).Equals(ExpectedTint, 0.001f));
+     }
     }
    }
 
@@ -452,32 +461,6 @@ namespace
   double Deadline = FPlatformTime::Seconds() + 20.0;
  };
 
- /** 只停止本测试启动的PIE，等待世界销毁后才把控制权交回自动化队列。 */
- class FStopDirectorMainMap final : public IAutomationLatentCommand
- {
- public:
-  explicit FStopDirectorMainMap(FAutomationTestBase* InTest) : Test(InTest) {}
-  virtual bool Update() override
-  {
-   if (!AutomationCommon::GetAnyGameWorld()) { return true; }
-   if (!bRequested)
-   {
-    UClass* ToolClass = FindObject<UClass>(nullptr, TEXT("/Script/EditorToolset.EditorAppToolset"));
-    UFunction* Stop = ToolClass ? ToolClass->FindFunctionByName(TEXT("StopPIE")) : nullptr;
-    if (!Stop) { Test->AddError(TEXT("官方StopPIE工具不可用，无法结束本测试PIE。")); return true; }
-    struct FStopParams { UObject* ReturnValue = nullptr; } Params;
-    ToolClass->GetDefaultObject()->ProcessEvent(Stop, &Params);
-    bRequested = true;
-    StartedAt = FPlatformTime::Seconds();
-   }
-   if (FPlatformTime::Seconds() - StartedAt > 15.0) { Test->AddError(TEXT("PIE结束等待超时。")); return true; }
-   return false;
-  }
- private:
-  FAutomationTestBase* Test;
-  bool bRequested = false;
-  double StartedAt = 0.0;
- };
 }
 
 /** 真实MainMap通过编辑器加载和PIE验证，避免未烘焙-game进程缺失外部Actor的差异。 */
@@ -485,10 +468,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDirectorMainMapTest, "MovingCastle.Direc
  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FCastleDirectorMainMapTest::RunTest(const FString& Parameters)
 {
- if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/MainMap"), true)) { return false; }
+ if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
  ADD_LATENT_AUTOMATION_COMMAND(FEngineWaitLatentCommand(0.1f));
  ADD_LATENT_AUTOMATION_COMMAND(FCheckDirectorMainMap(this));
- ADD_LATENT_AUTOMATION_COMMAND(FStopDirectorMainMap(this));
+ // 游戏结束场景会暂停世界，仍由编辑器统一结束本用例的 PIE。
+ FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
  return true;
 }
 #if !UE_BUILD_SHIPPING
@@ -496,10 +480,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDirectorIslandShopAndBuildBarTest, "Movi
  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FCastleDirectorIslandShopAndBuildBarTest::RunTest(const FString& Parameters)
 {
- if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/MainMap"), true)) { return false; }
+ if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
  ADD_LATENT_AUTOMATION_COMMAND(FEngineWaitLatentCommand(0.1f));
  ADD_LATENT_AUTOMATION_COMMAND(FCheckIslandShopAndBuildBar(*this));
- ADD_LATENT_AUTOMATION_COMMAND(FStopDirectorMainMap(this));
+ FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
  return true;
 }
 #endif
@@ -507,10 +491,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleTowerSideMainMapTest, "MovingCastle.Plac
  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FCastleTowerSideMainMapTest::RunTest(const FString& Parameters)
 {
- if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/MainMap"), true)) { return false; }
+ if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
  ADD_LATENT_AUTOMATION_COMMAND(FEngineWaitLatentCommand(0.1f));
  ADD_LATENT_AUTOMATION_COMMAND(FCheckMainTowerSidePlacement(this));
- ADD_LATENT_AUTOMATION_COMMAND(FStopDirectorMainMap(this));
+ FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
  return true;
 }
 

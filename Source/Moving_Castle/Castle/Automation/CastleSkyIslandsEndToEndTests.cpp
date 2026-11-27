@@ -21,6 +21,7 @@
 #include "CastleShopComponent.h"
 #include "Editor.h"
 #include "EngineUtils.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/GameInstance.h"
 #include "FileHelpers.h"
 #include "GameFramework/Pawn.h"
@@ -39,15 +40,16 @@ namespace
 	{
 		ECastleSkyIslandType Type;
 		const TCHAR* Command;
+		const TCHAR* ArtMeshName;
 		UClass* (*GetClass)();
 	};
 
 	// 先验证首步没有空岛节点时也能直入，再让四次访问共用同一个正式单局。
 	const FIslandVisit Visits[] = {
-		{ECastleSkyIslandType::Rest, TEXT("CastleEnterSkyIsland Rest"), &ACastleRestSkyIsland::StaticClass},
-		{ECastleSkyIslandType::Shop, TEXT("CastleEnterSkyIsland Shop"), &ACastleShopSkyIsland::StaticClass},
-		{ECastleSkyIslandType::NPC, TEXT("CastleEnterSkyIsland NPC"), &ACastlePinballNPCSkyIsland::StaticClass},
-		{ECastleSkyIslandType::Gamble, TEXT("CastleEnterSkyIsland Gamble"), &ACastleGambleSkyIsland::StaticClass}
+		{ECastleSkyIslandType::Rest, TEXT("CastleEnterSkyIsland Rest"), TEXT("SM_SkyIsland_Rest"), &ACastleRestSkyIsland::StaticClass},
+		{ECastleSkyIslandType::Shop, TEXT("CastleEnterSkyIsland Shop"), TEXT("SM_SkyIsland_Shop"), &ACastleShopSkyIsland::StaticClass},
+		{ECastleSkyIslandType::NPC, TEXT("CastleEnterSkyIsland NPC"), TEXT("SM_SkyIsland_PinballNPC"), &ACastlePinballNPCSkyIsland::StaticClass},
+		{ECastleSkyIslandType::Gamble, TEXT("CastleEnterSkyIsland Gamble"), TEXT("SM_SkyIsland_Gamble"), &ACastleGambleSkyIsland::StaticClass}
 	};
 	// 三个奖励岛各重访一次，继续复用同一 GameInstance 验证已读标记。
 	constexpr int32 FirstVisitCount = UE_ARRAY_COUNT(Visits);
@@ -144,6 +146,14 @@ namespace
 			}
 			ActiveIsland = *Island;
 			if (!Test.TestEqual(TEXT("场上岛屿属于指定正式类"), Island->GetClass(), Visit.GetClass())) { return false; }
+			// 从正式生成的 Actor 读取可见网格，捕捉岛型配错、重复换算厘米及装饰挡住射线的回归。
+			auto* Art = FindObjectFast<UStaticMeshComponent>(ActiveIsland.Get(), TEXT("IslandArt"));
+			if (!Test.TestTrue(TEXT("岛体挂载了对应的可见美术网格"), Art && Art->IsVisible() && Art->GetStaticMesh()
+				&& Art->GetStaticMesh()->GetName() == Visit.ArtMeshName)) { return false; }
+			const FVector Span = Art->GetStaticMesh()->GetBoundingBox().GetSize() * Art->GetRelativeScale3D();
+			Test.TestTrue(TEXT("岛面直径约 24 米且中心与岛根对齐"), FMath::IsNearlyEqual(Span.X, 2400.0, 20.0)
+				&& FMath::IsNearlyEqual(Span.Y, 2400.0, 20.0) && Art->GetRelativeLocation().IsNearlyZero());
+			Test.TestEqual(TEXT("整岛装饰让交互组件接收射线"), Art->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
 			++Island;
 			Test.TestFalse(TEXT("重复或上次空岛没有残留"), static_cast<bool>(Island));
 			Test.TestEqual(TEXT("进入空岛阶段"), Director.GetPhase(), ECastleDirectorPhase::SkyIsland);
@@ -278,7 +288,7 @@ namespace
 			Test.TestFalse(TEXT("玩家输入和临时商店已关闭"), Controller.IsMoveInputIgnored()
 				|| Controller.IsLookInputIgnored() || Controller.GetShop()->IsShopOpen());
 			FText Reason;
-			Test.TestFalse(TEXT("空岛的免费商店权限没有带回主塔"), Director.IsShopAccessAllowed(Reason));
+			Test.TestTrue(TEXT("离岛后恢复主塔常驻商店入口"), Director.IsShopAccessAllowed(Reason));
 			Test.TestFalse(TEXT("上次空岛 Actor 及世界中的空岛实例均已清除"), ActiveIsland.IsValid()
 				|| static_cast<bool>(TActorIterator<ACastleSkyIslandBase>(World)));
 			TArray<ECastleDirectorNodeKind> Expected = Director.GetNodeKindsForStep(*Director.GetConfig(), Director.GetNextStep());

@@ -124,6 +124,8 @@ bool UCastleGambleMachineComponent::ExecuteInteract(const FCastleSkyIslandIntera
 
 ACastleGambleSkyIsland::ACastleGambleSkyIsland()
 {
+	// 绑定该玩法的岛体，位置沿用作者对齐的岛面中心。
+	SetIslandArtMesh(TEXT("SM_SkyIsland_Gamble"));
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = false;
 	ConfigAsset = TSoftObjectPtr<UCastleGambleSkyIslandDataAsset>(FSoftObjectPath(
@@ -140,7 +142,9 @@ ACastleGambleSkyIsland::ACastleGambleSkyIsland()
 		auto* Machine = CreateDefaultSubobject<UCastleGambleMachineComponent>(Name);
 		Machine->Machine = Kind;
 		Machine->SetupAttachment(GetRootComponent());
+		// 整岛保留机台的多材质外形；这里的不可见网格专门接收玩法射线。
 		Machine->SetStaticMesh(Mesh);
+		Machine->SetVisibility(false);
 		Machine->SetRelativeLocation(Position);
 		Machine->SetRelativeScale3D(Scale);
 		Machine->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
@@ -222,13 +226,11 @@ bool ACastleGambleSkyIsland::OnInitializeIsland(const FCastleSkyIslandContext& C
 		return Reject(INVTEXT("赌博空岛需要已初始化的棋盘、背包、主塔、金币账户和徽章子系统。"), OutReason);
 	}
 	Backpack = Board->PrototypeBackpack;
+	RewardBoard = Board;
 	if (!BuildMiniGround(*Board, Context.Seed, OutReason)) { return false; }
 
 	RouletteRandom.Initialize(Context.Seed);
 	SlotRandom.Initialize(static_cast<int32>(static_cast<uint32>(Context.Seed) ^ 0x6f8135e9u));
-	SetTint(*Roulette, {0.12f, 0.07f, 0.11f});
-	SetTint(*Slot, {0.31f, 0.085f, 0.53f});
-	SetTint(*Recycler, {0.05f, 0.38f, 0.49f});
 	SetTint(*RoulettePointer, {1.0f, 0.78f, 0.19f});
 	BuildWheel();
 	return true;
@@ -405,9 +407,9 @@ bool ACastleGambleSkyIsland::TryReturnAllCards(FText& OutReason)
 
 bool ACastleGambleSkyIsland::TrySpinRoulette(const ECastleRouletteColor Bet, FText& OutReason)
 {
-	if (bTransacting || IsRouletteSpinning() || !IsValid(Config) || !IsValid(Backpack) || !IsValid(Badges))
+	if (bTransacting || IsRouletteSpinning() || !IsValid(Config) || !IsValid(Backpack))
 	{
-		return Reject(INVTEXT("轮盘正在运行，或本局轮盘配置、背包、徽章源失效。"), OutReason);
+		return Reject(INVTEXT("轮盘正在运行，或本局轮盘配置、背包失效。"), OutReason);
 	}
 	const int32 Count = MiniBoard.GetPlacements().Num();
 	if (Count == 0)
@@ -422,10 +424,10 @@ bool ACastleGambleSkyIsland::TrySpinRoulette(const ECastleRouletteColor Bet, FTe
 	FRandomStream Candidate = RouletteRandom;
 	ECastleRouletteColor Color;
 	int32 ColorSlot = 0;
-	const double Luck = FMath::Max(0.0, Badges->GetGambleLuckBonus());
-	if (!Config->TryRollRoulette(Bet, Luck, SampleUnit(Candidate), Color, ColorSlot))
+	// 轮盘按配置槽权重抽样，库存徽章不参与赌博结算。
+	if (!Config->TryRollRoulette(Bet, 0.0, SampleUnit(Candidate), Color, ColorSlot))
 	{
-		return Reject(INVTEXT("轮盘下注颜色、幸运值或权重无效。"), OutReason);
+		return Reject(INVTEXT("轮盘下注颜色或权重无效。"), OutReason);
 	}
 
 	// 玩法在动画前原子提交，关闭面板或离岛只能结束展示，不能改变已开奖的结果。
@@ -492,9 +494,10 @@ bool ACastleGambleSkyIsland::TryPlaySlot(FText& OutReason)
 	TGuardValue<bool> Transaction(bTransacting, true);
 	FRandomStream Candidate = SlotRandom;
 	ECastleSlotPrize Prize;
-	if (!Config->TryRollSlot(FMath::Max(0.0, Badges->GetGambleLuckBonus()), SampleUnit(Candidate), Prize))
+	// 投币同样只按配置奖项抽样。徽章子系统用于发奖和待替换校验。
+	if (!Config->TryRollSlot(0.0, SampleUnit(Candidate), Prize))
 	{
-		return Reject(INVTEXT("老虎机幸运值或概率权重无效。"), OutReason);
+		return Reject(INVTEXT("老虎机概率权重无效。"), OutReason);
 	}
 	FText Summary;
 	if (!TrySettleSlot(Prize, Candidate, Summary, OutReason)) { return false; }
@@ -511,7 +514,7 @@ bool ACastleGambleSkyIsland::TrySettleSlot(const ECastleSlotPrize Prize, FRandom
 	const int32 Cost = Config->SlotMachineCost;
 	const UCastleRoomGroupDataAsset* Group = nullptr;
 	const UCastleBadgeDataAsset* Badge = nullptr;
-	int32 Payout = 0;
+	FCastlePreparedRoomGroup Prepared;
 	switch (Prize)
 	{
 	case ECastleSlotPrize::None:
@@ -522,18 +525,29 @@ bool ACastleGambleSkyIsland::TrySettleSlot(const ECastleSlotPrize Prize, FRandom
 	{
 		const int32 Multiplier = Prize == ECastleSlotPrize::DoubleGold ? 2 : 5;
 		const int64 ExpectedPayout = static_cast<int64>(Cost) * Multiplier;
-		if (ExpectedPayout > MAX_int32 || static_cast<int64>(Economy->GetGold()) - Cost + ExpectedPayout > MAX_int32)
+		if (ExpectedPayout > MAX_int32)
 		{
 			return Reject(INVTEXT("老虎机金币奖励超出账户上限，本次未扣款。"), OutReason);
 		}
-		Payout = static_cast<int32>(ExpectedPayout);
-		OutSummary = FText::Format(INVTEXT("老虎机：投入 {0} 金，获得 {1} 金。"), FText::AsNumber(Cost), FText::AsNumber(Payout));
-		break;
+		// 同时结算投币与含零钱袋加成的奖额，未入账时不公布开奖结果，也不推进机台随机流。
+		int32 FinalGold = 0;
+		if (!Economy->TryAddGameplayGold(static_cast<int32>(ExpectedPayout), Cost, OutReason, FinalGold))
+		{
+			return Reject(FText::Format(INVTEXT("老虎机金币奖励未结算：{0}"), OutReason), OutReason);
+		}
+		OutSummary = FText::Format(INVTEXT("老虎机：投入 {0} 金，获得 {1} 金。"), FText::AsNumber(Cost), FText::AsNumber(FinalGold));
+		return true;
 	}
 	case ECastleSlotPrize::RoomGroup:
 		if (Config->RoomGroups.IsEmpty()) { return Reject(INVTEXT("老虎机房间组奖励池为空。"), OutReason); }
 		Group = Config->RoomGroups[Candidate.RandRange(0, Config->RoomGroups.Num() - 1)];
 		if (!IsValid(Group)) { return Reject(INVTEXT("老虎机抽中的房间组资产失效。"), OutReason); }
+		// 房间组规则与背包前置条件先于投币校验，拒绝时保留余额和开奖前的随机流。
+		if (!UCastleItemGrantLibrary::TryPrepareRoomGroup(Group, Backpack, RewardBoard.Get(),
+			Config->RoomDefinitions, Candidate, Prepared, OutReason))
+		{
+			return false;
+		}
 		OutSummary = FText::Format(INVTEXT("老虎机获得房间组：{0}。"), Group->DisplayName);
 		break;
 	case ECastleSlotPrize::Badge:
@@ -543,25 +557,20 @@ bool ACastleGambleSkyIsland::TrySettleSlot(const ECastleSlotPrize Prize, FRandom
 		OutSummary = FText::Format(INVTEXT("老虎机获得徽章：{0}。"), Badge->Badge.GetDisplayName());
 		break;
 	}
-	if (!Economy->TrySpendGold(Cost, OutReason)) { return Reject(OutReason, OutReason); }
-
-	// 公共奖励入口失败时撤销本次扣款并返回失败，随机流也由调用方保留在投币前。
-	bool bGranted = true;
-	if (Group)
+	// 扣费与道具一起提交。奖励被拒绝时，账户不会发送扣费或退款通知。
+	if (!Economy->TrySpendShopGold(Cost, [&]()
 	{
-		UCastlePendingRoomReward* Pending = nullptr;
-		bGranted = UCastleItemGrantLibrary::TryGrantRoomGroup(Group, Backpack, Config->RoomDefinitions, Candidate, Pending, OutReason);
-		if (bGranted && Pending) { bGranted = PresentRoomPrize(Pending, OutReason); }
-	}
-	else if (Badge) { bGranted = PresentBadgePrize(Badge->Badge, OutReason); }
-	else if (Payout > 0) { bGranted = Economy->TryAddGold(Payout, OutReason); }
-	if (!bGranted)
+		if (Group)
+		{
+			return Prepared.PendingReward
+				? PresentRoomPrize(Prepared.PendingReward, OutReason)
+				: UCastleItemGrantLibrary::TryCommitPreparedRoomGroup(Prepared, Backpack, OutReason);
+		}
+		return Badge ? PresentBadgePrize(*Badge, OutReason) : true;
+	}, OutReason))
 	{
-		FText RefundReason;
-		ensureAlwaysMsgf(Economy->TryAddGold(Cost, RefundReason), TEXT("赌博空岛 %s 投币回滚失败：%s"),
-			*GetPathName(), *RefundReason.ToString());
-		return Reject(FText::Format(INVTEXT("老虎机奖励发放失败，奖品 {0}。{1}"),
-			FText::FromString(Group ? Group->GetPathName() : GetPathNameSafe(Badge)), OutReason), OutReason);
+		return Reject(FText::Format(INVTEXT("老虎机结算失败，奖品 {0}。{1}"),
+			FText::FromString(GetPathNameSafe(Group ? static_cast<const UObject*>(Group) : Badge)), OutReason), OutReason);
 	}
 	return true;
 }
@@ -571,7 +580,7 @@ bool ACastleGambleSkyIsland::PresentRoomPrize(UCastlePendingRoomReward* Reward, 
 	return GrantPendingRoomRewardUI(Reward, OutReason);
 }
 
-bool ACastleGambleSkyIsland::PresentBadgePrize(const FCastleBadgeDefinition& Badge, FText& OutReason)
+bool ACastleGambleSkyIsland::PresentBadgePrize(const UCastleBadgeDataAsset& Badge, FText& OutReason)
 {
 	return GrantBadgeWithReplaceUI(Badge, OutReason);
 }
@@ -637,8 +646,10 @@ bool ACastleGambleSkyIsland::BuildMiniGround(const ACastleBoard& Board, int32 Se
 		return Reject(INVTEXT("主棋盘的格距、地面边长或层高无法用于微缩棋盘。"), OutReason);
 	}
 	const FIntPoint Size = Config->MiniBoardGridSize;
-	// 以轮盘后方、中央通道左侧的两个近边界定位；增大格数只向远离机台的方向扩展。
-	MiniOrigin = FVector(100.0 + MiniTileSize * 0.5, -275.0 - MiniTileSize * 0.5 - (Size.Y - 1) * MiniCellSize,
+	// 锚点取轮盘与岛岸之间的草地中心（岛内厘米）。从格心跨度反推首格，让整块地板以此居中。
+	const FVector2D ClearingCenter(-180.0, -895.0);
+	MiniOrigin = FVector(ClearingCenter.X - (Size.X - 1) * MiniCellSize * 0.5,
+		ClearingCenter.Y - (Size.Y - 1) * MiniCellSize * 0.5,
 		12.0 * Scale + 0.1);
 	FCastleGroundGenerationRequest Request;
 	Request.GridSize = FIntVector(Size.X, Size.Y, 1);

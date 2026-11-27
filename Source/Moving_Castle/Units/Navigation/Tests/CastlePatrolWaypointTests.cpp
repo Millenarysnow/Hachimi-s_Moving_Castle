@@ -80,23 +80,23 @@ bool FCastlePatrolWaypointGridCenterTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePatrolWaypointSpeedRoomTest, "MovingCastle.Navigation.PatrolWaypoint.SpeedRoomFloor",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePatrolWaypointRoomFloorTest, "MovingCastle.Navigation.PatrolWaypoint.NormalRoomFloor",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FCastlePatrolWaypointSpeedRoomTest::RunTest(const FString& Parameters)
+bool FCastlePatrolWaypointRoomFloorTest::RunTest(const FString& Parameters)
 {
-	// 通过正式定义和棋盘放置实例化加速房，测试无需改写其蓝图或添加测试碰撞。
+	// 通过正式定义和棋盘放置实例化普通房，测试无需改写其蓝图或添加测试碰撞。
 	auto* Definition = LoadObject<UCastleBuildingDefinition>(nullptr,
-		TEXT("/Game/MovingCastle/Data/Buildings/DA_SpeedRoom.DA_SpeedRoom"));
-	if (!TestNotNull(TEXT("正式加速房定义可加载"), Definition)) { return false; }
+		TEXT("/Game/MovingCastle/Data/Buildings/DA_NormalRoom.DA_NormalRoom"));
+	if (!TestNotNull(TEXT("正式普通房定义可加载"), Definition)) { return false; }
 	const auto Settings = UWorld::InitializationValues().CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false);
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Settings);
-	if (!TestNotNull(TEXT("创建加速房测试世界"), World)) { return false; }
+	if (!TestNotNull(TEXT("创建普通房测试世界"), World)) { return false; }
 	// 正式 PCG 会实例化并销毁变体，提供游戏 WorldContext 以走完整生命周期。
 	GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
 	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
 	auto* Board = World->SpawnActor<ACastleBoard>();
-	if (!TestNotNull(TEXT("创建加速房测试棋盘"), Board)) { return false; }
+	if (!TestNotNull(TEXT("创建普通房测试棋盘"), Board)) { return false; }
 	Board->GridSize = FIntVector(1, 1, 1);
 	Board->BuildingDefinitions = {Definition};
 	FCastleGroundGenerationResult Ground;
@@ -111,43 +111,44 @@ bool FCastlePatrolWaypointSpeedRoomTest::RunTest(const FString& Parameters)
 		AddError(Reason.ToString());
 		return false;
 	}
-	// 隐藏真实棋盘地块的点击面，只验证加速房自己的功能楼板。
+	// 隐藏真实棋盘地块的点击面，只验证普通房自己的功能楼板。
 	Board->SetGroundPresentationHidden(true);
 	auto* Room = Board->PlaceBuilding(Cell.Coordinate, Card, false, Reason);
-	if (!TestNotNull(TEXT("正式一级加速房可放置"), Room)
-		|| !TestTrue(TEXT("正式加速房完成飞入"), CastleBuildingTests::CompletePlacement(Room)))
+	if (!TestNotNull(TEXT("正式一级普通房可放置"), Room)
+		|| !TestTrue(TEXT("正式普通房完成飞入"), CastleBuildingTests::CompletePlacement(Room)))
 	{
 		AddError(Reason.ToString());
 		return false;
 	}
-	// 旧加速房的准绳是格底 Z=0，直接由棋盘计算期望值。
-	TestNull(TEXT("加速房沿用旧模板站立标高"), Room->HachimisLayout.Get());
-	const FVector Expected = Board->GetGridWorldLocation(Cell.Coordinate) - FVector(0, 0, Board->LayerHeight * 0.5);
+	// 正式普通房按布局定义站立标高，格心吸附使用同一功能楼板。
+	if (!TestNotNull(TEXT("普通房具有正式布局"), Room->HachimisLayout.Get())) { return false; }
+	const double FloorZ = Room->HachimisLayout->StandingHeight;
+	const FVector Expected = Board->GetGridWorldLocation(Cell.Coordinate) + FVector(0, 0, FloorZ - Board->LayerHeight * 0.5);
 	const FVector Start = Expected + FVector(40, -30, 150);
 	const FVector End = Expected + FVector(40, -30, -20);
 	FHitResult FloorHit;
-	if (!TestTrue(TEXT("加速房有真实功能楼板且阻挡 Pawn"), World->LineTraceSingleByChannel(FloorHit, Start, End, ECC_Pawn)))
+	if (!TestTrue(TEXT("普通房有真实功能楼板且阻挡 Pawn"), World->LineTraceSingleByChannel(FloorHit, Start, End, ECC_Pawn)))
 	{
 		return false;
 	}
 	UPrimitiveComponent* Floor = FloorHit.GetComponent();
 	TestTrue(TEXT("功能楼板顶面位于格底"), FMath::IsNearlyEqual(FloorHit.ImpactPoint.Z, Expected.Z, 0.01));
-	TestTrue(TEXT("加速房楼板位于功能层级并参与导航"), Floor && FloorHit.GetActor() == Room
+	TestTrue(TEXT("普通房楼板位于功能层级并参与导航"), Floor && FloorHit.GetActor() == Room
 		&& Floor->GetFName() == TEXT("GameplayFloor_0_0_0") && Room->IsComponentRelevantForNavigation(Floor));
-	TestTrue(TEXT("加速房功能楼板保持 Visibility 透明"), Floor && Floor->GetCollisionResponseToChannel(ECC_Visibility) == ECR_Ignore);
+	TestTrue(TEXT("普通房功能楼板保持 Visibility 透明"), Floor && Floor->GetCollisionResponseToChannel(ECC_Visibility) == ECR_Ignore);
 	FVector Point;
-	if (!TestTrue(TEXT("巡逻射线能解析加速房楼板"), ACastlePatrolRoute::TryResolveWaypointFromRay(World, Start, End, Point, Reason)))
+	if (!TestTrue(TEXT("巡逻射线能解析普通房楼板"), ACastlePatrolRoute::TryResolveWaypointFromRay(World, Start, End, Point, Reason)))
 	{
 		AddError(Reason.ToString());
 		return false;
 	}
-	TestTrue(TEXT("加速房路径点吸附到格心并保留楼面标高"), Point.Equals(Expected, 0.1));
+	TestTrue(TEXT("普通房路径点吸附到格心并保留楼面标高"), Point.Equals(Expected, 0.1));
 
 	// 在单层棋盘中加入功能障碍。其顶面已高过半层，旧的取整顺序会先把它判为未解锁层。
 	UBoxComponent* Obstacle = NewObject<UBoxComponent>(Room, TEXT("PatrolFloorTestObstacle"));
 	Obstacle->SetupAttachment(Room->GameplayRoot);
 	Obstacle->SetBoxExtent(FVector(80, 80, 5));
-	Obstacle->SetRelativeLocation(FVector(0, 0, 295));
+	Obstacle->SetRelativeLocation(FVector(0, 0, FloorZ + 295));
 	Obstacle->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	Obstacle->SetCollisionResponseToAllChannels(ECR_Ignore);
 	Obstacle->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
@@ -172,7 +173,7 @@ bool FCastlePatrolWaypointSpeedRoomTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("障碍后方落点仍吸附到真实楼板"), Point.Equals(Expected, 0.1));
 
 	// 顶面移动到下一层的精确站立标高后，它是未解锁楼板，整次点击应明确拒绝。
-	Obstacle->SetRelativeLocation(FVector(0, 0, Board->LayerHeight - 5.0));
+	Obstacle->SetRelativeLocation(FVector(0, 0, FloorZ + Board->LayerHeight - 5.0));
 	AddExpectedError(TEXT("位于棋盘已解锁楼层之外"), EAutomationExpectedErrorFlags::Contains, 1);
 	return TestFalse(TEXT("未解锁层的真实楼板拒绝点击"), ACastlePatrolRoute::TryResolveWaypointFromRay(
 		World, AboveObstacle, End, Point, Reason))
@@ -195,7 +196,7 @@ bool FCastlePatrolWaypointNumberTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("真实蓝图在世界中生成"), Marker)) { World->DestroyWorld(false); return false; }
 
 	TInlineComponentArray<UStaticMeshComponent*> Meshes(Marker);
-	TestEqual(TEXT("一个主体、两面各两个数字组件"), Meshes.Num(), 5);
+	// 蓝图可包含自身的静态网格。主体和四个数字分别按根节点、组件名校验，并对全部网格检查碰撞契约。
 	TestFalse(TEXT("标记 Actor 不开启碰撞"), Marker->GetActorEnableCollision());
 	for (const UStaticMeshComponent* Mesh : Meshes)
 	{

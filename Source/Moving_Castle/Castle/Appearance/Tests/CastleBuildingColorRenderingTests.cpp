@@ -31,7 +31,7 @@ namespace CastleBuildingColorTests
 		bool Update() override
 		{
 			static const TCHAR* Families[] = {TEXT("ArcherTower"),TEXT("CannonTower"),TEXT("Farm"),TEXT("BalloonTower"),
-				TEXT("BeeHive"),TEXT("ShieldTower"),TEXT("NormalRoom"),TEXT("SpeedRoom")};
+				TEXT("BeeHive"),TEXT("ShieldTower"),TEXT("NormalRoom")};
 			if (!World)
 			{
 				const auto Settings = UWorld::InitializationValues().AllowAudioPlayback(false).CreatePhysicsScene(true)
@@ -55,7 +55,7 @@ namespace CastleBuildingColorTests
 				FText Reason;
 				FCastleBuildingDescriptor Card;
 				if (!Test.TestNotNull(Path,Definition)) { return true; }
-				// 枚举正式定义提供的每个等级。普通房和加速房仅一级；功能塔各自配置可用的最高等级。
+				// 枚举正式定义提供的每个等级。普通房仅一级；功能塔各自配置可用的最高等级。
 				LevelCount = Definition->Levels.Num();
 				if (!Definition->Levels.IsValidIndex(LevelIndex) || !Definition->CreateDescriptor(Definition->Levels[LevelIndex].Level,Color,3,Card,Reason))
 				{

@@ -3,6 +3,7 @@
 #include "CastleBuildingBase.h"
 #include "CastleMassUnitSubsystem.h"
 #include "Engine/World.h"
+#include "Items/CastleBadgeRuntimeSubsystem.h"
 #include "Moving_Castle.h"
 
 UCastleBuildingEffectComponent::UCastleBuildingEffectComponent()
@@ -11,7 +12,7 @@ UCastleBuildingEffectComponent::UCastleBuildingEffectComponent()
 	PrimaryComponentTick.bCanEverTick = false;
 }
 
-bool UCastleBuildingEffectComponent::Trigger(const FCastleBuildingTriggerContext& Context)
+bool UCastleBuildingEffectComponent::Trigger(const FCastleBuildingTriggerContext& Context, const bool bIndirectTrigger)
 {
 	if (!IsInGameThread())
 	{
@@ -46,19 +47,46 @@ bool UCastleBuildingEffectComponent::Trigger(const FCastleBuildingTriggerContext
 		return false;
 	}
 	const FCastleBuildingTriggerContext PreviousContext = LastTriggerContext;
+	FCastleBuildingTriggerContext ResolvedContext = Context;
+	ResolvedContext.TriggerNumberBonus = 0;
+	UCastleBadgeRuntimeSubsystem* Runtime = nullptr;
+	uint64 FirstTowerEntry = 0;
+	if (Context.Source == ECastleBuildingTriggerSource::NPCEntry && !bIndirectTrigger && !Context.bChainReactionChild
+		&& Building->GetBuildingType() != ECastleBuildingType::NormalRoom)
+	{
+		// 波次效果在原生结算前预留，炮塔弹药库联动与连锁子触发都不会占用真实进塔机会。
+		Runtime = GetWorld()->GetSubsystem<UCastleBadgeRuntimeSubsystem>();
+		if (!Runtime)
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("功能塔 %s 缺少本局徽章子系统，无法结算 NPC 进入。"), *Building->GetPathName());
+			return false;
+		}
+		FirstTowerEntry = Runtime->ReserveFirstTowerEntry(ResolvedContext.TriggerNumberBonus);
+	}
 	++TriggerCount;
-	LastTriggerContext = Context;
-	if (!ExecuteEffect(Context))
+	LastTriggerContext = ResolvedContext;
+	if (!ExecuteEffect(ResolvedContext))
 	{
 		// 保留“记录→原生执行→表现通知”的既有顺序，但配置/结算失败必须传回调用方，不能报告成功。
 		--TriggerCount;
 		LastTriggerContext = PreviousContext;
+		if (Runtime) { Runtime->CancelFirstTowerEntry(FirstTowerEntry); }
 		return false;
 	}
-	OnEffectTriggered.Broadcast(Context);
+	if (ResolvedContext.TriggerNumberBonus > 0)
+	{
+		UE_LOG(LogMoving_Castle, Display, TEXT("门后备用弦：%s 本波首次进塔，触发数字额外 +%lld。"),
+			*Building->GetName(), ResolvedContext.TriggerNumberBonus);
+	}
+	OnEffectTriggered.Broadcast(ResolvedContext);
 	UE_LOG(LogMoving_Castle, Verbose, TEXT("建筑效果：%s，第 %lld 次触发，来源=%s。"),
 		*Building->GetName(), TriggerCount, Context.Source == ECastleBuildingTriggerSource::NPCEntry ? TEXT("NPC进入") : TEXT("主动调用"));
 	return true;
+}
+
+int64 UCastleBuildingEffectComponent::GetTriggeredBuildingNumber(const FCastleBuildingTriggerContext& Context) const
+{
+	return CastChecked<ACastleBuildingBase>(GetOwner())->GetEffectiveBuildingNumber() + Context.TriggerNumberBonus;
 }
 
 bool UCastleBuildingEffectComponent::ExecuteEffect(const FCastleBuildingTriggerContext& Context)

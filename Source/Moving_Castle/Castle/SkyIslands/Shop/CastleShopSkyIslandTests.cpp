@@ -16,6 +16,7 @@
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
 #include "CastlePlayerController.h"
+#include "Components/Button.h"
 #include "Components/PanelWidget.h"
 #include "Components/TextRenderComponent.h"
 #include "Editor.h"
@@ -28,6 +29,7 @@
 #include "Materials/MaterialInstanceConstant.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/AutomationTest.h"
+#include "PhysicsEngine/BodySetup.h"
 #include "Tests/AutomationCommon.h"
 #include "Tests/AutomationEditorCommon.h"
 #include "UObject/StrongObjectPtr.h"
@@ -37,12 +39,13 @@ namespace
 	constexpr TCHAR ShopAssetPath[] = TEXT("/Game/MovingCastle/Data/SkyIslands/DA_ShopSkyIsland.DA_ShopSkyIsland");
 	constexpr TCHAR RoomPackFolder[] = TEXT("/Game/MovingCastle/Model/Items/RoomPack");
 	const FName SoldAmountParameter(TEXT("SoldAmount"));
+	enum class EShopIslandTestScenario : uint8 { RoomGroup, Badge, TowerLevels };
 
-	/** 用正式资产名验证引用关系，避免漏配后仍由别的有效资源凑齐数量。 */
+	/** 由正式对象路径加载，避免漏配后仍由别的有效资源凑齐数量。 */
 	template <typename AssetType>
-	AssetType* LoadRoomPackAsset(const FString& Name)
+	AssetType* LoadNamedAsset(const TCHAR* Folder, const FString& Name)
 	{
-		return LoadObject<AssetType>(nullptr, *FString::Printf(TEXT("%s/%s.%s"), RoomPackFolder, *Name, *Name));
+		return LoadObject<AssetType>(nullptr, *FString::Printf(TEXT("%s/%s.%s"), Folder, *Name, *Name));
 	}
 
 	template <typename WidgetType>
@@ -58,8 +61,9 @@ namespace
 class FCastleShopSkyIslandScenario final : public IAutomationLatentCommand
 {
 public:
-	FCastleShopSkyIslandScenario(FAutomationTestBase& InTest, TStrongObjectPtr<UCastleDirectorConfigDataAsset>&& InConfig)
-		: Test(InTest), Config(MoveTemp(InConfig)) {}
+	FCastleShopSkyIslandScenario(FAutomationTestBase& InTest, TStrongObjectPtr<UCastleDirectorConfigDataAsset>&& InConfig,
+		const EShopIslandTestScenario InScenario)
+		: Test(InTest), Config(MoveTemp(InConfig)), Scenario(InScenario) {}
 
 	virtual ~FCastleShopSkyIslandScenario() override { StopConfiguringTestIslands(); }
 
@@ -77,6 +81,7 @@ public:
 			Test.AddError(TEXT("商店空岛测试需要 MainMap 的导演完成开局。"));
 			return true;
 		}
+		if (Scenario == EShopIslandTestScenario::TowerLevels) { return UpdateTowerLevelPurchases(*World, *Director); }
 		if (Stage == 0)
 		{
 			if (!PrepareAndEnter(*World, *Director)) { return true; }
@@ -105,6 +110,96 @@ public:
 	}
 
 private:
+	/** 同一局中逐级扩层，从未裁剪的正式目录挑种子，再让导演生成并结算真实货位。 */
+	bool UpdateTowerLevelPurchases(UWorld& World, UCastleDirectorSubsystem& Director)
+	{
+		if (Director.GetPhase() == ECastleDirectorPhase::SkyIsland)
+		{
+			if (FPlatformTime::Seconds() < WaitUntil) { return false; }
+			Test.AddError(TEXT("分级购买测试等待离岛超时。"));
+			return true;
+		}
+		if (!Test.TestEqual(TEXT("上一次离岛后只推进一步"), Director.GetClearedSteps(), Stage) || Stage == 4) { return true; }
+		const int32 Level = Stage + 1;
+		const TActorIterator<ACastleBoard> Board(&World);
+		auto* Controller = Cast<ACastlePlayerController>(World.GetFirstPlayerController());
+		const auto* Authored = LoadObject<UCastleShopSkyIslandDataAsset>(nullptr, ShopAssetPath);
+		if (!Test.TestTrue(TEXT("等级测试使用正式棋盘、目录和本局账户"), Board && Board->PrototypeBackpack
+			&& Controller && Controller->GetEconomy() && Authored && Director.GetConfig() == Config.Get())) { return true; }
+		FText Reason;
+		if (Level > 1 && !Test.TestTrue(TEXT("使用正常棋盘扩层入口提升稀有度等级"),
+			Board->ExpandMainTowerLayers(Level * 2 + 1, Reason))) { return true; }
+
+		// 每级购买一组该级新开放稀有度，Lv3、Lv4 同时验证拆解和染色的扣费原子路径。
+		const TCHAR* Products[] = {TEXT("DA_RoomGroup_07_TripleThreeArchers"), TEXT("DA_RoomGroup_11_RedStorm"),
+			TEXT("DA_RoomGroup_20_Normalize"), TEXT("DA_RoomGroup_22_GreenLushRedWither")};
+		const FName DesiredGroup(Products[Stage]);
+		int32 ContextSeed = INDEX_NONE;
+		TArray<ACastleShopSkyIsland::FProduct> Rolls;
+		for (int32 Seed = 0; Seed < 4096; ++Seed)
+		{
+			if (!ACastleShopSkyIsland::TryRollProducts(*Authored, Level, Seed, Rolls, Reason)) { Test.AddError(Reason.ToString()); return true; }
+			if (Rolls.ContainsByPredicate([DesiredGroup](const auto& Row) { return Row.RoomGroup && Row.RoomGroup->GetFName() == DesiredGroup; }))
+			{
+				ContextSeed = Seed;
+				break;
+			}
+		}
+		if (!Test.TestTrue(TEXT("正式概率表可抽到这一级新解锁的商品"), ContextSeed != INDEX_NONE)) { return true; }
+		const uint32 StepSeed = static_cast<uint32>(Director.GetNextStep()) * 0x9e3779b9u;
+		{
+			// 调试进入入口会派生节点随机种子，只对本用例的内存配置指定反向推算的种子。
+			TGuardValue<int32> RunSeed(Config->RunSeed, static_cast<int32>(static_cast<uint32>(ContextSeed) ^ StepSeed));
+			if (!Test.TestTrue(TEXT("正式导演生成商店空岛"), Director.TryEnterSkyIslandByTypeForDebug(ECastleSkyIslandType::Shop, Reason)))
+			{
+				Test.AddError(Reason.ToString());
+				return true;
+			}
+		}
+		const TActorIterator<ACastleShopSkyIsland> Island(&World);
+		if (!Test.TestTrue(TEXT("进入真正使用正式目录的商店空岛"), Island && Island->Config == Authored)) { return true; }
+		const auto* Offer = Island->Offers.FindByPredicate([DesiredGroup](const UCastleShopSkyIslandOffer* Entry)
+		{
+			return Entry->RoomGroup && Entry->RoomGroup->GetFName() == DesiredGroup;
+		});
+		if (!Test.TestNotNull(DesiredGroup.ToString(), Offer)) { return true; }
+
+		auto& Wallet = *Controller->GetEconomy();
+		auto& Pack = *Board->PrototypeBackpack;
+		auto* Normal = Board->FindBuildingDefinition(ECastleBuildingType::NormalRoom);
+		FCastleBuildingDescriptor Card;
+		// 清空本次测试的库存并布置一个确定首槽，隔离四种交易的牌面断言。
+		while (Pack.GetItemCount() > 0)
+		{
+			if (!Test.TestTrue(TEXT("清空上一档买入的房间"), Pack.TryConsumeItemAt(0, Card, Reason))) { return true; }
+		}
+		int32 Slot = INDEX_NONE;
+		if (!Test.TestTrue(TEXT("准备确定的红 6 首牌与余额"),
+			Normal && Pack.TryAddBuilding(Normal, 1, ECastleTileColor::Red, 6, Slot, Reason) && Wallet.TryAddGold(1000, Reason))) { return true; }
+		const int32 Before = Wallet.GetGold();
+		const FVector Center = (*Offer)->Bounds.Origin;
+		const double TowardAisle = (*Offer)->GetRelativeLocation().Y < 0 ? 160.0 : -160.0;
+		if (!Test.TestTrue(DesiredGroup.ToString() + TEXT(" 由真实准星购买"),
+			Director.TryInteractWithSkyIsland(Center + FVector(0, TowardAisle, 0), Center, Reason))) { Test.AddError(Reason.ToString()); return true; }
+		Test.TestEqual(TEXT("余额只扣单品资产价格"), Wallet.GetGold(), Before - (*Offer)->RoomGroup->ShopPrice);
+		Test.TestTrue(TEXT("交易成功后货位售罄"), (*Offer)->bSold);
+		const int32 ExpectedCount[] = {4, 7, 6, 4};
+		Test.TestEqual(TEXT("真实卡包结算的主栏张数"), Pack.GetItemCount(), ExpectedCount[Stage]);
+		Test.TestEqual(TEXT("未超容量时临时栏为空"), Pack.GetTempItemCount(), 0);
+		if (Level == 3 || Level == 4)
+		{
+			for (const auto& Result : Pack.GetItems())
+			{
+				Test.TestTrue(TEXT("拆解保持红色且数字为 1，染色则全主栏为绿"), Result.Definition == Normal
+					&& (Level == 3 ? Result.Color == ECastleTileColor::Red && Result.Number == 1 : Result.Color == ECastleTileColor::Green));
+			}
+		}
+		Island->OnDepartureRequested.Broadcast();
+		WaitUntil = FPlatformTime::Seconds() + 5.0;
+		++Stage;
+		return false;
+	}
+
 	void VerifyRoomPackDisplay(const ACastleShopSkyIsland& Island, const UCastleShopSkyIslandOffer& Offer)
 	{
 		Test.TestTrue(TEXT("房间组使用配置的卡包网格"), Offer.GetStaticMesh() == Island.Config->RoomPackMesh.Get());
@@ -116,8 +211,9 @@ private:
 		}
 		const FVector RelativeLocation = Offer.GetRelativeLocation();
 		const FBox Box = Offer.Bounds.GetBox();
-		const double FloorZ = Island.GetActorLocation().Z;
-		Test.TestTrue(TEXT("卡包包围盒底面贴地"), FMath::Abs(Box.Min.Z - FloorZ) <= 1.0);
+		// 卡包轴心贴实物展示台顶，测量基准随岛生成位置移动。
+		const double FloorZ = Island.GetActorLocation().Z + 101.0;
+		Test.TestTrue(TEXT("卡包包围盒底面贴展示台"), FMath::Abs(Box.Min.Z - FloorZ) <= 1.0);
 		Test.TestTrue(TEXT("卡包顶面在 180 至 200 cm"), Box.Max.Z - FloorZ >= 180.0 && Box.Max.Z - FloorZ <= 200.0);
 		Test.TestTrue(TEXT("卡包几何高度在 180 至 200 cm"), Box.GetSize().Z >= 180.0 && Box.GetSize().Z <= 200.0);
 		if (Test.TestNotNull(TEXT("卡包保留价格牌"), Offer.Sign.Get()))
@@ -140,12 +236,32 @@ private:
 	void VerifySoldAmount(const UCastleShopSkyIslandOffer& Offer, float Expected)
 	{
 		float SoldAmount = -1.0f;
-		if (Test.TestTrue(TEXT("卡包动态材质可读取 SoldAmount"), Offer.OfferMaterialInstance
+		if (Test.TestTrue(TEXT("商品动态材质可读取 SoldAmount"), Offer.OfferMaterialInstance
 			&& Offer.OfferMaterialInstance->GetScalarParameterValue(SoldAmountParameter, SoldAmount)))
 		{
-			Test.TestEqual(TEXT("卡包售罄材质状态匹配交易结果"), SoldAmount, Expected);
+			Test.TestEqual(TEXT("商品售罄材质状态匹配交易结果"), SoldAmount, Expected);
 		}
-		Test.TestTrue(TEXT("卡包模型仍可见"), Offer.IsVisible());
+		Test.TestTrue(TEXT("商品模型仍可见"), Offer.IsVisible());
+	}
+
+	void VerifyBadgeDisplay(const ACastleShopSkyIsland& Island, const UCastleShopSkyIslandOffer& Offer)
+	{
+		const UStaticMesh* Mesh = Offer.Badge->DisplayMesh;
+		Test.TestTrue(TEXT("徽章货位使用该徽章的正式网格"), Offer.GetStaticMesh() == Mesh);
+		if (Test.TestNotNull(TEXT("徽章货位具有独立动态材质"), Offer.OfferMaterialInstance.Get()))
+		{
+			Test.TestTrue(TEXT("徽章动态材质使用网格自己的原始材质"), Offer.OfferMaterialInstance->Parent.Get() == Mesh->GetMaterial(0));
+			Test.TestTrue(TEXT("动态材质应用到徽章网格的材质槽"), Offer.GetMaterial(0) == Offer.OfferMaterialInstance.Get());
+		}
+		const FBox Box = Offer.Bounds.GetBox();
+		const FVector Front = Offer.GetRelativeRotation().RotateVector(FVector::RightVector);
+		const FVector TowardAisle = Offer.GetRelativeLocation().Y < 0.0 ? FVector::RightVector : -FVector::RightVector;
+		Test.TestTrue(TEXT("徽章正面朝向中央通道"), Front.Equals(TowardAisle, 0.001));
+		Test.TestTrue(TEXT("徽章底边贴地"), FMath::Abs(Box.Min.Z - Island.GetActorLocation().Z) <= 1.0);
+		Test.TestTrue(TEXT("徽章高度在 180 至 200 cm"), Box.GetSize().Z >= 180.0 && Box.GetSize().Z <= 200.0);
+		Test.TestEqual(TEXT("徽章仅开启查询碰撞"), Offer.GetCollisionEnabled(), ECollisionEnabled::QueryOnly);
+		Test.TestEqual(TEXT("徽章阻挡准星查询"), Offer.GetCollisionResponseToChannel(ECC_Visibility), ECR_Block);
+		Test.TestFalse(TEXT("徽章组件禁用导航影响"), Offer.CanEverAffectNavigation());
 	}
 
 	bool PrepareAndEnter(UWorld& World, UCastleDirectorSubsystem& Director)
@@ -162,11 +278,16 @@ private:
 		// 用实际配置生成同种子的两套货架，再单独整理确定的四个商品，逐条覆盖不同交易入口。
 		if (!VerifyDeterminism(World, Director, *Controller)) { return false; }
 		TradeConfig.Reset(DuplicateObject(Authored, GetTransientPackage()));
+		// 固定为普通档，保证两个房间组和两个徽章均能上架，仍调用正式的同档不重复抽样。
+		for (FCastleShopRarityWeights& Row : TradeConfig->RarityWeightsByTowerLevel)
+		{
+			Row = {100, 0, 0, 0, 0};
+		}
 		TradeConfig->RoomGroupPool.Reset();
 		for (UCastleRoomGroupDataAsset* Group : Authored->RoomGroupPool)
 		{
-			if (Group->GroupType == ECastleRoomGroupType::ThreeNumberFourArchers
-				|| Group->GroupType == ECastleRoomGroupType::FullyCustomRoom)
+			if (Group && (Group->GetFName() == TEXT("DA_RoomGroup_01_RandomSupply")
+				|| Group->GetFName() == TEXT("DA_RoomGroup_04_CustomNormalRoom")))
 			{
 				TradeConfig->RoomGroupPool.Add(Group);
 			}
@@ -174,7 +295,7 @@ private:
 		TradeConfig->BadgePool.Reset();
 		for (UCastleBadgeDataAsset* Badge : Authored->BadgePool)
 		{
-			if (Badge->Badge.Type == ECastleBadgeType::GambleLuck || Badge->Badge.Type == ECastleBadgeType::BlueRoomNumber)
+			if (Badge && (Badge->Badge.Type == ECastleBadgeType::FirepowerCard || Badge->Badge.Type == ECastleBadgeType::StartingFunds))
 			{
 				TradeConfig->BadgePool.Add(Badge);
 			}
@@ -229,8 +350,12 @@ private:
 				if (Offer->RoomGroup)
 				{
 					VerifyRoomPackDisplay(*Island, *Offer);
-					VerifySoldAmount(*Offer, 0.0f);
 				}
+				else { VerifyBadgeDisplay(*Island, *Offer); }
+				VerifySoldAmount(*Offer, 0.0f);
+				const int32 AssetPrice = Offer->RoomGroup ? Offer->RoomGroup->ShopPrice : Offer->Badge->ShopPrice;
+				Test.TestEqual(TEXT("初始化货位按各自资产定价"), Offer->Price, AssetPrice);
+				Test.TestTrue(TEXT("价格牌显示资产单价"), Offer->Sign->Text.ToString().EndsWith(FString::Printf(TEXT("%d GOLD"), AssetPrice)));
 				Names.Add(Offer->ProductName.ToString());
 				const FText Prompt = Offer->GetInteractPrompt();
 				if (Copy == 0) { Previous.Add(Prompt); }
@@ -263,7 +388,7 @@ private:
 		for (UCastleShopSkyIslandOffer* Offer : Island->Offers)
 		{
 			if (Offer->Badge) { BadgeOffers.Add(Offer); }
-			else if (Offer->RoomGroup->GroupType == ECastleRoomGroupType::FullyCustomRoom) { Wildcard = Offer; }
+			else if (Offer->RoomGroup->bChooseInPicker) { Wildcard = Offer; }
 			else { Fixed = Offer; }
 		}
 		if (!Test.TestNotNull(TEXT("确定房间组台座"), Fixed) || !Test.TestNotNull(TEXT("万能卡台座"), Wildcard)
@@ -276,7 +401,7 @@ private:
 		FText Reason;
 		const auto Interact = [&Director, &Reason](const UPrimitiveComponent& Target)
 		{
-			// 包底轴心在地板上，从中央通道一侧瞄准世界包围盒中心才与玩家准星一致。
+			// 包底轴心在展示台上，从中央通道一侧瞄准世界包围盒中心才与玩家准星一致。
 			const FVector Center = Target.Bounds.Origin;
 			const double TowardAisle = Target.GetRelativeLocation().Y < 0.0 ? 160.0 : -160.0;
 			return Director.TryInteractWithSkyIsland(Center + FVector(0, TowardAisle, 0), Center, Reason);
@@ -285,9 +410,27 @@ private:
 		{
 			VerifyRoomPackDisplay(**Island, *Pack);
 			VerifySoldAmount(*Pack, 0.0f);
-			Test.TestTrue(TEXT("在售准星显示 30 金币"), Pack->GetInteractPrompt().ToString().EndsWith(TEXT("　30 金币")));
+			Test.TestEqual(TEXT("房间组从单品资产读取售价"), Pack->Price, Pack->RoomGroup->ShopPrice);
+			Test.TestTrue(TEXT("准星提示显示单品售价"), Pack->GetInteractPrompt().ToString().EndsWith(FString::Printf(TEXT("　%d 金币"), Pack->Price)));
 		}
 		Test.TestTrue(TEXT("真实 PIE 覆盖左右两侧的房间包朝向"), bCheckedLeftPack && bCheckedRightPack);
+		// 保留正式购房和徽章交易两条用例，房间组规则引擎的失败不会挡住独立的徽章验收。
+		const bool bPurchased = Scenario == EShopIslandTestScenario::RoomGroup
+			? VerifyRoomGroupPurchases(World, Wallet, Backpack, *Fixed, *Wildcard, Interact, Reason)
+			: VerifyBadgePurchases(World, **Island, Wallet, BadgeOffers, Interact, Reason);
+		if (!bPurchased) { return false; }
+
+		auto* Departure = FindObjectFast<UCastleSkyIslandDepartureComponent>(*Island, TEXT("DeparturePortal"));
+		return Test.TestNotNull(TEXT("商店离开门"), Departure) && Test.TestTrue(TEXT("登记离开商店岛"), Interact(*Departure));
+	}
+
+	/** 自定义卡延迟扣费、取消、拒绝与失败退款均走真实按钮和背包。 */
+	bool VerifyRoomGroupPurchases(UWorld& World, UCastleEconomyComponent& Wallet, UCastleBackpackComponent& Backpack,
+		UCastleShopSkyIslandOffer& FixedOffer, UCastleShopSkyIslandOffer& WildcardOffer,
+		TFunctionRef<bool(const UPrimitiveComponent&)> Interact, FText& Reason)
+	{
+		auto* Fixed = &FixedOffer;
+		auto* Wildcard = &WildcardOffer;
 		const auto CardCount = [&Backpack]() { return Backpack.GetItemCount() + Backpack.GetTempItemCount(); };
 		const int32 InitialCards = CardCount();
 		Test.TestTrue(TEXT("耗尽余额以验证交易拒绝"), Wallet.TrySpendGold(Wallet.GetGold(), Reason));
@@ -297,9 +440,9 @@ private:
 		Test.TestFalse(TEXT("被拒绝商品仍在售"), Fixed->bSold);
 		VerifySoldAmount(*Fixed, 0.0f);
 		Test.TestTrue(TEXT("测试账户入账"), Wallet.TryAddGold(200, Reason));
-		Test.TestTrue(TEXT("购买确定房间组"), Interact(*Fixed));
+		if (!Test.TestTrue(TEXT("购买随机补给房间组"), Interact(*Fixed))) { return false; }
 		Test.TestEqual(TEXT("房间组扣费"), Wallet.GetGold(), 200 - Fixed->Price);
-		Test.TestEqual(TEXT("三张确定卡牌入建筑栏或临时栏"), CardCount(), InitialCards + 3);
+		Test.TestEqual(TEXT("三张随机房间入建筑栏或临时栏"), CardCount(), InitialCards + 3);
 		Test.TestTrue(TEXT("房间组台座售罄"), Fixed->bSold);
 		VerifySoldAmount(*Fixed, 1.0f);
 		Test.TestTrue(TEXT("售罄后价格牌更新"), Fixed->Sign && Fixed->Sign->Text.ToString().EndsWith(TEXT("SOLD OUT")));
@@ -351,13 +494,34 @@ private:
 		Test.TestEqual(TEXT("满栏时确认的万能卡进入临时栏"), Backpack.GetTempItemCount(), BeforeTemp + 1);
 		Test.TestTrue(TEXT("确认后万能卡台座售罄"), Wildcard->bSold);
 		VerifySoldAmount(*Wildcard, 1.0f);
+		return true;
+	}
 
+	/** 通过可见性射线购买两个真实徽章，覆盖各自定价、售罄材质与手动替换。 */
+	bool VerifyBadgePurchases(UWorld& World, const ACastleShopSkyIsland& Island, UCastleEconomyComponent& Wallet,
+		const TArray<UCastleShopSkyIslandOffer*>& BadgeOffers,
+		TFunctionRef<bool(const UPrimitiveComponent&)> Interact, FText& Reason)
+	{
 		auto* Badges = UCastleBadgeSubsystem::GetForWorld(&World);
 		if (!Test.TestNotNull(TEXT("本局徽章子系统"), Badges)) { return false; }
 		Badges->ClearAllBadgesForTesting();
-		Test.TestTrue(TEXT("未满六枚时可购买徽章"), Interact(*BadgeOffers[0]));
+		for (const UCastleShopSkyIslandOffer* BadgeOffer : BadgeOffers)
+		{
+			VerifyBadgeDisplay(Island, *BadgeOffer);
+			VerifySoldAmount(*BadgeOffer, 0.0f);
+			Test.TestEqual(TEXT("徽章从单品资产读取售价"), BadgeOffer->Price, BadgeOffer->Badge->ShopPrice);
+		}
+		if (!Test.TestTrue(TEXT("为两枚不同价格的徽章补足余额"), Wallet.TryAddGold(300, Reason))) { return false; }
+		const int32 BeforeFirstBadge = Wallet.GetGold();
+		if (!Test.TestTrue(TEXT("未满六枚时可购买徽章"), Interact(*BadgeOffers[0]))) { return false; }
+		Test.TestEqual(TEXT("首枚徽章按照单品售价扣费"), Wallet.GetGold(), BeforeFirstBadge - BadgeOffers[0]->Price);
 		Test.TestEqual(TEXT("未满徽章栏直接入槽"), Badges->GetBadges().Num(), 1);
 		Test.TestTrue(TEXT("已入槽徽章商品售罄"), BadgeOffers[0]->bSold);
+		VerifySoldAmount(*BadgeOffers[0], 1.0f);
+		VerifySoldAmount(*BadgeOffers[1], 0.0f);
+		Test.TestFalse(TEXT("已售徽章仍可命中并拒绝重复购买"), Interact(*BadgeOffers[0]));
+		Test.TestEqual(TEXT("售罄徽章返回售罄提示"), Reason.ToString(), BadgeOffers[0]->ProductName.ToString() + TEXT("（已售罄）"));
+		Test.TestEqual(TEXT("重复购买拒绝后余额不变"), Wallet.GetGold(), BeforeFirstBadge - BadgeOffers[0]->Price);
 		const auto FirstBadge = BadgeOffers[0]->Badge->Badge;
 		bool bNeedsReplacement = false;
 		for (int32 Index = 1; Index < UCastleBadgeSubsystem::MaxBadges; ++Index)
@@ -368,6 +532,8 @@ private:
 		Test.TestTrue(TEXT("满六枚时购买进入正式替换流程"), Interact(*BadgeOffers[1]));
 		Test.TestEqual(TEXT("替换弹窗打开时徽章已扣款"), Wallet.GetGold(), BeforeBadge - BadgeOffers[1]->Price);
 		Test.TestTrue(TEXT("待替换徽章对应商品已售罄"), BadgeOffers[1]->bSold);
+		VerifySoldAmount(*BadgeOffers[1], 1.0f);
+		Test.TestTrue(TEXT("售罄徽章价格牌更新"), BadgeOffers[1]->Sign->Text.ToString().EndsWith(TEXT("SOLD OUT")));
 		auto* Modal = FindShopWidget<UCastleBadgeReplaceModalWidget>(World);
 		if (!Test.TestNotNull(TEXT("正式徽章替换 WBP"), Modal)) { return false; }
 		Test.TestTrue(TEXT("满额替换 WBP 可见"), Modal->IsVisible());
@@ -379,9 +545,7 @@ private:
 		Test.TestEqual(TEXT("替换完成仍为六枚"), Owned.Num(), UCastleBadgeSubsystem::MaxBadges);
 		Test.TestTrue(TEXT("新徽章写入所选槽"), !Owned.IsEmpty() && Owned[0].Type == BadgeOffers[1]->Badge->Badge.Type);
 		Test.TestEqual(TEXT("替换提交不重复扣款"), Wallet.GetGold(), BeforeBadge - BadgeOffers[1]->Price);
-
-		auto* Departure = FindObjectFast<UCastleSkyIslandDepartureComponent>(*Island, TEXT("DeparturePortal"));
-		return Test.TestNotNull(TEXT("商店离开门"), Departure) && Test.TestTrue(TEXT("登记离开商店岛"), Interact(*Departure));
+		return true;
 	}
 
 	bool PressPickerButton(UWorld& World, const FName ButtonName)
@@ -417,21 +581,20 @@ private:
 	TStrongObjectPtr<UCastleShopSkyIslandDataAsset> TradeConfig;
 	TWeakObjectPtr<UWorld> ConfiguredWorld;
 	FDelegateHandle SpawnHandle;
+	const EShopIslandTestScenario Scenario;
 	bool bCheckedLeftPack = false;
 	bool bCheckedRightPack = false;
 	int32 Stage = 0;
 	double WaitUntil = FPlatformTime::Seconds() + 30.0;
 };
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleShopSkyIslandIntegrationTest, "MovingCastle.SkyIslands.Shop.Transactions",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-
-bool FCastleShopSkyIslandIntegrationTest::RunTest(const FString& Parameters)
+/** 交易用例共享开局准备，各自从一局干净的 MainMap 开始。 */
+static bool QueueShopSkyIslandScenario(FAutomationTestBase& Test, const EShopIslandTestScenario Scenario)
 {
 	auto* Settings = GetMutableDefault<UCastleDirectorSettings>();
 	const auto Previous = Settings->DirectorConfig;
 	auto* Source = Previous.LoadSynchronous();
-	if (!TestNotNull(TEXT("正式导演配置"), Source)) { return false; }
+	if (!Test.TestNotNull(TEXT("正式导演配置"), Source)) { return false; }
 	TStrongObjectPtr<UCastleDirectorConfigDataAsset> Config(DuplicateObject(Source, GetTransientPackage()));
 	Config->SkyIslandClasses.Add(ECastleSkyIslandType::Shop, ACastleShopSkyIsland::StaticClass());
 	// 找到开局各有效节点序号都抽到商店的测试种子，避免测试依赖迭代器枚举顺序。
@@ -447,12 +610,12 @@ bool FCastleShopSkyIslandIntegrationTest::RunTest(const FString& Parameters)
 		}
 		if (bFoundSeed) { Config->RunSeed = Seed; }
 	}
-	if (!TestTrue(TEXT("指定商店节点的测试种子"), bFoundSeed)) { return false; }
+	if (!Test.TestTrue(TEXT("指定商店节点的测试种子"), bFoundSeed)) { return false; }
 	Settings->DirectorConfig = Config.Get();
 	// 只等待本用例显式启动的 PIE 导演，避免全量队列中引擎等待到另一个测试的游戏世界。
 	ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/MovingCastle/Maps/MainMap")));
 	ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
-	ADD_LATENT_AUTOMATION_COMMAND(FCastleShopSkyIslandScenario(*this, MoveTemp(Config)));
+	ADD_LATENT_AUTOMATION_COMMAND(FCastleShopSkyIslandScenario(Test, MoveTemp(Config), Scenario));
 	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([Settings, Previous, bRequested = false]() mutable
 	{
 		// 场景结束时等待已挂载的界面及世界真正销毁，再恢复全局 PIE 启动配置。
@@ -467,6 +630,30 @@ bool FCastleShopSkyIslandIntegrationTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleShopSkyIslandIntegrationTest, "MovingCastle.SkyIslands.Shop.Transactions",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleShopSkyIslandIntegrationTest::RunTest(const FString& Parameters)
+{
+	return QueueShopSkyIslandScenario(*this, EShopIslandTestScenario::RoomGroup);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleShopSkyIslandBadgeTransactionTest, "MovingCastle.SkyIslands.Shop.BadgeTransactions",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleShopSkyIslandBadgeTransactionTest::RunTest(const FString& Parameters)
+{
+	return QueueShopSkyIslandScenario(*this, EShopIslandTestScenario::Badge);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleShopSkyIslandLevelPurchasesTest, "MovingCastle.SkyIslands.Shop.LevelPurchases",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleShopSkyIslandLevelPurchasesTest::RunTest(const FString& Parameters)
+{
+	return QueueShopSkyIslandScenario(*this, EShopIslandTestScenario::TowerLevels);
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleShopSkyIslandAssetTest, "MovingCastle.SkyIslands.Shop.ConfigValidation",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -476,38 +663,12 @@ bool FCastleShopSkyIslandAssetTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("商店配置资产"), Asset)) { return false; }
 	FText Reason;
 	if (!TestTrue(TEXT("正式配置通过校验"), Asset->Validate(Reason))) { return false; }
-	TestEqual(TEXT("引用 8 个房间组"), Asset->RoomGroupPool.Num(), 8);
-	TestEqual(TEXT("引用 7 个徽章"), Asset->BadgePool.Num(), 7);
-	TestEqual(TEXT("默认货位数"), Asset->OfferCount, 4);
-	TestEqual(TEXT("房间组售价"), Asset->DefaultRoomGroupPrice, 30);
-	TestEqual(TEXT("徽章售价"), Asset->DefaultBadgePrice, 50);
-	TestTrue(TEXT("正式商店明确引用 SM_RoomPack"), Asset->RoomPackMesh.Get() == LoadRoomPackAsset<UStaticMesh>(TEXT("SM_RoomPack")));
+	TestEqual(TEXT("引用 26 个房间组"), Asset->RoomGroupPool.Num(), 26);
+	TestEqual(TEXT("引用 25 个徽章"), Asset->BadgePool.Num(), 25);
+	TestEqual(TEXT("固定四个货位"), Asset->OfferCount, 4);
+	TestTrue(TEXT("正式商店明确引用 SM_RoomPack"), Asset->RoomPackMesh.Get() == LoadNamedAsset<UStaticMesh>(RoomPackFolder, TEXT("SM_RoomPack")));
 
-	// 核对正式房间组名称与用户确认的档位，池中任一漏配或错配都会被识别。
-	const TMap<FString, ECastleRoomPackRarity> ExpectedGroups{
-		{TEXT("DA_RoomGroup_CustomNormalRoom"), ECastleRoomPackRarity::White},
-		{TEXT("DA_RoomGroup_CustomColorNormalRoom"), ECastleRoomPackRarity::White},
-		{TEXT("DA_RoomGroup_NpcSpeedRoom"), ECastleRoomPackRarity::Blue},
-		{TEXT("DA_RoomGroup_ThreeConsecutiveFarms"), ECastleRoomPackRarity::Blue},
-		{TEXT("DA_RoomGroup_ThreeNumberFourArchers"), ECastleRoomPackRarity::Purple},
-		{TEXT("DA_RoomGroup_HighNumberRoom"), ECastleRoomPackRarity::Purple},
-		{TEXT("DA_RoomGroup_RandomFunctionCustomRoom"), ECastleRoomPackRarity::Gold},
-		{TEXT("DA_RoomGroup_FullyCustomRoom"), ECastleRoomPackRarity::Holo}
-	};
-	TSet<FString> VerifiedGroups;
-	for (const UCastleRoomGroupDataAsset* Group : Asset->RoomGroupPool)
-	{
-		const FString Name = Group->GetName();
-		const ECastleRoomPackRarity* Expected = ExpectedGroups.Find(Name);
-		if (TestNotNull(TEXT("房间组资产在正式档位表中") + Name, Expected))
-		{
-			TestEqual(Name, Group->Rarity, *Expected);
-			VerifiedGroups.Add(Name);
-		}
-	}
-	TestEqual(TEXT("八个正式房间组各自出现"), VerifiedGroups.Num(), ExpectedGroups.Num());
-
-	const UMaterial* Master = LoadRoomPackAsset<UMaterial>(TEXT("M_RoomPack_Master"));
+	const UMaterial* Master = LoadNamedAsset<UMaterial>(RoomPackFolder, TEXT("M_RoomPack_Master"));
 	TestNotNull(TEXT("共用房间包母材质"), Master);
 	const auto VerifyTexture = [this](const UTexture2D* Texture, const FString& Name, const bool bSRgb,
 		const TextureCompressionSettings Compression, const bool bFlipGreen)
@@ -519,22 +680,22 @@ bool FCastleShopSkyIslandAssetTest::RunTest(const FString& Parameters)
 		TestEqual(Name + TEXT(" 的源图宽"), Texture->Source.GetSizeX(), int64{1024});
 		TestEqual(Name + TEXT(" 的源图高"), Texture->Source.GetSizeY(), int64{1024});
 	};
-	const TPair<ECastleRoomPackRarity, const TCHAR*> ExpectedMaterials[] = {
-		{ECastleRoomPackRarity::White, TEXT("01_White")}, {ECastleRoomPackRarity::Blue, TEXT("02_Blue")},
-		{ECastleRoomPackRarity::Purple, TEXT("03_Purple")}, {ECastleRoomPackRarity::Gold, TEXT("04_Gold")},
-		{ECastleRoomPackRarity::Holo, TEXT("05_Holo")}
+	const TPair<ECastleItemRarity, const TCHAR*> ExpectedMaterials[] = {
+		{ECastleItemRarity::Common, TEXT("01_White")}, {ECastleItemRarity::Uncommon, TEXT("02_Blue")},
+		{ECastleItemRarity::Rare, TEXT("03_Purple")}, {ECastleItemRarity::Epic, TEXT("04_Gold")},
+		{ECastleItemRarity::Legendary, TEXT("05_Holo")}
 	};
 	for (const auto& Entry : ExpectedMaterials)
 	{
 		const FString Tier(Entry.Value);
-		const auto* Instance = LoadRoomPackAsset<UMaterialInstanceConstant>(TEXT("MI_RoomPack_") + Tier);
+		const auto* Instance = LoadNamedAsset<UMaterialInstanceConstant>(RoomPackFolder, TEXT("MI_RoomPack_") + Tier);
 		if (!TestNotNull(Tier, Instance)) { continue; }
 		TestTrue(Tier + TEXT(" 显式绑定对应实例"), Asset->RoomPackMaterials.FindChecked(Entry.Key).Get() == Instance);
 		TestTrue(Tier + TEXT(" 使用房间包母材质"), Instance->Parent.Get() == Master);
 		const FString ColorName = TEXT("T_RoomPack_") + Tier + TEXT("_BC");
 		const FString MaskName = TEXT("T_RoomPack_") + Tier + TEXT("_ORM");
-		const auto* BaseColor = LoadRoomPackAsset<UTexture2D>(ColorName);
-		const auto* Masks = LoadRoomPackAsset<UTexture2D>(MaskName);
+		const auto* BaseColor = LoadNamedAsset<UTexture2D>(RoomPackFolder, ColorName);
+		const auto* Masks = LoadNamedAsset<UTexture2D>(RoomPackFolder, MaskName);
 		VerifyTexture(BaseColor, ColorName, true, TC_Default, false);
 		VerifyTexture(Masks, MaskName, false, TC_Masks, false);
 		UTexture* Parameter = nullptr;
@@ -543,41 +704,264 @@ bool FCastleShopSkyIslandAssetTest::RunTest(const FString& Parameters)
 		TestTrue(Tier + TEXT(" 使用该档 ORM"), Instance->GetTextureParameterValue(FName(TEXT("PackORM")), Parameter)
 			&& Parameter == Masks);
 	}
-	VerifyTexture(LoadRoomPackAsset<UTexture2D>(TEXT("T_RoomPack_Foil_N")), TEXT("T_RoomPack_Foil_N"), false, TC_Normalmap, true);
+	VerifyTexture(LoadNamedAsset<UTexture2D>(RoomPackFolder, TEXT("T_RoomPack_Foil_N")), TEXT("T_RoomPack_Foil_N"), false, TC_Normalmap, true);
 
 	// 非法变体只改临时副本，编码预期错误并断言原配置不会被修正。
 	auto* Invalid = DuplicateObject(Asset, GetTransientPackage());
+	AddExpectedError(TEXT("商店空岛配置"), EAutomationExpectedErrorFlags::Contains, 14);
 	Invalid->OfferCount = 3;
-	TestTrue(TEXT("允许 3 个货位"), Invalid->Validate(Reason));
-	AddExpectedError(TEXT("商店空岛配置"), EAutomationExpectedErrorFlags::Contains, 7);
-	Invalid->OfferCount = 2;
-	TestFalse(TEXT("拒绝不足 3 个货位"), Invalid->Validate(Reason));
+	TestFalse(TEXT("拒绝少于四个货位"), Invalid->Validate(Reason));
 	Invalid->OfferCount = 4;
-	Invalid->DefaultBadgePrice = -1;
-	TestFalse(TEXT("拒绝负售价"), Invalid->Validate(Reason));
-	Invalid->DefaultBadgePrice = 50;
+	Invalid->RarityWeightsByTowerLevel.Pop();
+	TestFalse(TEXT("拒绝概率表缺少等级行"), Invalid->Validate(Reason));
+	Invalid->RarityWeightsByTowerLevel = Asset->RarityWeightsByTowerLevel;
+	Invalid->RarityWeightsByTowerLevel[0].Rare = -1;
+	TestFalse(TEXT("拒绝负概率"), Invalid->Validate(Reason));
+	Invalid->RarityWeightsByTowerLevel[0].Rare = 0;
+	Invalid->RarityWeightsByTowerLevel[0].Common++;
+	TestFalse(TEXT("拒绝行总和不是一百"), Invalid->Validate(Reason));
+	Invalid->RarityWeightsByTowerLevel = Asset->RarityWeightsByTowerLevel;
 	Invalid->RoomGroupPool[0] = nullptr;
 	TestFalse(TEXT("拒绝无效商品指针"), Invalid->Validate(Reason));
 	Invalid->RoomGroupPool = Asset->RoomGroupPool;
 	Invalid->BadgePool.Reset();
 	TestFalse(TEXT("拒绝空商品池"), Invalid->Validate(Reason));
 	Invalid->BadgePool = Asset->BadgePool;
+	Invalid->BadgePool.RemoveAll([](const UCastleBadgeDataAsset* Badge) { return Badge->Rarity == ECastleItemRarity::Legendary; });
+	TestFalse(TEXT("拒绝已开启档位缺少徽章"), Invalid->Validate(Reason));
+	Invalid->BadgePool = Asset->BadgePool;
 	Invalid->RoomPackMesh = nullptr;
 	TestFalse(TEXT("拒绝缺失房间包网格"), Invalid->Validate(Reason));
 	Invalid->RoomPackMesh = Asset->RoomPackMesh;
-	Invalid->RoomPackMaterials[ECastleRoomPackRarity::Gold] = nullptr;
+	Invalid->RoomPackMaterials[ECastleItemRarity::Epic] = nullptr;
 	TestFalse(TEXT("拒绝任一档材质缺失"), Invalid->Validate(Reason));
-	Invalid->RoomPackMaterials[ECastleRoomPackRarity::Gold] = UMaterial::GetDefaultMaterial(MD_Surface);
+	Invalid->RoomPackMaterials[ECastleItemRarity::Epic] = UMaterial::GetDefaultMaterial(MD_Surface);
 	TestFalse(TEXT("拒绝材质没有售罄控制参数"), Invalid->Validate(Reason));
 	Invalid->RoomPackMaterials = Asset->RoomPackMaterials;
+	auto* InvalidBadge = DuplicateObject(Asset->BadgePool[0].Get(), GetTransientPackage());
+	Invalid->BadgePool[0] = InvalidBadge;
+	InvalidBadge->ShopPrice = -1;
+	TestFalse(TEXT("拒绝徽章负售价"), Invalid->Validate(Reason));
+	InvalidBadge->ShopPrice = Asset->BadgePool[0]->ShopPrice;
+	InvalidBadge->Badge.Icon = nullptr;
+	TestFalse(TEXT("拒绝缺失徽章图标"), Invalid->Validate(Reason));
+	InvalidBadge->Badge.Icon = Asset->BadgePool[0]->Badge.Icon;
+	InvalidBadge->DisplayMesh = nullptr;
+	TestFalse(TEXT("拒绝缺失徽章网格"), Invalid->Validate(Reason));
+	Invalid->BadgePool = Asset->BadgePool;
 	auto* InvalidGroup = DuplicateObject(Asset->RoomGroupPool[0].Get(), GetTransientPackage());
 	Invalid->RoomGroupPool[0] = InvalidGroup;
+	InvalidGroup->ShopPrice = -1;
+	TestFalse(TEXT("拒绝房间组负售价"), Invalid->Validate(Reason));
+	InvalidGroup->ShopPrice = Asset->RoomGroupPool[0]->ShopPrice;
 	AddExpectedError(TEXT("的卡包稀有度无效"), EAutomationExpectedErrorFlags::Contains, 2);
-	InvalidGroup->Rarity = ECastleRoomPackRarity::None;
+	InvalidGroup->Rarity = ECastleItemRarity::None;
 	TestFalse(TEXT("拒绝房间组漏配稀有度"), Invalid->Validate(Reason));
-	InvalidGroup->Rarity = static_cast<ECastleRoomPackRarity>(255);
+	InvalidGroup->Rarity = static_cast<ECastleItemRarity>(255);
 	TestFalse(TEXT("拒绝房间组稀有度越界"), Invalid->Validate(Reason));
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleShopSkyIslandCatalogTest, "MovingCastle.SkyIslands.Shop.OfficialCatalog",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleShopSkyIslandCatalogTest::RunTest(const FString& Parameters)
+{
+	const auto* Config = LoadObject<UCastleShopSkyIslandDataAsset>(nullptr, ShopAssetPath);
+	if (!TestNotNull(TEXT("正式商店配置"), Config)) { return false; }
+	FText Reason;
+	if (!TestTrue(TEXT("完整目录通过商店校验"), Config->Validate(Reason))) { return false; }
+
+	// 使用指南中的具名资产和各自售价，避免两个错误相同的奖池互相比对后仍通过。
+	const struct
+	{
+		const TCHAR* AssetName;
+		const TCHAR* DisplayName;
+		ECastleItemRarity Rarity;
+		int32 Price;
+	} RoomGroups[] = {
+		{TEXT("DA_RoomGroup_01_RandomSupply"), TEXT("随机补给"), ECastleItemRarity::Common, 48},
+		{TEXT("DA_RoomGroup_02_WangcaiPatchBag"), TEXT("旺财的补缝袋"), ECastleItemRarity::Common, 40},
+		{TEXT("DA_RoomGroup_03_ShieldBehindField"), TEXT("盾后小田"), ECastleItemRarity::Common, 55},
+		{TEXT("DA_RoomGroup_04_CustomNormalRoom"), TEXT("自定义普通房间"), ECastleItemRarity::Common, 36},
+		{TEXT("DA_RoomGroup_05_TwinRooms"), TEXT("双胞房间"), ECastleItemRarity::Common, 44},
+		{TEXT("DA_RoomGroup_06_TopSupply"), TEXT("顶格补给"), ECastleItemRarity::Uncommon, 86},
+		{TEXT("DA_RoomGroup_07_TripleThreeArchers"), TEXT("三三箭塔"), ECastleItemRarity::Uncommon, 105},
+		{TEXT("DA_RoomGroup_08_LuckyCannons"), TEXT("幸运炮塔"), ECastleItemRarity::Uncommon, 96},
+		{TEXT("DA_RoomGroup_09_SequentialFarms"), TEXT("连号农田"), ECastleItemRarity::Uncommon, 105},
+		{TEXT("DA_RoomGroup_10_Highway"), TEXT("高速公路"), ECastleItemRarity::Uncommon, 115},
+		{TEXT("DA_RoomGroup_11_RedStorm"), TEXT("红色风暴"), ECastleItemRarity::Rare, 185},
+		{TEXT("DA_RoomGroup_12_DoubleStairPuzzle"), TEXT("双楼梯拼图"), ECastleItemRarity::Rare, 168},
+		{TEXT("DA_RoomGroup_13_TricolorAmmoSquad"), TEXT("三色弹药班"), ECastleItemRarity::Rare, 178},
+		{TEXT("DA_RoomGroup_14_ThreeWayToolbox"), TEXT("三岔分工箱"), ECastleItemRarity::Rare, 172},
+		{TEXT("DA_RoomGroup_15_BigNumberRoom"), TEXT("大数字房间"), ECastleItemRarity::Rare, 148},
+		{TEXT("DA_RoomGroup_16_RandomFuncCustomRoom"), TEXT("随机功能自定义房间"), ECastleItemRarity::Rare, 156},
+		{TEXT("DA_RoomGroup_17_ThreeBlueEights"), TEXT("加入 3 个蓝 8"), ECastleItemRarity::Epic, 275},
+		{TEXT("DA_RoomGroup_18_HiveChainBox"), TEXT("蜂房接龙匣"), ECastleItemRarity::Epic, 340},
+		{TEXT("DA_RoomGroup_19_FullyCustomRoom"), TEXT("完全自定义房间"), ECastleItemRarity::Epic, 245},
+		{TEXT("DA_RoomGroup_20_Normalize"), TEXT("归一化"), ECastleItemRarity::Epic, 300},
+		{TEXT("DA_RoomGroup_21_PortalRoom"), TEXT("传送门房间"), ECastleItemRarity::Epic, 315},
+		{TEXT("DA_RoomGroup_22_GreenLushRedWither"), TEXT("绿肥红瘦"), ECastleItemRarity::Legendary, 520},
+		{TEXT("DA_RoomGroup_23_SelfOrbitCannon"), TEXT("自环绕炮塔"), ECastleItemRarity::Legendary, 490},
+		{TEXT("DA_RoomGroup_24_TowerBuyout"), TEXT("功能塔买断"), ECastleItemRarity::Legendary, 650},
+		{TEXT("DA_RoomGroup_25_DirectDeploy"), TEXT("直接部署"), ECastleItemRarity::Legendary, 620},
+		{TEXT("DA_RoomGroup_26_ColorShift"), TEXT("颜色转变"), ECastleItemRarity::Legendary, 500},
+	};
+	for (const auto& Row : RoomGroups)
+	{
+		auto* Group = LoadNamedAsset<UCastleRoomGroupDataAsset>(TEXT("/Game/MovingCastle/Data/Items/RoomGroups"), Row.AssetName);
+		if (!TestNotNull(Row.AssetName, Group)) { return false; }
+		TestTrue(FString(Row.AssetName) + TEXT(" 进入正式商店池"), Config->RoomGroupPool.Contains(Group));
+		TestEqual(FString(Row.AssetName) + TEXT(" 名称"), Group->DisplayName.ToString(), FString(Row.DisplayName));
+		TestEqual(FString(Row.AssetName) + TEXT(" 稀有度"), Group->Rarity, Row.Rarity);
+		TestEqual(FString(Row.AssetName) + TEXT(" 售价"), Group->ShopPrice, Row.Price);
+		TestTrue(FString(Row.AssetName) + TEXT(" 有显式发牌、选择或主栏动作"), !Group->CardRules.IsEmpty()
+			|| Group->bChooseInPicker || Group->MainBarAction != ECastleRoomGroupMainBarAction::None);
+	}
+
+	const struct
+	{
+		ECastleBadgeType Type;
+		const TCHAR* AssetSuffix;
+		const TCHAR* ArtSuffix;
+		ECastleItemRarity Rarity;
+		int32 Price;
+		float Magnitude;
+	} Badges[] = {
+		{ECastleBadgeType::FirepowerCard, TEXT("FirepowerCard"), TEXT("01_firepower_card"), ECastleItemRarity::Common, 90, 0.10f},
+		{ECastleBadgeType::CoinPurse, TEXT("CoinPurse"), TEXT("02_coin_purse"), ECastleItemRarity::Common, 90, 0.10f},
+		{ECastleBadgeType::StartingFunds, TEXT("StartingFunds"), TEXT("03_starting_funds"), ECastleItemRarity::Common, 140, 100.00f},
+		{ECastleBadgeType::DoubleDoorPass, TEXT("DoubleDoorPass"), TEXT("04_double_door_pass"), ECastleItemRarity::Common, 130, 10.00f},
+		{ECastleBadgeType::SpareBowstring, TEXT("SpareBowstring"), TEXT("05_spare_bowstring"), ECastleItemRarity::Common, 85, 1.00f},
+		{ECastleBadgeType::BalloonRack, TEXT("BalloonRack"), TEXT("06_balloon_rack"), ECastleItemRarity::Common, 120, 0.20f},
+		{ECastleBadgeType::ShopDiscount, TEXT("ShopDiscount"), TEXT("07_shop_discount"), ECastleItemRarity::Uncommon, 230, 0.85f},
+		{ECastleBadgeType::ShopRebate, TEXT("ShopRebate"), TEXT("08_shop_rebate"), ECastleItemRarity::Uncommon, 220, 1.00f},
+		{ECastleBadgeType::ShiftWhistle, TEXT("ShiftWhistle"), TEXT("09_shift_whistle"), ECastleItemRarity::Uncommon, 170, 0.20f},
+		{ECastleBadgeType::StringGlove, TEXT("StringGlove"), TEXT("10_string_glove"), ECastleItemRarity::Uncommon, 180, 1.00f},
+		{ECastleBadgeType::QuickstringPass, TEXT("QuickstringPass"), TEXT("11_quickstring_pass"), ECastleItemRarity::Uncommon, 200, 0.20f},
+		{ECastleBadgeType::FreeRefresh, TEXT("FreeRefresh"), TEXT("12_free_refresh"), ECastleItemRarity::Rare, 360, 3.00f},
+		{ECastleBadgeType::QuickLadder, TEXT("QuickLadder"), TEXT("13_quick_ladder"), ECastleItemRarity::Rare, 270, 0.50f},
+		{ECastleBadgeType::LoopPurchase, TEXT("LoopPurchase"), TEXT("14_loop_purchase"), ECastleItemRarity::Rare, 320, 10.00f},
+		{ECastleBadgeType::LateAdvantage, TEXT("LateAdvantage"), TEXT("15_late_advantage"), ECastleItemRarity::Rare, 380, 0.20f},
+		{ECastleBadgeType::SiphonArrow, TEXT("SiphonArrow"), TEXT("16_siphon_arrow"), ECastleItemRarity::Rare, 350, 0.10f},
+		{ECastleBadgeType::BlueAbacus, TEXT("BlueAbacus"), TEXT("17_blue_abacus"), ECastleItemRarity::Epic, 450, 1.00f},
+		{ECastleBadgeType::WorkshopRefund, TEXT("WorkshopRefund"), TEXT("18_workshop_refund"), ECastleItemRarity::Epic, 520, 2.00f},
+		{ECastleBadgeType::EmergencyBallast, TEXT("EmergencyBallast"), TEXT("19_emergency_ballast"), ECastleItemRarity::Epic, 500, 0.50f},
+		{ECastleBadgeType::RapidMarch, TEXT("RapidMarch"), TEXT("20_rapid_march"), ECastleItemRarity::Epic, 480, 0.20f},
+		{ECastleBadgeType::BerserkBee, TEXT("BerserkBee"), TEXT("21_berserk_bee"), ECastleItemRarity::Epic, 550, 5.00f},
+		{ECastleBadgeType::ChainReaction, TEXT("ChainReaction"), TEXT("22_chain_reaction"), ECastleItemRarity::Legendary, 1000, 1.00f},
+		{ECastleBadgeType::BurstAlarm, TEXT("BurstAlarm"), TEXT("23_burst_alarm"), ECastleItemRarity::Legendary, 1000, 2.00f},
+		{ECastleBadgeType::LapReassignment, TEXT("LapReassignment"), TEXT("24_lap_reassignment"), ECastleItemRarity::Legendary, 900, 10.00f},
+		{ECastleBadgeType::LastBalloonClasp, TEXT("LastBalloonClasp"), TEXT("25_last_balloon_clasp"), ECastleItemRarity::Legendary, 950, 1.00f},
+	};
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Badges); ++Index)
+	{
+		const auto& Row = Badges[Index];
+		const FString Name = FString::Printf(TEXT("DA_Badge_%02d_%s"), Index + 1, Row.AssetSuffix);
+		auto* Asset = LoadNamedAsset<UCastleBadgeDataAsset>(TEXT("/Game/MovingCastle/Data/Items/Badges"), Name);
+		auto* Mesh = LoadNamedAsset<UStaticMesh>(TEXT("/Game/MovingCastle/Art/Badges/Meshes"), FString(TEXT("SM_Badge_")) + Row.ArtSuffix);
+		auto* Icon = LoadNamedAsset<UTexture2D>(TEXT("/Game/MovingCastle/UI/Badges/Icons"), FString(TEXT("Badge_")) + Row.ArtSuffix);
+		if (!TestNotNull(Name, Asset) || !TestNotNull(Name + TEXT(" 的 GLB 网格"), Mesh)
+			|| !TestNotNull(Name + TEXT(" 的 PNG 贴图"), Icon))
+		{
+			return false;
+		}
+		TestTrue(Name + TEXT(" 进入正式商店池"), Config->BadgePool.Contains(Asset));
+		TestTrue(Name + TEXT(" 徽章定义有效"), Asset->Badge.Validate(Reason));
+		TestEqual(Name + TEXT(" 类型"), Asset->Badge.Type, Row.Type);
+		TestEqual(Name + TEXT(" 数值"), Asset->Badge.Magnitude, Row.Magnitude);
+		TestEqual(Name + TEXT(" 稀有度"), Asset->Rarity, Row.Rarity);
+		TestEqual(Name + TEXT(" 售价"), Asset->ShopPrice, Row.Price);
+		TestTrue(Name + TEXT(" 绑定同编号的 GLB 与 PNG"), Asset->DisplayMesh == Mesh && Asset->Badge.Icon == Icon);
+		TestEqual(Name + TEXT(" 保留源网格三角面"), Mesh->GetNumTriangles(0), 1020);
+		const UBodySetup* Collision = Mesh->GetBodySetup();
+		TestTrue(Name + TEXT(" 使用显示网格查询且禁用导航"),
+			Collision && Collision->CollisionTraceFlag == CTF_UseComplexAsSimple && !Mesh->bHasNavigationData);
+		TestEqual(Name + TEXT(" PNG 源图宽"), Icon->Source.GetSizeX(), int64{512});
+		TestEqual(Name + TEXT(" PNG 源图高"), Icon->Source.GetSizeY(), int64{512});
+		TestTrue(Name + TEXT(" PNG 保留 Alpha 和 sRGB"), Icon->HasAlphaChannel() && Icon->SRGB && !Icon->CompressionNoAlpha);
+		TestTrue(Name + TEXT(" 使用 RGBA UI 压缩、UI 组且不生成 mip"),
+			Icon->CompressionSettings == TC_EditorIcon && Icon->LODGroup == TEXTUREGROUP_UI && Icon->MipGenSettings == TMGS_NoMipmaps);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleShopSkyIslandRarityTest, "MovingCastle.SkyIslands.Shop.RaritySampling",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleShopSkyIslandRarityTest::RunTest(const FString& Parameters)
+{
+	const auto* Config = LoadObject<UCastleShopSkyIslandDataAsset>(nullptr, ShopAssetPath);
+	if (!TestNotNull(TEXT("正式商店配置"), Config)) { return false; }
+	FText Reason;
+	if (!TestTrue(TEXT("采样前配置通过校验"), Config->Validate(Reason))) { return false; }
+	static constexpr int32 Expected[4][5] = {
+		{80, 20, 0, 0, 0}, {60, 25, 15, 0, 0}, {45, 25, 20, 10, 0}, {35, 23, 20, 15, 7}
+	};
+	using FProduct = ACastleShopSkyIsland::FProduct;
+	TArray<FProduct> Products;
+	FRandomStream Seeds(489306);
+	constexpr int32 SampleCount = 12000;
+	for (int32 Level = 1; Level <= 4; ++Level)
+	{
+		const auto Percentages = Config->RarityWeightsByTowerLevel[Level - 1].GetPercentages();
+		int32 Counts[4][5] = {};
+		for (int32 Sample = 0; Sample < SampleCount; ++Sample)
+		{
+			if (!ACastleShopSkyIsland::TryRollProducts(*Config, Level, static_cast<int32>(Seeds.GetUnsignedInt()), Products, Reason))
+			{
+				AddError(Reason.ToString());
+				return false;
+			}
+			if (Products.Num() != 4 || !Products[0].RoomGroup || !Products[1].Badge)
+			{
+				AddError(TEXT("四个货位必须至少包含一件房间组与一枚徽章。"));
+				return false;
+			}
+			for (int32 Slot = 0; Slot < Products.Num(); ++Slot)
+			{
+				const auto& Product = Products[Slot];
+				if (MakeArrayView(Products.GetData(), Slot).Contains(Product))
+				{
+					AddError(TEXT("正式货池在仍有候选时抽出了重复商品。"));
+					return false;
+				}
+				const auto Rarity = Product.RoomGroup ? Product.RoomGroup->Rarity : Product.Badge->Rarity;
+				++Counts[Slot][static_cast<int32>(Rarity) - static_cast<int32>(ECastleItemRarity::Common)];
+			}
+		}
+		// 四个货位各自对比配置与样本，保底货位也必须服从同一张概率表。
+		for (int32 Rarity = 0; Rarity < 5; ++Rarity)
+		{
+			const int32 ExpectedPercent = Expected[Level - 1][Rarity];
+			TestEqual(FString::Printf(TEXT("Lv%d 档 %d 的配置百分比"), Level, Rarity + 1), Percentages[Rarity], ExpectedPercent);
+			for (int32 Slot = 0; Slot < 4; ++Slot)
+			{
+				const double Observed = 100.0 * Counts[Slot][Rarity] / SampleCount;
+				TestTrue(FString::Printf(TEXT("Lv%d 货位 %d 档 %d 实测 %.2f%%，期望 %d%%"), Level, Slot + 1, Rarity + 1, Observed, ExpectedPercent),
+					ExpectedPercent == 0 ? Counts[Slot][Rarity] == 0 : FMath::Abs(Observed - ExpectedPercent) < 2.0);
+			}
+		}
+	}
+
+	auto* Scarce = DuplicateObject(Config, GetTransientPackage());
+	Scarce->RoomGroupPool.SetNum(1);
+	Scarce->BadgePool.SetNum(1);
+	for (FCastleShopRarityWeights& Row : Scarce->RarityWeightsByTowerLevel) { Row = {100, 0, 0, 0, 0}; }
+	if (!TestTrue(TEXT("普通档只有一房间组一徽章的显式配置可用"), Scarce->Validate(Reason))) { return false; }
+	AddExpectedMessage(TEXT("档已无未展示商品"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 2);
+	TestTrue(TEXT("抽空普通档后可重复上架该档商品"), ACastleShopSkyIsland::TryRollProducts(*Scarce, 1, 47, Products, Reason));
+	TestEqual(TEXT("补齐四个货位"), Products.Num(), 4);
+	for (const FProduct& Product : Products)
+	{
+		TestTrue(TEXT("售卖货位始终留在已抽中的档位"),
+			Product.RoomGroup == Scarce->RoomGroupPool[0] || Product.Badge == Scarce->BadgePool[0]);
+	}
+	AddExpectedError(TEXT("没有对应的稀有度概率行"), EAutomationExpectedErrorFlags::Contains, 2);
+	TestFalse(TEXT("拒绝无效主塔 Lv0"), ACastleShopSkyIsland::TryRollProducts(*Config, 0, 47, Products, Reason));
+	TestFalse(TEXT("拒绝配置表之外的主塔 Lv5"), ACastleShopSkyIsland::TryRollProducts(*Config, 5, 47, Products, Reason));
+	return true;
+}
+
 
 #endif

@@ -2,13 +2,17 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 #include "Tests/AutomationCommon.h"
+#include "Castle/Automation/CastlePIEAutomation.h"
 #include "Castle/Combat/CastleCombatSubsystem.h"
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
+#include "Castle/Items/CastleBadgeDataAsset.h"
 #include "Castle/Items/CastleBadgeSubsystem.h"
+#include "Castle/Items/CastleItemGrantLibrary.h"
 #include "Castle/Items/CastlePendingRoomReward.h"
 #include "Castle/SkyIslands/CastleSkyIslandTestFixture.h"
+#include "Castle/SkyIslands/Shop/CastleShopSkyIslandDataAsset.h"
 #include "Castle/Support/CastleSupportTowerSubsystem.h"
 #include "Castle/Support/CastleSupportFlightActors.h"
 #include "Castle/Placement/CastleTowerSideGridComponent.h"
@@ -27,7 +31,6 @@
 #include "CastleShopComponent.h"
 #include "Interaction/CastlePatrolRoute.h"
 #include "Engine/Engine.h"
-#include "Editor.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Components/PanelWidget.h"
@@ -208,18 +211,29 @@ private:
 	void VerifyBadgesAndSale(UCastleDirectorSubsystem& Director)
 	{
 		auto* Badges = UCastleBadgeSubsystem::GetForWorld(Director.GetWorld());
-		if (!Test.TestNotNull(TEXT("正式 GameInstance 徽章组件"), Badges)) { return; }
+		const auto* ShopCatalog = LoadObject<UCastleShopSkyIslandDataAsset>(nullptr,
+			TEXT("/Game/MovingCastle/Data/SkyIslands/DA_ShopSkyIsland.DA_ShopSkyIsland"));
+		if (!Test.TestNotNull(TEXT("正式 GameInstance 徽章组件"), Badges)
+			|| !Test.TestNotNull(TEXT("正式徽章资产目录"), ShopCatalog)) { return; }
+		// 主地图 HUD 已订阅徽章库存。使用带真实 PNG 的同一资产发放入口，触发界面与导演更新。
+		const auto FindBadge = [ShopCatalog](const ECastleBadgeType Type) -> const UCastleBadgeDataAsset*
+		{
+			const auto* Found = ShopCatalog->BadgePool.FindByPredicate([Type](const UCastleBadgeDataAsset* Asset)
+			{
+				return IsValid(Asset) && Asset->Badge.Type == Type;
+			});
+			return Found ? Found->Get() : nullptr;
+		};
 		FText Reason;
 		bool bReplace = false;
-		for (const ECastleBadgeType Type : {ECastleBadgeType::MainTowerHealth, ECastleBadgeType::ArcherFireRate,
-			ECastleBadgeType::BlueRoomNumber, ECastleBadgeType::GambleLuck,
-			ECastleBadgeType::FirstMainTowerDamage, ECastleBadgeType::LowMainTowerHealth})
+		for (const ECastleBadgeType Type : {ECastleBadgeType::BalloonRack, ECastleBadgeType::QuickstringPass,
+			ECastleBadgeType::BlueAbacus, ECastleBadgeType::FirepowerCard,
+			ECastleBadgeType::BurstAlarm, ECastleBadgeType::EmergencyBallast})
 		{
-			FCastleBadgeDefinition Badge;
-			if (FCastleBadgeDefinition::TryMakeStandard(Type, Badge)) { Test.TestTrue(TEXT("正式徽章入口发放"), Badges->TryAcquireBadge(Badge, bReplace, Reason)); }
+			const auto* Asset = FindBadge(Type);
+			if (!Test.TestTrue(TEXT("正式徽章入口发放"), UCastleItemGrantLibrary::TryGrantBadge(Asset, Badges, bReplace, Reason))) { return; }
 		}
 		Test.TestTrue(TEXT("主塔同步 +20% 生命"), FMath::IsNearlyEqual(Director.Tower->MaxHealth, 9600.0f));
-		Test.TestTrue(TEXT("赌博幸运供空岛查询"), Badges->GetGambleLuckBonus() > 0.0);
 		auto* Mass = Director.GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>();
 		Director.SetPhase(ECastleDirectorPhase::Battle);
 		Director.Tower->ApplyDamage(0.0f);
@@ -231,11 +245,11 @@ private:
 		Test.TestEqual(TEXT("恢复生命后解除低血压制"), Mass->GetGlobalEnemyAttackSpeedMultiplier(), 1.0f);
 		Director.SetPhase(ECastleDirectorPhase::Editing);
 		Test.TestFalse(TEXT("战斗结束时关闭首次受击增益"), Director.IsFirstTowerDamageTriggeredInBattle());
-		FCastleBadgeDefinition UpgradeBadge;
-		FCastleBadgeDefinition::TryMakeStandard(ECastleBadgeType::UpgradeRoomCards, UpgradeBadge);
-		Test.TestTrue(TEXT("第七枚徽章使用正式替换入口"), Badges->TryAcquireBadge(UpgradeBadge, bReplace, Reason));
+		const auto* UpgradeBadge = FindBadge(ECastleBadgeType::WorkshopRefund);
+		if (!Test.TestTrue(TEXT("第七枚徽章使用正式替换入口"),
+			UCastleItemGrantLibrary::TryGrantBadge(UpgradeBadge, Badges, bReplace, Reason))) { return; }
 		Test.TestTrue(TEXT("第七枚徽章等待确认替换"), bReplace);
-		Test.TestTrue(TEXT("替换一枚后合成徽章生效"), Badges->TryReplaceBadgeAt(3, UpgradeBadge, Reason));
+		Test.TestTrue(TEXT("替换一枚后合成徽章生效"), Badges->TryReplaceBadgeAt(3, UpgradeBadge->Badge, Reason));
 		Test.TestEqual(TEXT("升级徽章赠两张牌"), Badges->GetUpgradeBonusRoomCards(), int64{2});
 		auto* Shop = Director.Controller->GetShop();
 		if (!Test.TestTrue(TEXT("打开商店验证真实出售"), Shop->TryOpenShop(Reason))) { return; }
@@ -390,20 +404,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDirectorWave2IntegrationTest, "MovingCas
 
 bool FCastleDirectorWave2IntegrationTest::RunTest(const FString&)
 {
-	if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/MainMap"), true)) { return false; }
+	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
 	ADD_LATENT_AUTOMATION_COMMAND(FEngineWaitLatentCommand(0.2f));
 	ADD_LATENT_AUTOMATION_COMMAND(FCastleDirectorWave2Scenario(*this));
 	// 下一项地图测试开跑前必须等待本次 PIE 世界完全退出。
-	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([bRequested = false]() mutable
-	{
-		if (!GEditor->PlayWorld) { return true; }
-		if (!bRequested)
-		{
-			GEditor->RequestEndPlayMap();
-			bRequested = true;
-		}
-		return false;
-	}));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
 	return true;
 }
 #endif

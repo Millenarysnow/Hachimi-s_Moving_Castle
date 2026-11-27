@@ -4,6 +4,7 @@
 
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Castle/UI/BuildBar/CastleBuildBarWidget.h"
+#include "Castle/UI/BuildBar/CastleBuildBarSlotWidget.h"
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
 #include "CastlePlayerController.h"
@@ -51,7 +52,8 @@ namespace
 			}
 			const FStep& Previous = Steps[NextStep];
 			if (!Test.TestEqual(Previous.Description, Controller->GetSelectedBackpackIndex(), Previous.ExpectedSlot)
-				|| !CheckHighlight(*World, Previous))
+				|| !CheckHighlight(*World, Previous)
+				|| !Test.TestTrue(TEXT("输入步骤期间保持指定操作模式"), Controller->GetControlMode() == ExpectedMode))
 			{
 				Finish(Backpack, Shop);
 				return true;
@@ -75,6 +77,30 @@ namespace
 				const float Delta = Step.Action == EAction::Up ? 1.0f : -1.0f;
 				const FPointerEvent Event(0u, 0u, Position, Position, TSet<FKey>(), FKey(), Delta, FModifierKeysState());
 				Viewport->OnMouseWheel(Geometry, Event);
+				break;
+			}
+			case EAction::EnterDesignMode:
+				ExpectedMode = ECastleControlMode::Design;
+				Controller->SetControlMode(ExpectedMode, false);
+				break;
+			case EAction::EnterClassicMode:
+				ExpectedMode = ECastleControlMode::Classic;
+				Controller->SetControlMode(ExpectedMode, false);
+				break;
+			case EAction::ClickFirstSlot:
+			case EAction::ClickSecondSlot:
+			{
+				TArray<UUserWidget*> Bars;
+				UWidgetBlueprintLibrary::GetAllWidgetsOfClass(World, Bars, UCastleBuildBarWidget::StaticClass(), true);
+				auto* Slot = Bars.Num() == 1
+					? Cast<UCastleBuildBarSlotWidget>(Bars[0]->GetWidgetFromName(
+						Step.Action == EAction::ClickFirstSlot ? TEXT("Slot01") : TEXT("Slot02"))) : nullptr;
+				if (!Test.TestNotNull(TEXT("真实建造栏点击卡槽"), Slot)) { bActionSucceeded = false; break; }
+				const FGeometry& Geometry = Slot->GetCachedGeometry();
+				const FVector2D Position = Geometry.LocalToAbsolute(FVector2D(Geometry.GetLocalSize()) * 0.5);
+				const FPointerEvent Click(0u, 0u, Position, Position, TSet<FKey>{EKeys::LeftMouseButton},
+					EKeys::LeftMouseButton, 0.0f, FModifierKeysState());
+				bActionSucceeded = Slot->NativeOnMouseButtonDown(Geometry, Click).IsEventHandled();
 				break;
 			}
 			case EAction::Zero:
@@ -124,7 +150,8 @@ namespace
 		}
 
 	private:
-		enum class EAction { Initial, Up, Down, Zero, One, ReduceCards, RestoreCards, OpenShop, CloseShop };
+		enum class EAction { Initial, Up, Down, EnterDesignMode, EnterClassicMode, ClickFirstSlot, ClickSecondSlot,
+			Zero, One, ReduceCards, RestoreCards, OpenShop, CloseShop };
 		struct FStep
 		{
 			EAction Action;
@@ -135,6 +162,10 @@ namespace
 		/** 每一项先提交输入，再核对该帧处理后的控制器索引和 WBP 金环。 */
 		static constexpr FStep Steps[] = {
 			{EAction::Initial, 0, TEXT("开局选中第一槽")},
+			{EAction::EnterDesignMode, 0, TEXT("设计模式操作下保持选牌状态")},
+			{EAction::ClickSecondSlot, 1, TEXT("设计模式点击第二张卡牌后选中状态切换")},
+			{EAction::EnterClassicMode, 1, TEXT("返回经典模式后保持选牌状态")},
+			{EAction::ClickFirstSlot, 0, TEXT("经典模式点击第一张卡牌后选中状态切换")},
 			{EAction::Up, 0, TEXT("满包首槽向上保持选中，不穿透到尾槽")},
 			{EAction::Down, 1, TEXT("首槽向下只向右移动一格")},
 			{EAction::Up, 0, TEXT("滚轮向上只向左移动一格")},
@@ -203,6 +234,7 @@ namespace
 
 		FAutomationTestBase& Test;
 		TArray<FCastleBuildingDescriptor> RemovedCards;
+		ECastleControlMode ExpectedMode = ECastleControlMode::Classic;
 		int32 NextStep = 0;
 	};
 }

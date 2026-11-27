@@ -8,6 +8,9 @@
 #include "CastleBuildingDefinition.h"
 #include "CastleCardPricing.h"
 #include "CastleEconomyComponent.h"
+#include "Engine/World.h"
+#include "Items/CastleBadgeRuntimeSubsystem.h"
+#include "Items/CastleBadgeSubsystem.h"
 #include "Moving_Castle.h"
 #include "UObject/StrongObjectPtr.h"
 
@@ -80,7 +83,39 @@ bool UCastleShopComponent::CalculatePrice(const FCastleBuildingDescriptor& Descr
 	return true;
 }
 
-bool UCastleShopComponent::GenerateOffers(FRandomStream& Stream, TArray<FCastleShopOffer>& OutOffers, FText& OutFailureReason) const
+int32 UCastleShopComponent::GetBuyPrice(const FCastleShopOffer& Offer) const
+{
+	// 重新开店也使用当前已入槽的徽章；商品、售罄和定价策略的原始报价按原规则保留。
+	const UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(IsValid(Board) ? Board->GetWorld() : nullptr);
+	return !bScriptedStock && Badges ? Badges->GetDiscountedShopBuyPrice(Offer.Price) : Offer.Price;
+}
+
+TArray<FCastleShopOffer> UCastleShopComponent::GetOffers() const
+{
+	TArray<FCastleShopOffer> QuotedOffers = Offers;
+	for (FCastleShopOffer& Offer : QuotedOffers) { Offer.Price = GetBuyPrice(Offer); }
+	return QuotedOffers;
+}
+
+bool UCastleShopComponent::GenerateRandomRoom(FRandomStream& Stream, const int32 MinNumber, const int32 MaxNumber,
+	const TOptional<int32> ForcedNumber, FCastleBuildingDescriptor& OutCard, FText& OutFailureReason) const
+{
+	const TConstArrayView<ECastleTileColor> Colors = CastleTileColors::GetPlayable();
+	const auto* Definition = Board->BuildingDefinitions[Stream.RandRange(0, Board->BuildingDefinitions.Num() - 1)].Get();
+	const ECastleTileColor Color = Colors[Stream.RandRange(0, Colors.Num() - 1)];
+	// 首格数字由采购签指定时，仍按正常顺序推进当次随机流，后五格继续使用独立抽样。
+	const int32 RandomNumber = Stream.RandRange(MinNumber, MaxNumber);
+	if (!Definition->CreateDescriptor(1, Color, ForcedNumber.Get(RandomNumber), OutCard, OutFailureReason))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("商店 %s 无法生成房间卡 %s：%s。"),
+			*GetPathName(), *Definition->GetPathName(), *OutFailureReason.ToString());
+		return false;
+	}
+	return true;
+}
+
+bool UCastleShopComponent::GenerateOffers(FRandomStream& Stream, TArray<FCastleShopOffer>& OutOffers, FText& OutFailureReason,
+	const TOptional<int32> FirstNumber) const
 {
 	OutOffers.Reset();
 	OutFailureReason = FText::GetEmpty();
@@ -92,15 +127,11 @@ bool UCastleShopComponent::GenerateOffers(FRandomStream& Stream, TArray<FCastleS
 		}
 		return false;
 	}
-	const TConstArrayView<ECastleTileColor> Colors = CastleTileColors::GetPlayable();
 	for (int32 Index = 0; Index < 6; ++Index)
 	{
-		UCastleBuildingDefinition* Definition = Board->BuildingDefinitions[Stream.RandRange(0, Board->BuildingDefinitions.Num() - 1)];
-		// 普通房间与功能建筑都从四种玩法色和本局解锁的数字区间采样，允许重复出牌。
-		const ECastleTileColor Color = Colors[Stream.RandRange(0, Colors.Num() - 1)];
-		const int32 Number = Stream.RandRange(MinOfferNumber, MaxOfferNumber);
 		FCastleShopOffer Offer;
-		if (!Definition->CreateDescriptor(1, Color, Number, Offer.Descriptor, OutFailureReason))
+		if (!GenerateRandomRoom(Stream, MinOfferNumber, MaxOfferNumber, Index == 0 ? FirstNumber : TOptional<int32>(),
+			Offer.Descriptor, OutFailureReason))
 		{
 			return false;
 		}
@@ -164,6 +195,19 @@ bool UCastleShopComponent::ValidateTrade(FText& OutFailureReason) const
 		return false;
 	}
 	return true;
+}
+
+bool UCastleShopComponent::TryResolveTradeBadgeRuntime(UCastleBadgeRuntimeSubsystem*& OutRuntime, FText& OutFailureReason) const
+{
+	OutRuntime = nullptr;
+	const UWorld* World = Board->GetWorld();
+	// 固定教学货架和独立数据商店的既有入口可以在单局之外运行，自身不拥有徽章计数。
+	if (bScriptedStock || !World || !World->IsGameWorld()) { return true; }
+	OutRuntime = World->GetSubsystem<UCastleBadgeRuntimeSubsystem>();
+	if (OutRuntime) { return true; }
+	OutFailureReason = INVTEXT("普通商店交易需要本局徽章子系统。");
+	UE_LOG(LogMoving_Castle, Error, TEXT("商店 %s 交易失败：%s"), *GetPathName(), *OutFailureReason.ToString());
+	return false;
 }
 
 bool UCastleShopComponent::TryRefreshOffers(FText& OutFailureReason)
@@ -306,23 +350,42 @@ bool UCastleShopComponent::TrySetOfferNumberRange(const int32 MinNumber, const i
 	return true;
 }
 
-bool UCastleShopComponent::RefreshOffersInternal(const bool bFree, FText& OutFailureReason)
+bool UCastleShopComponent::RefreshOffersInternal(const bool bRewardRefresh, FText& OutFailureReason)
 {
 	OutFailureReason = FText::GetEmpty();
 	// 奖励在界面打开前准备商品；付费刷新仍严格要求商店已打开。
-	if (bFree && (!bInitialized || bTrading || !IsValid(Economy) || !IsValid(Board) || !IsValid(Backpack)))
+	if (bRewardRefresh && (!bInitialized || bTrading || !IsValid(Economy) || !IsValid(Board) || !IsValid(Backpack)))
 	{
 		OutFailureReason = FText::FromString(TEXT("奖励换批失败：商店未初始化、依赖无效或正在交易。"));
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s：%s"), *GetPathName(), *OutFailureReason.ToString());
 		return false;
 	}
-	if (!bFree && (!ValidateTrade(OutFailureReason) || !Economy->CanSpendGold(RefreshCost, OutFailureReason)))
+	if (!bRewardRefresh && !ValidateTrade(OutFailureReason))
 	{
 		return false;
 	}
+	UCastleBadgeRuntimeSubsystem* Runtime = nullptr;
+	if (!bRewardRefresh && !TryResolveTradeBadgeRuntime(Runtime, OutFailureReason)) { return false; }
+	const bool bUseBadgeRefresh = Runtime && RefreshCost > 0 && Runtime->GetRemainingFreeShopRefreshes() > 0;
+	const int32 Price = (bRewardRefresh || bUseBadgeRefresh) ? 0 : RefreshCost;
+	if (!Economy->CanSpendGold(Price, OutFailureReason)) { return false; }
+
 	TGuardValue<bool> TradeGuard(bTrading, true);
 	FRandomStream CandidateStream = RandomStream;
 	TArray<FCastleShopOffer> Candidates;
+	TOptional<int32> FirstNumber;
+	const bool bMatchFirst = Runtime && Runtime->IsMatchingShopRefreshDue();
+	if (bMatchFirst && Backpack->GetItemCount() > 0)
+	{
+		FCastleBuildingDescriptor FirstCard;
+		if (!Backpack->TryGetItemAt(0, FirstCard) || !FirstCard.Validate(OutFailureReason))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("商店 %s 无法匹配背包 %s 首张牌 %s：%s。"),
+				*GetPathName(), *Backpack->GetPathName(), *GetPathNameSafe(FirstCard.Definition.Get()), *OutFailureReason.ToString());
+			return false;
+		}
+		FirstNumber = FirstCard.Number;
+	}
 	if (bScriptedStock)
 	{
 		if (!bScriptedRefreshPending)
@@ -332,21 +395,44 @@ bool UCastleShopComponent::RefreshOffersInternal(const bool bFree, FText& OutFai
 		}
 		Candidates = ScriptedRefreshOffers;
 	}
-	else if (!GenerateOffers(CandidateStream, Candidates, OutFailureReason))
+	else if (!GenerateOffers(CandidateStream, Candidates, OutFailureReason, FirstNumber))
 	{
-		if (bFree) { UE_LOG(LogMoving_Castle, Error, TEXT("%s 奖励换批失败：%s"), *GetPathName(), *OutFailureReason.ToString()); }
+		// 奖励路径仍沿用调用方可识别的原日志；普通刷新只额外记录徽章结算相关错误。
+		if (bRewardRefresh)
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("%s 奖励换批失败：%s"), *GetPathName(), *OutFailureReason.ToString());
+		}
+		else if (bUseBadgeRefresh || bMatchFirst)
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("商店 %s 换批失败：%s"), *GetPathName(), *OutFailureReason.ToString());
+		}
 		return false;
 	}
-	// 先暂存完整商品再扣费，使余额通知的观察者看见的是同一笔交易的最终状态。
-	TArray<FCastleShopOffer> PreviousOffers = MoveTemp(Offers);
-	Offers = MoveTemp(Candidates);
-	if (!bFree && !Economy->TrySpendGold(RefreshCost, OutFailureReason))
+	// 商店状态及徽章计数一起提交，余额通知观察者随后才能读取完整结果。
+	if (!Economy->TrySpendShopGold(Price, [&]()
 	{
-		Offers = MoveTemp(PreviousOffers);
+		Offers = MoveTemp(Candidates);
+		RandomStream = CandidateStream;
+		if (bScriptedStock) { bScriptedRefreshPending = false; }
+		if (Runtime) { Runtime->RecordShopRefresh(bUseBadgeRefresh); }
+		return true;
+	}, OutFailureReason))
+	{
 		return false;
 	}
-	RandomStream = CandidateStream;
-	if (bScriptedStock) { bScriptedRefreshPending = false; }
+	if (bMatchFirst)
+	{
+		if (FirstNumber.IsSet())
+		{
+			UE_LOG(LogMoving_Castle, Display, TEXT("环路采购签：本次商店首格匹配主建筑栏数字 %d。"), FirstNumber.GetValue());
+		}
+		else
+		{
+			// D12 对空主栏有明确规则，仍生成正常货架并告知本次为何没有锁定数字。
+			UE_LOG(LogMoving_Castle, Warning, TEXT("环路采购签：背包 %s 主建筑栏为空，本次首格按普通规则随机。"),
+				*Backpack->GetPathName());
+		}
+	}
 	OnShopChanged.Broadcast();
 	return true;
 }
@@ -386,18 +472,46 @@ bool UCastleShopComponent::TryBuyOffer(int32 OfferIndex, FText& OutFailureReason
 		OutFailureReason = FText::FromString(TEXT("房间总量已达到上限，无法继续购买。"));
 		return false;
 	}
-	if (!Economy->CanSpendGold(Offers[OfferIndex].Price, OutFailureReason))
+	const int32 Price = GetBuyPrice(Offers[OfferIndex]);
+	if (!Economy->CanSpendGold(Price, OutFailureReason))
 	{
 		return false;
 	}
 	TGuardValue<bool> TradeGuard(bTrading, true);
+	UCastleBadgeRuntimeSubsystem* Runtime = nullptr;
+	if (!TryResolveTradeBadgeRuntime(Runtime, OutFailureReason)) { return false; }
+	const int64 RebateCount = Runtime ? Runtime->GetNextShopPurchaseRebate() : 0;
+	FRandomStream CandidateStream = RandomStream;
+	TArray<FCastleBuildingDescriptor> RebateCards;
+	if (RebateCount > 0)
+	{
+		if (!Board->ValidateBuildingDefinitions(OutFailureReason) || RebateCount > MAX_int32)
+		{
+			if (OutFailureReason.IsEmpty()) { OutFailureReason = INVTEXT("商店返利卡牌数量超出背包数组容量。"); }
+			UE_LOG(LogMoving_Castle, Error, TEXT("商店 %s 无法准备返利：%s"), *GetPathName(), *OutFailureReason.ToString());
+			return false;
+		}
+		for (int64 Index = 0; Index < RebateCount; ++Index)
+		{
+			if (!GenerateRandomRoom(CandidateStream, 1, 6, {}, RebateCards.AddDefaulted_GetRef(), OutFailureReason))
+			{
+				return false;
+			}
+		}
+	}
 	int32 AddedIndex = INDEX_NONE;
 	if (!Backpack->TryAddItem(Offers[OfferIndex].Descriptor, AddedIndex, OutFailureReason))
 	{
 		return false;
 	}
 	Offers[OfferIndex].bSold = true;
-	if (!Economy->TrySpendGold(Offers[OfferIndex].Price, OutFailureReason))
+	if (!Economy->TrySpendShopGold(Price, [&]()
+	{
+		if (!RebateCards.IsEmpty() && !Backpack->TryAddItemsAllowOverflow(RebateCards, OutFailureReason)) { return false; }
+		if (Runtime) { Runtime->RecordShopPurchase(); }
+		RandomStream = CandidateStream;
+		return true;
+	}, OutFailureReason))
 	{
 		// 此处只处理不可预期的提交失败；回滚必须显式校验，绝不能留下免费卡牌。
 		Offers[OfferIndex].bSold = false;
@@ -408,6 +522,10 @@ bool UCastleShopComponent::TryBuyOffer(int32 OfferIndex, FText& OutFailureReason
 			UE_LOG(LogMoving_Castle, Error, TEXT("商店购买回滚失败：%s"), *RollbackReason.ToString());
 		}
 		return false;
+	}
+	if (!RebateCards.IsEmpty())
+	{
+		UE_LOG(LogMoving_Castle, Display, TEXT("商店返利：本次购买额外发放 %d 张随机房间卡。"), RebateCards.Num());
 	}
 	OnShopChanged.Broadcast();
 	return true;

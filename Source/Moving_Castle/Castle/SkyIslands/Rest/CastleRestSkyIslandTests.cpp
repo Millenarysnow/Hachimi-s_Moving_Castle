@@ -7,6 +7,9 @@
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/Director/CastleDirectorSettings.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
+#include "Castle/Items/CastleBadgeDataAsset.h"
+#include "Castle/Items/CastleBadgeSubsystem.h"
+#include "Castle/Items/CastleItemGrantLibrary.h"
 #include "CastleSkyIslandAcceptance.h"
 #include "CastlePlayerController.h"
 #include "CastleShopComponent.h"
@@ -80,7 +83,8 @@ public:
 		FText Reason;
 		Test.TestEqual(TEXT("离岛恢复编辑阶段"), Director->GetPhase(), ECastleDirectorPhase::Editing);
 		Test.TestEqual(TEXT("离岛只推进一步"), Director->GetClearedSteps(), BeforeIsland + 1);
-		Test.TestFalse(TEXT("休息岛许可不泄漏到塔侧 B 商店"), Director->IsShopAccessAllowed(Reason));
+		// 返塔关闭本次补给商店，恢复主塔编辑阶段的常驻商店入口。
+		Test.TestTrue(TEXT("返塔后主塔普通商店可用"), Director->IsShopAccessAllowed(Reason));
 		Test.TestFalse(TEXT("离岛销毁休息岛"), static_cast<bool>(TActorIterator<ACastleRestSkyIsland>(World)));
 		Test.TestTrue(TEXT("离岛生成下一批节点"), static_cast<bool>(TActorIterator<ACastleDirectorNodeActor>(World)));
 		const auto* Controller = Cast<ACastlePlayerController>(World->GetFirstPlayerController());
@@ -135,13 +139,19 @@ private:
 			Test.TestFalse(TEXT("回血台拒绝重复领取"), Interact(*Heal));
 			Test.TestTrue(TEXT("回血台提示已领取"), Reason.ToString().Contains(TEXT("已领取")));
 
+			// 从正式奖励入口装备零钱袋，射线领取仍使用 MainMap 上唯一玩家的账户。
+			const auto* CoinPurse = LoadObject<UCastleBadgeDataAsset>(nullptr,
+				TEXT("/Game/MovingCastle/Data/Items/Badges/DA_Badge_02_CoinPurse.DA_Badge_02_CoinPurse"));
+			bool bNeedsReplacement = false;
+			if (!Test.TestTrue(TEXT("发放带真实图标的管家零钱袋"), UCastleItemGrantLibrary::TryGrantBadge(
+				CoinPurse, UCastleBadgeSubsystem::GetForWorld(&World), bNeedsReplacement, Reason) && !bNeedsReplacement)) { return false; }
 			const int32 OldGold = Economy->GetGold();
 			Test.TestTrue(TEXT("首次领取金币台"), Interact(*Gold));
 			Test.TestFalse(TEXT("金币台拒绝重复领取"), Interact(*Gold));
-			Test.TestEqual(TEXT("仅到账一次 50 金币"), Economy->GetGold(), OldGold + 50);
+			Test.TestEqual(TEXT("50 金币奖励只领取一次，零钱袋加成后到账 55"), Economy->GetGold(), OldGold + 55);
 			Test.TestTrue(TEXT("首次交互打开免费房间商店"), Interact(*ShopStation));
 			Test.TestTrue(TEXT("房间商店已打开"), Shop->IsShopOpen());
-			Test.TestEqual(TEXT("换批免费"), Economy->GetGold(), OldGold + 50);
+			Test.TestEqual(TEXT("换批免费"), Economy->GetGold(), OldGold + 55);
 			Shop->CloseShop();
 			Test.TestFalse(TEXT("岛上不允许通过 B 重新打开商店"), Director.IsShopAccessAllowed(Reason));
 			Test.TestFalse(TEXT("商店台拒绝重复换批"), Interact(*ShopStation));

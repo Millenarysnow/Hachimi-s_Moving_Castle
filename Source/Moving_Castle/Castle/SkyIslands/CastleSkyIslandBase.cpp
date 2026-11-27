@@ -41,6 +41,10 @@ ACastleSkyIslandBase::ACastleSkyIslandBase()
 	Platform->SetStaticMesh(Cube.Object);
 	Platform->SetRelativeScale3D(FVector(24.0, 24.0, 1.0));
 	Platform->SetRelativeLocation(FVector(0, 0, -50));
+	IslandArt = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("IslandArt"));
+	IslandArt->SetupAttachment(Root);
+	IslandArt->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	IslandArt->SetCanEverAffectNavigation(false);
 	ArrivalAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("PlayerArrival"));
 	ArrivalAnchor->SetupAttachment(Root);
 	ArrivalAnchor->SetRelativeLocation(FVector(-700, 0, 240));
@@ -60,8 +64,37 @@ ACastleSkyIslandBase::ACastleSkyIslandBase()
 	Title->SetRelativeRotation(FRotator(0, 180, 0));
 }
 
+UStaticMesh* ACastleSkyIslandBase::LoadIslandArt(const TCHAR* AssetName)
+{
+	// 目录内的名字与 UE 包名相同。构造时保留硬引用，使烹饪和编辑器共享同一网格。
+	const FString Path = FString::Printf(TEXT("/Game/MovingCastle/Model/SkyIslands/%s.%s"), AssetName, AssetName);
+	ConstructorHelpers::FObjectFinder<UStaticMesh> Mesh(*Path);
+	if (!Mesh.Succeeded())
+	{
+		MissingIslandArtPath = Path;
+		UE_LOG(LogMoving_Castle, Error, TEXT("空岛 %s 缺少美术网格 %s。"), *GetPathName(), *Path);
+	}
+	return Mesh.Object;
+}
+
+void ACastleSkyIslandBase::SetIslandArtMesh(const TCHAR* AssetName)
+{
+	// 正式岛体和原生碰撞共享厘米坐标；测试夹具保留自带的白盒地面和出口。
+	IslandArt->SetStaticMesh(LoadIslandArt(AssetName));
+	Platform->SetVisibility(false);
+	Departure->SetVisibility(false);
+}
+
 bool ACastleSkyIslandBase::InitializeIsland(const FCastleSkyIslandContext& Context, FText& OutFailureReason)
 {
+	if (!MissingIslandArtPath.IsEmpty())
+	{
+		OutFailureReason = FText::Format(INVTEXT("空岛美术网格资产 {0} 未加载。"),
+			FText::FromString(MissingIslandArtPath));
+		UE_LOG(LogMoving_Castle, Error, TEXT("空岛 %s 的美术网格资产 %s：%s"),
+			*GetPathName(), *MissingIslandArtPath, *OutFailureReason.ToString());
+		return false;
+	}
 	if (bInitialized || Context.Step < 1 || !Context.Director.IsValid() || !Context.Controller.IsValid()
 		|| Context.Controller->GetWorld() != GetWorld() || !Platform->GetStaticMesh() || !Departure->GetStaticMesh())
 	{
@@ -100,7 +133,7 @@ bool ACastleSkyIslandBase::GrantPendingRoomRewardUI(UCastlePendingRoomReward* Re
 	return IslandContext.Director.IsValid() && IslandContext.Director->RequestIslandRoomReward(this, Reward, OutFailureReason);
 }
 
-bool ACastleSkyIslandBase::GrantBadgeWithReplaceUI(const FCastleBadgeDefinition& Badge, FText& OutFailureReason)
+bool ACastleSkyIslandBase::GrantBadgeWithReplaceUI(const UCastleBadgeDataAsset& Badge, FText& OutFailureReason)
 {
 	return IslandContext.Director.IsValid() && IslandContext.Director->RequestIslandBadgeReward(this, Badge, OutFailureReason);
 }

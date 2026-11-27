@@ -87,6 +87,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|背包")
 	int32 GetSelectedBackpackIndex() const { return SelectedBackpackIndex; }
 
+	/** 建造栏卡槽通过此入口提交点击选择，和数字键、滚轮共用控制器唯一选中状态。 */
+	void SelectBackpackSlotFromBuildBar(int32 SlotIndex);
+
 	/** B 键切换商店；首次打开初始化商品，关闭后恢复中心指针建造。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|商店")
 	void ToggleShop();
@@ -247,6 +250,12 @@ protected:
 	UFUNCTION()
 	void HandleItemBadgeChanged();
 	void InteractWithSkyIsland();
+	/** 编辑阶段的 E 只消费准星命中的房间内置门体。 */
+	void InteractWithRoomPortal();
+	bool TryInteractWithRoomPortalFromRay(const FVector& Start, const FVector& End, FText& OutReason);
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FCastlePortalRoomTraitTest;
+#endif
 
 	/** 统一把收支、选牌和商店失败原因写入日志及屏幕，保证无资源时也有反馈。 */
 	void ShowGameplayMessage(const FString& Message, bool bSuccess) const;

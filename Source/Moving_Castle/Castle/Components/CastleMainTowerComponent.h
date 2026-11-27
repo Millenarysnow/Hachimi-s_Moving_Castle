@@ -76,6 +76,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|主塔")
 	bool ApplyDamage(float Damage);
 
+	/** 仅新手教程启用：将主塔最低生命锁定为当前最大生命的二十分之一。 */
+	bool EnableTutorialHealthLock(FText& OutReason);
+
+	/** 敌方攻击专用入口；致命伤害在提交前由徽章运行时检查气球扣。 */
+	bool ApplyEnemyDamage(float Damage);
+
 	/** 按指定生命值回血；不改变 AttackCount，并用负伤害广播实际恢复量。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|主塔")
 	bool ApplyHealing(float Amount);
@@ -133,13 +139,21 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** 普通受伤和敌伤共用提交；敌伤在致命时先检查气球扣资格。 */
+	bool ApplyDamageInternal(float Damage, bool bEnemyAttack);
+	bool bResolvingDamage = false;
 	/** 保留未乘徽章倍率的上限；表现组件只接受生命组件发布的结果。 */
 	float BaseMaxHealth = 1000.0f;
 	float HealthMultiplier = 1.0f;
+	/** TutorialMap 专用锁血开关；默认关闭，不改变正式主塔伤害规则。 */
+	bool bTutorialHealthLockEnabled = false;
 	UPROPERTY(Transient) TObjectPtr<UCastleMainTowerBalloonComponent> BalloonPresentation;
 
 	/** 更新气球并广播原生命通知，使塔顶和 HUD 使用同一份已提交的数值。 */
 	void NotifyHealthChanged(float PreviousHealth, float Damage);
+
+	/** 返回当前生命下限；常规关卡为零，新手教程为 HUD 二十格中的一格。 */
+	float GetMinimumHealthFloor() const;
 };
 
 /**
@@ -178,6 +192,8 @@ public:
 
 	/** 记录一次攻击并结算伤害，伤害为零仍会增加主塔攻击计数。 */
 	bool ApplyMainTowerDamage(float Damage);
+	/** 真实敌方攻击统一使用此入口，允许致命时触发最后一颗气球扣。 */
+	bool ApplyEnemyMainTowerDamage(float Damage);
 
 	/** 供棋盘和自动化测试查询当前主塔组件。 */
 	UCastleMainTowerComponent* GetRegisteredMainTower() const;

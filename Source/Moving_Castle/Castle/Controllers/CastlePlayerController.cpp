@@ -22,6 +22,8 @@
 #include "CastleMassEnemySpawner.h"
 #include "MassEntityConfigAsset.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
+#include "Castle/Director/CastleDirectorConfigDataAsset.h"
+#include "Castle/Items/CastleRoomTraitComponent.h"
 #include "Castle/Support/CastleSupportFlightActors.h"
 #include "Castle/Support/CastleSupportTowerSubsystem.h"
 #include "Castle/SkyIslands/CastleSkyIslandBase.h"
@@ -431,6 +433,11 @@ void ACastlePlayerController::SelectBackpackSlot(int32 SlotIndex)
 	SelectedBackpackIndex = SlotIndex;
 	ShowGameplayMessage(FString::Printf(TEXT("已选中背包第 %d 格：%s，数字 %d。"), SlotIndex + 1,
 		*Descriptor.Definition->DisplayName.ToString(), Descriptor.Number), true);
+}
+
+void ACastlePlayerController::SelectBackpackSlotFromBuildBar(const int32 SlotIndex)
+{
+	SelectBackpackSlot(SlotIndex);
 }
 
 bool ACastlePlayerController::TryPopBalloonFromRay(const FVector& Start, const FVector& End, bool& bOutConsumed)
@@ -950,13 +957,22 @@ bool ACastlePlayerController::BindSkyIslandInput(const FKey& Key, FText& OutReas
 		return false;
 	}
 	InputComponent->BindKey(Key, IE_Pressed, this, &ACastlePlayerController::InteractWithSkyIsland);
+	// 默认 E 与离岛物件共用绑定，避免一次按键刚进岛又触发岛上物件。配置其他岛内交互键时，房间门仍用 E。
+	if (Key != EKeys::E) { InputComponent->BindKey(EKeys::E, IE_Pressed, this, &ACastlePlayerController::InteractWithRoomPortal); }
 	return true;
 }
 
 void ACastlePlayerController::InteractWithSkyIsland()
 {
 	auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
-	if (!Director || Director->GetPhase() != ECastleDirectorPhase::SkyIsland || bModalInputActive) { return; }
+	if (!Director || bModalInputActive) { return; }
+	const auto* Config = Director->GetConfig();
+	if (Director->GetPhase() == ECastleDirectorPhase::Editing && Config && Config->SkyIslandInteractKey == EKeys::E)
+	{
+		InteractWithRoomPortal();
+		return;
+	}
+	if (Director->GetPhase() != ECastleDirectorPhase::SkyIsland) { return; }
 	FVector Start, End;
 	if (!TryGetDispatchAim(Start, End)) { return; }
 	FText Reason;
@@ -964,6 +980,27 @@ void ACastlePlayerController::InteractWithSkyIsland()
 	{
 		ShowDirectorMessage(Reason);
 	}
+}
+
+void ACastlePlayerController::InteractWithRoomPortal()
+{
+	FVector Start, End;
+	if (!TryGetDispatchAim(Start, End)) { return; }
+	FText Reason;
+	if (!TryInteractWithRoomPortalFromRay(Start, End, Reason) && !Reason.IsEmpty()) { ShowDirectorMessage(Reason); }
+}
+
+bool ACastlePlayerController::TryInteractWithRoomPortalFromRay(const FVector& Start, const FVector& End, FText& OutReason)
+{
+	OutReason = FText::GetEmpty();
+	auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
+	if (!Director || Director->GetPhase() != ECastleDirectorPhase::Editing || bModalInputActive || bHoldingTemporaryHUDPointer) { return false; }
+	FHitResult Hit;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(CastleRoomPortalInteract), false, GetPawn());
+	if (!GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params)) { return false; }
+	// 只有门体自身是目标。命中屋顶、墙面或被遮挡时不能通过房间 Actor 间接传送。
+	auto* Portal = Cast<UCastleRoomTraitComponent>(Hit.GetComponent());
+	return Portal && Portal->TryInteractWithPortal(OutReason);
 }
 
 void ACastlePlayerController::CastleTestSkyIsland()

@@ -2,6 +2,7 @@
 
 #include "CastleBuildBarSlotWidget.h"
 
+#include "Input/Events.h"
 #include "CastleBuildingDefinition.h"
 #include "CastleBuildingPreviewWidget.h"
 #include "Components/Image.h"
@@ -84,4 +85,24 @@ void UCastleBuildBarSlotWidget::SetSelected(bool bSelected)
 	NormalCircle->SetVisibility(bHasCard && !bShowSelection ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	SelectedCircle->SetVisibility(bShowSelection ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	SelectionDot->SetVisibility(bShowSelection ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+}
+
+FReply UCastleBuildBarSlotWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
+{
+	if (InMouseEvent.GetEffectingButton() != EKeys::LeftMouseButton)
+	{
+		return Super::NativeOnMouseButtonDown(InGeometry, InMouseEvent);
+	}
+
+	// 点击空槽也消费输入，避免玩家原本想操作 HUD 时误放置或拆除世界建筑。
+	if (bHasCard)
+	{
+		if (SlotIndex == INDEX_NONE)
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("建造槽位 WBP %s 收到卡牌点击，但父建造栏尚未分配槽位索引。"), *GetClass()->GetPathName());
+			return FReply::Handled();
+		}
+		OnSlotClicked.Broadcast(SlotIndex);
+	}
+	return FReply::Handled();
 }

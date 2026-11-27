@@ -160,9 +160,10 @@ bool FCastleCombatAtomicStartTest::RunTest(const FString& Parameters)
 	// 先留一只场外实体；回滚必须只清掉本次开战的实体，不能清空世界或影响旧场次。
 	TArray<FCastleMassUnitHandle> Existing;
 	TestTrue(TEXT("预先生成场外敌人"), Scope.Units().SpawnUnits(Scope.Config->Roster[0].Configuration, {FTransform::Identity}, Existing, Failure));
-	int32 Seen = 0, Cleared = 0, Failed = 0;
+	int32 Seen = 0, Cleared = 0, Failed = 0, Started = 0;
 	Scope.Combat().OnBattleCleared.AddLambda([&](auto, auto) { ++Cleared; });
 	Scope.Combat().OnBattleFailed.AddLambda([&](auto, auto, const auto&) { ++Failed; });
+	Scope.Combat().OnWaveStarted.AddLambda([&](int32, int32) { ++Started; });
 	const auto Hook = Scope.World->AddOnActorSpawnedHandler(FOnActorSpawned::FDelegate::CreateLambda([&](AActor* Actor)
 	{
 		if (Actor->IsA<ACastleMassEnemySpawner>() && ++Seen == 2)
@@ -182,6 +183,7 @@ bool FCastleCombatAtomicStartTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("回滚不走死亡分裂，不留下六只幼骸"), Scope.Count(), 1);
 	TestEqual(TEXT("没有本场生成器残留"), Scope.Spawners(), 0);
 	TestEqual(TEXT("原子开战失败不广播清场"), Cleared, 0);
+	TestEqual(TEXT("原子开战失败不广播波次开始"), Started, 0);
 	TestEqual(TEXT("开战调用返回失败，不冒充已开始战斗的延迟失败通知"), Failed, 0);
 	return true;
 }

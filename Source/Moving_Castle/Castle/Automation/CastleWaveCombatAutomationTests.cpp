@@ -261,9 +261,15 @@ bool FCastleTwoWaveScheduleTest::RunTest(const FString& Parameters)
 	auto* Config = MakeWaveConfig(Scope, {FirstWave, NextWave});
 	int32 Clears = 0;
 	int32 Fails = 0;
+	TArray<FIntPoint> StartedWaves;
 	auto& Combat = Scope.Combat();
 	Combat.OnBattleCleared.AddLambda([&Clears](auto, auto) { ++Clears; });
 	Combat.OnBattleFailed.AddLambda([&Fails](auto, auto, const auto&) { ++Fails; });
+	// 道具监听者必须收到关内的一基波次，每波只记录一次。
+	Combat.OnWaveStarted.AddLambda([&StartedWaves](const int32 WaveIndex, const int32 TotalWaves)
+	{
+		StartedWaves.Emplace(WaveIndex, TotalWaves);
+	});
 	FText Failure;
 	if (!TestTrue(TEXT("初始化两波配置"), Combat.InitializeCombat(Config, Failure))
 		|| !TestTrue(TEXT("零延时批次随开战生成"), Combat.StartBattle(ECastleBattleKind::Normal, 1, Failure))) { return false; }
@@ -274,6 +280,7 @@ bool FCastleTwoWaveScheduleTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("开战有波次进度"), Combat.GetCurrentWaveProgress(Wave, Total));
 	TestEqual(TEXT("开始于第 1 波"), Wave, 1);
 	TestEqual(TEXT("总波次为 2"), Total, 2);
+	TestTrue(TEXT("开战仅发布第 1 波"), StartedWaves == TArray<FIntPoint>{FIntPoint(1, 2)});
 	Scope.Advance(4);
 	Combat.GetBattleProgress(Alive, Pending);
 	TestEqual(TEXT("半秒前第二批未到期"), Alive, 2);
@@ -303,6 +310,7 @@ bool FCastleTwoWaveScheduleTest::RunTest(const FString& Parameters)
 	Scope.KillAll();
 	Combat.Tick(0.0f);
 	TestEqual(TEXT("末波归零仅通知一次"), Clears, 1);
+	TestTrue(TEXT("两次波次通知按开战顺序发布"), StartedWaves == TArray<FIntPoint>{FIntPoint(1, 2), FIntPoint(2, 2)});
 	TestEqual(TEXT("没有战斗失败"), Fails, 0);
 	TestFalse(TEXT("结束后波次查询返回 false"), Combat.GetCurrentWaveProgress(Wave, Total));
 	return true;

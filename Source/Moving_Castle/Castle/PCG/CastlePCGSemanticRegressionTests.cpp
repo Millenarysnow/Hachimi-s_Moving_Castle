@@ -9,7 +9,6 @@
 #include "CastleNavigationSubsystem.h"
 #include "BuildingMergeComponent.h"
 #include "HachimisV4/CastleHachimisV4PCG.h"
-#include "CastleLegacyPCGAdapter.h"
 #include "Interaction/CastlePatrolRoute.h"
 #include "Algo/AllOf.h"
 #include "Components/BoxComponent.h"
@@ -267,50 +266,6 @@ bool FCastlePCGHorizontalStepHatch::RunTest(const FString& Parameters)
 	FHitResult Hit;
 	TestFalse(TEXT("功能切洞也允许射线穿过梯井中心"), Fixture->LineTraceSingleByChannel(Hit, Opening + Delta, Opening - Delta, ECC_Pawn, Query));
 	CheckHatchCursor(*this, *Board, *Upper, Above);
-	return true;
-}
-
-/** 两栋正式旧占位楼叠放时，上下分装的梯井必须真的在 Pawn 楼板上开孔。 */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePCGLegacyStairOwnership, "MovingCastle.Castle.PCG.LegacyStairOwnership",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-bool FCastlePCGLegacyStairOwnership::RunTest(const FString& Parameters)
-{
-	using namespace CastlePCGTests;
-	UWorld* Fixture = World();
-	ON_SCOPE_EXIT { Fixture->DestroyWorld(false); GEngine->DestroyWorldContext(Fixture); };
-	auto* Board = Fixture->SpawnActor<ACastleBoard>();
-	ON_SCOPE_EXIT { RemoveFixtureBuildings(*this, *Board); };
-	Board->GridSize = FIntVector(3, 3, 3);
-	Board->PCGRuleSet = Rules(Board);
-	auto* SpeedRoom = LoadDefinition(TEXT("SpeedRoom"));
-	if (!TestNotNull(TEXT("正式速度室定义"), SpeedRoom)) { return false; }
-	Board->BuildingDefinitions = {SpeedRoom};
-	FText Reason;
-	if (!SetGreenSevenGround(*Board, Reason)) { AddError(Reason.ToString()); return false; }
-	const FIntVector Base(1, 1, 0);
-	const FIntVector Above = Base + FCastlePCGBoardQuery::Up;
-	auto* Lower = Place(*this, *Board, *SpeedRoom, Base, 1, ECastleTileColor::Green);
-	auto* Upper = Place(*this, *Board, *SpeedRoom, Above, 1, ECastleTileColor::Green);
-	if (!Lower || !Upper) { return false; }
-	TestTrue(TEXT("上下都走真实旧占位装配器"), !Lower->HachimisLayout && !Upper->HachimisLayout);
-	TestEqual(TEXT("旧竖梯只归下层"), CountVisibleParts(*Lower, TEXT("CastlePCGGroup=Ladder")), 1);
-	TestEqual(TEXT("旧下层不拥有带洞楼板"), CountVisibleParts(*Lower, TEXT("CastlePCGGroup=UpperFloor")), 0);
-	TestEqual(TEXT("旧带洞楼板只归上层"), CountVisibleParts(*Upper, TEXT("CastlePCGGroup=UpperFloor")), 1);
-	TestEqual(TEXT("旧上层不拥有竖梯"), CountVisibleParts(*Upper, TEXT("CastlePCGGroup=Ladder")), 0);
-	const auto* Link = Lower->FindComponentByClass<UCastleLadderLinkComponent>();
-	TestTrue(TEXT("旧梯链接有效且只归下层"), Link && Link->GetId().IsValid()
-		&& !Upper->FindComponentByClass<UCastleLadderLinkComponent>());
-	const FTransform Deck = CastleV4PCG::CellFrame(*Board, Above);
-	const FVector Opening = CastleLegacyPCG::LadderHatch(Board->LayerHeight).Opening.GetCenter();
-	auto TraceFloor = [&](double X, double Y, FHitResult& Hit)
-	{
-		const FCollisionQueryParams Params(SCENE_QUERY_STAT(SemanticPCGLegacyCutDeck), true);
-		return Fixture->LineTraceSingleByChannel(Hit, Deck.TransformPosition(FVector(X, Y, 15)),
-			Deck.TransformPosition(FVector(X, Y, -25)), ECC_Pawn, Params);
-	};
-	FHitResult Hit;
-	TestFalse(TEXT("旧梯洞中心不被下层封板或上层原楼板堵住"), TraceFloor(Opening.X, Opening.Y, Hit));
-	TestTrue(TEXT("井口外仍命中上层拥有的功能板"), TraceFloor(0, 0, Hit) && Hit.GetActor() == Upper);
 	return true;
 }
 

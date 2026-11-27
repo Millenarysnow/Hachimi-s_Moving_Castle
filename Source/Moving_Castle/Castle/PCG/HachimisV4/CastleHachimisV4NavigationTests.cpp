@@ -67,7 +67,7 @@ namespace CastleV4NavigationTests
 			for (ACastleBuildingBase*& Building : Extra) { if (!Remove(Building)) { Cleanup(); return true; } }
 			Extra.Reset();
 			Stage = 0;
-			if (++Scene < 9) { return false; }
+			if (++Scene < 8) { return false; }
 			if (FParse::Param(FCommandLine::Get(), TEXT("HachimisV4Capture"))) { CaptureRoomsAndPreviews(); }
 			Cleanup();
 			return true;
@@ -119,7 +119,7 @@ namespace CastleV4NavigationTests
 			const bool bRotatedRooms = Scene == 4;
 			const bool bShieldBelow = Scene == 2 || Scene == 5;
 			const TCHAR* LowerName = bRotatedRooms ? TEXT("NormalRoom") : bShieldBelow ? TEXT("ShieldTower") : TEXT("ArcherTower");
-			const TCHAR* UpperName = Scene == 8 ? TEXT("SpeedRoom") : bRotatedRooms || Scene == 7 ? TEXT("NormalRoom")
+			const TCHAR* UpperName = bRotatedRooms || Scene == 7 ? TEXT("NormalRoom")
 				: Scene == 1 ? TEXT("ShieldTower") : TEXT("CannonTower");
 			const int32 Level = Scene == 0 ? 2 : 1;
 			const bool bClosed = Scene == 3 || Scene == 6;
@@ -264,7 +264,7 @@ namespace CastleV4NavigationTests
 			}
 			TraceFloor(Links[0].UpperCell, Offset, false);
 			TraceFloor(Links[0].UpperCell, FVector::ZeroVector, true);
-			if (Scene == 5 || Scene == 7 || Scene == 8)
+			if (Scene == 5 || Scene == 7)
 			{
 				VerifyStepRoof(true);
 				VerifyStepDeck(true);
@@ -356,21 +356,6 @@ namespace CastleV4NavigationTests
 			}
 			Test.TestEqual(TEXT("无梯井时上层才持有一块本族实心宽边板"), Decks, bHatch ? 0 : 1);
 			Test.TestEqual(TEXT("有梯井时上层持有全部带孔楼板作者件"), Floors, bHatch ? ExpectedFloors : 0);
-			if (Scene == 8)
-			{
-				// 正式旧版加速房同号叠放。正式带孔楼板已在上方计数，旧原装底板应隐藏。
-				Test.TestNull(TEXT("加速房来自旧版装配器"), Upper->HachimisLayout.Get());
-				const auto Original = TInlineComponentArray<UStaticMeshComponent*>(Upper);
-				const auto* OriginalDeck = Original.FindByPredicate([](const UStaticMeshComponent* Part)
-				{
-					return Part->GetFName() == TEXT("StaticMesh");
-				});
-				if (Test.TestTrue(TEXT("找到加速房原装底板"), OriginalDeck != nullptr))
-				{
-					Test.TestFalse(TEXT("加速房原装底板视觉已隐藏"), (*OriginalDeck)->IsVisible());
-				}
-				return;
-			}
 			TArray<FCastlePCGPartAnnotation> Original;
 			FString Error;
 			if (!CastleV4PCG::Extract(*Upper, *Board, Original, Error)) { Test.AddError(Error); return; }

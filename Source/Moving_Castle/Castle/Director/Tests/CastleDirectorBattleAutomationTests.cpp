@@ -2,6 +2,7 @@
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
+#include "Castle/Automation/CastlePIEAutomation.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
@@ -521,40 +522,15 @@ private:
 	TWeakObjectPtr<ACastleBuildingBase> Building;
 };
 
-/** 始终退出本测试启动的 PIE；正式地图内容不保存。 */
-class FDirectorBattleStopPIE final : public IAutomationLatentCommand
-{
-public:
-	bool Update() override
-	{
-		for (const auto& Context : GEngine->GetWorldContexts())
-		{
-			if (Context.WorldType != EWorldType::PIE) { continue; }
-			if (!bRequested)
-			{
-				UClass* Tool = FindObject<UClass>(nullptr, TEXT("/Script/EditorToolset.EditorAppToolset"));
-				UFunction* Stop = Tool ? Tool->FindFunctionByName(TEXT("StopPIE")) : nullptr;
-				check(Stop);
-				struct FParams { UObject* ReturnValue = nullptr; } Params;
-				Tool->GetDefaultObject()->ProcessEvent(Stop, &Params);
-				bRequested = true;
-			}
-			return false;
-		}
-		return true;
-	}
-private:
-	bool bRequested = false;
-};
-
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDirectorBattleIntegrationTest, "MovingCastle.Director.BattleIntegration",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FCastleDirectorBattleIntegrationTest::RunTest(const FString& Parameters)
 {
-	if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/MainMap"), true)) { return false; }
+	// 完整战斗场景独占一次 MainMap PIE，结束后交回编辑器视口。
+	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
 	ADD_LATENT_AUTOMATION_COMMAND(FEngineWaitLatentCommand(0.2f));
 	ADD_LATENT_AUTOMATION_COMMAND(FDirectorBattleScenario(this));
-	ADD_LATENT_AUTOMATION_COMMAND(FDirectorBattleStopPIE());
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
 	return true;
 }
 #endif

@@ -147,6 +147,22 @@ bool FCastleMainTowerBalloonHealthTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("徽章倍率可使用默认等比生命缩放"), Tower->SetMaxHealthMultiplier(1.2f));
 	TestEqual(TEXT("徽章最大生命"), Tower->MaxHealth, 2400.0f);
 	CheckBalloons(TEXT("等比应用徽章"), 1, 10);
+
+	// 教学场景将一格 HUD 血条作为最低生命，重复超额伤害也只能停在该下限。
+	TestTrue(TEXT("教程锁血测试重新初始化主塔"), Tower->InitializeHealth());
+	TestTrue(TEXT("教程启用一心锁血"), Tower->EnableTutorialHealthLock(Reason));
+	const float TutorialHealthFloor = Tower->MaxHealth / 20.0f;
+	Tower->MaxBalloons = 20;
+	Tower->HealthPerBalloon = 11.0f;
+	TestTrue(TEXT("教程测试主塔受击后仍高于一心"), Tower->ApplyDamage(Tower->MaxHealth - 60.0f));
+	AddExpectedError(TEXT("至少保留一颗心"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestFalse(TEXT("教程不能回收导致生命低于一心的气球"), Tower->TryConsumeBalloons(1, Reason));
+	TestTrue(TEXT("拒绝一心以下的气球回收后保留原生命"), FMath::IsNearlyEqual(Tower->CurrentHealth, 60.0f));
+	TestTrue(TEXT("超额攻击在教程锁血下仍成功结算"), Tower->ApplyDamage(Tower->MaxHealth * 2.0f));
+	TestTrue(TEXT("超额攻击将主塔保留在一颗心"), FMath::IsNearlyEqual(Tower->CurrentHealth, TutorialHealthFloor));
+	TestTrue(TEXT("锁血主塔仍然存活"), Tower->IsAlive());
+	TestTrue(TEXT("锁血后续攻击继续结算"), Tower->ApplyDamage(Tower->MaxHealth));
+	TestTrue(TEXT("后续攻击不能降低一心下限"), FMath::IsNearlyEqual(Tower->CurrentHealth, TutorialHealthFloor));
 	return true;
 }
 
@@ -174,6 +190,9 @@ bool FCastleMainTowerSideGrowthTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	TestEqual(TEXT("开局四面各三格"), Grid->GetCells().Num(), 12);
+	const FCastleTowerSideCell& FirstSideCell = Grid->GetCells()[0];
+	TestTrue(TEXT("塔侧格使用没有窄边的 Plane 网格"), IsValid(FirstSideCell.Panel)
+		&& FirstSideCell.Panel->GetStaticMesh() && FirstSideCell.Panel->GetStaticMesh()->GetFName() == TEXT("Plane"));
 	for (const int32 Target : {5, 7, 9})
 	{
 		const TArray<FCastleTowerSideCell> Old = Grid->GetCells();
@@ -281,7 +300,7 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 			const UStaticMesh* MeshBeforeFailure = Body->GetStaticMesh();
 			const int32 PartCountBeforeFailure = TInlineComponentArray<UStaticMeshComponent*>(Board->MainTowerActor.Get()).Num();
 			ExistingSide->Panel->UnregisterComponent();
-			AddExpectedError(TEXT("的面板或数字未注册"), EAutomationExpectedErrorFlags::Contains, 1);
+			AddExpectedError(TEXT("的面板或数字未注册，或纹理材质属性无效"), EAutomationExpectedErrorFlags::Contains, 1);
 			TestFalse(TEXT("侧格失效时拒绝合法的五层扩层"), Board->ExpandMainTowerLayers(5, Reason));
 			ExistingSide->Panel->RegisterComponent();
 			TestEqual(TEXT("扩层失败保留三层"), Board->GetUnlockedLayerCount(), 3);
@@ -338,11 +357,18 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 			{
 				const auto* Side = Board->FindTowerSideCell(Center + FIntVector(0, 0, Layer), Face);
 				if (!TestNotNull(TEXT("四面每层均有侧格"), Side)) { return false; }
+				TestTrue(TEXT("塔侧格使用无厚度侧面的 Plane 网格"), Side->Panel->GetStaticMesh()
+					&& Side->Panel->GetStaticMesh()->GetFName() == TEXT("Plane"));
 				const FTransform& Panel = Side->Panel->GetComponentTransform();
-				const FVector Outward = Panel.GetUnitAxis(EAxis::X);
+				const FVector Outward = Panel.GetUnitAxis(EAxis::Z);
+				// 基础 Plane 的 UV 从本地 -X/-Y 角起算。站在塔外看，U 应向右、V 应向下。
+				const FVector TowerUp = TowerTransform.GetUnitAxis(EAxis::Z);
+				const FVector ViewerRight = FVector::CrossProduct(Outward, TowerUp);
+				TestTrue(TEXT("塔外正视时数字向右且正立"), Panel.GetUnitAxis(EAxis::X).Equals(ViewerRight)
+					&& Panel.GetUnitAxis(EAxis::Y).Equals(-TowerUp));
 				for (const double U : {-49.5, 0.0, 49.5})
 				{
-					const FVector Point = Panel.TransformPosition(FVector(0, U, 0));
+					const FVector Point = Panel.TransformPosition(FVector(U, 0, 0));
 					FHitResult Hit;
 					const bool bReachedPanel = World->LineTraceSingleByChannel(
 						Hit, Point + Outward * 200.0, Point - Outward * 20.0, ECC_Visibility, TraceParams)
@@ -353,6 +379,10 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 					{
 						FCastleGridCursorTarget& Target = HighestTargets.AddDefaulted_GetRef();
 						if (!TestTrue(TEXT("最高开放层由实际命中解析建造面"), Grid->TryResolveHit(Hit, Target))) { return false; }
+						// 使用塔身竖直轴核对高度，防止面片转正时把提示条一起翻到上沿。
+						const FVector IndicatorOffset = Target.IndicatorTransform.GetLocation() - Panel.GetLocation();
+						TestTrue(TEXT("悬停提示条位于格面下沿"), FMath::IsNearlyEqual(
+							FVector::DotProduct(IndicatorOffset, TowerUp), -43.0 * Panel.GetScale3D().Y, 0.01));
 					}
 				}
 			}
@@ -512,7 +542,12 @@ bool FCastleMainTowerWaypointLimitTest::RunTest(const FString& Parameters)
 	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
 	ACastlePatrolRoute* Route = World->SpawnActor<ACastlePatrolRoute>();
 	if (!TestNotNull(TEXT("生成路线编辑入口"), Route)) { return false; }
-	// 直接使用准星射线成功解析落点后的相同入口，避免测试依赖鼠标焦点。
+	// 使用准星解析后的同一入口，监听者在通知中读取已经提交的草稿和上限。
+	TArray<FIntPoint> DraftCounts;
+	Route->OnWaypointDraftChanged.AddLambda([Route, &DraftCounts]
+	{
+		DraftCounts.Emplace(Route->GetUsedWaypointCount(), Route->GetRemainingWaypointCount());
+	});
 	FText Reason;
 	TestEqual(TEXT("初始限额为两点"), Route->GetMaxPlayerWaypoints(), 2);
 	TestTrue(TEXT("第 1 点被接收"), Route->TryAppendDraftWaypoint(FVector(0, 0, 0), Reason));
@@ -529,6 +564,8 @@ bool FCastleMainTowerWaypointLimitTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("增量不能超过 99 上限"), Route->AddMaxPlayerWaypoints(1));
 	TestFalse(TEXT("配置不能低于 1"), Route->SetMaxPlayerWaypoints(0));
 	TestEqual(TEXT("无效配置保留原上限"), Route->GetMaxPlayerWaypoints(), 99);
+	const TArray<FIntPoint> ExpectedCounts = {FIntPoint(1, 1), FIntPoint(2, 0), FIntPoint(2, 1), FIntPoint(3, 0), FIntPoint(3, 96)};
+	TestTrue(TEXT("成功变更才通知 HUD，且通知内可以读取最新点数"), DraftCounts == ExpectedCounts);
 	return true;
 }
 
