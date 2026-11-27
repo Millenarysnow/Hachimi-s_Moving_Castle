@@ -33,6 +33,8 @@
 #include "Materials/Material.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
+#include "NiagaraComponent.h"
+#include "NiagaraSystem.h"
 #include "PhysicsEngine/BodySetup.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleMainTowerKitAssetTest, "MovingCastle.MainTower.KitAssets",
@@ -86,6 +88,22 @@ bool FCastleMainTowerKitAssetTest::RunTest(const FString& Parameters)
 	};
 	for (const FExpectedMesh& Mesh : Towers) { CheckMesh(Mesh, TEXT("Tower"), true); }
 	for (const FExpectedMesh& Mesh : LiftKit) { CheckMesh(Mesh, TEXT("LiftKit"), false); }
+	// 独立核对五个导入底座共用塔根原点、厘米尺寸及同名作者材质，含正式上限之外的 L05。
+	const FExpectedMesh FlightBases[] = {
+		{TEXT("SM_MainTower_FlightBase_L01"), {-272.5, -272.5, -191.654}, {272.5, 272.5, 4.7}},
+		{TEXT("SM_MainTower_FlightBase_L02"), {-277.0, -277.0, -231.417}, {277.0, 277.0, 4.7}},
+		{TEXT("SM_MainTower_FlightBase_L03"), {-281.5, -281.5, -279.385}, {281.5, 281.5, 4.7}},
+		{TEXT("SM_MainTower_FlightBase_L04"), {-286.0, -286.0, -329.714}, {286.0, 286.0, 4.7}},
+		{TEXT("SM_MainTower_FlightBase_L05"), {-290.0, -290.0, -385.922}, {290.0, 290.0, 4.7}}
+	};
+	for (const FExpectedMesh& Mesh : FlightBases) { CheckMesh(Mesh, TEXT("FlightBase"), false); }
+	CheckMesh({TEXT("SM_MainTower_DoorSigns_560"), {-323.3, -141.6, 369.152}, {323.3, 141.6, 464.852}}, TEXT("DoorSigns"), false);
+	const auto* Exhaust = LoadObject<UNiagaraSystem>(nullptr,
+		TEXT("/Game/RocketThrusterExhaustFX/FX/NS_RocketExhaust_Realistic.NS_RocketExhaust_Realistic"));
+	if (TestNotNull(TEXT("正式喷口 Niagara 系统"), Exhaust))
+	{
+		TestTrue(TEXT("火焰可用且已包含发射器"), Exhaust->IsValid() && !Exhaust->GetEmitterHandles().IsEmpty());
+	}
 	const TCHAR* Palette[] = {
 		TEXT("Brass"), TEXT("Bronze"), TEXT("CanvasMint"), TEXT("CanvasPink"), TEXT("CanvasRose"), TEXT("CanvasRoseDeep"),
 		TEXT("CanvasRoseLight"), TEXT("CanvasTeal"), TEXT("CanvasTealDeep"), TEXT("Cloud"), TEXT("Dark"), TEXT("EmberTile"),
@@ -288,6 +306,27 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 	}
 	TMap<FIntVector, ACastleBuildingBase*> PlacedRooms;
 	PlacedRooms.Add(OldRoomCell, OldRoom);
+	const auto FindExhaust = [&]() { return Board->MainTowerActor->FindComponentByClass<UNiagaraComponent>(); };
+	const auto CheckFlight = [&](const UNiagaraComponent* Exhaust, const int32 Tier, const bool bVisible)
+	{
+		if (!TestNotNull(TEXT("有已登记的中央喷口 Niagara"), Exhaust)) { return false; }
+		const auto* Base = Cast<UStaticMeshComponent>(Exhaust->GetAttachParent());
+		if (!TestNotNull(TEXT("喷口挂在该等级底座下"), Base)) { return false; }
+		TestEqual(TEXT("底座与当前塔身等级一致"), GetNameSafe(Base->GetStaticMesh()),
+			FString::Printf(TEXT("SM_MainTower_FlightBase_L%02d"), Tier + 1));
+		TestTrue(TEXT("底座挂在共同塔根且保持作者原点"), Base->GetAttachParent() == Board->MainTowerActor->GetRootComponent()
+			&& Base->GetRelativeTransform().Equals(FTransform::Identity));
+		const double ExhaustZ[] = {-183.0, -221.0, -266.0, -315.0, -371.0};
+		TestTrue(TEXT("发射面紧贴中央喷口下沿"), Exhaust->GetRelativeLocation().Equals(FVector(0, 0, ExhaustZ[Tier]), 0.01));
+		TestTrue(TEXT("作者 +X 喷射轴对齐底座的 -Z"), Exhaust->GetRelativeRotation().Vector().Equals(FVector::DownVector, 0.001));
+		TestEqual(TEXT("喷口资产是 Realistic 作者版本"), GetNameSafe(Exhaust->GetAsset()), FString(TEXT("NS_RocketExhaust_Realistic")));
+		TestTrue(TEXT("底座与喷口一起登记并按事务控制可见性"), Base->IsRegistered() && Exhaust->IsRegistered()
+			&& Base->IsVisible() == bVisible && Exhaust->IsVisible() == bVisible);
+		TestTrue(TEXT("底座和喷口都没有碰撞及导航资格"), Base->GetCollisionEnabled() == ECollisionEnabled::NoCollision
+			&& Exhaust->GetCollisionEnabled() == ECollisionEnabled::NoCollision
+			&& !Base->CanEverAffectNavigation() && !Exhaust->CanEverAffectNavigation());
+		return true;
+	};
 	for (const int32 Layers : {3, 5, 7, 9})
 	{
 		if (Layers == 5)
@@ -298,6 +337,7 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 			const auto* Body = Cast<UStaticMeshComponent>(FindObjectFast<UObject>(Board->MainTowerActor, TEXT("TowerBodyMesh")));
 			if (!TestNotNull(TEXT("扩层失败前的整塔组件"), Body)) { return false; }
 			const UStaticMesh* MeshBeforeFailure = Body->GetStaticMesh();
+			const UNiagaraComponent* ExhaustBeforeFailure = FindExhaust();
 			const int32 PartCountBeforeFailure = TInlineComponentArray<UStaticMeshComponent*>(Board->MainTowerActor.Get()).Num();
 			ExistingSide->Panel->UnregisterComponent();
 			AddExpectedError(TEXT("的面板或数字未注册，或纹理材质属性无效"), EAutomationExpectedErrorFlags::Contains, 1);
@@ -307,6 +347,8 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("扩层失败保留 L01 塔身"), Body->GetStaticMesh() == MeshBeforeFailure);
 			TestEqual(TEXT("扩层失败清理待发布吊挂"),
 				TInlineComponentArray<UStaticMeshComponent*>(Board->MainTowerActor.Get()).Num(), PartCountBeforeFailure);
+			TestTrue(TEXT("扩层失败保留原喷口并清除未提交火焰"), FindExhaust() == ExhaustBeforeFailure
+				&& TInlineComponentArray<UNiagaraComponent*>(Board->MainTowerActor.Get()).Num() == 1);
 		}
 		if (Layers != 3 && !TestTrue(TEXT("扩层提交成功"), Board->ExpandMainTowerLayers(Layers, Reason))) { return false; }
 		TestEqual(TEXT("棋盘发布实际层数"), Board->GetUnlockedLayerCount(), Layers);
@@ -329,6 +371,8 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("再上一层超出高度"), Board->IsCoordinateWithinBoard(Highest + FIntVector(0, 0, 1)));
 		TestFalse(TEXT("第一层以下超出高度"), Board->IsCoordinateWithinBoard(Center + FIntVector(1, 0, -1)));
 		const int32 Tier = (Layers - 3) / 2;
+		TestEqual(TEXT("每次扩层后只保留一个喷口组件"), TInlineComponentArray<UNiagaraComponent*>(Board->MainTowerActor.Get()).Num(), 1);
+		if (!CheckFlight(FindExhaust(), Tier, true)) { return false; }
 		const auto* Body = Cast<UStaticMeshComponent>(FindObjectFast<UObject>(Board->MainTowerActor, TEXT("TowerBodyMesh")));
 		if (!TestNotNull(TEXT("蓝图的整塔网格组件存在"), Body)) { return false; }
 		TestEqual(TEXT("当前整塔使用对应的 560 cm 网格"),
@@ -483,11 +527,24 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("拒绝十一层后保留九层"), Board->GetUnlockedLayerCount(), 9);
 	Board->MaxTowerLayers = 9;
 	Board->GridSize.Z = 9;
+	// 正式棋盘保留九层上限；单独准备作者的 11 层表现，验证 L05 可用且丢弃后仍保留 L04。
+	if (!TestTrue(TEXT("准备 11 层底座套件"), LiftPresentation->PrepareTier(11, Reason))) { return false; }
+	const TInlineComponentArray<UNiagaraComponent*> WithPending(Board->MainTowerActor.Get());
+	const auto* Pending = WithPending.FindByPredicate([](const UNiagaraComponent* Exhaust) { return !Exhaust->IsVisible(); });
+	const bool bCheckedPending = TestNotNull(TEXT("11 层隐藏喷口已准备"), Pending) && CheckFlight(*Pending, 4, false);
+	LiftPresentation->DiscardPreparedTier();
+	if (!bCheckedPending || !CheckFlight(FindExhaust(), 3, true)) { return false; }
+	TestEqual(TEXT("丢弃 L05 后没有残留喷口"), TInlineComponentArray<UNiagaraComponent*>(Board->MainTowerActor.Get()).Num(), 1);
 	// 使用正式建造入口配置门外房间，验证正负 X 语义与真实棋盘格心一致。
 	UCastleTowerDispatchDoors* Doors = NewObject<UCastleTowerDispatchDoors>(Board->MainTowerActor);
 	Board->MainTowerActor->AddInstanceComponent(Doors);
 	Doors->RegisterComponent();
 	if (!TestTrue(TEXT("注册塔底双门"), Doors->Initialize(*Board, Reason))) { return false; }
+	const auto* DoorSigns = FindObjectFast<UStaticMeshComponent>(Board->MainTowerActor.Get(), TEXT("MainTowerDoorSigns"));
+	if (!TestNotNull(TEXT("塔根只有一件屋门双面标识"), DoorSigns)) { return false; }
+	TestEqual(TEXT("双门使用正式网格"), GetNameSafe(DoorSigns->GetStaticMesh()), FString(TEXT("SM_MainTower_DoorSigns_560")));
+	TestTrue(TEXT("双门保持作者基准且不影响碰撞导航"), DoorSigns->GetRelativeTransform().Equals(FTransform::Identity)
+		&& DoorSigns->GetCollisionEnabled() == ECollisionEnabled::NoCollision && !DoorSigns->CanEverAffectNavigation());
 	FVector DoorA, DoorB;
 	AddExpectedMessagePlain(TEXT("需要已完成放置的房间"), ELogVerbosity::Warning);
 	TestFalse(TEXT("缺门 A 房间时没有有效出口"), Doors->TryGetDoorWaypoints(DoorA, DoorB, Reason));
