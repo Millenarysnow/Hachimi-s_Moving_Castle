@@ -9,13 +9,17 @@
 UClass* PublishCastleFortressTutorialPopup(FName Name);
 #endif
 
-/** 正式过关奖励的资产发布入口，供托管编辑器的 Python 调用。 */
+/** 堡垒界面的资产发布入口，供托管编辑器的 Python 调用。 */
 UCLASS()
 class UCastleFortressUIPublisherLibrary : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()
 
 public:
+	/** 只发布生产对话蓝图，保留所有剧本和其他弹窗资产。 */
+	UFUNCTION(BlueprintCallable, Category = "MovingCastle|EditorUI")
+	static bool PublishDialogueWidget();
+
 	/** 重新构建、编译与保存普通和教程的两个奖励面板。 */
 	UFUNCTION(BlueprintCallable, Category = "MovingCastle|EditorUI")
 	static bool PublishGoldRewardWidgets();

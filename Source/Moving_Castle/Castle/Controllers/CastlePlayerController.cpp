@@ -676,6 +676,17 @@ void ACastlePlayerController::ToggleTowerAutoDispatchShortcut()
 	if (Dispatch && Dispatch->IsSessionActive()) { Dispatch->ToggleAutoDispatch(); }
 }
 
+void ACastlePlayerController::SetTutorialShopAccess(const bool bAllowed)
+{
+	TutorialShopAccess = bAllowed;
+	// 商店已打开时同步禁用点击与键盘交互，剧情结束的模态焦点照常由控制器恢复。
+	if (UUserWidget* Widget = ShopFocusWidget.Get(); Widget && Widget->GetIsEnabled() != bAllowed)
+	{
+		Widget->SetIsEnabled(bAllowed);
+		if (bAllowed) { RefreshModalInput(true); }
+	}
+}
+
 void ACastlePlayerController::ToggleShop()
 {
 	// 更高层的剧情和百科面板拥有输入，B 不会关闭它们下方的教学商店。

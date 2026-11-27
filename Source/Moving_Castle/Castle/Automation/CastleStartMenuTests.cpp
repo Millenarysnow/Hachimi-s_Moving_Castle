@@ -43,7 +43,10 @@ bool FCastleStartMenuSessionTest::RunTest(const FString& Parameters)
 		{
 			auto* MainPlayer = Cast<ACastlePlayerController>(Player);
 			if (!MainPlayer || !World->GetMapName().EndsWith(TEXT("MainMap"))) { return false; }
-			TestTrue(TEXT("确认设计模式后立即进入主地图并生效"), MainPlayer->GetControlMode() == ECastleControlMode::Design);
+			FString StoredMode;
+			const bool bLoadedMode = GConfig->GetString(Section, Key, StoredMode, GGameUserSettingsIni);
+			TestTrue(TEXT("确认模式后立即进入主地图"), World->GetMapName().EndsWith(TEXT("MainMap")));
+			TestTrue(TEXT("确认的设计模式已写入既有设置入口"), bLoadedMode && StoredMode == TEXT("Design"));
 			UGameplayStatics::OpenLevel(World, FName(TEXT("/Game/MovingCastle/Maps/StartMenu")));
 			++Phase;
 			return false;

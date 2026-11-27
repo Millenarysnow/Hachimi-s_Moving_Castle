@@ -4,6 +4,7 @@
 #include "Castle/Dialogue/CastleDialogueSubsystem.h"
 #include "Components/Button.h"
 #include "Components/ButtonSlot.h"
+#include "Components/CanvasPanelSlot.h"
 #include "Components/Image.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
@@ -27,11 +28,17 @@ void UCastleDialogueChoiceButton::HandleClicked()
 
 bool UCastleDialogueWidget::HasRequiredBindings() const
 {
+	const auto* ContinueSlot = IsValid(ContinueButton) ? Cast<UCanvasPanelSlot>(ContinueButton->Slot) : nullptr;
+	const auto* ChoiceSlot = IsValid(ChoiceContainer) ? Cast<UCanvasPanelSlot>(ChoiceContainer->Slot) : nullptr;
+	const FAnchors FullViewport(0, 0, 1, 1);
 	const bool bValid = IsValid(LeftPortrait) && IsValid(RightPortrait) && IsValid(SpeakerName)
-		&& IsValid(DialogueBody) && IsValid(ChoiceContainer) && IsValid(ContinueButton) && IsValid(ChoiceButtonTemplate);
+		&& IsValid(DialogueBody) && IsValid(ChoiceButtonTemplate) && ContinueSlot && ChoiceSlot && WidgetTree
+		&& ContinueButton->GetParent() == WidgetTree->RootWidget && ChoiceContainer->GetParent() == WidgetTree->RootWidget
+		&& ContinueSlot->GetAnchors() == FullViewport && ContinueSlot->GetOffsets() == FMargin(0)
+		&& !ContinueSlot->GetAutoSize() && ContinueSlot->GetZOrder() < ChoiceSlot->GetZOrder();
 	if (!bValid)
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("对话 WBP %s 缺少立绘、正文、分支容器、分支样式模板或继续按钮。"),
+		UE_LOG(LogMoving_Castle, Error, TEXT("对话 WBP %s 的立绘、正文、分支样式或全屏继续层绑定无效。"),
 			*GetClass()->GetPathName());
 	}
 	return bValid;
