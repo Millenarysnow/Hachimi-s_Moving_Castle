@@ -8,21 +8,25 @@
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "GameFramework/WorldSettings.h"
+#include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 
-/** 验证运行时专属网格、必需材质参数、三维变换和所有视觉排除标记。 */
+/** 验证运行时网格、专属全息材质与参数、三维变换和所有视觉排除标记。 */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePlacementHoloBoxAutomationTest,
 	"MovingCastle.Placement.HoloBox.CursorMaterialAndRenderFlags",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FCastlePlacementHoloBoxAutomationTest::RunTest(const FString& Parameters)
 {
-	// 材质和专属网格由 Source/Tools/PlacementCursor 中的离线生成器提供。
-	UStaticMesh* ExpectedMesh = LoadObject<UStaticMesh>(nullptr,
-		TEXT("/Game/MovingCastle/FX/Placement/SM_CastlePlacementHoloBox.SM_CastlePlacementHoloBox"));
-	if (!TestNotNull(TEXT("专属全息占位盒网格已经生成"), ExpectedMesh)) { return false; }
+	// 指示器复用离线生成器核验过的标准立方体，并硬引用专属半透明材质。
+	UStaticMesh* ExpectedMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+	UMaterial* ExpectedMaterial = LoadObject<UMaterial>(nullptr,
+		TEXT("/Game/MovingCastle/FX/Placement/M_CastlePlacementHoloBox.M_CastlePlacementHoloBox"));
+	if (!TestNotNull(TEXT("引擎占位盒网格可加载"), ExpectedMesh)
+		|| !TestNotNull(TEXT("专属全息占位盒材质已经生成"), ExpectedMaterial)) { return false; }
 
 	const UWorld::InitializationValues Settings = UWorld::InitializationValues().AllowAudioPlayback(false)
 		.CreatePhysicsScene(false).CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(false);
@@ -31,13 +35,25 @@ bool FCastlePlacementHoloBoxAutomationTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("创建隔离的指示器测试世界"), World)) { return false; }
 	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
 	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
+	ON_SCOPE_EXIT
+	{
+		// 测试显式进入了 BeginPlay，先按正式生命周期结束再销毁世界。
+		World->EndPlay(EEndPlayReason::Quit);
+		World->DestroyWorld(false);
+		GEngine->DestroyWorldContext(World);
+	};
+	// 进入游戏生命周期，让正式 Actor 初始化组件并独立创建运行时材质。
+	World->InitializeActorsForPlay(FURL());
+	World->GetWorldSettings()->NotifyBeginPlay();
 
 	ACastleGridCursor* Cursor = World->SpawnActor<ACastleGridCursor>();
 	if (!TestNotNull(TEXT("生成正式网格指示器"), Cursor)) { return false; }
 	if (!TestNotNull(TEXT("创建动态全息材质实例"), Cursor->CursorMaterial.Get())) { return false; }
 
-	TestTrue(TEXT("指示器使用专属 100 cm 网格"), Cursor->CursorMesh->GetStaticMesh() == ExpectedMesh);
+	TestTrue(TEXT("指示器使用六面 0–1 UV 的 100 cm 网格"), Cursor->CursorMesh->GetStaticMesh() == ExpectedMesh);
+	TestTrue(TEXT("动态材质使用生成的全息材质"), Cursor->CursorMaterial->GetBaseMaterial() == ExpectedMaterial);
+	TestEqual(TEXT("全息材质使用半透明混合"), ExpectedMaterial->GetBlendMode(), BLEND_Translucent);
+	TestTrue(TEXT("从盒外可看见背面棱线"), ExpectedMaterial->IsTwoSided());
 	TestTrue(TEXT("材质存在 HoloColor 参数索引"), Cursor->HoloColorParameterIndex != INDEX_NONE);
 	TestTrue(TEXT("材质存在 SupportNormal 参数索引"), Cursor->SupportNormalParameterIndex != INDEX_NONE);
 	TestTrue(TEXT("材质存在 InvalidMode 参数索引"), Cursor->InvalidModeParameterIndex != INDEX_NONE);
@@ -68,6 +84,7 @@ bool FCastlePlacementHoloBoxAutomationTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("不可放目标显示警示暖红色"), Cursor->CursorMaterial->K2_GetVectorParameterValue(TEXT("HoloColor"))
 		.Equals(FLinearColor(1.0f, 0.20f, 0.14f, 1.0f), 0.001f));
 	TestEqual(TEXT("不可放目标开启警示斜纹"), Cursor->CursorMaterial->K2_GetScalarParameterValue(TEXT("InvalidMode")), 1.0f);
+	TestTrue(TEXT("切换双态不改变盒体变换"), Cursor->GetActorTransform().Equals(Target.IndicatorTransform, 0.01f));
 
 	Target.bValid = false;
 	Cursor->ApplyTarget(Target, false);

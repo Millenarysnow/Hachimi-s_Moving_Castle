@@ -15,8 +15,9 @@ namespace
 	const FLinearColor HoloPlaceColor(0.16f, 0.88f, 1.0f, 1.0f);
 	const FLinearColor HoloInvalidColor(1.0f, 0.20f, 0.14f, 1.0f);
 
-	/** 全息材质、专属网格与必需参数均是运行时硬依赖，不使用引擎默认材质兜底。 */
-	constexpr TCHAR PlacementMeshPath[] = TEXT("/Game/MovingCastle/FX/Placement/SM_CastlePlacementHoloBox.SM_CastlePlacementHoloBox");
+	/** 引擎标准盒的六个面均有独立的 0–1 UV，生成器会核对该约定。 */
+	constexpr TCHAR PlacementMeshPath[] = TEXT("/Engine/BasicShapes/Cube.Cube");
+	/** 全息材质及其必需参数为运行时硬依赖。 */
 	constexpr TCHAR PlacementMaterialPath[] = TEXT("/Game/MovingCastle/FX/Placement/M_CastlePlacementHoloBox.M_CastlePlacementHoloBox");
 }
 
@@ -32,11 +33,17 @@ ACastleGridCursor::ACastleGridCursor()
 	CursorMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	CursorMesh->SetCanEverAffectNavigation(false);
 	CursorMesh->SetVisibility(true, true);
+	// 无论资产加载结果如何，光标组件都不能参与环境渲染和射线查询。
+	CursorMesh->SetCastShadow(false);
+	CursorMesh->SetAffectDistanceFieldLighting(false);
+	CursorMesh->SetVisibleInRayTracing(false);
+	CursorMesh->SetReceivesDecals(false);
+	CursorMesh->SetRenderCustomDepth(false);
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> PlacementMeshFinder(PlacementMeshPath);
 	if (!PlacementMeshFinder.Succeeded())
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("网格全息指示器初始化失败：找不到专属网格资产 %s。指示器保持隐藏。"), PlacementMeshPath);
+		UE_LOG(LogMoving_Castle, Error, TEXT("网格全息指示器初始化失败：找不到盒体网格资产 %s。指示器保持隐藏。"), PlacementMeshPath);
 		return;
 	}
 	CursorMesh->SetStaticMesh(PlacementMeshFinder.Object);
@@ -47,40 +54,57 @@ ACastleGridCursor::ACastleGridCursor()
 		UE_LOG(LogMoving_Castle, Error, TEXT("网格全息指示器初始化失败：找不到材质资产 %s。指示器保持隐藏。"), PlacementMaterialPath);
 		return;
 	}
+	CursorMaterialTemplate = PlacementMaterialFinder.Object;
+}
 
-	CursorMaterial = UMaterialInstanceDynamic::Create(PlacementMaterialFinder.Object, this);
+void ACastleGridCursor::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+	// 构造阶段已报告缺失的资产。此时仍保持隐藏，也不创建材质实例。
+	if (CursorMaterialTemplate == nullptr)
+	{
+		return;
+	}
+
+	// MID 可为不存在的名称创建覆盖值，所以必须直接检查父材质定义的参数。
+	static const FName HoloColorName(TEXT("HoloColor"));
+	static const FName SupportNormalName(TEXT("SupportNormal"));
+	static const FName InvalidModeName(TEXT("InvalidMode"));
+	FLinearColor VectorValue;
+	float ScalarValue = 0.0f;
+	const bool bHasHoloColor = CursorMaterialTemplate->GetVectorParameterValue(FMaterialParameterInfo(HoloColorName), VectorValue);
+	const bool bHasSupportNormal = CursorMaterialTemplate->GetVectorParameterValue(FMaterialParameterInfo(SupportNormalName), VectorValue);
+	const bool bHasInvalidMode = CursorMaterialTemplate->GetScalarParameterValue(FMaterialParameterInfo(InvalidModeName), ScalarValue);
+	if (!bHasHoloColor || !bHasSupportNormal || !bHasInvalidMode)
+	{
+		UE_LOG(LogMoving_Castle, Error,
+			TEXT("网格全息指示器初始化失败：材质 %s 缺少必需参数 HoloColor=%d、SupportNormal=%d、InvalidMode=%d。指示器保持隐藏。"),
+			PlacementMaterialPath, bHasHoloColor, bHasSupportNormal, bHasInvalidMode);
+		return;
+	}
+
+	CursorMaterial = UMaterialInstanceDynamic::Create(CursorMaterialTemplate, this);
 	if (CursorMaterial == nullptr)
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("网格全息指示器初始化失败：无法从 %s 创建动态材质。指示器保持隐藏。"), PlacementMaterialPath);
 		return;
 	}
 
-	// Initialize...AndGetIndex 会在参数真实存在时才成功，避免材质参数名拼写错误时静默显示默认外观。
-	const bool bHasHoloColor = CursorMaterial->InitializeVectorParameterAndGetIndex(
-		TEXT("HoloColor"), HoloPlaceColor, HoloColorParameterIndex);
-	const bool bHasSupportNormal = CursorMaterial->InitializeVectorParameterAndGetIndex(
-		TEXT("SupportNormal"), FLinearColor(0.0f, 0.0f, 1.0f, 0.0f), SupportNormalParameterIndex);
-	const bool bHasInvalidMode = CursorMaterial->InitializeScalarParameterAndGetIndex(
-		TEXT("InvalidMode"), 0.0f, InvalidModeParameterIndex);
-	if (!bHasHoloColor || !bHasSupportNormal || !bHasInvalidMode)
+	// 正式参数存在后，缓存当前实例的索引供控制器每帧更新。
+	const bool bHasColorIndex = CursorMaterial->InitializeVectorParameterAndGetIndex(HoloColorName, HoloPlaceColor, HoloColorParameterIndex);
+	const bool bHasNormalIndex = CursorMaterial->InitializeVectorParameterAndGetIndex(
+		SupportNormalName, FLinearColor(0.0f, 0.0f, 1.0f, 0.0f), SupportNormalParameterIndex);
+	const bool bHasModeIndex = CursorMaterial->InitializeScalarParameterAndGetIndex(InvalidModeName, 0.0f, InvalidModeParameterIndex);
+	if (!bHasColorIndex || !bHasNormalIndex || !bHasModeIndex)
 	{
 		UE_LOG(LogMoving_Castle, Error,
-			TEXT("网格全息指示器初始化失败：材质 %s 缺少必需参数 HoloColor=%d、SupportNormal=%d、InvalidMode=%d。指示器保持隐藏。"),
-			PlacementMaterialPath, bHasHoloColor, bHasSupportNormal, bHasInvalidMode);
+			TEXT("网格全息指示器初始化失败：无法缓存材质 %s 的参数索引 HoloColor=%d、SupportNormal=%d、InvalidMode=%d。指示器保持隐藏。"),
+			PlacementMaterialPath, bHasColorIndex, bHasNormalIndex, bHasModeIndex);
 		CursorMaterial = nullptr;
 		return;
 	}
 
 	CursorMesh->SetMaterial(0, CursorMaterial);
-
-	// 光标只负责视觉反馈，所有环境参与标记都显式关闭，射线仍可命中其后的真实建造面。
-	CursorMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	CursorMesh->SetCanEverAffectNavigation(false);
-	CursorMesh->SetCastShadow(false);
-	CursorMesh->SetAffectDistanceFieldLighting(false);
-	CursorMesh->SetVisibleInRayTracing(false);
-	CursorMesh->SetReceivesDecals(false);
-	CursorMesh->SetRenderCustomDepth(false);
 }
 
 void ACastleGridCursor::ApplyTarget(const FCastleGridCursorTarget& Target, bool bCanPlace)
@@ -91,13 +115,9 @@ void ACastleGridCursor::ApplyTarget(const FCastleGridCursorTarget& Target, bool 
 		return;
 	}
 
-	// 资源或参数未成功初始化时保持隐藏，并记录失效目标，绝不退回不透明默认材质。
-	if (CursorMesh == nullptr || CursorMaterial == nullptr || HoloColorParameterIndex == INDEX_NONE
-		|| SupportNormalParameterIndex == INDEX_NONE || InvalidModeParameterIndex == INDEX_NONE)
+	// 初始化失败已经写入 Error。保持隐藏，避免控制器每帧重复报告同一故障。
+	if (CursorMaterial == nullptr)
 	{
-		UE_LOG(LogMoving_Castle, Error,
-			TEXT("网格全息指示器无法应用目标：必需网格、材质或参数索引失效，材质路径 %s。指示器保持隐藏。"),
-			PlacementMaterialPath);
 		HideCursor();
 		return;
 	}

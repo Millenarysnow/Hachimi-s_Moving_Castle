@@ -264,6 +264,30 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("真实射线选中上层建筑侧面"), Board->TryResolveGridCursorTarget(
 		WideCenter + FVector(0, Board->CellSize, 0), WideCenter, FloatingSide))) { return false; }
 	TestEqual(TEXT("射线选中朝 +Y 的建筑面"), FloatingSide.Face, ECastleGridFace::PositiveY);
+	VerifyHoloBox(FloatingSide, FloatingSide.AdjacentCell, TEXT("建筑 +Y 面"));
+	// 上层模型四周留空，可用短射线独立命中反向侧面、顶面和悬空底面。
+	const struct
+	{
+		FIntVector Offset;
+		ECastleGridFace Face;
+		const TCHAR* Description;
+	} OtherFaces[] = {
+		{ FIntVector(0, -1, 0), ECastleGridFace::NegativeY, TEXT("建筑 -Y 面") },
+		{ FIntVector(0, 0, 1), ECastleGridFace::Up, TEXT("建筑顶面") },
+		{ FIntVector(0, 0, -1), ECastleGridFace::Down, TEXT("建筑悬空底面") },
+	};
+	for (const auto& Face : OtherFaces)
+	{
+		FCastleGridCursorTarget SurfaceTarget;
+		const FVector RayStart = WideCenter + FVector(Face.Offset) * (Board->CellSize * 0.25f);
+		if (!TestTrue(FString::Printf(TEXT("射线命中%s"), Face.Description),
+			Board->TryResolveGridCursorTarget(RayStart, WideCenter, SurfaceTarget))) { return false; }
+		TestEqual(FString::Printf(TEXT("%s保留建筑来源"), Face.Description), SurfaceTarget.Surface, ECastleGridCursorSurface::Building);
+		TestEqual(FString::Printf(TEXT("%s保留朝向"), Face.Description), SurfaceTarget.Face, Face.Face);
+		const FIntVector Adjacent = SurfaceTarget.Cell + Face.Offset;
+		TestEqual(FString::Printf(TEXT("%s命中外侧邻格"), Face.Description), SurfaceTarget.AdjacentCell, Adjacent);
+		VerifyHoloBox(SurfaceTarget, Adjacent, Face.Description);
+	}
 	TestEqual(TEXT("侧面落点仍在第二层"), FloatingSide.AdjacentCell.Z, 1);
 	TestFalse(TEXT("侧面落点正下方没有建筑"), HasPlacedCell(FloatingSide.AdjacentCell - FIntVector(0, 0, 1)));
 	TestTrue(TEXT("同色普通房间允许侧向悬空"), Board->CanPlaceBuildingAtCursor(FloatingSide, NormalRoomCard, Reason));
