@@ -163,7 +163,8 @@ namespace
 				CheckActionIconStates(*Test, const_cast<UCastleHUDIconButtonWidget*>(GuideBtn), TEXT("ActionButton"), TEXT("IconStates"));
 				if (BuildBar)
 				{
-					Test->TestEqual(TEXT("建造页显示建造栏"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+					Test->TestEqual(TEXT("建造页显示且仅卡槽接收鼠标的建造栏"),
+						BuildBar->GetVisibility(), ESlateVisibility::SelfHitTestInvisible);
 				}
 
 				Test->TestTrue(TEXT("非致死伤害走原生命入口"), IConsoleManager::Get().ProcessUserConsoleInput(TEXT("CastleDamageMainTower 25"), Output, World));
@@ -218,7 +219,8 @@ namespace
 		}
 		if (BuildBar)
 		{
-			Test->TestEqual(TEXT("回到建造页恢复建造栏显示"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+			Test->TestEqual(TEXT("回到建造页恢复建造栏及卡槽命中穿透"),
+				BuildBar->GetVisibility(), ESlateVisibility::SelfHitTestInvisible);
 		}
 	}
 
@@ -295,7 +297,7 @@ namespace
 		TActorIterator<ACastleRestSkyIsland> Island(World);
 		if (!BuildBar || !Test.TestTrue(TEXT("正式休息岛已生成"), static_cast<bool>(Island))) { return true; }
 		ACastleRestSkyIsland* RestIsland = *Island;
-		Test.TestEqual(TEXT("入岛后建造栏可见"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		Test.TestEqual(TEXT("入岛后建造栏可见"), BuildBar->GetVisibility(), ESlateVisibility::SelfHitTestInvisible);
 		Test.TestFalse(TEXT("岛内主塔商店权限不可用"), Director->IsShopAccessAllowed(Reason));
 		Controller->ToggleShop();
 		Test.TestFalse(TEXT("岛内 B 键入口无法打开主塔商店"), Controller->GetShop()->IsShopOpen());
@@ -304,7 +306,7 @@ namespace
 		Test.TestTrue(TEXT("空岛商店已打开"), Controller->GetShop()->IsShopOpen());
 		Test.TestEqual(TEXT("空岛商店打开时折叠建造栏"), BuildBar->GetVisibility(), ESlateVisibility::Collapsed);
 		Controller->GetShop()->CloseShop();
-		Test.TestEqual(TEXT("空岛商店关闭后恢复建造栏"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		Test.TestEqual(TEXT("空岛商店关闭后恢复建造栏"), BuildBar->GetVisibility(), ESlateVisibility::SelfHitTestInvisible);
 		if (!Interact(*Director, RestIsland->FindComponentByClass<UCastleSkyIslandDepartureComponent>(), TEXT("离开传送门")))
 		{
 			return true;
@@ -442,6 +444,7 @@ namespace
    const FCastleTowerSideCell* BottomCell = Board->FindTowerSideCell(Base, Faces[0]);
    FCastleBuildingDescriptor OffColor = Starter;
    OffColor.Color = BottomCell->Color == ECastleTileColor::Red ? ECastleTileColor::Blue : ECastleTileColor::Red;
+   OffColor.Number = BottomCell->Number;
    Test->TestTrue(TEXT("不同色同数字可放"), Board->CanPlaceBuildingAtCursor(BottomTarget, OffColor, Reason));
    OffColor.Number = BottomCell->Number % 9 + 1;
    Test->TestFalse(TEXT("颜色和数字都不同拒绝"), Board->CanPlaceBuildingAtCursor(BottomTarget, OffColor, Reason));

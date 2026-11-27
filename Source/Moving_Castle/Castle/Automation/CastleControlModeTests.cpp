@@ -275,24 +275,28 @@ namespace
 						Capsule->GetCollisionResponseToChannel(static_cast<ECollisionChannel>(Channel)),
 						Channel == ECC_WorldDynamic ? ECR_Overlap : ECR_Ignore);
 				}
-				SendInput(*Player, EKeys::LeftAlt, IE_Pressed, 1.0f);
+				// 连续多档输入在同一个测试帧中执行。将临时 HUD 指针放到下一次潜伏更新，
+				// 让真实 PlayerInput 队列按常规帧序处理独占按键。
 				return false;
 			}
 			case 5:
+				SendInput(*Player, EKeys::LeftAlt, IE_Pressed, 1.0f);
+				return false;
+			case 6:
 				Test.TestTrue(TEXT("经典按住左 Alt 释放 HUD 指针并停用视角"), Player->bShowMouseCursor
 					&& !Player->CanRotateCameraFromMouse() && !Player->ShouldDrawCenterCrosshair());
 				SendInput(*Player, EKeys::LeftAlt, IE_Released, 0.0f);
 				return false;
-			case 6:
+			case 7:
 				Test.TestTrue(TEXT("松开左 Alt 恢复经典准星与自由视角"), !Player->bShowMouseCursor
 					&& Player->CanRotateCameraFromMouse() && Player->ShouldDrawCenterCrosshair());
 				Press(*Player, EKeys::O);
 				return false;
-			case 7:
+			case 8:
 				Test.TestNotNull(TEXT("O 键打开设置 WBP"), FindWidget<UCastleControlSettingsWidget>(*Player));
 				Press(*Player, EKeys::Escape);
 				return false;
-			case 8:
+			case 9:
 				Test.TestNull(TEXT("Esc 关闭设置 WBP"), FindWidget<UCastleControlSettingsWidget>(*Player));
 				return true;
 			default:
