@@ -10,7 +10,6 @@
 class UStaticMesh;
 class UStaticMeshComponent;
 class UMaterialInterface;
-class UTextRenderComponent;
 
 /** 塔身坐标和朝外的面共同确定一个侧格；同层的四个面各有独立属性。 */
 USTRUCT()
@@ -23,9 +22,8 @@ struct FCastleTowerSideCell
 	ECastleTileColor Color = ECastleTileColor::Gray;
 	int32 Number = 0;
 
-	/** 面板本身是唯一命中来源；数字不参与射线或导航。 */
+	/** 面板本身是唯一命中来源；颜色和数字由纹理材质显示，不参与射线或导航。 */
 	UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> Panel;
-	UPROPERTY(Transient) TObjectPtr<UTextRenderComponent> Label;
 };
 
 /** 随主塔生存的侧格数据与表现，不负责房间占用、放置或合成。 */
@@ -57,7 +55,7 @@ public:
 	bool TryResolveHit(const FHitResult& Hit, FCastleGridCursorTarget& OutTarget) const;
 
 private:
-	/** 使用与旧地块同一正式几何和调色材质，不在缺失时生成替代物。 */
+	/** 单面 Plane 只显示格面正面；缺少网格或材质时初始化直接失败。 */
 	UPROPERTY(Transient) TObjectPtr<UStaticMesh> PanelMesh;
 	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> PanelMaterial;
 	UPROPERTY(Transient) TArray<FCastleTowerSideCell> Cells;

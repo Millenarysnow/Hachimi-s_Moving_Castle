@@ -190,6 +190,9 @@ bool FCastleMainTowerSideGrowthTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	TestEqual(TEXT("开局四面各三格"), Grid->GetCells().Num(), 12);
+	const FCastleTowerSideCell& FirstSideCell = Grid->GetCells()[0];
+	TestTrue(TEXT("塔侧格使用没有窄边的 Plane 网格"), IsValid(FirstSideCell.Panel)
+		&& FirstSideCell.Panel->GetStaticMesh() && FirstSideCell.Panel->GetStaticMesh()->GetFName() == TEXT("Plane"));
 	for (const int32 Target : {5, 7, 9})
 	{
 		const TArray<FCastleTowerSideCell> Old = Grid->GetCells();
@@ -297,7 +300,7 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 			const UStaticMesh* MeshBeforeFailure = Body->GetStaticMesh();
 			const int32 PartCountBeforeFailure = TInlineComponentArray<UStaticMeshComponent*>(Board->MainTowerActor.Get()).Num();
 			ExistingSide->Panel->UnregisterComponent();
-			AddExpectedError(TEXT("的面板或数字未注册"), EAutomationExpectedErrorFlags::Contains, 1);
+			AddExpectedError(TEXT("的面板或数字未注册，或纹理材质属性无效"), EAutomationExpectedErrorFlags::Contains, 1);
 			TestFalse(TEXT("侧格失效时拒绝合法的五层扩层"), Board->ExpandMainTowerLayers(5, Reason));
 			ExistingSide->Panel->RegisterComponent();
 			TestEqual(TEXT("扩层失败保留三层"), Board->GetUnlockedLayerCount(), 3);
@@ -354,11 +357,18 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 			{
 				const auto* Side = Board->FindTowerSideCell(Center + FIntVector(0, 0, Layer), Face);
 				if (!TestNotNull(TEXT("四面每层均有侧格"), Side)) { return false; }
+				TestTrue(TEXT("塔侧格使用无厚度侧面的 Plane 网格"), Side->Panel->GetStaticMesh()
+					&& Side->Panel->GetStaticMesh()->GetFName() == TEXT("Plane"));
 				const FTransform& Panel = Side->Panel->GetComponentTransform();
-				const FVector Outward = Panel.GetUnitAxis(EAxis::X);
+				const FVector Outward = Panel.GetUnitAxis(EAxis::Z);
+				// 基础 Plane 的 UV 从本地 -X/-Y 角起算。站在塔外看，U 应向右、V 应向下。
+				const FVector TowerUp = TowerTransform.GetUnitAxis(EAxis::Z);
+				const FVector ViewerRight = FVector::CrossProduct(Outward, TowerUp);
+				TestTrue(TEXT("塔外正视时数字向右且正立"), Panel.GetUnitAxis(EAxis::X).Equals(ViewerRight)
+					&& Panel.GetUnitAxis(EAxis::Y).Equals(-TowerUp));
 				for (const double U : {-49.5, 0.0, 49.5})
 				{
-					const FVector Point = Panel.TransformPosition(FVector(0, U, 0));
+					const FVector Point = Panel.TransformPosition(FVector(U, 0, 0));
 					FHitResult Hit;
 					const bool bReachedPanel = World->LineTraceSingleByChannel(
 						Hit, Point + Outward * 200.0, Point - Outward * 20.0, ECC_Visibility, TraceParams)
@@ -369,6 +379,10 @@ bool FCastleMainTowerBoardGrowthTest::RunTest(const FString& Parameters)
 					{
 						FCastleGridCursorTarget& Target = HighestTargets.AddDefaulted_GetRef();
 						if (!TestTrue(TEXT("最高开放层由实际命中解析建造面"), Grid->TryResolveHit(Hit, Target))) { return false; }
+						// 使用塔身竖直轴核对高度，防止面片转正时把提示条一起翻到上沿。
+						const FVector IndicatorOffset = Target.IndicatorTransform.GetLocation() - Panel.GetLocation();
+						TestTrue(TEXT("悬停提示条位于格面下沿"), FMath::IsNearlyEqual(
+							FVector::DotProduct(IndicatorOffset, TowerUp), -43.0 * Panel.GetScale3D().Y, 0.01));
 					}
 				}
 			}

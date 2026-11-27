@@ -21,7 +21,6 @@
 #include "Components/Button.h"
 #include "Components/TextBlock.h"
 #include "Components/StaticMeshComponent.h"
-#include "Components/TextRenderComponent.h"
 #include "Components/WidgetSwitcher.h"
 #include "CastleShopComponent.h"
 #include "Engine/Engine.h"
@@ -31,6 +30,7 @@
 #include "InputKeyEventArgs.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/OutputDeviceNull.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Tests/AutomationCommon.h"
 #include "Units/Navigation/Interaction/CastlePatrolRoute.h"
 
@@ -395,9 +395,18 @@ namespace
      Probe.Color = Data->Color;
      Probe.Number = Data->Number;
      Test->TestTrue(TEXT("实际命中的每个侧格都可摆放匹配房间"), Board->CanPlaceBuildingAtCursor(Target, Probe, Reason));
-     Test->TestTrue(TEXT("面板及数字可见，不占实体碰撞或导航"), Data->Panel->IsVisible() && Data->Label->IsVisible()
-         && Data->Panel->GetCollisionEnabled() == ECollisionEnabled::QueryOnly && !Data->Panel->CanEverAffectNavigation()
-         && !Data->Label->CanEverAffectNavigation() && Data->Label->Text.ToString() == FString::FromInt(Data->Number));
+     UMaterialInstanceDynamic* PanelMaterial = Cast<UMaterialInstanceDynamic>(Data->Panel->GetMaterial(0));
+     FLinearColor ExpectedTint;
+     Test->TestTrue(TEXT("纹理面板可见且仅参与可见性查询，不占实体碰撞或导航"), Data->Panel->IsVisible()
+         && Data->Panel->GetCollisionEnabled() == ECollisionEnabled::QueryOnly
+         && !Data->Panel->CanEverAffectNavigation() && PanelMaterial != nullptr);
+     if (PanelMaterial)
+     {
+         Test->TestTrue(TEXT("棋盘贴图数字帧与格子数字一致"), FMath::IsNearlyEqual(
+             PanelMaterial->K2_GetScalarParameterValue(TEXT("Frame (S)")), static_cast<float>(Data->Number - 1)));
+         Test->TestTrue(TEXT("棋盘贴图颜色与格子颜色一致"), CastleTileColors::TryGetGridTint(Data->Color, ExpectedTint)
+             && PanelMaterial->K2_GetVectorParameterValue(TEXT("Color")).Equals(ExpectedTint, 0.001f));
+     }
     }
    }
 

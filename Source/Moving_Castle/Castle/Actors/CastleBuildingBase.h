@@ -13,6 +13,8 @@ class USceneComponent;
 class UStaticMesh;
 class UStaticMeshComponent;
 class UTextRenderComponent;
+class UDecalComponent;
+class ACastleBoard;
 class UBuildingMergeComponent;
 class UAssemblyFlightComponent;
 class UBuildingGameplayRootComponent;
@@ -134,6 +136,9 @@ public:
 	/** 根据当前 Actor 自身的美术组件配置视觉与标签；缺少美术模型时返回明确错误。 */
 	bool ConfigureBuildingVisual(float InCellSize, float InLayerHeight, FText& OutFailureReason);
 
+	/** 依照棋盘每个占格的真实楼板标高，创建颜色和数字与建筑卡一致的地板贴花。 */
+	bool ConfigureFloorDecals(const ACastleBoard& Board, FText& OutFailureReason);
+
 	/** 返回当前 Actor 直接拥有的可见模型包围盒，供标签和卡片预览取景使用。 */
 	FBox GetVisualBounds() const;
 
@@ -177,6 +182,14 @@ protected:
 	/** 所有模型组件和通用标签的公共根节点。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "建筑模型")
 	TObjectPtr<USceneComponent> VisualRoot;
+
+	/** Texture 分支提供的楼板 Deferred Decal 材质；缺失时建筑生成明确失败。 */
+	UPROPERTY()
+	TObjectPtr<UMaterialInterface> FloorDecalMaterial;
+
+	/** 每个逻辑占格各自拥有一个贴花，随建筑销毁且不参与碰撞或导航。 */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UDecalComponent>> FloorDecals;
 
 	/** 仅供数字标签底牌使用的引擎资源，不得用于替代缺失的建筑模型。 */
 	UPROPERTY()
