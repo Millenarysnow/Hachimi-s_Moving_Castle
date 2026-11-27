@@ -130,7 +130,23 @@ private:
 			Director.ClearedSteps = StageNumber - 1;
 			Director.SetPhase(ECastleDirectorPhase::Battle);
 			Director.Tower->ApplyDamage(100.0f);
-			const int32 BeforeGold = Director.Controller->GetEconomy()->GetGold();
+			UCastleEconomyComponent* Economy = Director.Controller->GetEconomy();
+			const int32 BeforeGold = Economy->GetGold();
+			if (EliteStage == 1)
+			{
+				// 精英前三项共享预检。以无法入账的余额证明其余效果及关号也都保留。
+				const int32 TopUp = MAX_int32 - BeforeGold;
+				if (!Test.TestTrue(TEXT("构造精英奖励溢出"), Economy->TryAddGold(TopUp, Reason))) { return; }
+				Test.AddExpectedError(TEXT("导演奖励失败"), EAutomationExpectedErrorFlags::Contains, 1);
+				Director.HandleBattleCleared(ECastleBattleKind::Elite, StageNumber);
+				Test.TestEqual(TEXT("金币溢出保留精英原阶段"), Director.GetPhase(), ECastleDirectorPhase::Battle);
+				Test.TestEqual(TEXT("金币溢出保留关号"), Director.GetNextStep(), StageNumber);
+				Test.TestEqual(TEXT("金币溢出保留原余额"), Economy->GetGold(), MAX_int32);
+				Test.TestEqual(TEXT("金币溢出不回血"), Director.Tower->CurrentHealth, 7900.0f);
+				Test.TestFalse(TEXT("金币溢出不打开商店"), Shop->IsShopOpen());
+				Test.TestFalse(TEXT("金币溢出不发布首次精英解锁"), Director.Combat->HasUnlockedEnemyTag(TEXT("Unlock.MiasmaWelp")));
+				if (!Test.TestTrue(TEXT("释放余额空间后重新提交"), Economy->TrySpendGold(TopUp, Reason))) { return; }
+			}
 			Director.HandleBattleCleared(ECastleBattleKind::Elite, StageNumber);
 			Test.TestEqual(TEXT("精英自动提交后回编辑"), Director.Phase, ECastleDirectorPhase::Editing);
 			Test.TestEqual(TEXT("精英同一笔奖励增加60金币"), Director.Controller->GetEconomy()->GetGold() - BeforeGold, 60);
