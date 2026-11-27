@@ -33,7 +33,8 @@ public class Moving_Castle : ModuleRules
 			"SlateCore"
 		});
 
-		PrivateDependencyModuleNames.AddRange(new string[] { });
+		// 主塔底座的喷射效果由运行时 Niagara 组件承载。
+		PrivateDependencyModuleNames.Add("Niagara");
 		// 几何身份在编辑器离线生成；正式游戏只读取目录，不依赖 MeshDescription 或 CPU 顶点。
 		if (Target.bBuildEditor)
 		{
