@@ -1,13 +1,17 @@
 #if WITH_EDITOR && WITH_DEV_AUTOMATION_TESTS && !UE_BUILD_SHIPPING
+#include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/PackageName.h"
 #include "Tests/AutomationCommon.h"
+#include "Camera/CameraActor.h"
+#include "Camera/CameraComponent.h"
 #include "Castle/Dialogue/CastleDialogueScriptDataAsset.h"
 #include "Castle/Dialogue/CastleDialogueSubsystem.h"
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/Items/CastleBadgeSubsystem.h"
+#include "Castle/Rendering/CastleHoverHighlightSubsystem.h"
 #include "Castle/SkyIslands/Gamble/CastleGambleSkyIsland.h"
 #include "Castle/SkyIslands/Pinball/CastlePinballNPCConsoleComponent.h"
 #include "Castle/SkyIslands/Pinball/CastlePinballNPCSimulationComponent.h"
@@ -24,6 +28,7 @@
 #include "EngineUtils.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/GameInstance.h"
+#include "Blueprint/UserWidget.h"
 #include "FileHelpers.h"
 #include "GameFramework/Pawn.h"
 #include "HAL/IConsoleManager.h"
@@ -89,6 +94,8 @@ namespace
 			{
 			case EStage::Enter:
 				return !Enter(*Director, *Controller, **Board);
+			case EStage::HoverTargets:
+				return UpdateHoverTargets(*Director, *Controller);
 			case EStage::PinballLaunch:
 				return UpdatePinballLaunch(*Controller);
 			case EStage::PinballExit:
@@ -110,7 +117,8 @@ namespace
 		}
 
 	private:
-		enum class EStage { Enter, PinballLaunch, PinballExit, Return };
+		enum class EStage { Enter, HoverTargets, PinballLaunch, PinballExit, Return };
+		enum class EHoverStage { AwaitTarget, AwaitModalClear, AwaitModalRestore, AwaitMiss };
 		const FIslandVisit& GetVisit() const
 		{
 			return Visits[VisitIndex < FirstVisitCount ? VisitIndex : VisitIndex - FirstVisitCount + 1];
@@ -197,7 +205,262 @@ namespace
 					return false;
 				}
 			}
-			return InteractWithIsland(Visit.Type, Director, Controller);
+			if (!StartHoverTargetChecks(Controller, *ActiveIsland.Get())) { return false; }
+			Stage = EStage::HoverTargets;
+			return true;
+		}
+
+		bool StartHoverTargetChecks(ACastlePlayerController& Controller, ACastleSkyIslandBase& Island)
+		{
+			HoverTargets.Reset();
+			const auto AddTarget = [this](UPrimitiveComponent* Component, const TCHAR* Name)
+			{
+				if (!Test.TestNotNull(FString::Printf(TEXT("悬停验收目标 %s"), Name), Component)) { return false; }
+				HoverTargets.Add(Component);
+				return true;
+			};
+			const auto AddComponentTargets = [&Island, &AddTarget](const TCHAR* NamePrefix)
+			{
+				TArray<UPrimitiveComponent*> Components;
+				Island.GetComponents<UPrimitiveComponent>(Components);
+				for (UPrimitiveComponent* Component : Components)
+				{
+					if (Component->GetName().StartsWith(NamePrefix)
+						&& Cast<ICastleSkyIslandInteractable>(Component)
+						&& !AddTarget(Component, *Component->GetName()))
+					{
+						return false;
+					}
+				}
+				return true;
+			};
+
+			if (!AddTarget(Island.FindComponentByClass<UCastleSkyIslandDepartureComponent>(), TEXT("离开传送门")))
+			{
+				return false;
+			}
+			switch (GetVisit().Type)
+			{
+			case ECastleSkyIslandType::Rest:
+				if (!AddTarget(FindObjectFast<UCastleRestSkyIslandStation>(&Island, TEXT("HealStation")), TEXT("回血台"))
+					|| !AddTarget(FindObjectFast<UCastleRestSkyIslandStation>(&Island, TEXT("GoldStation")), TEXT("金币台"))
+					|| !AddTarget(FindObjectFast<UCastleRestSkyIslandStation>(&Island, TEXT("ShopStation")), TEXT("免费商店台")))
+				{
+					return false;
+				}
+				break;
+			case ECastleSkyIslandType::Shop:
+				if (!AddComponentTargets(TEXT("Offer"))) { return false; }
+				if (!Test.TestEqual(TEXT("商店空岛生成四个独立货位"), HoverTargets.Num(), 5)) { return false; }
+				break;
+			case ECastleSkyIslandType::NPC:
+				if (!AddTarget(Island.FindComponentByClass<UCastlePinballNPCConsoleComponent>(), TEXT("弹珠机投币台")))
+				{
+					return false;
+				}
+				break;
+			case ECastleSkyIslandType::Gamble:
+				if (!AddComponentTargets(TEXT("Roulette")) || !AddComponentTargets(TEXT("SlotMachine"))
+					|| !AddComponentTargets(TEXT("BalloonRecycler")))
+				{
+					return false;
+				}
+				if (!Test.TestEqual(TEXT("赌博岛有三台独立机台和离开门"), HoverTargets.Num(), 4)) { return false; }
+				break;
+			}
+
+			UWorld* World = Island.GetWorld();
+			if (!Test.TestNotNull(TEXT("悬停测试世界子系统"), World->GetSubsystem<UCastleHoverHighlightSubsystem>()))
+			{
+				return false;
+			}
+			HoverCamera = World->SpawnActor<ACameraActor>();
+			if (!Test.TestNotNull(TEXT("悬停验收临时相机"), HoverCamera.Get())) { return false; }
+			PreviousViewTarget = Controller.GetViewTarget();
+			if (!Test.TestNotNull(TEXT("保存进入悬停验收前的视图目标"), PreviousViewTarget.Get())) { return false; }
+			Controller.SetControlMode(ECastleControlMode::Classic, false);
+			if (GetVisit().Type == ECastleSkyIslandType::Shop || GetVisit().Type == ECastleSkyIslandType::Gamble)
+			{
+				// 商店货位和赌博机台即使账户余额为零仍可交互，本轮射线检查在缺少金币时执行。
+				HoverSavedGold = Controller.GetEconomy()->GetGold();
+				FText Reason;
+				if (HoverSavedGold > 0 && !Controller.GetEconomy()->TrySpendGold(HoverSavedGold, Reason))
+				{
+					Test.AddError(FString::Printf(TEXT("悬停验收暂时扣至零金币失败：%s"), *Reason.ToString()));
+					return false;
+				}
+				bRestoreHoverGold = HoverSavedGold > 0;
+			}
+
+			HoverTargetIndex = 0;
+			HoverStage = EHoverStage::AwaitTarget;
+			AimAtHoverTarget(Controller);
+			return true;
+		}
+
+		bool UpdateHoverTargets(UCastleDirectorSubsystem& Director, ACastlePlayerController& Controller)
+		{
+			if (FPlatformTime::Seconds() > Deadline)
+			{
+				const UPrimitiveComponent* Target = HoverTargets.IsValidIndex(HoverTargetIndex)
+					? HoverTargets[HoverTargetIndex].Get() : nullptr;
+				const FString CameraLocation = IsValid(HoverCamera.Get())
+					? HoverCamera->GetActorLocation().ToCompactString() : TEXT("<无效>");
+				const FString TargetLocation = IsValid(Target)
+					? Target->Bounds.Origin.ToCompactString() : TEXT("<无效>");
+				Test.AddError(FString::Printf(TEXT("空岛悬停目标射线等待超时；相机位置 %s，目标 %s 位置 %s。"),
+					*CameraLocation, Target ? *Target->GetPathName() : TEXT("<无效>"), *TargetLocation));
+				return true;
+			}
+			if (HoverFramesToWait > 0)
+			{
+				--HoverFramesToWait;
+				return false;
+			}
+
+			UCastleHoverHighlightSubsystem* Highlight = Controller.GetWorld()->GetSubsystem<UCastleHoverHighlightSubsystem>();
+			if (!Test.TestNotNull(TEXT("悬停子系统持续有效"), Highlight)) { return true; }
+			switch (HoverStage)
+			{
+			case EHoverStage::AwaitTarget:
+				if (!CheckCurrentHoverTarget(Controller, *Highlight)) { return true; }
+				if (!bModalSuppressionChecked)
+				{
+					TArray<UUserWidget*> Widgets;
+					UWidgetBlueprintLibrary::GetAllWidgetsOfClass(
+						&Controller, Widgets, UUserWidget::StaticClass(), true);
+					if (!Test.TestTrue(TEXT("MainMap 提供模态焦点控件"), !Widgets.IsEmpty())) { return true; }
+					ModalFocusWidget = Widgets[0];
+					Controller.SetPresentationModalState(true, ModalFocusWidget.Get());
+					HoverStage = EHoverStage::AwaitModalClear;
+					HoverFramesToWait = 2;
+					return false;
+				}
+				return AdvanceHoverTarget(Director, Controller);
+			case EHoverStage::AwaitModalClear:
+				if (!Test.TestTrue(TEXT("模态界面打开后立即清空空岛悬停描边"),
+					Highlight->GetHighlightedPrimitives().IsEmpty())) { return true; }
+				Controller.SetPresentationModalState(false, ModalFocusWidget.Get());
+				HoverStage = EHoverStage::AwaitModalRestore;
+				HoverFramesToWait = 2;
+				return false;
+			case EHoverStage::AwaitModalRestore:
+				if (!CheckCurrentHoverTarget(Controller, *Highlight)) { return true; }
+				bModalSuppressionChecked = true;
+				return AdvanceHoverTarget(Director, Controller);
+			case EHoverStage::AwaitMiss:
+				if (!Test.TestTrue(TEXT("瞄准空处后当前白边立即清除"),
+					Highlight->GetHighlightedPrimitives().IsEmpty())) { return true; }
+				return FinishHoverTargetChecks(Director, Controller);
+			}
+			return true;
+		}
+
+		bool CheckCurrentHoverTarget(ACastlePlayerController& Controller,
+			const UCastleHoverHighlightSubsystem& Highlight)
+		{
+			// 读取正常 Tick 留给渲染帧的集合。诊断射线只在断言失败时使用，不更新高亮状态。
+			UPrimitiveComponent* Target = HoverTargets.IsValidIndex(HoverTargetIndex)
+				? HoverTargets[HoverTargetIndex].Get() : nullptr;
+			const TArray<UPrimitiveComponent*> Current = Highlight.GetHighlightedPrimitives();
+			if (Target && Current.Num() == 1 && Current[0] == Target) { return true; }
+			FString CurrentNames;
+			for (const UPrimitiveComponent* Component : Current)
+			{
+				CurrentNames += FString::Printf(TEXT("%s "), *GetPathNameSafe(Component));
+			}
+			FString FirstHitName = TEXT("<射线未命中>");
+			FVector RayOrigin;
+			FVector RayDirection;
+			if (Controller.TryGetAimWorldRay(RayOrigin, RayDirection))
+			{
+				FHitResult FirstHit;
+				const FCollisionQueryParams Query(SCENE_QUERY_STAT(CastleSkyIslandHoverDiagnostic), false,
+					Controller.GetPawn());
+				if (Controller.GetWorld()->LineTraceSingleByChannel(
+					FirstHit, RayOrigin, RayOrigin + RayDirection * 50000.0f, ECC_Visibility, Query))
+				{
+					FirstHitName = GetPathNameSafe(FirstHit.GetComponent());
+				}
+			}
+			const FString CameraLocation = IsValid(HoverCamera.Get())
+				? HoverCamera->GetActorLocation().ToCompactString() : TEXT("<无效>");
+			const FString TargetLocation = IsValid(Target)
+				? Target->Bounds.Origin.ToCompactString() : TEXT("<无效>");
+			Test.AddError(FString::Printf(TEXT("可交互目标 %s 未独立高亮。相机位置 %s，目标包围盒中心 %s，射线首个命中 %s，当前高亮集合 %s。"),
+					Target ? *Target->GetName() : TEXT("<无效>"), *CameraLocation, *TargetLocation,
+					*FirstHitName, *CurrentNames));
+			return false;
+		}
+
+		bool AdvanceHoverTarget(UCastleDirectorSubsystem& Director, ACastlePlayerController& Controller)
+		{
+			++HoverTargetIndex;
+			if (HoverTargetIndex < HoverTargets.Num())
+			{
+				HoverStage = EHoverStage::AwaitTarget;
+				AimAtHoverTarget(Controller);
+				return false;
+			}
+
+			// 从岛体上方沿水平方向看向空处，避免让测试相机进入近垂直视角。
+			HoverCamera->SetActorLocationAndRotation(
+				ActiveIsland->GetActorLocation() + FVector::UpVector * 3000.0f, FRotator::ZeroRotator);
+			HoverStage = EHoverStage::AwaitMiss;
+			HoverFramesToWait = 2;
+			Deadline = FPlatformTime::Seconds() + 10.0;
+			return false;
+		}
+
+		bool FinishHoverTargetChecks(UCastleDirectorSubsystem& Director, ACastlePlayerController& Controller)
+		{
+			Controller.ClearHoverHighlight();
+			Controller.SetViewTarget(PreviousViewTarget.Get());
+			if (IsValid(HoverCamera.Get())) { HoverCamera->Destroy(); }
+			if (bRestoreHoverGold)
+			{
+				FText Reason;
+				if (!Controller.GetEconomy()->TryAddGold(HoverSavedGold, Reason))
+				{
+					Test.AddError(FString::Printf(TEXT("恢复悬停验收前金币余额失败：%s"), *Reason.ToString()));
+					return true;
+				}
+				bRestoreHoverGold = false;
+			}
+			return !InteractWithIsland(GetVisit().Type, Director, Controller);
+		}
+
+		void AimAtHoverTarget(ACastlePlayerController& Controller)
+		{
+			UPrimitiveComponent* Target = HoverTargets[HoverTargetIndex].Get();
+			// 交互网格的原点常在岛面底部。将视线落在其真实可见包围盒中心，避免测试射线止于地板平面。
+			const FVector TargetLocation = Target->Bounds.Origin;
+			FVector CameraOffset(-350.0f, -350.0f, 900.0f);
+			if (Target->IsA<UCastleShopSkyIslandOffer>())
+			{
+				// 沿中央通道拍摄货位正面，使售卖品与岛体棚顶在画面中分开。
+				const double TowardCenter = Target->GetRelativeLocation().Y < 0.0 ? 1.0 : -1.0;
+				CameraOffset = FVector(-120.0, TowardCenter * 460.0, 115.0);
+			}
+			else if (Target->IsA<UCastlePinballNPCConsoleComponent>())
+			{
+				// 盘面偏航 180 度，投币台朝向 -X 到达点。沿该方向拍摄可避开盘面底板。
+				CameraOffset = FVector(-460.0, -180.0, 310.0);
+			}
+			else if (Target->IsA<UCastleGambleMachineComponent>() || Target->IsA<UCastleSkyIslandDepartureComponent>())
+			{
+				CameraOffset = FVector(-600.0, -200.0, 225.0);
+			}
+			const FVector CameraLocation = TargetLocation + CameraOffset;
+			const FRotator CameraRotation = (TargetLocation - CameraLocation).Rotation();
+			HoverCamera->SetActorLocationAndRotation(CameraLocation, CameraRotation);
+			HoverCamera->GetCameraComponent()->SetFieldOfView(60.0f);
+			FViewTargetTransitionParams Transition;
+			Transition.BlendTime = 0.0f;
+			Controller.SetViewTarget(HoverCamera.Get(), Transition);
+			// 等待引擎通过正常视图 Tick 更新相机管理器，避免在自动化游戏线程强制零时长计算矩阵。
+			HoverFramesToWait = 8;
+			Deadline = FPlatformTime::Seconds() + 10.0;
 		}
 
 		bool InteractWithIsland(ECastleSkyIslandType Type, UCastleDirectorSubsystem& Director, ACastlePlayerController& Controller)
@@ -214,6 +477,14 @@ namespace
 				if (!Interact(Director, Gold, TEXT("休息岛金币台"))
 					|| !Interact(Director, Shop, TEXT("休息岛免费商店台"))) { return false; }
 				Test.TestTrue(TEXT("领取金币写入本局账户"), Economy->GetGold() > GoldBefore);
+				FHitResult ClaimedGoldHit;
+				ClaimedGoldHit.Component = Gold;
+				const FCastleSkyIslandInteractContext ClaimedGoldContext{&Island, &Controller, ClaimedGoldHit};
+				Test.TestFalse(TEXT("已领取的休息岛金币台不再具备悬停交互"), Gold->CanHighlightInteract(ClaimedGoldContext));
+				FHitResult ClaimedShopHit;
+				ClaimedShopHit.Component = Shop;
+				const FCastleSkyIslandInteractContext ClaimedShopContext{&Island, &Controller, ClaimedShopHit};
+				Test.TestFalse(TEXT("已领取的休息岛商店台不再具备悬停交互"), Shop->CanHighlightInteract(ClaimedShopContext));
 				Test.TestTrue(TEXT("休息岛打开真实房间商店"), Controller.GetShop()->IsShopOpen());
 				Controller.GetShop()->CloseShop();
 				break;
@@ -228,6 +499,10 @@ namespace
 				if (!Interact(Director, Offer, TEXT("商店岛徽章货位"))) { return false; }
 				Test.TestEqual(TEXT("购买发放一枚徽章"), Badges->GetBadges().Num(), Before + 1);
 				Test.TestTrue(TEXT("购买已扣除金币"), Economy->GetGold() < GoldBefore);
+				FHitResult SoldOfferHit;
+				SoldOfferHit.Component = Offer;
+				const FCastleSkyIslandInteractContext SoldOfferContext{&Island, &Controller, SoldOfferHit};
+				Test.TestFalse(TEXT("已售罄的商店货位不再具备悬停交互"), Offer->CanHighlightInteract(SoldOfferContext));
 				break;
 			}
 			case ECastleSkyIslandType::NPC:
@@ -238,6 +513,9 @@ namespace
 					&& !Console->CanEverAffectNavigation())) { return false; }
 				if (!Interact(Director, Console,
 					TEXT("NPC 岛弹珠机控制台"))) { return false; }
+				const auto* Highlight = Island.GetWorld()->GetSubsystem<UCastleHoverHighlightSubsystem>();
+				Test.TestTrue(TEXT("进入弹珠机瞄准锁定时立即清除投币台描边"),
+					Highlight && Highlight->GetHighlightedPrimitives().IsEmpty());
 				Test.TestTrue(TEXT("瞄准实际锁定移动和视角"), Controller.IsMoveInputIgnored() && Controller.IsLookInputIgnored());
 				PinballStartingGold = GoldBefore;
 				// 按键由玩家控制器的正常输入栈和下一帧 PIE Tick 消费。
@@ -374,10 +652,20 @@ namespace
 		EStage Stage = EStage::Enter;
 		int32 VisitIndex = 0;
 		int32 PinballStartingGold = 0;
+		int32 HoverTargetIndex = INDEX_NONE;
+		int32 HoverFramesToWait = 0;
+		int32 HoverSavedGold = 0;
+		bool bRestoreHoverGold = false;
+		bool bModalSuppressionChecked = false;
+		EHoverStage HoverStage = EHoverStage::AwaitTarget;
 		double Deadline = FPlatformTime::Seconds() + 30.0;
 		FVector BeforeLocation;
 		FRotator BeforeView;
 		TWeakObjectPtr<ACastleSkyIslandBase> ActiveIsland;
+		TWeakObjectPtr<ACameraActor> HoverCamera;
+		TWeakObjectPtr<AActor> PreviousViewTarget;
+		TWeakObjectPtr<UUserWidget> ModalFocusWidget;
+		TArray<TWeakObjectPtr<UPrimitiveComponent>> HoverTargets;
 		TArray<TWeakObjectPtr<ACastleDirectorNodeActor>> PreviousNodes;
 	};
 }

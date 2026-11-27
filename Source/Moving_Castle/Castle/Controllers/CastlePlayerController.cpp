@@ -161,6 +161,7 @@ void ACastlePlayerController::Tick(float DeltaSeconds)
 		// 失焦会清空 PlayerInput 的按键状态，未送达的 Alt 松键也必须归还经典指针。
 		if (bHoldingTemporaryHUDPointer && !IsInputKeyDown(EKeys::LeftAlt)) { EndTemporaryHUDPointer(); }
 		UpdateTowerDispatchInput();
+		UpdateHoverHighlight();
 		FText EditReason;
 		if (BuildingDemolishMenu)
 		{
@@ -322,7 +323,12 @@ void ACastlePlayerController::UpdateGridCursor(ACastleSkyIslandBase* Island)
 			CurrentGridCursorTarget = NewTarget;
 			GridCursor->ApplyTarget(NewTarget, Island->CanPlaceCardAtIslandCursor(NewTarget, SelectedBackpackIndex));
 		}
-		else { HideDirectorEditingPresentation(); }
+		else
+		{
+			// 空岛上的交易机台和离开门没有放置网格。无网格目标时只收起放置指示，保留当前交互描边。
+			CurrentGridCursorTarget = FCastleGridCursorTarget();
+			GridCursor->HideCursor();
+		}
 		return;
 	}
 	if (ActiveBoard->TryResolveGridCursorTarget(RayOrigin, RayEnd, NewTarget))
@@ -830,6 +836,7 @@ void ACastlePlayerController::SetPresentationModalState(const bool bOpen, UUserW
 
 void ACastlePlayerController::HideDirectorEditingPresentation()
 {
+	ClearHoverHighlight();
 	CloseBuildingDemolishMenu();
 	CurrentGridCursorTarget = FCastleGridCursorTarget();
 	if (IsValid(GridCursor)) { GridCursor->HideCursor(); }
@@ -1023,6 +1030,7 @@ void ACastlePlayerController::RefreshModalInput(const bool bForceRefresh)
 	if (bHigherModalOpen) { RemoveControlSettingsWidget(); }
 	const bool bNewOpen = bHigherModalOpen || ControlSettings != nullptr;
 	if (bNewOpen) { RemoveBuildingDemolishWidget(); }
+	if (bNewOpen || BuildingDemolishMenu || bHoldingTemporaryHUDPointer) { ClearHoverHighlight(); }
 	// 普通商店的购买/刷新通知不改变开关，沿用旧行为，不重设模式或抢回焦点。
 	if (bNewOpen == bModalInputActive && !bForceRefresh) { return; }
 	if (bNewOpen != bModalInputActive)

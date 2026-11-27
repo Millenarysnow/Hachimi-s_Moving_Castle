@@ -23,6 +23,13 @@ bool UCastleSkyIslandDepartureComponent::CanInteract(const FCastleSkyIslandInter
 	return true;
 }
 
+bool UCastleSkyIslandDepartureComponent::CanHighlightInteract(const FCastleSkyIslandInteractContext& Context) const
+{
+	// 悬停仅验证当前岛、控制器与命中组件，不执行离岛广播或输出提示日志。
+	return IsValid(GetOwner()) && IsValid(Context.Controller)
+		&& Context.Island == GetOwner() && Context.Hit.GetComponent() == this;
+}
+
 bool UCastleSkyIslandDepartureComponent::ExecuteInteract(const FCastleSkyIslandInteractContext& Context, FText& OutFailureReason)
 {
 	if (!CanInteract(Context, OutFailureReason)) { return false; }

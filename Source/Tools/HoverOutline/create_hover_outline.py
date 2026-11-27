@@ -85,8 +85,6 @@ def create_hover_outline():
     custom_stencil = scene_texture(
         unreal.SceneTextureId.PPI_CUSTOM_STENCIL, -1000, 360
     )
-    uv = node(unreal.MaterialExpressionTextureCoordinate, -1000, 540)
-
     color = node(unreal.MaterialExpressionVectorParameter, -1000, 700)
     color.set_editor_property("parameter_name", "OutlineColor")
     color.set_editor_property("default_value", unreal.LinearColor(*OUTLINE_COLOR))
@@ -109,7 +107,6 @@ def create_hover_outline():
     )
     custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT4)
     bindings = (
-        ("UV", uv, ""),
         ("SceneColor", scene_color, ""),
         ("SceneDepth", scene_depth, ""),
         ("CustomDepth", custom_depth, ""),

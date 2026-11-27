@@ -26,7 +26,7 @@ public:
 	/** 加载指定的后处理材质，并为当前世界创建无界临时体积。 */
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 
-	/** 世界结束时先精确还原组件，再销毁本子系统创建的临时体积。 */
+	/** 世界结束时精确还原组件，临时体积由世界回收。 */
 	virtual void Deinitialize() override;
 
 	/**

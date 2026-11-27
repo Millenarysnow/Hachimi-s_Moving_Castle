@@ -22,6 +22,8 @@ public:
 	ACastlePinballNPCSkyIsland();
 	virtual void Tick(float DeltaSeconds) override;
 	bool EnterAimMode(ACastlePlayerController& Controller, FText& OutReason);
+	/** 返回弹珠机是否正持有专用瞄准输入栈，供悬停门控只读判断。 */
+	bool IsAimModeActive() const { return AimInput != nullptr; }
 #if !UE_BUILD_SHIPPING
 	/** 单机 PIE 验收入口，独立保存玩家返回位置并复用场内交互组件。 */
 	static void StartAcceptanceVisit(UWorld* World);

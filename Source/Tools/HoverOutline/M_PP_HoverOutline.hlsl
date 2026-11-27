@@ -1,10 +1,10 @@
 // 描边只替换选中对象的外侧像素，未命中的场景颜色由后处理输入原样保留。
 struct FCastleHoverOutline
 {
-	// CustomStencil 纹理以 8 位无符号值归一化存储，先还原整数再按 bit 掩码判断。
+	// UE5.8 的 SceneTextureLookup 直接返回 0～255 的 Stencil 整数值，保留其他位独立含义。
 	float IsHoverStencil(float4 StencilSample, float StencilBit)
 	{
-		int StencilValue = (int)round(saturate(StencilSample.r) * 255.0f);
+		int StencilValue = (int)StencilSample.r;
 		int BitMask = (int)round(StencilBit);
 		return (StencilValue & BitMask) != 0;
 	}
@@ -45,10 +45,11 @@ if (bCenterIsSelected && bCenterIsVisible)
 
 // Before DOF 在 TSR 前以渲染分辨率运行。由当前视图高度缩放像素线宽，
 // 后续 TSR 会对颜色和深度边缘共同完成时间抗锯齿与放大。
-float ViewWidthPx = max(View.ViewSizeAndInvSize.x, 1.0f);
 float ViewHeightPx = max(View.ViewSizeAndInvSize.y, 1.0f);
 float ThicknessPx = max(1.0f, OutlineThicknessPx * ViewHeightPx / 1080.0f);
-float2 PixelOffset = float2(ThicknessPx / ViewWidthPx, ThicknessPx / ViewHeightPx);
+// 视图可只占场景缓冲区的一部分。以引擎转换后的中心 UV 和纹理像素尺寸采样，避免缩放或视口偏移造成重影。
+float2 UV = GetDefaultSceneTextureUV(Parameters, PPI_CustomStencil);
+float2 PixelOffset = ThicknessPx * GetSceneTextureBufferSize(PPI_CustomStencil).zw;
 float OutlineMask = 0.0f;
 
 OutlineMask = max(OutlineMask, HoverOutline.IsVisibleHoverTarget(UV + float2(-PixelOffset.x, 0.0f), SceneDepthCm, HoverStencilBit, DepthOcclusionToleranceCm));
@@ -60,4 +61,6 @@ OutlineMask = max(OutlineMask, HoverOutline.IsVisibleHoverTarget(UV + float2( Pi
 OutlineMask = max(OutlineMask, HoverOutline.IsVisibleHoverTarget(UV + float2(-PixelOffset.x,  PixelOffset.y), SceneDepthCm, HoverStencilBit, DepthOcclusionToleranceCm));
 OutlineMask = max(OutlineMask, HoverOutline.IsVisibleHoverTarget(UV + float2( PixelOffset.x,  PixelOffset.y), SceneDepthCm, HoverStencilBit, DepthOcclusionToleranceCm));
 
-return lerp(SceneColor, OutlineColor, saturate(OutlineMask));
+// UE 5.8 将场景颜色作为 float4、向量参数的 RGB 作为 float3 传给 Custom 节点。
+// 保留原场景 alpha，并为描边 RGB 明确补充不透明 alpha，使 SM6 的 Lerp 两侧同为 float4。
+return lerp(SceneColor, float4(OutlineColor, 1.0f), saturate(OutlineMask));

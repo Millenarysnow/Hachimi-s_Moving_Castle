@@ -190,6 +190,7 @@ bool ACastlePinballNPCSkyIsland::EnterAimMode(ACastlePlayerController& Controlle
 	Controller.GetPlayerViewPoint(ViewLocation, ViewRotation);
 	Controller.SetControlRotation((Playfield->GetComponentLocation() - ViewLocation).Rotation());
 	Controller.PushInputComponent(AimInput);
+	Controller.ClearHoverHighlight();
 	StatusWidget->SetFeedback(FText::GetEmpty());
 	RefreshStatus();
 	UE_LOG(LogMoving_Castle, Display, TEXT("弹珠机 %s 已接管投币输入。"), *GetPathName());

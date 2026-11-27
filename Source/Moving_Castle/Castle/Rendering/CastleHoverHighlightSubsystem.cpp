@@ -59,11 +59,8 @@ void UCastleHoverHighlightSubsystem::Initialize(FSubsystemCollectionBase& Collec
 void UCastleHoverHighlightSubsystem::Deinitialize()
 {
 	ClearHighlight();
-	if (IsValid(HoverPostProcessVolume))
-	{
-		HoverPostProcessVolume->Destroy();
-		HoverPostProcessVolume = nullptr;
-	}
+	// 体积由同一世界的关卡持有，随世界清理。此时世界上下文可能已经注销，不能再次主动销毁 Actor。
+	HoverPostProcessVolume = nullptr;
 	bReady = false;
 	Super::Deinitialize();
 }

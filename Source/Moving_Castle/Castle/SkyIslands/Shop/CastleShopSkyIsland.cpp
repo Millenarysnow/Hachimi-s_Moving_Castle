@@ -215,6 +215,15 @@ bool UCastleShopSkyIslandOffer::CanInteract(const FCastleSkyIslandInteractContex
 	return true;
 }
 
+bool UCastleShopSkyIslandOffer::CanHighlightInteract(const FCastleSkyIslandInteractContext& Context) const
+{
+	// 金币余额不决定商品是否可交互。这里只排除已售罄和正在提交的货位，不刷提示日志。
+	const auto* Island = Cast<ACastleShopSkyIsland>(GetOwner());
+	return IsValid(Island) && Context.Island == Island && Island->IsIslandController(Context.Controller)
+		&& Context.Hit.GetComponent() == this && IsValid(OfferMaterialInstance) && IsValid(Sign)
+		&& !bSold && !bSubmitting;
+}
+
 bool UCastleShopSkyIslandOffer::ExecuteInteract(const FCastleSkyIslandInteractContext& Context, FText& OutReason)
 {
 	if (!CanInteract(Context, OutReason)) { return false; }

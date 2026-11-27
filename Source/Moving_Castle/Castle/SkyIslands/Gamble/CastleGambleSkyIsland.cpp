@@ -109,6 +109,17 @@ bool UCastleGambleMachineComponent::CanInteract(const FCastleSkyIslandInteractCo
 	return Island->CanUseMachine(Context, OutReason);
 }
 
+bool UCastleGambleMachineComponent::CanHighlightInteract(const FCastleSkyIslandInteractContext& Context) const
+{
+	// 每帧悬停不能调用会写 Warning/Error 的玩法检查，但必须维持相同玩家和交易门控。
+	const auto* Island = Cast<ACastleGambleSkyIsland>(GetOwner());
+	const auto* Controller = Context.Controller;
+	return IsValid(Island) && Context.Island == Island && IsValid(Controller)
+		&& Controller == Island->GetIslandContext().Controller.Get() && Context.Hit.GetComponent() == this
+		&& IsValid(Island->Config) && !Island->bTransacting
+		&& !Controller->IsMoveInputIgnored() && !Controller->IsLookInputIgnored();
+}
+
 bool UCastleGambleMachineComponent::ExecuteInteract(const FCastleSkyIslandInteractContext& Context, FText& OutReason)
 {
 	if (!CanInteract(Context, OutReason)) { return false; }

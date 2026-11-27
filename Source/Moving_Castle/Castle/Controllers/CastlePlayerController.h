@@ -119,6 +119,8 @@ public:
 
 	/** 开战事务准备时立即清除高亮，避免等下一帧控制器 Tick 才撤下旧建造目标。 */
 	void HideDirectorEditingPresentation();
+	/** 在弹窗或玩法状态切换时同步恢复当前高亮组件。 */
+	void ClearHoverHighlight();
 
 	/** 查询导演编辑权限；未运行导演的世界保持原有行为。 */
 	bool IsDirectorEditingAllowed(FText& OutReason) const;
@@ -172,6 +174,11 @@ protected:
 
 	/** 每帧用屏幕中心射线更新网格目标。 */
 	virtual void Tick(float DeltaSeconds) override;
+
+	/** 用双模式瞄准射线更新当前唯一的可交互悬停目标。 */
+	void UpdateHoverHighlight();
+	/** 执行路径编辑、模态界面和弹珠机锁定态的悬停门控。 */
+	bool IsHoverHighlightSuppressed() const;
 
 	/** 保留父类生命周期入口，但不再添加第三人称模板的 Input Mapping Context。 */
 	virtual void SetupInputComponent() override;

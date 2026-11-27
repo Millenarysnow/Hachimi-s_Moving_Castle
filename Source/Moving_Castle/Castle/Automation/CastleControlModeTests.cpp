@@ -7,6 +7,7 @@
 #include "Castle/Actors/CastleBoard.h"
 #include "Castle/Actors/CastleBuildingBase.h"
 #include "Castle/Automation/CastlePIEAutomation.h"
+#include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Castle/Components/CastleBackpackComponent.h"
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Data/CastleBuildingDefinition.h"
@@ -16,17 +17,23 @@
 #include "Castle/UI/Common/CastleControlSettingsWidget.h"
 #include "Castle/UI/Common/CastleHUDControls.h"
 #include "Castle/UI/Director/CastleDirectorWidgets.h"
+#include "Castle/Items/CastleRoomTraitComponent.h"
+#include "Castle/Rendering/CastleHoverHighlightSubsystem.h"
 #include "Components/Animation/BuildingMergeComponent.h"
 #include "Components/Button.h"
+#include "Components/PrimitiveComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "InputKeyEventArgs.h"
+#include "Interaction/CastlePatrolRoute.h"
+#include "Kismet/GameplayStatics.h"
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 #include "TextureResource.h"
+
 
 namespace
 {
@@ -55,6 +62,36 @@ namespace
 		TArray<UUserWidget*> Widgets;
 		UWidgetBlueprintLibrary::GetAllWidgetsOfClass(&Player, Widgets, TWidget::StaticClass(), true);
 		return Widgets.Num() == 1 ? Cast<TWidget>(Widgets[0]) : nullptr;
+	}
+
+	/** 按控制器同一视觉过滤条件验证建筑整体高亮集合与路径编辑门控。 */
+	bool CheckBuildingHover(FAutomationTestBase& Test, ACastlePlayerController& Player,
+		ACastleBuildingBase& Building, const TCHAR* Message, const bool bExpected)
+	{
+		auto* Highlight = Player.GetWorld()->GetSubsystem<UCastleHoverHighlightSubsystem>();
+		if (!Test.TestNotNull(TEXT("建筑悬停子系统"), Highlight)) { return false; }
+		const TArray<UPrimitiveComponent*> Current = Highlight->GetHighlightedPrimitives();
+		if (!bExpected)
+		{
+			return Test.TestTrue(Message, Current.IsEmpty());
+		}
+
+		TArray<UPrimitiveComponent*> Components;
+		Building.GetComponents<UPrimitiveComponent>(Components);
+		Components.RemoveAll([&Building](const UPrimitiveComponent* Component)
+		{
+			return !IsValid(Component) || !Component->IsRegistered() || !Component->IsVisible()
+				|| UBuildingGameplayRootComponent::IsInGameplayHierarchy(Component)
+				|| Component == Building.GetRoomTraitComponent()
+				|| Component->GetFName() == TEXT("PrototypeLabel")
+				|| Component->GetFName() == TEXT("PrototypeLabelPlate");
+		});
+		bool bSameComponentSet = !Components.IsEmpty() && Current.Num() == Components.Num();
+		for (const UPrimitiveComponent* Component : Components)
+		{
+			bSameComponentSet &= Current.Contains(Component);
+		}
+		return Test.TestTrue(Message, bSameComponentSet);
 	}
 
 	/** 正式 HUD 的齿轮和两张设置按钮驱动模式，再检查 Pawn 对鼠标轴输入的实际响应。 */
@@ -237,10 +274,63 @@ namespace
 				++Stage;
 				return false;
 			case 2:
-				Press(*Player, Player->GetDemolishKey());
-				++Stage;
-				return false;
+			{
+				auto* Route = Cast<ACastlePatrolRoute>(UGameplayStatics::GetActorOfClass(
+					Player->GetWorld(), ACastlePatrolRoute::StaticClass()));
+				if (!Test.TestNotNull(TEXT("MainMap 路径编辑入口"), Route)) { return true; }
+				auto* Building = Board->GetBuildingAt(RoomCell);
+				if (!Test.TestNotNull(TEXT("路径门控使用真实普通房"), Building)) { return true; }
+				switch (PathHoverSubstage)
+				{
+				case 0:
+					if (!CheckBuildingHover(Test, *Player, *Building, TEXT("经典准星命中可拆除房间后高亮全部可见外观"), true))
+					{
+						return true;
+					}
+					Press(*Player, EKeys::P);
+					PathHoverSubstage = 1;
+					return false;
+				case 1:
+					if (!Test.TestTrue(TEXT("P 键进入正式路径编辑模式"), Route->IsEditing())
+						|| !CheckBuildingHover(Test, *Player, *Building, TEXT("路径编辑期间清空建筑悬停描边"), false))
+					{
+						return true;
+					}
+					Press(*Player, EKeys::P);
+					PathHoverSubstage = 2;
+					return false;
+				case 2:
+					if (!Test.TestFalse(TEXT("再次按 P 退出路径编辑"), Route->IsEditing())
+						|| !CheckBuildingHover(Test, *Player, *Building, TEXT("退出路径编辑后恢复建筑悬停描边"), true))
+					{
+						return true;
+					}
+					SendInput(*Player, EKeys::LeftAlt, IE_Pressed, 1.0f);
+					PathHoverSubstage = 3;
+					return false;
+				case 3:
+					if (!Test.TestFalse(TEXT("左 Alt 临时 HUD 指针期间不能旋转视角"),
+						Player->CanRotateCameraFromMouse())
+						|| !CheckBuildingHover(Test, *Player, *Building, TEXT("左 Alt 临时 HUD 指针期间清空描边"), false))
+					{
+						return true;
+					}
+					SendInput(*Player, EKeys::LeftAlt, IE_Released, 0.0f);
+					PathHoverSubstage = 4;
+					return false;
+				case 4:
+					if (!CheckBuildingHover(Test, *Player, *Building, TEXT("松开左 Alt 后恢复建筑悬停描边"), true))
+					{
+						return true;
+					}
+					Press(*Player, Player->GetDemolishKey());
+					++Stage;
+					return false;
+				}
+				return true;
+			}
 			case 3:
+				if (!CheckBuildingHover(Test, *Player, *Room, TEXT("拆除菜单打开后清空原建筑悬停描边"), false)) { return true; }
 				if (!CheckCard(*Player, *Room, RoomCell)) { return true; }
 				Test.TestTrue(TEXT("经典菜单显示鼠标并停用相机鼠标轴"), Player->bShowMouseCursor && !Player->CanRotateCameraFromMouse());
 				if (!ClickDemolish(*Player)) { return true; }
@@ -257,12 +347,27 @@ namespace
 				int32 Width, Height;
 				Player->GetViewportSize(Width, Height);
 				Player->SetMouseLocation(Width / 2, Height / 2);
-				Press(*Player, Player->GetDemolishKey());
-				++Stage;
-				return false;
+				if (DesignHoverSubstage == 0)
+				{
+					DesignHoverSubstage = 1;
+					return false;
+				}
+				if (DesignHoverSubstage == 1)
+				{
+					if (!CheckBuildingHover(Test, *Player, *Tower,
+						TEXT("设计模式系统鼠标命中升级塔后高亮全部可见外观"), true))
+					{
+						return true;
+					}
+					Press(*Player, Player->GetDemolishKey());
+					++Stage;
+					return false;
+				}
+				return true;
 			}
 			case 5:
 			{
+				if (!CheckBuildingHover(Test, *Player, *Tower, TEXT("设计模式拆除菜单打开后清空建筑描边"), false)) { return true; }
 				if (!CheckCard(*Player, *Tower, TowerCell)) { return true; }
 				// 这段地图从未开店。使用菜单同一摄影请求，等待真实 RHI 生成一级建筑画面。
 				auto* Studio = Player->GetWorld()->GetSubsystem<UCastleCardPortraitSubsystem>();
@@ -439,6 +544,8 @@ namespace
 		FAutomationTestBase& Test;
 		double Deadline = FPlatformTime::Seconds() + 40.0;
 		int32 Stage = 0;
+		int32 PathHoverSubstage = 0;
+		int32 DesignHoverSubstage = 0;
 		ACastleBoard* Board = nullptr;
 		ACameraActor* Camera = nullptr;
 		ACastleBuildingBase* Room = nullptr;
