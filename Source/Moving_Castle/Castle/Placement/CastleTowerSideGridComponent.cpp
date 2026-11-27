@@ -40,24 +40,26 @@ UCastleTowerSideGridComponent::UCastleTowerSideGridComponent()
 }
 
 bool UCastleTowerSideGridComponent::Initialize(const FIntVector& BaseCell, const int32 LayerCount, const float CellWidth,
-	const float LayerHeight, const float SurfaceOffset, const int32 Seed, FText& OutReason)
+	const float GridCellSize, const float LayerHeight, const float SurfaceOffset, const int32 Seed, FText& OutReason)
 {
 	OutReason = FText::GetEmpty();
 	AActor* Tower = GetOwner();
 	USceneComponent* Root = IsValid(Tower) ? Tower->GetRootComponent() : nullptr;
 	if (bInitialized || !IsValid(Root) || !IsValid(PanelMesh) || !IsValid(PanelMaterial)
 		|| LayerCount < 1 || LayerCount > 64 || !FMath::IsFinite(CellWidth) || CellWidth < 20.0f
+		|| !FMath::IsFinite(GridCellSize) || GridCellSize < CellWidth
 		|| !FMath::IsFinite(LayerHeight) || LayerHeight < 20.0f || !FMath::IsFinite(SurfaceOffset)
 		|| SurfaceOffset <= CellWidth * 0.5f || SurfaceOffset >= CellWidth)
 	{
 		OutReason = FText::FromString(FString::Printf(
-			TEXT("主塔 %s 侧格初始化失败：塔根、板材资源（Cube / BasicShapeMaterial）、层数或侧面距离不合法；侧面距离须处于半格至一格之间。"),
+			TEXT("主塔 %s 侧格初始化失败：塔根、板材资源（Cube / BasicShapeMaterial）、层数、格距或侧面距离不合法；棋盘格距不得小于面板宽度，侧面距离须处于半格至一格之间。"),
 			*GetPathNameSafe(Tower)));
 		return false;
 	}
 
 	TowerBaseCell = BaseCell;
 	TowerCellWidth = CellWidth;
+	TowerGridCellSize = GridCellSize;
 	TowerLayerHeight = LayerHeight;
 	TowerSurfaceOffset = SurfaceOffset;
 	RunSeed = Seed;
@@ -245,9 +247,27 @@ bool UCastleTowerSideGridComponent::TryResolveHit(const FHitResult& Hit, FCastle
 		OutTarget.AdjacentCell = Cell->TowerCell + Face.Outward;
 		OutTarget.Surface = ECastleGridCursorSurface::MainTowerSide;
 		OutTarget.WorldNormal = Normal;
-		// 使用边缘色条反馈可放/不可放，不用原来的整格不透明高亮盖掉塔侧的颜色和数字。
-		OutTarget.IndicatorTransform = FTransform(PanelTransform.GetRotation(),
-			PanelTransform.TransformPosition(FVector(85.0, 0.0, -43.0)), PanelTransform.GetScale3D() * FVector(0.32, 0.92, 0.07));
+		// 塔根位于底层格心下方半层；外侧目标格中心沿完整棋盘格距和半层高推算。
+		const USceneComponent* TowerRoot = GetOwner()->GetRootComponent();
+		if (!IsValid(TowerRoot))
+		{
+			UE_LOG(LogMoving_Castle, Error,
+				TEXT("主塔 %s 的侧格 %s 缺少塔根组件，无法定位三维全息盒。"),
+				*GetPathNameSafe(GetOwner()), *Cell->TowerCell.ToString());
+			return false;
+		}
+		const FTransform RootTransform = TowerRoot->GetComponentTransform();
+		const FVector Outward(Face.Outward);
+		const FVector LocalBoxCenter(
+			Outward.X * TowerGridCellSize,
+			Outward.Y * TowerGridCellSize,
+			(Cell->TowerCell.Z - TowerBaseCell.Z + 0.5f) * TowerLayerHeight);
+		const FVector LocalBoxSize(
+			TowerGridCellSize * 0.98f,
+			TowerGridCellSize * 0.98f,
+			TowerLayerHeight * 0.98f);
+		OutTarget.IndicatorTransform = FTransform(RootTransform.GetRotation(),
+			RootTransform.TransformPosition(LocalBoxCenter), LocalBoxSize * RootTransform.GetScale3D() / 100.0f);
 		OutTarget.bValid = true;
 		return true;
 	}

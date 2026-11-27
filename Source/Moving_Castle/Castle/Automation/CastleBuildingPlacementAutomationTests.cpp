@@ -181,6 +181,21 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("左侧高亮面向 +X"), LeftTarget.Face, ECastleGridFace::PositiveX);
 	TestEqual(TEXT("右侧高亮面向 -X"), RightTarget.Face, ECastleGridFace::NegativeX);
 	TestEqual(TEXT("两侧指向同一个落点"), LeftTarget.AdjacentCell, RightTarget.AdjacentCell);
+	// 准星中心和边长只由最终业务落点格决定，不再依赖表面命中点或实体地块边长。
+	const auto VerifyHoloBox = [this, Board](const FCastleGridCursorTarget& Target,
+		const FIntVector& PlacementCell, const TCHAR* Description)
+	{
+		const FVector ExpectedCenter = Board->GetGridWorldLocation(PlacementCell);
+		const FVector ExpectedSize(Board->CellSize * 0.98f, Board->CellSize * 0.98f, Board->LayerHeight * 0.98f);
+		const FVector ActualSize = Target.IndicatorTransform.GetScale3D() * 100.0f;
+		TestTrue(FString::Printf(TEXT("%s全息盒中心对齐最终落点格心"), Description),
+			Target.IndicatorTransform.GetLocation().Equals(ExpectedCenter, 1.0f));
+		TestTrue(FString::Printf(TEXT("%s全息盒尺寸为 98%% 单格体积"), Description),
+			ActualSize.Equals(ExpectedSize * Board->GetActorScale3D(), 1.0f));
+	};
+	VerifyHoloBox(FloorTarget, FloorTarget.Cell, TEXT("旧地面模式"));
+	VerifyHoloBox(LeftTarget, LeftTarget.AdjacentCell, TEXT("建筑 +X 面"));
+	VerifyHoloBox(RightTarget, RightTarget.AdjacentCell, TEXT("建筑 -X 面"));
 	TestFalse(TEXT("高亮蓝 5 地面不能借用红 3 邻地块或红色邻建筑匹配"), Board->CanPlaceBuildingAtCursor(FloorTarget, RedCard, Reason));
 	TestFalse(TEXT("坐标接口也不能扫描周围邻格放宽匹配"), Board->CanPlaceBuilding(Destination, RedCard, Reason));
 	TestFalse(TEXT("高亮黄 7 建筑不能借用另一侧红色建筑匹配"), Board->CanPlaceBuildingAtCursor(RightTarget, RedCard, Reason));
