@@ -580,6 +580,36 @@ bool FCastlePCGRoofQuarterReversible::RunTest(const FString& Parameters)
 	TestEqual(TEXT("删除邻居恢复先前屋面视觉"), Tower->BuildingPCG->GetAppliedVisualKey(), Visual);
 	CheckRoofColor(*Tower);
 	TestEqual(TEXT("删除邻居保持玩法签名"), Tower->BuildingPCG->GetAppliedGameplayKey(), Gameplay);
+
+	// 二级横向箭塔的 +Y 长边只在 +X 端放邻房，两个顶格的 +Y 屋角都要切换。
+	const FIntVector LongStart = Board->GridOrigin + FIntVector(1, 2, 0);
+	const FIntVector LongEnd = LongStart + Side;
+	ACastleBuildingBase* LongRoof = Place(*this, *Board, *Archer, LongStart, 2, ECastleTileColor::Green);
+	if (!TestNotNull(TEXT("正式棋盘放置二级横向建筑"), LongRoof)
+		|| !TestTrue(TEXT("长边跨越两个 X 顶格"), LongRoof->GetOccupiedCoordinates().Contains(LongEnd))) { return false; }
+	const auto CountYTrim = [LongRoof, RoofTag]()
+	{
+		int32 Count = 0;
+		for (const auto* Part : TInlineComponentArray<UStaticMeshComponent*>(LongRoof))
+		{
+			// 以最终发布的网格状态验证两个顶格同步换檐。
+			if (Part->IsRegistered() && Part->IsVisible() && Part->ComponentHasTag(RoofTag)
+				&& GetNameSafe(Part->GetStaticMesh()).EndsWith(TEXT("_FlushY"))) { ++Count; }
+		}
+		return Count;
+	};
+	const FString LongVisual = LongRoof->BuildingPCG->GetAppliedVisualKey();
+	const FString LongGameplay = LongRoof->BuildingPCG->GetAppliedGameplayKey();
+	const int32 Before = CountYTrim();
+	ACastleBuildingBase* HalfNeighbor = Place(*this, *Board, *Room, LongEnd + FIntVector(0, 1, 0), 1, ECastleTileColor::Green);
+	if (!HalfNeighbor) { return false; }
+	TestNull(TEXT("同一条长边的另一端保持无邻居"), Board->GetBuildingAt(LongStart + FIntVector(0, 1, 0)));
+	TestEqual(TEXT("半条长边相邻时追加两片同轴收檐"), CountYTrim(), Before + 2);
+	if (!Board->RemoveBuilding(HalfNeighbor, Reason)) { AddError(Reason.ToString()); return false; }
+	Complete(LongRoof);
+	TestEqual(TEXT("拆掉邻居后整条长边恢复"), CountYTrim(), Before);
+	TestEqual(TEXT("整边收缩可逆恢复原视觉签名"), LongRoof->BuildingPCG->GetAppliedVisualKey(), LongVisual);
+	TestEqual(TEXT("整边收缩与拆除都保持玩法签名"), LongRoof->BuildingPCG->GetAppliedGameplayKey(), LongGameplay);
 	return true;
 }
 

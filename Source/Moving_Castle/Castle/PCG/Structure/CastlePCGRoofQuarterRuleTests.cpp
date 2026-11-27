@@ -80,30 +80,26 @@ bool FCastlePCGRoofQuarters::RunTest(const FString& Parameters)
 				auto& Spec = Base.Cells.Add(Cell);
 				if (bRoom) { Spec.RoomFrame = {&Layout, Local, Origin, bTurn}; }
 			}
-			const auto CheckMask = [&](uint8 Mask, bool bAbove, bool bTower, bool bOnlyPositiveX = false)
+			const auto CheckMask = [&](uint8 Mask, bool bAbove, bool bTower)
 			{
 				auto Occupancy = Cells;
 				auto Field = Base;
 				TOptional<FIntVector> Tower;
-				for (const auto& Piece : Form.Pieces)
+				// 每个被选中的外侧只放一个邻居。较长边的其余顶格即使外侧为空也必须一起收缩。
+				const int32 Top = Layout.Grid.Z - 1;
+				const FIntVector Outside[] = {
+					{Layout.Grid.X, Layout.Grid.Y - 1, Top}, {-1, 0, Top},
+					{Layout.Grid.X - 1, Layout.Grid.Y, Top}, {0, -1, Top}
+				};
+				for (int32 Side = 0; Side < UE_ARRAY_COUNT(Outside); ++Side)
 				{
-					// 半侧相邻只布置在长轴正端，另一端仍读到空列。
-					if (bOnlyPositiveX && Piece.Owner.X != Layout.Grid.X - 1) { continue; }
-					const FIntVector Cell = Origin + Rotate(Piece.Owner);
-					const FIntVector Dx = Rotate(FIntVector(Piece.Outward.X, 0, 0));
-					const FIntVector Dy = Rotate(FIntVector(0, Piece.Outward.Y, 0));
-					const uint8 XBit = Piece.Outward.X > 0 ? 1 : 2;
-					const uint8 YBit = Piece.Outward.Y > 0 ? 4 : 8;
-					for (const auto& Side : {TPair<uint8, FIntVector>(XBit, Dx), TPair<uint8, FIntVector>(YBit, Dy)})
+					if (!(Mask & (1 << Side))) { continue; }
+					const FIntVector Neighbor = Origin + Rotate(Outside[Side]) + (bAbove ? Up : FIntVector::ZeroValue);
+					if (bTower) { Tower = Neighbor; }
+					else
 					{
-						if (!(Mask & Side.Key)) { continue; }
-						const FIntVector Neighbor = Cell + Side.Value + (bAbove ? Up : FIntVector::ZeroValue);
-						if (bTower) { Tower = Neighbor; }
-						else if (!Occupancy.Contains(Neighbor))
-						{
-							Occupancy.Add(Neighbor).BuildingRoot = Neighbor;
-							Field.Cells.Add(Neighbor);
-						}
+						Occupancy.Add(Neighbor).BuildingRoot = Neighbor;
+						Field.Cells.Add(Neighbor);
 					}
 				}
 				FCastlePCGBoardQuery Query(MoveTemp(Occupancy), *Rules, nullptr, 0, 0, Tower);
@@ -115,15 +111,11 @@ bool FCastlePCGRoofQuarters::RunTest(const FString& Parameters)
 					const FIntVector Cell = Origin + Rotate(Piece.Owner);
 					const auto* Attachment = Field.GetAttachments().Find({Cell, TEXT("RoofQuarter"), Piece.Slot});
 					if (!TestNotNull(Name + TEXT(" 实际屋角归属查找"), Attachment)) { continue; }
-					const FIntVector OutsideX = Cell + Rotate(FIntVector(Piece.Outward.X, 0, 0));
-					const FIntVector OutsideY = Cell + Rotate(FIntVector(0, Piece.Outward.Y, 0));
-					const auto Occupied = [&](const FIntVector& Outside)
-					{
-						const auto* Neighbor = Query.Find(Outside + (bAbove ? Up : FIntVector::ZeroValue));
-						return Query.IsMainTowerColumn(Outside) || (Neighbor && !Cells.Contains(Outside));
-					};
-					const uint8 Bits = (Occupied(OutsideX) ? 1 : 0) | (Occupied(OutsideY) ? 2 : 0);
-					TestTrue(Name + TEXT(" 旋转后仍按作者轴选款"), Attachment->Kit == Piece.Variants.FindChecked(static_cast<ECastlePCGRoofQuarterState>(Bits)));
+					const uint8 XBit = Piece.Outward.X > 0 ? 1 : 2;
+					const uint8 YBit = Piece.Outward.Y > 0 ? 4 : 8;
+					const uint8 Bits = ((Mask & XBit) ? 1 : 0) | ((Mask & YBit) ? 2 : 0);
+					TestTrue(Name + TEXT(" 旋转后同侧全部屋角仍按作者轴统一选款"),
+						Attachment->Kit == Piece.Variants.FindChecked(static_cast<ECastlePCGRoofQuarterState>(Bits)));
 					TestTrue(Name + TEXT(" 可选中、无导航、单位缩放"), Attachment->bSelectable && !Attachment->bAffectsNavigation
 						&& Attachment->AnchorTransform.GetScale3D() == FVector::OneVector);
 					if (Mask == 0)
@@ -148,9 +140,11 @@ bool FCastlePCGRoofQuarters::RunTest(const FString& Parameters)
 				}
 			};
 			for (uint8 Mask = 0; Mask < 16; ++Mask) { CheckMask(Mask, false, false); }
-			CheckMask(1, true, false);
-			if (Layout.Grid.X == 1 && Layout.Grid.Y == 1) { CheckMask(4, false, true); }
-			if (Layout.Grid.X == 2) { CheckMask(4, false, false, true); }
+			for (const uint8 Side : {1, 2, 4, 8})
+			{
+				CheckMask(Side, true, false);
+				CheckMask(Side, false, true);
+			}
 
 			// 部分顶格压顶时仍生成其他格的屋角；前置规则整顶覆写时不再生成屋角。
 			const FIntVector Hidden = Origin + Rotate(Form.Pieces[0].Owner);
