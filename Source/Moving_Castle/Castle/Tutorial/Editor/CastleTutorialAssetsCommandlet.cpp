@@ -370,6 +370,8 @@ int32 UCastleTutorialAssetsCommandlet::Main(const FString& Params)
 		return 1;
 	}
 	auto* Config = AuthorAsset<UCastleTutorialConfigDataAsset>(DataRoot + TEXT("DA_TutorialConfig"));
+	// 重建教程配置时仍明确绑定单独制作的城主模板，不从正式主塔配置拷贝。
+	Config->TutorialLordNPCConfiguration = FindAsset<UMassEntityConfigAsset>(TEXT("/Game/MovingCastle/Mass/DA_MassNPC_TutorialLord"));
 	TMap<FName, UTexture2D*> Portraits;
 	FText Reason;
 	if (!ImportPortraits(PortraitSource, Portraits) || !BuildCastleTutorialWidgets(*Config)

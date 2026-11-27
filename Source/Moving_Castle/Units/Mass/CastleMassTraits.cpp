@@ -176,6 +176,8 @@ void UCastleMassHumanoidVisualizationTrait::BuildTemplate(FMassEntityTemplateBui
 	FCastleMassAnimationParameters Parameters;
 	Parameters.IdleSequence = IdleSequence;
 	Parameters.MoveSequence = MoveSequence;
+	Parameters.RunSequence = RunSequence;
+	Parameters.RunSpeedThreshold = RunSpeedThreshold;
 	Parameters.AttackSequence = AttackSequence;
 	Parameters.MovePlayRate = MovePlayRate;
 	Parameters.AttackPlayRate = AttackPlayRate;
@@ -185,6 +187,11 @@ void UCastleMassHumanoidVisualizationTrait::BuildTemplate(FMassEntityTemplateBui
 	{
 		Parameters.IdleLength = AnimationProvider->GetSequencePlayLength(IdleSequence);
 		Parameters.MoveLength = AnimationProvider->GetSequencePlayLength(MoveSequence);
+		// 模板验证单独拒绝非法索引；构建阶段只读取提供器已有的序列时长。
+		if (RunSequence != INDEX_NONE && AnimationProvider->GetSequences().IsValidIndex(RunSequence))
+		{
+			Parameters.RunLength = AnimationProvider->GetSequencePlayLength(RunSequence);
+		}
 		if (AttackSequence != INDEX_NONE && AnimationProvider->GetSequences().IsValidIndex(AttackSequence))
 		{
 			Parameters.AttackLength = AnimationProvider->GetSequencePlayLength(AttackSequence);
@@ -200,6 +207,8 @@ bool UCastleMassHumanoidVisualizationTrait::ValidateTemplate(const FMassEntityTe
 		&& AnimationProvider && AnimationProvider->GetSkinnedAsset() && AnimationProvider->IsEnabled()
 		&& AnimationProvider->GetSequences().IsValidIndex(IdleSequence)
 		&& AnimationProvider->GetSequences().IsValidIndex(MoveSequence)
+		&& (RunSequence == INDEX_NONE || (AnimationProvider->GetSequences().IsValidIndex(RunSequence)
+			&& FMath::IsFinite(RunSpeedThreshold) && RunSpeedThreshold > 0.0f))
 		&& FMath::IsFinite(MovePlayRate) && MovePlayRate > 0.0f
 		&& (AttackSequence == INDEX_NONE || AnimationProvider->GetSequences().IsValidIndex(AttackSequence))
 		&& FMath::IsFinite(AttackPlayRate) && AttackPlayRate > 0.0f && AttackPlayRate <= 10.0f
@@ -290,7 +299,8 @@ bool UCastleMassHumanoidVisualizationTrait::ValidateTemplate(const FMassEntityTe
 	}
 	if (!bValid)
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 人形动画配置无效：%s，需要骨骼网格匹配的动画提供器和有效待机/移动序列。"), *GetPathName());
+		UE_LOG(LogMoving_Castle, Error, TEXT("Mass 人形动画配置无效：%s，检查骨骼网格、动画提供器、序列索引与跑步阈值（索引 %d，阈值 %.2f cm/s）。"),
+			*GetPathName(), RunSequence, RunSpeedThreshold);
 	}
 	return bValid;
 }

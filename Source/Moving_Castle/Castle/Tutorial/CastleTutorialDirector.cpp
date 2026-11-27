@@ -26,6 +26,7 @@
 #include "EngineUtils.h"
 #include "Interaction/CastlePatrolRoute.h"
 #include "Interaction/CastleTowerDispatchDoors.h"
+#include "MassEntityConfigAsset.h"
 #include "Moving_Castle.h"
 
 namespace
@@ -84,6 +85,7 @@ bool UCastleTutorialConfigDataAsset::ValidateTutorial(FText& OutReason) const
 	{
 		return Reject(TEXT("HUDClass / ObjectiveClass / BubbleClass / RewardClass / GhostBattle"));
 	}
+	if (!IsValid(TutorialLordNPCConfiguration)) { return Reject(TEXT("TutorialLordNPCConfiguration")); }
 	for (const auto* Script : {ClaimDialogue.Get(), OutOfStockDialogue.Get(), FarmOfferDialogue.Get(), ClosingDialogue.Get()})
 	{
 		if (!Script) { return Reject(TEXT("ClaimDialogue / OutOfStockDialogue / FarmOfferDialogue / ClosingDialogue")); }
@@ -121,6 +123,13 @@ bool ACastleTutorialDirector::InitializeTutorial(FText& OutReason)
 		return false;
 	}
 	if (!Configuration->ValidateTutorial(OutReason)) { return false; }
+	// 教程初始化时就验证城主模板，防止玩家完成前九步之后才发现 S10 资产不完整。
+	if (!Configuration->TutorialLordNPCConfiguration->GetMutableConfig().ValidateEntityTemplate(*World))
+	{
+		OutReason = FText::Format(INVTEXT("教程城主 Mass 配置 {0} 的实体模板校验失败。"),
+			FText::FromString(Configuration->TutorialLordNPCConfiguration->GetPathName()));
+		return false;
+	}
 	// 一心对应正式 HUD 的 20 格血条之一，教程受击和主动生命消耗都留在该下限。
 	if (!Tower->EnableTutorialHealthLock(OutReason)) { return false; }
 	Dialogue = Instance->GetSubsystem<UCastleDialogueSubsystem>();
@@ -196,14 +205,8 @@ bool ACastleTutorialDirector::EnterStep(const int32 Number, FText& OutReason)
 	else if (Step == 9) { RemovePathMarkers(); }
 	else if (Step == 10)
 	{
-		const auto* DispatchConfig = Dispatch->GetConfiguration();
-		if (!DispatchConfig)
-		{
-			OutReason = INVTEXT("教程主塔没有有效的出兵配置。");
-			return false;
-		}
 		// 单人待命池让城主沿真实路线出门，仍使用正式手动点击派兵入口。
-		if (!Dispatch->StartBattleDispatchSession(DispatchConfig->NPCConfiguration, 1, OutReason)
+		if (!Dispatch->StartBattleDispatchSession(Configuration->TutorialLordNPCConfiguration, 1, OutReason)
 			|| !Combat->StartBattle(ECastleBattleKind::Normal, 1, OutReason)) { return false; }
 	}
 	else if (Step == 11)

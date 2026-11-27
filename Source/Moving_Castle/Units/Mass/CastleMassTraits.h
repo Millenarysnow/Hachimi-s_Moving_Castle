@@ -110,6 +110,14 @@ public:
 	UPROPERTY(EditAnywhere, Category="人形动画", meta=(ClampMin="0"))
 	int32 MoveSequence = 1;
 
+	/** 仅配置跑步的单位按水平移速区分走和跑。 */
+	UPROPERTY(EditAnywhere, Category="人形动画")
+	int32 RunSequence = INDEX_NONE;
+
+	/** 实时水平移速严格大于本阈值才切入跑步。 */
+	UPROPERTY(EditAnywhere, Category="人形动画", meta=(Units="cm/s"))
+	float RunSpeedThreshold = 250.0f;
+
 	/** 可选攻击序列；INDEX_NONE 表示该单位没有攻击动作。 */
 	UPROPERTY(EditAnywhere, Category="人形动画", meta=(ClampMin="-1"))
 	int32 AttackSequence = INDEX_NONE;
