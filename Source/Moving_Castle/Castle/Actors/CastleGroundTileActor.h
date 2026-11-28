@@ -68,8 +68,12 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UStaticMesh> PrototypeCubeMesh;
 
+	/** 世界地块响应固定日光，数字底板独立使用不受光的材质。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInterface> PrototypeMaterial;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> NumberPlateMaterial;
 
 	bool bInitialized = false;
 };

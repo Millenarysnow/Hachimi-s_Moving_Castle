@@ -11,9 +11,9 @@ FRONT = unreal.MaterialProperty.MP_FRONT_MATERIAL
 
 # 色阶在线性空间中取样。单位的暗部略亮，金属同时保留窄而硬的高光。
 PROFILES = {
-    "Surface": ((0.45, 0.47, 0.58), (0.0, 0.0, 0.0), 0.0, 1.0),
-    "Unit": ((0.56, 0.59, 0.69), (0.0, 0.0, 0.0), 0.0, 1.0),
-    "Metal": ((0.45, 0.47, 0.58), (0.65, 0.53, 0.39), 0.35, 0.34),
+    "Surface": ((0.48, 0.51, 0.62), (0.0, 0.0, 0.0), 0.0, 1.0),
+    "Unit": ((0.58, 0.62, 0.72), (0.0, 0.0, 0.0), 0.0, 1.0),
+    "Metal": ((0.48, 0.51, 0.62), (0.65, 0.53, 0.39), 0.35, 0.34),
 }
 
 
@@ -38,6 +38,16 @@ def create(path, asset_type, factory):
     return require(asset_tools.create_asset(name, folder, asset_type, factory()), f"{path} 创建失败")
 
 
+def get_or_create(path, asset_type, factory):
+    """保持已保存的项目资产标识，首次构建时才创建包。"""
+    return load(path, asset_type) if ASSETS.does_asset_exist(path) else create(path, asset_type, factory)
+
+
+def save(asset):
+    """只保存制作器负责的包，拒绝引擎报告的保存失败。"""
+    require(ASSETS.save_loaded_asset(asset, False), f"{asset.get_path_name()} 保存失败")
+
+
 def color(rgb):
     """把色阶的线性 RGB 变成 UE 资产可识别的颜色。"""
     return unreal.LinearColor(*rgb, 1.0)
@@ -58,9 +68,14 @@ def connect(source, target, pin="", output=""):
             f"{source.get_path_name()} 的 {output} 无法连接到 {target.get_name()} 的 {pin}")
 
 
-def make_surface_function(path, profile, metallic, roughness):
+def make_surface_function(function, profile, metallic, roughness):
     """只有共享函数拥有原生 Toon BSDF，材质根节点一律通过函数传递 Front Material。"""
-    function = create(path, unreal.MaterialFunction, unreal.MaterialFunctionFactoryNew)
+    if EDITING.get_material_function_expressions(function):
+        # 保留已有函数输入 GUID，避免重复执行后调用方丢失接线。
+        toon, = [n for n in EDITING.get_material_function_expressions(function)
+                 if isinstance(n, unreal.MaterialExpressionSubstrateToonBSDF)]
+        require(toon.get_editor_property("toon_profile") == profile, f"{function.get_path_name()} 的 Toon Profile 无效")
+        return function
     toon = node(function, unreal.MaterialExpressionSubstrateToonBSDF, 0, 0)
     toon.set_editor_property("toon_profile", profile)
     # 如未接法线贴图，切线空间 +Z 由引擎转换为几何表面的世界法线。
@@ -93,17 +108,18 @@ def make_surface_function(path, profile, metallic, roughness):
 
 
 def build_shared_assets(root):
-    """在空目录中生成成对的配置和函数。验证由调用方决定，函数自身不保存资产。"""
+    """按约定路径生成或更新三份共享配置，保持函数输入的连接身份。"""
     functions = {}
     for name, (shadow, highlight, metallic, roughness) in PROFILES.items():
         profile_path = f"{root}/Profiles/TP_{name}"
         function_path = f"{root}/Functions/MF_ToonSurface_{name}"
-        require(not ASSETS.does_asset_exist(profile_path) and not ASSETS.does_asset_exist(function_path),
-                f"验证要求使用新包，{profile_path} 或 {function_path} 已存在")
-        profile = create(profile_path, unreal.ToonProfile, unreal.ToonProfileFactory)
+        profile = get_or_create(profile_path, unreal.ToonProfile, unreal.ToonProfileFactory)
         require(TOOLS.configure_toon_profile(profile, color(shadow), color(highlight)),
                 f"{profile_path} 写入色阶失败")
-        functions[name] = make_surface_function(function_path, profile, metallic, roughness)
+        function = get_or_create(function_path, unreal.MaterialFunction, unreal.MaterialFunctionFactoryNew)
+        functions[name] = make_surface_function(function, profile, metallic, roughness)
+        save(profile)
+        save(function)
     return functions
 
 

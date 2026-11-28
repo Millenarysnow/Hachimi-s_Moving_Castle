@@ -1,4 +1,5 @@
 #include "CastleGambleSkyIsland.h"
+#include "Castle/Rendering/CastleRenderingConstants.h"
 #include "Audio/CastleAudioSubsystem.h"
 
 #include "CastleBackpackComponent.h"
@@ -155,7 +156,8 @@ ACastleGambleSkyIsland::ACastleGambleSkyIsland()
 		TEXT("/Game/MovingCastle/Model/SkyIslands/SM_Gamble_SlotMachine.SM_Gamble_SlotMachine"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> BalloonRecyclerMesh(
 		TEXT("/Game/MovingCastle/Model/SkyIslands/SM_Gamble_BalloonRecycler.SM_Gamble_BalloonRecycler"));
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+	// 轮盘和台座是世界几何，保留原来的 Color 参数与实例化流程。
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(CastleRenderingConstants::ToonBasicColorMaterialPath);
 	CubeMesh = Cube.Object;
 	TintMaterial = Material.Object;
 	const auto MakeMachine = [this](const FName Name, ECastleGambleMachine Kind, UStaticMesh* Mesh, FVector Position)
