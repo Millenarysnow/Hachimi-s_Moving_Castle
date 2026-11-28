@@ -47,19 +47,19 @@ float2 AerialCloudMedium(Texture3D Shape, SamplerState ShapeSampler, float2 UV, 
     const float Edge = 1.0 - smoothstep(0.10, 0.41, BodyField);
     const float Detail = Shape.SampleLevel(ShapeSampler, ShapeUV * 3.0 + float3(0.23, 0.39, 0.11), 0).b;
     const float Body = smoothstep(-0.04, 0.23, BodyField - Edge * (1.0 - Detail) * 0.046);
-    // 让云团和碎絮穿过大尺度过渡带，而不是共用一条只取决于 XY 覆盖图的边缘。
-    const float Bank = smoothstep(0.44, 0.82, Coverage + 0.34 * (CloudBody - 0.48) + 0.045 * (Detail - 0.5));
+    // 提高厚云聚集的覆盖阈值，给垂直穿过云层的视线留出间隙。云肩与碎絮仍跨过过渡带。
+    const float Bank = smoothstep(0.56, 0.85, Coverage + 0.34 * (CloudBody - 0.48) + 0.045 * (Detail - 0.5));
     const float Lobe = Bank * LowerSoftness * UpperSoftness * Body;
 
     // 薄云使用同一份滚动的三维场，但不被厚云顶部截断。垂直穿过时透出地貌，斜穿时由原生追踪
     // 沿更长的路径自然累积消光；不根据俯仰角或屏幕中心划一个透明区域。
     const float VeilHeight = smoothstep(0.06, 0.25, Height) * (1.0 - smoothstep(0.57, 0.94, Height));
     const float VeilPattern = smoothstep(0.20, 0.81, 0.32 * Coverage + 0.50 * CloudBody + 0.18 * Detail);
-    const float Veil = 0.0012 * VeilHeight * lerp(0.20, 1.0, VeilPattern);
+    const float Veil = 0.00028 * VeilHeight * lerp(0.20, 1.0, VeilPattern);
     // 云隙中也有轮廓可辨的碎云：让三维云肩聚集成雾丝，再用不同的垂直剖面错开厚云顶部。
     const float WispHeight = smoothstep(0.22, 0.39, Height) * (1.0 - smoothstep(0.51 + 0.12 * HeightPattern, 0.78 + 0.12 * HeightPattern, Height));
     const float WispPattern = smoothstep(0.45, 0.78, 0.61 * CloudBody + 0.30 * Shoulder.x + 0.09 * Detail);
-    const float Wisps = 0.013 * WispHeight * WispPattern * (1.0 - 0.55 * Bank);
+    const float Wisps = 0.006 * WispHeight * WispPattern * (1.0 - 0.55 * Bank);
     const float Density = Extinction * FarWeight * (Lobe + Veil + Wisps);
 
     // 天光遮蔽只随上覆厚云和云肩增强；稀薄云不压成灰黑面，厚云仍由同一消光场产生自阴影。
@@ -72,7 +72,8 @@ float2 AerialCloudMedium(Texture3D Shape, SamplerState ShapeSampler, float2 UV, 
 // 高度与云内遮蔽共同决定软色阶，保留连续过渡供原生体积积分做时间抗锯齿。
 float AerialCloudLitBand(float Visibility, float Height, float Lower, float Upper)
 {
-    const float Exposure = 0.72 * Visibility + 0.28 * smoothstep(0.28, 0.79, Height);
+    // 云腹的高度权重更大，减少下部无遮挡碎絮误入暖白亮阶，同时保留连续过渡。
+    const float Exposure = 0.62 * Visibility + 0.38 * smoothstep(0.24, 0.76, Height);
     return smoothstep(Lower, Upper, Exposure);
 }
 

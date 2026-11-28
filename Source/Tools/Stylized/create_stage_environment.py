@@ -5,7 +5,8 @@ import unreal as ue
 
 MAP = '/Game/MovingCastle/Maps/MainMap'
 SKY = '/Game/MovingCastle/Rendering/Sky'
-HORIZON = ue.LinearColor(0.69, 0.81, 0.86, 1.0)
+# 天空材质、雾和远景地表在线性空间共用此端点，地平线下保持同一色相。
+HORIZON = ue.LinearColor(0.38, 0.73, 1.00, 1.0)
 SUN_ROTATION = ue.Rotator(pitch=-50.0, yaw=207.0, roll=0.0)
 ASSETS = ue.EditorAssetLibrary
 EDIT = ue.MaterialEditingLibrary
@@ -41,7 +42,7 @@ def make_sky():
     bindings = {'CameraVector': require(camera, '天空材质缺少相机方向')}
     for index, (name, value) in enumerate((
         ('HorizonColor', HORIZON),
-        ('MidSkyColor', ue.LinearColor(0.22, 0.51, 0.83, 1.0)),
+        ('MidSkyColor', ue.LinearColor(0.19, 0.48, 0.89, 1.0)),
         ('ZenithColor', ue.LinearColor(0.08, 0.29, 0.66, 1.0)),
         ('SunColor', ue.LinearColor(1.48, 1.26, 0.99, 1.0)),
     )):
@@ -64,8 +65,8 @@ def make_sky():
                                       inputs=inputs,
                                       code='''
 const float3 View = -normalize(CameraVector);
-// 地平线下保持同一个浅青白，给远景地表与雾提供共同的融合端点。
-const float3 Sky = lerp(lerp(HorizonColor, MidSkyColor, smoothstep(0.0, 0.48, View.z)),
+// 地平线附近很快过渡到中天蓝，浅蓝端点同时承接远景地表和雾。
+const float3 Sky = lerp(lerp(HorizonColor, MidSkyColor, smoothstep(0.0, 0.28, View.z)),
                         ZenithColor, smoothstep(0.24, 0.98, View.z));
 const float Sun = smoothstep(0.99956, 0.99967, dot(View, normalize(SunDirection)));
 return lerp(Sky, SunColor, Sun);
@@ -137,10 +138,11 @@ def author_environment():
     sun = place(ue.DirectionalLight, 'Stylized Sun', rotation=SUN_ROTATION).light_component
     # 太阳朝向固定；Movable 是关闭烘焙照明时给建筑、Mass、VSM 和云提供实时光照的模式。
     sun.set_mobility(ue.ComponentMobility.MOVABLE)
-    sun.set_editor_properties(dict(intensity=3.15, light_color=ue.Color(255, 249, 238, 255),
+    sun.set_editor_properties(dict(intensity=4.15, light_color=ue.Color(255, 249, 238, 255),
                                    light_source_angle=0.15, contact_shadow_length=0.0,
                                    atmosphere_sun_light=True, cast_cloud_shadows=False,
-                                   cloud_scattered_luminance_scale=ue.LinearColor(1.44, 1.56, 1.78, 1.0)))
+                                   # 单独定标体积云的太阳散射，实体继续使用灰板定标的直射光。
+                                   cloud_scattered_luminance_scale=ue.LinearColor(3.83, 3.81, 3.76, 1.0)))
     sun.set_transmission(False)
 
     dome = place(ue.StaticMeshActor, 'Stylized Sky Dome')
@@ -164,9 +166,10 @@ def author_environment():
                                        lower_hemisphere_color=ue.LinearColor(0.31, 0.43, 0.60, 1.0)))
 
     fog = place(ue.ExponentialHeightFog, 'Stylized Horizon Fog', ue.Vector(0, 0, -18000)).component
+    # 远景保留淡蓝空气层，减少跨越云隙的俯视射线在地表又叠一层灰蓝雾。
     fog.set_editor_properties(dict(fog_density=0.012, fog_height_falloff=0.30,
-                                   fog_inscattering_luminance=HORIZON, start_distance=30000.0,
-                                   fog_max_opacity=0.18, enable_volumetric_fog=False))
+                                   fog_inscattering_luminance=HORIZON, start_distance=65000.0,
+                                   fog_max_opacity=0.08, enable_volumetric_fog=False))
     # 地表使用作者提供的远端天空颜色和相同的固定太阳方向，插件无需引用关卡资源。
     terrain[0].set_editor_properties(dict(haze_color=HORIZON,
                                           sun_direction=ue.MathLibrary.get_forward_vector(SUN_ROTATION) * -1.0))

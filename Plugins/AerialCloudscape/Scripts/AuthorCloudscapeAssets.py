@@ -137,11 +137,12 @@ def make_material(coverage, volume):
                      dict(Weather=(texture_2d, ''), UV=(uv, ''), Height=(altitude, 'NormAltitudeInLayer'),
                           Distance=(distance, ''), StartKm=(start, ''), EndKm=(end, '')))
     # RGB 模式保留云的反照率色相；它不改变标量消光，也不染色云后方的地表。
-    # 云内多次散射为阴面补光；双瓣相位保留上方受光轮廓，也避免侧看时明暗过于剧烈。
+    # 一阶多次散射给云腹补光，限制贡献并保留遮挡，避免各层被抬成同一片灰。
+    # 双瓣相位保留上方受光轮廓，也避免侧看时明暗过于剧烈。
     advanced = node(material, ue.MaterialExpressionVolumetricAdvancedMaterialOutput, 380, -340,
                     ray_march_volume_shadow=True, gray_scale_material=False,
                     multi_scattering_approximation_octave_count=1,
-                    const_multi_scattering_contribution=0.92, const_multi_scattering_occlusion=0.28,
+                    const_multi_scattering_contribution=0.76, const_multi_scattering_occlusion=0.42,
                     const_phase_g=-0.25, const_phase_g2=0.12, const_phase_blend=0.31)
     connect(support, advanced, 'ConservativeDensity')
     cached = node(material, ue.MaterialExpressionVolumetricAdvancedMaterialInput, -375, 125)
@@ -157,10 +158,10 @@ def make_material(coverage, volume):
     connect(medium, occlusion, '')
     # 色阶只影响线性散射反照率和天光补光，消光维持无色，云下地貌仍按透射率呈现。
     sunlit = node(material, ue.MaterialExpressionVectorParameter, -140, 525,
-                  parameter_name='CloudSunlitTint', default_value=ue.LinearColor(1.0, 0.98, 0.92, 1.0))
+                  parameter_name='CloudSunlitTint', default_value=ue.LinearColor(1.0, 0.99, 0.95, 1.0))
     interior = node(material, ue.MaterialExpressionVectorParameter, -140, 730,
-                    parameter_name='CloudInteriorTint', default_value=ue.LinearColor(0.54, 0.72, 0.96, 1.0))
-    band_lower, band_upper = 0.45, 0.59
+                    parameter_name='CloudInteriorTint', default_value=ue.LinearColor(0.34, 0.58, 0.96, 1.0))
+    band_lower, band_upper = 0.51, 0.67
     assert 0.0 <= band_lower < band_upper <= 1.0, '云光照软色阶上下界无效'
     lower, upper = [node(material, ue.MaterialExpressionScalarParameter, -160, y, parameter_name=name,
                          default_value=value) for y, name, value in
@@ -174,7 +175,7 @@ def make_material(coverage, volume):
                     'return lerp(Interior.rgb, Sunlit.rgb, Band);',
                     ue.CustomMaterialOutputType.CMOT_FLOAT3,
                     dict(Sunlit=(sunlit, ''), Interior=(interior, ''), Band=(band, '')))
-    boost = custom(material, 700, 340, '避免阴面天光降为灰黑', 'return lerp(0.72, 1.0, Band);',
+    boost = custom(material, 700, 340, '给蓝色云腹保留柔和天光', 'return lerp(0.84, 1.0, Band);',
                    ue.CustomMaterialOutputType.CMOT_FLOAT1, dict(Band=(band, '')))
     assert EDIT.connect_material_property(density, '', ue.MaterialProperty.MP_SUBSURFACE_COLOR), '无法接入体积消光'
     assert EDIT.connect_material_property(albedo, '', ue.MaterialProperty.MP_BASE_COLOR), '无法接入体积反照率'

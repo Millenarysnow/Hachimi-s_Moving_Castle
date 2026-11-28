@@ -83,7 +83,7 @@ float3 AerialTerrainColor(Texture2D Field, SamplerState FieldSampler, float2 UV,
     const float Macro = AerialNoise(MapUV, 91, 137u);
     const float LandVariation = 0.96 + 0.12 * Macro;
     // 暖橄榄草甸与浅苔绿在远处也可分辨。湿度、高度和坡度仍定义同一批群系。
-    float3 Land = lerp(float3(0.354, 0.390, 0.116), float3(0.229, 0.330, 0.111), Wet);
+    float3 Land = lerp(float3(0.385, 0.402, 0.095), float3(0.250, 0.342, 0.091), Wet);
     Land = lerp(Land, float3(0.52, 0.390, 0.170), Arid * 0.85);
     Land = lerp(Land, float3(0.235, 0.275, 0.177), Cold * 0.66);
     Land = lerp(Land, float3(0.367, 0.453, 0.189), Meadow * Wet * 0.53);
@@ -104,7 +104,7 @@ float3 AerialTerrainColor(Texture2D Field, SamplerState FieldSampler, float2 UV,
     Land = lerp(Land, float3(0.312, 0.275, 0.225) * (0.82 + 0.30 * Macro), Crag);
     Land = lerp(Land, float3(0.66, 0.75, 0.82), Snow);
     const float Beach = smoothstep(-0.015, -0.004, Depth) * (1.0 - smoothstep(0.16, 0.41, Steep));
-    Land = lerp(Land, float3(0.62, 0.474, 0.255), Beach * (0.53 + 0.35 * (1.0 - Wet)));
+    Land = lerp(Land, float3(0.64, 0.48, 0.229), Beach * (0.53 + 0.35 * (1.0 - Wet)));
     // 只在明暗分界留平滑过渡，保证远端坡面在低分辨率 mip 下稳定。
     Land *= lerp(0.69, 1.08, smoothstep(0.47, 0.63, dot(Normal, Sun.xyz)));
 
@@ -120,7 +120,7 @@ float3 AerialTerrainColor(Texture2D Field, SamplerState FieldSampler, float2 UV,
     const float WaterMask = smoothstep(-ShoreWidth, ShoreWidth, Depth);
     const float3 Terrain = lerp(Land, Water, WaterMask);
 
-    // 先压低远景对比，再融到天空球在地平线以下的固定浅青白。
+    // 先压低远景对比，再融到天空球在地平线以下的固定晴空浅蓝。
     // 到达距离遮罩前必须完成颜色融合，否则雾再浓也会留下整片地表的剪影。
     const float Mist = smoothstep(Sun.w, Haze.w * 0.79, ViewDistance);
     const float SkyBlend = smoothstep(Haze.w * 0.55, Haze.w * 0.78, ViewDistance);
