@@ -407,7 +407,7 @@ bool FCastleNPCSpeedAnimationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("旧敌人不启用跑步"), OldVisual->RunSequence, INDEX_NONE);
 	// 验证放大后的 Polyart 网格仍以实体原点为脚底，动画提供器继续使用正式素材。
 	TestEqual(TEXT("正式 NPC 动画提供器"), Visual->AnimationProvider->GetFName(), FName(TEXT("ATP_MassNPC_Polyart")));
-	TestTrue(TEXT("正式 NPC 放大至 1.7 倍"), Visual->MeshOffset.GetScale3D().Equals(FVector(1.7)));
+	TestTrue(TEXT("正式 NPC 模型按 1.3 倍等比显示"), Visual->MeshOffset.GetScale3D().Equals(FVector(1.3)));
 	const auto* Mesh = Cast<USkeletalMesh>(Visual->AnimationProvider->GetSkinnedAsset());
 	if (!TestNotNull(TEXT("正式 NPC 骨骼网格"), Mesh)) { return false; }
 	const FBoxSphereBounds Bounds = Mesh->GetBounds();
