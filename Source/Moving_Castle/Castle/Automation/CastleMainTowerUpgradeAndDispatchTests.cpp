@@ -98,10 +98,15 @@ bool FCastleMainTowerKitAssetTest::RunTest(const FString& Parameters)
 	};
 	for (const FExpectedMesh& Mesh : FlightBases) { CheckMesh(Mesh, TEXT("FlightBase"), false); }
 	CheckMesh({TEXT("SM_MainTower_DoorSigns_560"), {-323.3, -141.6, 369.152}, {323.3, 141.6, 464.852}}, TEXT("DoorSigns"), false);
-	const auto* Exhaust = LoadObject<UNiagaraSystem>(nullptr,
+	auto* Exhaust = LoadObject<UNiagaraSystem>(nullptr,
 		TEXT("/Game/RocketThrusterExhaustFX/FX/NS_RocketExhaust_Realistic.NS_RocketExhaust_Realistic"));
 	if (TestNotNull(TEXT("正式喷口 Niagara 系统"), Exhaust))
 	{
+		// 编辑器冷启动首次加载 Niagara 系统时脚本处于按需编译态，校验前须完成加载与脚本编译。
+		Exhaust->EnsureFullyLoaded();
+#if WITH_EDITORONLY_DATA
+		Exhaust->WaitForCompilationComplete(false, false);
+#endif
 		TestTrue(TEXT("火焰可用且已包含发射器"), Exhaust->IsValid() && !Exhaust->GetEmitterHandles().IsEmpty());
 	}
 	const TCHAR* Palette[] = {
@@ -170,12 +175,13 @@ bool FCastleMainTowerBalloonHealthTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("教程锁血测试重新初始化主塔"), Tower->InitializeHealth());
 	TestTrue(TEXT("教程启用一心锁血"), Tower->EnableTutorialHealthLock(Reason));
 	const float TutorialHealthFloor = Tower->MaxHealth / 20.0f;
+	const float HealthAboveOneHeart = TutorialHealthFloor + 10.0f;
 	Tower->MaxBalloons = 20;
 	Tower->HealthPerBalloon = 11.0f;
-	TestTrue(TEXT("教程测试主塔受击后仍高于一心"), Tower->ApplyDamage(Tower->MaxHealth - 60.0f));
+	TestTrue(TEXT("教程测试主塔受击后仍高于一心"), Tower->ApplyDamage(Tower->MaxHealth - HealthAboveOneHeart));
 	AddExpectedError(TEXT("至少保留一颗心"), EAutomationExpectedErrorFlags::Contains, 1);
 	TestFalse(TEXT("教程不能回收导致生命低于一心的气球"), Tower->TryConsumeBalloons(1, Reason));
-	TestTrue(TEXT("拒绝一心以下的气球回收后保留原生命"), FMath::IsNearlyEqual(Tower->CurrentHealth, 60.0f));
+	TestTrue(TEXT("拒绝一心以下的气球回收后保留原生命"), FMath::IsNearlyEqual(Tower->CurrentHealth, HealthAboveOneHeart));
 	TestTrue(TEXT("超额攻击在教程锁血下仍成功结算"), Tower->ApplyDamage(Tower->MaxHealth * 2.0f));
 	TestTrue(TEXT("超额攻击将主塔保留在一颗心"), FMath::IsNearlyEqual(Tower->CurrentHealth, TutorialHealthFloor));
 	TestTrue(TEXT("锁血主塔仍然存活"), Tower->IsAlive());

@@ -194,7 +194,17 @@ bool UCastleMainTowerBalloonComponent::Initialize(UStaticMeshComponent* InTowerM
 	{
 		return Reject(TEXT("塔身、吊挂或 FlightBase L01～L05 资产引用数量与清单不符"));
 	}
-	if (!IsValid(ThrusterExhaustFX) || !ThrusterExhaustFX->IsValid())
+	if (!IsValid(ThrusterExhaustFX))
+	{
+		return Reject(FString::Printf(TEXT("喷口 Niagara 系统 %s 缺失或无效"), ExhaustObjectPath));
+	}
+	// 编辑器下 UNiagaraSystem::PostLoad 不会立即调用 UpdateSystemAfterLoad 或触发按需脚本编译，
+	// 须先完成系统加载并等待脚本编译完成，再校验 IsValid()，避免冷启动首次加载被误判为无效资产。
+	ThrusterExhaustFX->EnsureFullyLoaded();
+#if WITH_EDITORONLY_DATA
+	ThrusterExhaustFX->WaitForCompilationComplete(false, false);
+#endif
+	if (!ThrusterExhaustFX->IsValid())
 	{
 		return Reject(FString::Printf(TEXT("喷口 Niagara 系统 %s 缺失或无效"), ExhaustObjectPath));
 	}

@@ -423,7 +423,7 @@ namespace
          Test->TestTrue(TEXT("棋盘贴图数字帧与格子数字一致"), FMath::IsNearlyEqual(
              PanelMaterial->K2_GetScalarParameterValue(TEXT("Frame (S)")), static_cast<float>(Data->Number - 1)));
          Test->TestTrue(TEXT("棋盘贴图颜色与格子颜色一致"), CastleTileColors::TryGetGridTint(Data->Color, ExpectedTint)
-             && PanelMaterial->K2_GetVectorParameterValue(TEXT("Color")).Equals(ExpectedTint, 0.001f));
+             && PanelMaterial->K2_GetVectorParameterValue(TEXT("BackgroundColor")).Equals(ExpectedTint, 0.001f));
      }
     }
    }

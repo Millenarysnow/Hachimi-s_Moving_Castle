@@ -67,7 +67,7 @@ bool FCastleTowerStarterDeckTest::RunTest(const FString& Parameters)
 			{
 				return false;
 			}
-			Material->SetVectorParameterValue(TEXT("Color"), Tint);
+			Material->SetVectorParameterValue(TEXT("BackgroundColor"), Tint);
 			Material->SetScalarParameterValue(TEXT("Frame (S)"), static_cast<float>(Cell->Number - 1));
 		}
 		while (Board->PrototypeBackpack->GetItemCount() > 0)
