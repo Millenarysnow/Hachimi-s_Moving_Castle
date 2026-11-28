@@ -171,14 +171,36 @@ bool UCastlePCGRoofQuarterRule::Evaluate(const FCastlePCGBoardQuery& Query, FCas
 		};
 		const auto ShouldTrim = [&](const FIntVector& LocalDirection)
 		{
-			const FIntVector Outside = Cell + GridDirection(LocalDirection);
-			return OccupiedByNeighbor(Outside) || OccupiedByNeighbor(Outside + Query.Up) || Query.IsMainTowerColumn(Outside);
+			// 沿整条作者外边界检查所有顶格，不能用当前屋角所属格代替整栋建筑。
+			// RoomFrame 给合并房提供共享的作者布局和原点；先沿作者轴取格，再旋转到棋盘。
+			const bool bAlongY = LocalDirection.X != 0;
+			const int32 Length = bAlongY ? Layout->Grid.Y : Layout->Grid.X;
+			const int32 Boundary = bAlongY
+				? (LocalDirection.X > 0 ? Layout->Grid.X - 1 : 0)
+				: (LocalDirection.Y > 0 ? Layout->Grid.Y - 1 : 0);
+			for (int32 Along = 0; Along < Length; ++Along)
+			{
+				const FIntVector Edge = bAlongY ? FIntVector(Boundary, Along, LocalCell.Z)
+					: FIntVector(Along, Boundary, LocalCell.Z);
+				const FIntVector Outside = Cell + GridDirection(Edge + LocalDirection - LocalCell);
+				if (OccupiedByNeighbor(Outside) || OccupiedByNeighbor(Outside + Query.Up) || Query.IsMainTowerColumn(Outside))
+				{
+					return true;
+				}
+			}
+			return false;
 		};
+		// 同一局部轴的正负外侧分别判断，每片屋角只消费属于自己的两个方向结果。
+		const bool bTrimNegativeX = ShouldTrim(FIntVector(-1, 0, 0));
+		const bool bTrimPositiveX = ShouldTrim(FIntVector(1, 0, 0));
+		const bool bTrimNegativeY = ShouldTrim(FIntVector(0, -1, 0));
+		const bool bTrimPositiveY = ShouldTrim(FIntVector(0, 1, 0));
 		for (const FCastlePCGRoofQuarterPiece& Piece : Form->Pieces)
 		{
 			if (Piece.Owner != LocalCell) { continue; }
-			const uint8 Bits = (ShouldTrim(FIntVector(Piece.Outward.X, 0, 0)) ? 1 : 0)
-				| (ShouldTrim(FIntVector(0, Piece.Outward.Y, 0)) ? 2 : 0);
+			const bool bTrimX = Piece.Outward.X > 0 ? bTrimPositiveX : bTrimNegativeX;
+			const bool bTrimY = Piece.Outward.Y > 0 ? bTrimPositiveY : bTrimNegativeY;
+			const uint8 Bits = (bTrimX ? 1 : 0) | (bTrimY ? 2 : 0);
 			const auto State = static_cast<ECastlePCGRoofQuarterState>(Bits);
 			FCastlePCGAttachmentSpec Attachment;
 			Attachment.Kit = Piece.Variants.FindChecked(State);

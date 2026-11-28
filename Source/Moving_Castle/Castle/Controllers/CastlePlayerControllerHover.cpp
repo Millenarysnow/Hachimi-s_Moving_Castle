@@ -249,9 +249,7 @@ void ACastlePlayerController::UpdateHoverHighlight()
 			{
 				if (!IsValid(Component) || !Component->IsRegistered() || !Component->IsVisible()
 					|| UBuildingGameplayRootComponent::IsInGameplayHierarchy(Component)
-					|| Cast<UCastleRoomTraitComponent>(Component)
-					|| Component->GetFName() == TEXT("PrototypeLabel")
-					|| Component->GetFName() == TEXT("PrototypeLabelPlate"))
+					|| Cast<UCastleRoomTraitComponent>(Component))
 				{
 					continue;
 				}

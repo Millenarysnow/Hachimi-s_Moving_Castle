@@ -8,6 +8,8 @@
 #include "GameFramework/Actor.h"
 #include "Materials/MaterialInterface.h"
 #include "Moving_Castle.h"
+#include "NiagaraComponent.h"
+#include "NiagaraSystem.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -24,6 +26,9 @@ namespace
 		TEXT("SM_LiftBalloon_Lantern"), TEXT("SM_LiftBalloon_Crown"), TEXT("SM_LiftBalloon_Pod_Rose"), TEXT("SM_LiftBalloon_Pod_Teal")
 	};
 	constexpr TCHAR TowerAssetRoot[] = TEXT("/Game/MovingCastle/Model/MainTower");
+	constexpr TCHAR ExhaustObjectPath[] = TEXT("/Game/RocketThrusterExhaustFX/FX/NS_RocketExhaust_Realistic.NS_RocketExhaust_Realistic");
+	// Niagara 的 Thrusters 使用半径 18 cm 的发射圆和局部 +X 速度轴。
+	constexpr double ExhaustAuthorDiameter = 36.0;
 
 	struct FLiftMount
 	{
@@ -74,15 +79,19 @@ namespace
 		const TCHAR* MeshName;
 		double Eaves;
 		TArrayView<const FLiftMount> Mounts;
+		const TCHAR* FlightBaseName;
+		double NozzleLipZ;
+		double NozzleDiameter;
 	};
 
-	// 烘焙塔冠的标高由作者给出，索引 4 仅提供 11 层配置和表现校验。
+	// 底座和塔共用 560 cm 套件原点。每件底座的单个喷口都在 X=Y=0。
+	// 从作者 FBX 的 IronLip 与 Void 材质面实测喷口下沿和内腔直径，单位为 UE cm。
 	const FTowerLiftTier LiftTiers[] = {
-		{3, TEXT("SM_MainTower_L01"), 1680.0, FirstFlight},
-		{5, TEXT("SM_MainTower_L02"), 2800.0, Longwatch},
-		{7, TEXT("SM_MainTower_L03"), 3920.0, Beacon},
-		{9, TEXT("SM_MainTower_L04"), 5040.0, TwinEscort},
-		{11, TEXT("SM_MainTower_L05"), 6160.0, CrownFleet}
+		{3, TEXT("SM_MainTower_L01"), 1680.0, FirstFlight, TEXT("SM_MainTower_FlightBase_L01"), -182.0, 83.98},
+		{5, TEXT("SM_MainTower_L02"), 2800.0, Longwatch, TEXT("SM_MainTower_FlightBase_L02"), -220.0, 105.94},
+		{7, TEXT("SM_MainTower_L03"), 3920.0, Beacon, TEXT("SM_MainTower_FlightBase_L03"), -265.0, 129.20},
+		{9, TEXT("SM_MainTower_L04"), 5040.0, TwinEscort, TEXT("SM_MainTower_FlightBase_L04"), -314.0, 153.75},
+		{11, TEXT("SM_MainTower_L05"), 6160.0, CrownFleet, TEXT("SM_MainTower_FlightBase_L05"), -370.0, 184.76}
 	};
 
 	FString TowerKitObjectPath(const TCHAR* Folder, const TCHAR* Name)
@@ -102,6 +111,15 @@ namespace
 	}
 }
 
+void FCastleMainTowerFlightParts::Destroy()
+{
+	// 撤销可能发生在组件创建中途；Actor 回收时也可能先一步销毁其中的组件。
+	if (IsValid(Exhaust)) { Exhaust->DestroyComponent(); }
+	if (IsValid(Base)) { Base->DestroyComponent(); }
+	Exhaust = nullptr;
+	Base = nullptr;
+}
+
 UCastleMainTowerBalloonComponent::UCastleMainTowerBalloonComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
@@ -112,6 +130,8 @@ UCastleMainTowerBalloonComponent::UCastleMainTowerBalloonComponent()
 	{
 		TArray<UStaticMesh*> Towers;
 		TArray<UStaticMesh*> Lift;
+		TArray<UStaticMesh*> FlightBases;
+		UNiagaraSystem* Exhaust = nullptr;
 		UMaterialInterface* Dark = nullptr;
 	};
 	static const FKitAssets Kit = []
@@ -121,6 +141,8 @@ UCastleMainTowerBalloonComponent::UCastleMainTowerBalloonComponent()
 		{
 			const ConstructorHelpers::FObjectFinder<UStaticMesh> Mesh(*TowerKitObjectPath(TEXT("Tower"), Tier.MeshName));
 			Assets.Towers.Add(Mesh.Object);
+			const ConstructorHelpers::FObjectFinder<UStaticMesh> Base(*TowerKitObjectPath(TEXT("FlightBase"), Tier.FlightBaseName));
+			Assets.FlightBases.Add(Base.Object);
 		}
 		for (const TCHAR* Name : LiftMeshNames)
 		{
@@ -130,10 +152,14 @@ UCastleMainTowerBalloonComponent::UCastleMainTowerBalloonComponent()
 		// Dark 是清单中唯一没有被任何本期网格引用的材质，保留显式硬引用。
 		const ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(*TowerKitObjectPath(TEXT("Materials"), TEXT("M_Aero_Dark")));
 		Assets.Dark = Material.Object;
+		const ConstructorHelpers::FObjectFinder<UNiagaraSystem> Exhaust(ExhaustObjectPath);
+		Assets.Exhaust = Exhaust.Object;
 		return Assets;
 	}();
 	TowerAssets = Kit.Towers;
 	LiftAssets = Kit.Lift;
+	FlightBaseAssets = Kit.FlightBases;
+	ThrusterExhaustFX = Kit.Exhaust;
 	DarkMaterial = Kit.Dark;
 }
 
@@ -162,9 +188,14 @@ bool UCastleMainTowerBalloonComponent::Initialize(UStaticMeshComponent* InTowerM
 	{
 		return Reject(TEXT("塔身网格或运行时锚点缺失、尚未注册或已初始化"));
 	}
-	if (TowerAssets.Num() != UE_ARRAY_COUNT(LiftTiers) || LiftAssets.Num() != UE_ARRAY_COUNT(LiftMeshNames))
+	if (TowerAssets.Num() != UE_ARRAY_COUNT(LiftTiers) || LiftAssets.Num() != UE_ARRAY_COUNT(LiftMeshNames)
+		|| FlightBaseAssets.Num() != UE_ARRAY_COUNT(LiftTiers))
 	{
-		return Reject(TEXT("整塔或吊挂资产引用数量与清单不符"));
+		return Reject(TEXT("塔身、吊挂或 FlightBase L01～L05 资产引用数量与清单不符"));
+	}
+	if (!IsValid(ThrusterExhaustFX) || !ThrusterExhaustFX->IsValid())
+	{
+		return Reject(FString::Printf(TEXT("喷口 Niagara 系统 %s 缺失或无效"), ExhaustObjectPath));
 	}
 	const auto ValidateMesh = [&](const UStaticMesh* Mesh, const TCHAR* ExpectedName)
 	{
@@ -188,7 +219,8 @@ bool UCastleMainTowerBalloonComponent::Initialize(UStaticMeshComponent* InTowerM
 	};
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(LiftTiers); ++Index)
 	{
-		if (!ValidateMesh(TowerAssets[Index], LiftTiers[Index].MeshName)) { return false; }
+		if (!ValidateMesh(TowerAssets[Index], LiftTiers[Index].MeshName)
+			|| !ValidateMesh(FlightBaseAssets[Index], LiftTiers[Index].FlightBaseName)) { return false; }
 	}
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(LiftMeshNames); ++Index)
 	{
@@ -216,7 +248,7 @@ bool UCastleMainTowerBalloonComponent::PrepareTier(const int32 LayerCount, FText
 	AActor* Tower = GetOwner();
 	const auto Reject = [&](const TCHAR* Detail)
 	{
-		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 无法准备 %d 层吊挂套件：%s。"),
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 无法准备 %d 层表现套件：%s。"),
 			*GetPathNameSafe(Tower), LayerCount, Detail));
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
@@ -264,6 +296,46 @@ bool UCastleMainTowerBalloonComponent::PrepareTier(const int32 LayerCount, FText
 			return Reject(TEXT("拉索或大气球组件注册失败"));
 		}
 	}
+	// 保持塔根共用原点，且注册前关闭碰撞和导航；新底座在侧格事务提交之前一直隐藏。
+	UStaticMeshComponent* Base = NewObject<UStaticMeshComponent>(Tower,
+		MakeUniqueObjectName(Tower, UStaticMeshComponent::StaticClass(), FName(Tier.FlightBaseName)));
+	PendingFlight.Base = Base;
+	Base->SetupAttachment(Tower->GetRootComponent());
+	Base->SetMobility(EComponentMobility::Movable);
+	Base->SetCanEverAffectNavigation(false);
+	Base->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Base->SetGenerateOverlapEvents(false);
+	Base->SetStaticMesh(FlightBaseAssets[TierIndex]);
+	Base->SetVisibility(false);
+	Tower->AddInstanceComponent(Base);
+	Base->RegisterComponent();
+	if (!Base->IsRegistered())
+	{
+		DiscardPreparedTier();
+		return Reject(*FString::Printf(TEXT("火箭底座 %s 注册失败"), Tier.FlightBaseName));
+	}
+
+	UNiagaraComponent* Exhaust = NewObject<UNiagaraComponent>(Tower,
+		MakeUniqueObjectName(Tower, UNiagaraComponent::StaticClass(), TEXT("TowerThrusterExhaust")));
+	PendingFlight.Exhaust = Exhaust;
+	Exhaust->SetupAttachment(Base);
+	Exhaust->SetMobility(EComponentMobility::Movable);
+	Exhaust->SetAutoActivate(false);
+	Exhaust->SetCanEverAffectNavigation(false);
+	Exhaust->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Exhaust->SetGenerateOverlapEvents(false);
+	// 将喷流的局部 +X 对准底座的 -Z。发射面离金属下沿 1 cm，尺寸随内腔直径比例变化。
+	Exhaust->SetRelativeTransform(FTransform(FRotator(-90.0, 0.0, 0.0), FVector(0, 0, Tier.NozzleLipZ - 1.0),
+		FVector(Tier.NozzleDiameter / ExhaustAuthorDiameter)));
+	Exhaust->SetAsset(ThrusterExhaustFX);
+	Exhaust->SetVisibility(false);
+	Tower->AddInstanceComponent(Exhaust);
+	Exhaust->RegisterComponent();
+	if (!Exhaust->IsRegistered())
+	{
+		DiscardPreparedTier();
+		return Reject(*FString::Printf(TEXT("底座 %s 的喷口 %s 注册失败"), Tier.FlightBaseName, ExhaustObjectPath));
+	}
 	PendingTierIndex = TierIndex;
 	return true;
 }
@@ -271,12 +343,14 @@ bool UCastleMainTowerBalloonComponent::PrepareTier(const int32 LayerCount, FText
 void UCastleMainTowerBalloonComponent::DiscardPreparedTier()
 {
 	DestroyLiftParts(PendingParts);
+	PendingFlight.Destroy();
 	PendingTierIndex = INDEX_NONE;
 }
 
 void UCastleMainTowerBalloonComponent::CommitPreparedTier(const float CurrentHealth, const float MaxHealth)
 {
 	check(LiftTiers[PendingTierIndex].Mounts.Num() == PendingParts.Num());
+	check(IsValid(PendingFlight.Base) && IsValid(PendingFlight.Exhaust));
 	const FTowerLiftTier& Tier = LiftTiers[PendingTierIndex];
 	TowerMesh->SetStaticMesh(TowerAssets[PendingTierIndex]);
 	CrownAnchor->SetRelativeLocation(FVector(0, 0, Tier.Eaves));
@@ -284,11 +358,25 @@ void UCastleMainTowerBalloonComponent::CommitPreparedTier(const float CurrentHea
 
 	DestroyLiftParts(LiveParts);
 	LiveParts = MoveTemp(PendingParts);
+	LiveFlight.Destroy();
+	LiveFlight = PendingFlight;
+	PendingFlight = {};
+	LiveFlight.Base->SetVisibility(true);
+	LiveFlight.Exhaust->SetVisibility(true);
+	// 注册阶段关掉自动激活，直至正式切换才启动作者资产的无限循环。
+	LiveFlight.Exhaust->Activate(true);
 	PendingTierIndex = INDEX_NONE;
 	LiveCount = 0;
 	UpdateHealth(CurrentHealth, MaxHealth);
 	// 即使没有剩余气球，本次换塔仍改变了塔身。非零时 UpdateHealth 已发出同一次通知。
 	if (LiveCount == 0) { OnDisplayChanged.Broadcast(); }
+}
+
+void UCastleMainTowerBalloonComponent::OnComponentDestroyed(const bool bDestroyingHierarchy)
+{
+	LiveFlight.Destroy();
+	PendingFlight.Destroy();
+	Super::OnComponentDestroyed(bDestroyingHierarchy);
 }
 
 bool UCastleMainTowerBalloonComponent::UpdateHealth(const float CurrentHealth, const float MaxHealth)
@@ -324,13 +412,14 @@ bool UCastleMainTowerBalloonComponent::UpdateHealth(const float CurrentHealth, c
 
 bool UCastleMainTowerBalloonComponent::CollectMenuTower(FCastleMenuModelBuilder& Builder, FString& Error) const
 {
-	if (!IsValid(TowerMesh) || !IsValid(GetOwner()) || LiveParts.IsEmpty())
+	if (!IsValid(TowerMesh) || !IsValid(GetOwner()) || LiveParts.IsEmpty() || !IsValid(LiveFlight.Base))
 	{
-		Error = GetPathName() + TEXT(" 的塔身或已提交吊挂尚未就绪。");
+		Error = GetPathName() + TEXT(" 的塔身、火箭底座或已提交吊挂尚未就绪。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *Error);
 		return false;
 	}
 	const FTransform Frame = GetOwner()->GetActorTransform();
-	if (!Builder.AddComponent(*TowerMesh, Frame, Error)) { return false; }
+	if (!Builder.AddComponent(*TowerMesh, Frame, Error) || !Builder.AddComponent(*LiveFlight.Base, Frame, Error)) { return false; }
 	for (int32 Index = 0; Index < LiveCount; ++Index)
 	{
 		const FCastleMainTowerLiftParts& Rig = LiveParts[Index];
@@ -343,19 +432,27 @@ bool UCastleMainTowerBalloonComponent::CollectMenuTower(FCastleMenuModelBuilder&
 bool UCastleMainTowerBalloonComponent::BuildFirstMenuTower(FCastleMenuModelBuilder& Builder, FString& Error) const
 {
 	// 首级的网格、吊挂方向与材质均来自正式套件。模型丢失时保留作者资源名供定位。
-	if (TowerAssets.Num() != UE_ARRAY_COUNT(LiftTiers) || LiftAssets.Num() != UE_ARRAY_COUNT(LiftMeshNames))
+	if (TowerAssets.Num() != UE_ARRAY_COUNT(LiftTiers) || LiftAssets.Num() != UE_ARRAY_COUNT(LiftMeshNames)
+		|| FlightBaseAssets.Num() != UE_ARRAY_COUNT(LiftTiers))
 	{
-		Error = TEXT("主塔套件缺少已配置的塔身或吊挂资产。");
+		Error = TEXT("主塔套件缺少已配置的塔身、FlightBase 或吊挂资产。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *Error);
 		return false;
 	}
 	auto Add = [&](UStaticMesh* Mesh, const TCHAR* Name, const FTransform& Local)
 	{
-		if (!IsValid(Mesh)) { Error = FString::Printf(TEXT("首玩主塔缺少网格 %s。"), Name); return false; }
+		if (!IsValid(Mesh))
+		{
+			Error = FString::Printf(TEXT("首玩主塔缺少网格 %s。"), Name);
+			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *Error);
+			return false;
+		}
 		TArray<UMaterialInterface*> Materials;
 		for (const FStaticMaterial& Slot : Mesh->GetStaticMaterials()) { Materials.Add(Slot.MaterialInterface); }
 		return Builder.AddMesh(Mesh, Materials, {}, Local, Error);
 	};
-	if (!Add(TowerAssets[0], LiftTiers[0].MeshName, FTransform::Identity)) { return false; }
+	if (!Add(TowerAssets[0], LiftTiers[0].MeshName, FTransform::Identity)
+		|| !Add(FlightBaseAssets[0], LiftTiers[0].FlightBaseName, FTransform::Identity)) { return false; }
 	for (const FLiftMount& Mount : LiftTiers[0].Mounts)
 	{
 		const int32 Tether = static_cast<int32>(ELiftAsset::Tether);

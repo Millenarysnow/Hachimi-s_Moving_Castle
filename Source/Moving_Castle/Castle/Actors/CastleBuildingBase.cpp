@@ -2,6 +2,7 @@
 
 #include "CastleBuildingBase.h"
 #include "Castle/Appearance/CastleBuildingColors.h"
+#include "Castle/Appearance/CastleBuildingIconIndex.h"
 #include "Castle/Items/CastleBadgeSubsystem.h"
 #include "Castle/Items/CastleItemTypes.h"
 #include "Castle/Items/CastleRoomTraitComponent.h"
@@ -18,10 +19,10 @@
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
-#include "Components/TextRenderComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "MaterialShared.h"
+#include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Moving_Castle.h"
@@ -53,34 +54,9 @@ ACastleBuildingBase::ACastleBuildingBase(const FObjectInitializer& ObjectInitial
 	AssemblyFlight->bAutoPlay = false;
 	AssemblyFlight->ExcludedComponentTag = TEXT("MergeExclude");
 
-	// 引擎基础资源只用于数字底牌；建筑美术必须由等级蓝图显式配置。
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface> FloorMaterial(TEXT("/Game/ART/Material/MI_Floor.MI_Floor"));
-	LabelPlateMesh = Cube.Object;
-	LabelPlateMaterial = Material.Object;
+	// 硬引用作者贴花，确保楼板材质和功能、数字图集随建筑进入 Cook。
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> FloorMaterial(TEXT("/Game/ART/Material/MI_Floor_02.MI_Floor_02"));
 	FloorDecalMaterial = FloorMaterial.Object;
-
-	// 标签只在 ConfigureBuildingVisual 成功后显示，避免生成中间状态被玩家看见。
-	PrototypeLabel = CreateDefaultSubobject<UTextRenderComponent>(TEXT("PrototypeLabel"));
-	PrototypeLabel->SetupAttachment(VisualRoot);
-	PrototypeLabel->SetHorizontalAlignment(EHorizTextAligment::EHTA_Center);
-	PrototypeLabel->SetVerticalAlignment(EVerticalTextAligment::EVRTA_TextCenter);
-	PrototypeLabel->SetTextRenderColor(FColor::White);
-	PrototypeLabel->SetWorldSize(52.0f);
-	PrototypeLabel->SetRelativeRotation(FRotator(90.0f, 0.0f, 0.0f));
-	PrototypeLabel->SetVisibility(false);
-
-	PrototypeLabelPlate = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PrototypeLabelPlate"));
-	// 数字牌是界面辅助物，合并时随旧 Actor 消失，不把它误当成屋顶零件卷入建筑。
-	PrototypeLabelPlate->ComponentTags.Add(TEXT("MergeExclude"));
-	PrototypeLabelPlate->SetupAttachment(VisualRoot);
-	// 标签底牌不参与碰撞或导航；先设置资格，再赋网格，避免创建期导航更新。
-	PrototypeLabelPlate->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	PrototypeLabelPlate->SetCanEverAffectNavigation(false);
-	PrototypeLabelPlate->SetStaticMesh(LabelPlateMesh);
-	PrototypeLabelPlate->SetMaterial(0, LabelPlateMaterial);
-	PrototypeLabelPlate->SetVisibility(false);
 }
 
 bool ACastleBuildingBase::TriggerBuildingEffect(const FCastleBuildingTriggerContext& Context)
@@ -115,8 +91,6 @@ void ACastleBuildingBase::SetPlacementComplete(const bool bComplete)
 		if (auto* Triggers = GetWorld()->GetSubsystem<UCastleBuildingTriggerSubsystem>()) { Triggers->NotifyBuildingStateChanged(this); }
 	}
 	bHasCompletedPlacement = bComplete;
-	PrototypeLabel->SetVisibility(bComplete, false);
-	PrototypeLabelPlate->SetVisibility(bComplete, false);
 	if (RoomTraitComponent)
 	{
 		RoomTraitComponent->SetPortalAvailable(CanReceiveBuildingTrigger());
@@ -131,6 +105,17 @@ void ACastleBuildingBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	if (auto* Triggers = GetWorld()->GetSubsystem<UCastleBuildingTriggerSubsystem>()) { Triggers->UnregisterBuilding(this); }
 	Super::EndPlay(EndPlayReason);
+}
+
+void ACastleBuildingBase::Destroyed()
+{
+	// 拆除或合并销毁 Actor 前撤下已发布的贴花，连同动态材质解除引用。
+	for (UDecalComponent* Decal : FloorDecals)
+	{
+		Decal->DestroyComponent();
+	}
+	FloorDecals.Reset();
+	Super::Destroyed();
 }
 
 bool ACastleBuildingBase::InitializeBuilding(const FCastleBuildingDescriptor& Descriptor, const TArray<FIntVector>& InOccupiedCoordinates)
@@ -188,7 +173,6 @@ bool ACastleBuildingBase::InitializeBuilding(const FCastleBuildingDescriptor& De
 	OccupiedCoordinates = InOccupiedCoordinates;
 	RoomTrait = Descriptor.RoomTrait;
 	TraitRemainingRounds = Descriptor.TraitRemainingRounds;
-	UpdateTraitLabel(false);
 	return true;
 }
 
@@ -204,14 +188,6 @@ FCastleBuildingDescriptor ACastleBuildingBase::GetBuildingDescriptor() const
 	return Descriptor;
 }
 
-void ACastleBuildingBase::UpdateTraitLabel(const bool bHighwayActive)
-{
-	// 数字标签使用引擎默认字库，以 ASCII 显示当前可用的道路或房间传送门。
-	const TCHAR* Suffix = RoomTrait == ECastleRoomTrait::SkyIslandPortal ? TEXT("\nPORTAL")
-		: (RoomTrait == ECastleRoomTrait::Highway && bHighwayActive ? TEXT("\nHIGHWAY") : TEXT(""));
-	PrototypeLabel->SetText(FText::FromString(FString::Printf(TEXT("%d\nLv%d%s"), Number, BuildingLevel, Suffix)));
-}
-
 void ACastleBuildingBase::ConsumeSkyIslandPortal()
 {
 	check(RoomTrait == ECastleRoomTrait::SkyIslandPortal && IsValid(RoomTraitComponent));
@@ -219,7 +195,6 @@ void ACastleBuildingBase::ConsumeSkyIslandPortal()
 	RoomTrait = ECastleRoomTrait::None;
 	RoomTraitComponent->DestroyComponent();
 	RoomTraitComponent = nullptr;
-	UpdateTraitLabel(false);
 }
 
 TSubclassOf<ACastleBuildingBase> ACastleBuildingBase::GetClassForLevel(int32 InLevel) const
@@ -258,27 +233,13 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 		return false;
 	}
 
-	FIntVector Minimum = OccupiedCoordinates[0];
-	FIntVector Maximum = OccupiedCoordinates[0];
-	for (const FIntVector& Coordinate : OccupiedCoordinates)
-	{
-		Minimum = Minimum.ComponentMin(Coordinate);
-		Maximum = Maximum.ComponentMax(Coordinate);
-	}
-	const FIntVector Dimensions = Maximum - Minimum + FIntVector(1, 1, 1);
-
-	// 只有美术分支中的可见网格才算建筑模型；功能楼板和标签不能掩盖模型漏配。
-	// 失败时标签保持隐藏，棋盘会销毁未提交的 Actor，并保留原有卡牌与占用。
-	PrototypeLabel->SetVisibility(false);
-	PrototypeLabelPlate->SetVisibility(false);
-
+	// 美术分支必须拥有真实可见模型；功能楼板单独保留其碰撞与导航职责。
 	TArray<UStaticMeshComponent*> StaticMeshes;
 	GetComponents<UStaticMeshComponent>(StaticMeshes);
 	bool bHasConfiguredModel = false;
 	for (UStaticMeshComponent* Component : StaticMeshes)
 	{
-		if (Component == PrototypeLabelPlate
-			|| UBuildingGameplayRootComponent::IsInGameplayHierarchy(Component))
+		if (UBuildingGameplayRootComponent::IsInGameplayHierarchy(Component))
 		{
 			continue;
 		}
@@ -396,25 +357,6 @@ bool ACastleBuildingBase::ConfigureBuildingVisual(float InCellSize, float InLaye
 			RoomTraitComponent->ConfigurePortalTransform(InCellSize, InLayerHeight);
 		}
 	}
-	const FBox LocalBounds = Bounds.TransformBy(GetActorTransform().ToInverseMatrixWithScale());
-	const float PlateHeight = LocalBounds.Max.Z + 8.0f;
-	const float Width = FMath::Min(Dimensions.X * InCellSize * 0.72f, 300.0f);
-	const float Depth = FMath::Min(Dimensions.Y * InCellSize * 0.72f, 180.0f);
-	PrototypeLabelPlate->SetRelativeLocation(FVector(0.0f, 0.0f, PlateHeight));
-	PrototypeLabelPlate->SetRelativeScale3D(FVector(Width / 100.0f, Depth / 100.0f, 0.035f));
-	UMaterialInstanceDynamic* PlateMaterial = UMaterialInstanceDynamic::Create(LabelPlateMaterial, this);
-	if (PlateMaterial == nullptr)
-	{
-		OutFailureReason = FText::FromString(TEXT("建筑标签材质创建失败。"));
-		return false;
-	}
-	PlateMaterial->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.015f, 0.015f, 0.02f));
-	PrototypeLabelPlate->SetMaterial(0, PlateMaterial);
-	PrototypeLabel->SetRelativeLocation(FVector(0.0f, 0.0f, PlateHeight + 2.5f));
-	const FColor LabelColors[] = { FColor::Silver, FColor::Red, FColor::Cyan, FColor::Green, FColor::Yellow, FColor::Magenta };
-	PrototypeLabel->SetTextRenderColor(LabelColors[static_cast<int32>(Color)]);
-	PrototypeLabel->SetVisibility(true);
-	PrototypeLabelPlate->SetVisibility(true);
 	return true;
 }
 
@@ -441,15 +383,32 @@ bool ACastleBuildingBase::ConfigureFloorDecals(const ACastleBoard& Board, FText&
 		|| !FMath::IsFinite(Board.LayerHeight) || Board.LayerHeight <= 0.0f
 		|| Board.GetActorTransform().ContainsNaN())
 	{
-		return Reject(FString::Printf(TEXT("楼板材质 /Game/ART/Material/MI_Floor、功能根节点、占格或棋盘尺寸无效。材质=%s。"),
+		return Reject(FString::Printf(TEXT("楼板材质 /Game/ART/Material/MI_Floor_02、功能根节点、占格或棋盘尺寸无效。材质=%s。"),
 			*GetPathNameSafe(FloorDecalMaterial)));
+	}
+	// 材质参数写入在 UE 中允许找不到同名项，必须先检查真实参数和贴花域再创建整批组件。
+	static const FMaterialParameterInfo IconParameter(TEXT("Icon"));
+	static const FMaterialParameterInfo NumberParameter(TEXT("Number"));
+	static const FMaterialParameterInfo BackgroundParameter(TEXT("BackgroundColor"));
+	static const FMaterialParameterInfo SymbolParameter(TEXT("Color"));
+	float ScalarValue;
+	FLinearColor VectorValue;
+	if (FloorDecalMaterial->GetMaterial()->MaterialDomain != MD_DeferredDecal
+		|| !FloorDecalMaterial->GetScalarParameterValue(IconParameter, ScalarValue)
+		|| !FloorDecalMaterial->GetScalarParameterValue(NumberParameter, ScalarValue)
+		|| !FloorDecalMaterial->GetVectorParameterValue(BackgroundParameter, VectorValue)
+		|| !FloorDecalMaterial->GetVectorParameterValue(SymbolParameter, VectorValue))
+	{
+		return Reject(FString::Printf(TEXT("%s 必须为贴花域并包含 Icon、Number、BackgroundColor 与 Color 参数。"),
+			*FloorDecalMaterial->GetPathName()));
 	}
 
 	FLinearColor DecalTint;
-	if (!CastleTileColors::TryGetGridTint(Color, DecalTint) || Number < 1 || Number > 9)
+	const int32 IconIndex = CastleBuildingIcons::FindIndex(BuildingType);
+	if (IconIndex == INDEX_NONE || !CastleTileColors::TryGetGridTint(Color, DecalTint) || Number < 1 || Number > 9)
 	{
-		return Reject(FString::Printf(TEXT("卡牌属性无效：颜色 %d、数字 %d，无法设置材质颜色和图集帧。"),
-			static_cast<int32>(Color), Number));
+		return Reject(FString::Printf(TEXT("%s 的卡牌属性无效：类型 %d、颜色 %d、数字 %d。"),
+			*FloorDecalMaterial->GetPathName(), static_cast<int32>(BuildingType), static_cast<int32>(Color), Number));
 	}
 
 	const bool bHasV4Layout = IsValid(HachimisLayout);
@@ -509,9 +468,11 @@ bool ACastleBuildingBase::ConfigureFloorDecals(const ACastleBoard& Board, FText&
 			return Reject(FString::Printf(TEXT("占格 %s 无法从材质 %s 创建动态实例。"),
 				*Coordinate.ToString(), *FloorDecalMaterial->GetPathName()));
 		}
-		// 3×3 图集帧从零编号，建筑数字 1～9 映射到帧 0～8。
-		Material->SetVectorParameterValue(TEXT("Color"), DecalTint);
-		Material->SetScalarParameterValue(TEXT("Frame (S)"), static_cast<float>(Number - 1));
+		// 卡牌色设置底纹；数字和图标沿用共同的作者字色，保留其与底纹的对比。
+		// 两张 3×3 图集均从 0 编号，数字 I～IX 对应 0～8，功能图标使用独立编号。
+		Material->SetVectorParameterValue(BackgroundParameter.Name, DecalTint);
+		Material->SetScalarParameterValue(NumberParameter.Name, static_cast<float>(Number - 1));
+		Material->SetScalarParameterValue(IconParameter.Name, static_cast<float>(IconIndex));
 
 		Decal->SetupAttachment(GameplayRoot);
 		Decal->SetWorldTransform(DecalWorldTransform);
@@ -542,13 +503,8 @@ FBox ACastleBuildingBase::GetVisualBounds() const
 	GetComponents<UPrimitiveComponent>(Primitives);
 	for (const UPrimitiveComponent* Primitive : Primitives)
 	{
-		// 隐藏碰撞即使为了编辑调试临时设为可见，也不能扩大建筑标签高度和卡片取景范围。
+		// 功能碰撞即使临时设为可见，也不纳入模型包围盒和卡片取景。
 		if (UBuildingGameplayRootComponent::IsInGameplayHierarchy(Primitive))
-		{
-			continue;
-		}
-		// 标签不属于模型几何体，取景和标签高度都不应把文字自身再次计入范围。
-		if (Primitive == PrototypeLabelPlate || Primitive == PrototypeLabel)
 		{
 			continue;
 		}
@@ -565,9 +521,6 @@ void ACastleBuildingBase::PrepareForPreview()
 	// 预览虽然使用相同建筑类，但不属于真实放置实例，不能接收任何玩法效果。
 	bBuildingPreview = true;
 	if (RoomTraitComponent) { RoomTraitComponent->SetPortalAvailable(false); }
-	// 卡片只显示建筑形状，等级与数字由卡片自己的文字控件显示。
-	PrototypeLabel->SetVisibility(false);
-	PrototypeLabelPlate->SetVisibility(false);
 	TArray<UPrimitiveComponent*> Primitives;
 	GetComponents<UPrimitiveComponent>(Primitives);
 #if WITH_EDITOR

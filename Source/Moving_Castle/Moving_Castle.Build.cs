@@ -33,7 +33,8 @@ public class Moving_Castle : ModuleRules
 			"SlateCore"
 		});
 
-		PrivateDependencyModuleNames.AddRange(new string[] { });
+		// 主塔表现组件的公开属性引用 Niagara，因此运行时模块向调用方导出该依赖。
+		PublicDependencyModuleNames.Add("Niagara");
 		// 几何身份在编辑器离线生成；正式游戏只读取目录，不依赖 MeshDescription 或 CPU 顶点。
 		if (Target.bBuildEditor)
 		{
