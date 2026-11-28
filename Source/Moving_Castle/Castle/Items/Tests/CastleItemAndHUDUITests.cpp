@@ -12,6 +12,7 @@
 #include "Castle/UI/Items/CastleBadgeReplaceModalWidget.h"
 #include "Components/Button.h"
 #include "Components/Image.h"
+#include "Components/Overlay.h"
 #include "Components/PanelWidget.h"
 #include "Components/TextBlock.h"
 #include "Engine/Engine.h"
@@ -76,6 +77,10 @@ bool FCastleBadgeIconUITest::RunTest(const FString&)
 		|| !TestNotNull(TEXT("候选徽章文案"), PendingLabel) || !TestNotNull(TEXT("舍弃按钮"), Discard)) { return false; }
 
 	const int32 SlotCount = UCastleBadgeSubsystem::MaxBadges;
+	auto* FrameTexture = LoadObject<UTexture2D>(nullptr,
+		TEXT("/Game/MovingCastle/UI/Textures/T_UI_BadgeSlot.T_UI_BadgeSlot"));
+	if (!TestNotNull(TEXT("正式六边形槽底图"), FrameTexture)) { return false; }
+	TestEqual(TEXT("栏根允许子槽接收悬停"), Bar->GetVisibility(), ESlateVisibility::SelfHitTestInvisible);
 	TestEqual(TEXT("商店外徽章栏固定六槽"), BarRows->GetChildrenCount(), 6);
 	TestEqual(TEXT("弹窗固定六个替换按钮"), ModalRows->GetChildrenCount(), 6);
 	TestEqual(TEXT("每个替换按钮有对应图标"), ModalIcons->GetChildrenCount(), 6);
@@ -83,25 +88,31 @@ bool FCastleBadgeIconUITest::RunTest(const FString&)
 	TestEqual(TEXT("没有候选徽章时弹窗折叠"), Modal->GetVisibility(), ESlateVisibility::Collapsed);
 
 	TArray<UImage*> BarSlotIcons;
-	TArray<UTextBlock*> BarSlotLabels;
+	TArray<UImage*> BarSlotFrames;
+	TArray<UOverlay*> BarSlots;
 	TArray<UImage*> ModalSlotIcons;
 	TArray<UButton*> ModalSlotButtons;
 	for (int32 Index = 0; Index < SlotCount; ++Index)
 	{
-		auto* Row = Cast<UPanelWidget>(BarRows->GetChildAt(Index));
-		auto* Icon = Row ? Cast<UImage>(Row->GetChildAt(0)) : nullptr;
-		auto* Label = Row ? Cast<UTextBlock>(Row->GetChildAt(1)) : nullptr;
+		auto* Slot = Cast<UOverlay>(BarRows->GetChildAt(Index));
+		if (!TestNotNull(TEXT("栏内叠层槽"), Slot)) { return false; }
+		auto* Frame = Cast<UImage>(Slot->GetChildAt(0));
+		auto* Icon = Cast<UImage>(Slot->GetChildAt(1));
 		auto* ModalIcon = Cast<UImage>(ModalIcons->GetChildAt(Index));
 		auto* Button = Cast<UButton>(ModalRows->GetChildAt(Index));
-		if (!TestNotNull(TEXT("栏内图标"), Icon) || !TestNotNull(TEXT("栏内说明"), Label)
+		if (!TestNotNull(TEXT("栏内图标"), Icon) || !TestNotNull(TEXT("栏内底框"), Frame)
 			|| !TestNotNull(TEXT("弹窗槽图标"), ModalIcon) || !TestNotNull(TEXT("弹窗槽按钮"), Button)) { return false; }
 		BarSlotIcons.Add(Icon);
-		BarSlotLabels.Add(Label);
+		BarSlotFrames.Add(Frame);
+		BarSlots.Add(Slot);
 		ModalSlotIcons.Add(ModalIcon);
 		ModalSlotButtons.Add(Button);
 		TestEqual(TEXT("空槽隐藏图标"), Icon->GetVisibility(), ESlateVisibility::Hidden);
 		TestNull(TEXT("空栏槽无图标资源"), Icon->GetBrush().GetResourceObject());
-		TestEqual(TEXT("空栏槽显示文字"), Label->GetText().ToString(), FString(TEXT("空徽章槽")));
+		TestTrue(TEXT("空槽正确显示六边形底框"), Frame->GetBrush().GetResourceObject() == FrameTexture);
+		TestEqual(TEXT("空槽底框为 58 像素"), FVector2D(Frame->GetBrush().GetImageSize()), FVector2D(58, 58));
+		TestEqual(TEXT("空槽不截获鼠标"), Slot->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		TestTrue(TEXT("空槽无提示"), Slot->GetToolTipText().IsEmpty());
 		TestEqual(TEXT("空弹窗槽隐藏图标"), ModalIcon->GetVisibility(), ESlateVisibility::Hidden);
 	}
 
@@ -141,10 +152,11 @@ bool FCastleBadgeIconUITest::RunTest(const FString&)
 		TestEqual(TEXT("替换槽显示图标"), ModalSlotIcons[Index]->GetVisibility(), ESlateVisibility::HitTestInvisible);
 		const UTextBlock* ModalLabel = Cast<UTextBlock>(ModalSlotButtons[Index]->GetContent());
 		if (!TestNotNull(TEXT("原替换按钮保留文本子控件"), ModalLabel)) { return false; }
-		for (const UTextBlock* SlotLabel : {static_cast<const UTextBlock*>(BarSlotLabels[Index]), ModalLabel})
+		TestEqual(TEXT("占用槽接收鼠标悬停"), BarSlots[Index]->GetVisibility(), ESlateVisibility::Visible);
+		for (const FText& SlotText : {BarSlots[Index]->GetToolTipText(), ModalLabel->GetText()})
 		{
-			TestTrue(TEXT("槽显示该徽章的名称"), SlotLabel->GetText().ToString().Contains(Owned.GetDisplayName().ToString()));
-			TestTrue(TEXT("槽显示该徽章的效果"), SlotLabel->GetText().ToString().Contains(Owned.GetEffectSummary().ToString()));
+			TestTrue(TEXT("槽显示该徽章的名称"), SlotText.ToString().Contains(Owned.GetDisplayName().ToString()));
+			TestTrue(TEXT("槽显示该徽章的效果"), SlotText.ToString().Contains(Owned.GetEffectSummary().ToString()));
 		}
 	}
 
@@ -152,6 +164,8 @@ bool FCastleBadgeIconUITest::RunTest(const FString&)
 	ModalSlotButtons.Last()->OnClicked.Broadcast();
 	TestEqual(TEXT("替换提交后弹窗折叠"), Modal->GetVisibility(), ESlateVisibility::Collapsed);
 	TestTrue(TEXT("按钮只替换选中的末槽"), BarSlotIcons.Last()->GetBrush().GetResourceObject() == Candidate.Icon.Get());
+	TestEqual(TEXT("末槽提示同步替换后的名称和效果"), BarSlots.Last()->GetToolTipText().ToString(),
+		Candidate.GetDisplayName().ToString() + TEXT("\n") + Candidate.GetEffectSummary().ToString());
 	TestTrue(TEXT("首槽保持原图标"), BarSlotIcons[0]->GetBrush().GetResourceObject() == Awards[0].Icon.Get());
 	bool bNeedsReplacement = false;
 	if (!TestTrue(TEXT("满槽时可打开下一笔替换"),
@@ -182,10 +196,31 @@ bool FCastleBadgeIconUITest::RunTest(const FString&)
 	{
 		TestEqual(TEXT("重置徽章后隐藏图标"), BarSlotIcons[Index]->GetVisibility(), ESlateVisibility::Hidden);
 		TestNull(TEXT("重置徽章后释放画刷资源"), BarSlotIcons[Index]->GetBrush().GetResourceObject());
-		TestEqual(TEXT("重置徽章后显示空槽"), BarSlotLabels[Index]->GetText().ToString(), FString(TEXT("空徽章槽")));
+		TestTrue(TEXT("重置徽章后清除提示"), BarSlots[Index]->GetToolTipText().IsEmpty());
+		TestEqual(TEXT("重置徽章后不截获鼠标"), BarSlots[Index]->GetVisibility(), ESlateVisibility::HitTestInvisible);
 	}
 
 	// 破坏本测试实例的控件树，实际资产保持原样。缺失绑定必须拒绝重新绑定。
+	BarSlotFrames[0]->SetBrushResourceObject(nullptr);
+	AddExpectedError(TEXT("缺少有效底框纹理 T_UI_BadgeSlot"), EAutomationExpectedErrorFlags::Contains, 2);
+	Badges->ClearAllBadgesForTesting();
+	TestEqual(TEXT("刷新发现底框破损时折叠整栏"), Bar->GetVisibility(), ESlateVisibility::Collapsed);
+	TestFalse(TEXT("没有底框纹理时拒绝绑定"), Bar->BindBadges(Badges));
+	BarSlotFrames[0]->SetBrushResourceObject(FrameTexture);
+	BarRows->RemoveChildAt(SlotCount - 1);
+	AddExpectedError(TEXT("需要含六个子项的 BadgeSlots"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestFalse(TEXT("缺少一个徽章槽时拒绝绑定"), Bar->BindBadges(Badges));
+
+	// 绕过正式发放库，向隔离库存注入坏徽章来覆盖徽章栏自身的资源校验。
+	auto* InvalidBadgeSource = NewObject<UCastleBadgeSubsystem>(Game);
+	auto* InvalidBadgeBar = CreateWidget<UCastleBadgeBarWidget>(Game, BarClass);
+	if (!TestNotNull(TEXT("创建隔离的徽章栏"), InvalidBadgeBar)) { return false; }
+	AddExpectedError(TEXT("缺少有效 Icon"), EAutomationExpectedErrorFlags::Contains, 1);
+	if (!TestTrue(TEXT("隔离库存可以接收测试徽章"),
+		InvalidBadgeSource->TryAcquireBadge(MissingIcon->Badge, bNeedsReplacement, Reason))) { return false; }
+	TestFalse(TEXT("持有缺图标徽章时拒绝绑定"), InvalidBadgeBar->BindBadges(InvalidBadgeSource));
+	TestEqual(TEXT("缺图标徽章导致整栏折叠"), InvalidBadgeBar->GetVisibility(), ESlateVisibility::Collapsed);
+
 	ModalIcons->RemoveChildAt(SlotCount - 1);
 	AddExpectedError(TEXT("绑定失败：需要徽章源、候选图标和说明"), EAutomationExpectedErrorFlags::Contains, 1);
 	TestFalse(TEXT("缺少一个替换槽图标时拒绝绑定"), Modal->BindBadges(Badges));

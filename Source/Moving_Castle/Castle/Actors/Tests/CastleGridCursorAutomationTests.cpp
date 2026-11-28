@@ -14,6 +14,21 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 
+#if WITH_EDITOR
+#include "Camera/CameraActor.h"
+#include "Camera/PlayerCameraManager.h"
+#include "Castle/Automation/CastlePIEAutomation.h"
+#include "CastleBoard.h"
+#include "CastlePlayerController.h"
+#include "HAL/FileManager.h"
+#include "HAL/IConsoleManager.h"
+#include "Interaction/CastlePatrolRoute.h"
+#include "Kismet/GameplayStatics.h"
+#include "Misc/App.h"
+#include "Misc/OutputDeviceNull.h"
+#include "UnrealClient.h"
+#endif
+
 /** 验证运行时网格、专属全息材质与参数、三维变换和所有视觉排除标记。 */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePlacementHoloBoxAutomationTest,
 	"MovingCastle.Placement.HoloBox.CursorMaterialAndRenderFlags",
@@ -91,5 +106,109 @@ bool FCastlePlacementHoloBoxAutomationTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("无效目标立即隐藏全息盒"), Cursor->IsHidden());
 	return true;
 }
+
+#if WITH_EDITOR
+/** 使用正式地图的视口与主塔侧格，覆盖路径编辑前后控制器的完整光标更新入口。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePathEditGridCursorTest,
+	"MovingCastle.Placement.HoloBox.HiddenInPathEditMode",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastlePathEditGridCursorTest::RunTest(const FString&)
+{
+	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"), FIntPoint(1280, 720))) { return false; }
+	const bool bShowScreenMessages = GAreScreenMessagesEnabled;
+	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([this, Deadline = FPlatformTime::Seconds() + 60.0,
+		Phase = 0, ViewportFrames = 0]() mutable
+	{
+		UWorld* World = GEditor->PlayWorld;
+		auto* Player = World ? Cast<ACastlePlayerController>(World->GetFirstPlayerController()) : nullptr;
+		FText EditReason;
+		const bool bCanEdit = Player && Player->GetPawn() && Player->IsCastleEditingAllowed(EditReason);
+		if (!bCanEdit && FPlatformTime::Seconds() < Deadline) { return false; }
+		if (!TestTrue(TEXT("MainMap 玩家进入可建造阶段"), bCanEdit)) { return true; }
+		auto* Board = Cast<ACastleBoard>(UGameplayStatics::GetActorOfClass(World, ACastleBoard::StaticClass()));
+		auto* Route = Cast<ACastlePatrolRoute>(UGameplayStatics::GetActorOfClass(World, ACastlePatrolRoute::StaticClass()));
+		if (!TestNotNull(TEXT("真实棋盘"), Board) || !TestNotNull(TEXT("真实巡逻路径"), Route)) { return true; }
+
+		// 截图使用正式 PIE 游戏画面。无渲染的测试仍逐帧验证同样的状态切换。
+		const FString ScreenshotDir = FPaths::ProjectSavedDir() / TEXT("Coordinator");
+		auto Capture = [&ScreenshotDir](const TCHAR* Filename)
+		{
+			if (FApp::CanEverRender())
+			{
+				IFileManager::Get().MakeDirectory(*ScreenshotDir, true);
+				FScreenshotRequest::RequestScreenshot(ScreenshotDir / Filename, true, false, false, FIntRect(), true);
+			}
+		};
+		if (Phase == 0)
+		{
+			// 经典模式使用视口中心。相机放在首层负 X 面外，瞄向正式主塔侧格。
+			const FVector Center = Board->GetGridWorldLocation(Board->GetBoardCenterCoordinate());
+			const FVector Eye = Center + Board->GetActorTransform().TransformVector(FVector(-2.0 * Board->CellSize, 0, 0));
+			auto* Camera = World->SpawnActor<ACameraActor>(Eye, (Center - Eye).Rotation());
+			if (!TestNotNull(TEXT("创建测试相机"), Camera)) { return true; }
+			Player->SetControlMode(ECastleControlMode::Classic, false);
+			Player->SetViewTarget(Camera);
+			Player->PlayerCameraManager->UpdateCamera(0.0f);
+			// 使用已有验收命令取得正式徽章，截图同时覆盖占用槽和空槽。
+			FOutputDeviceNull Output;
+			if (!TestTrue(TEXT("为验收画面发放正式徽章"), IConsoleManager::Get().ProcessUserConsoleInput(
+				TEXT("Castle.Items.Badge 1"), Output, World))) { return true; }
+			// 留出几帧给独立 PIE 窗口的首次绘制，避免截图被编辑器视口先消费。
+			GAreScreenMessagesEnabled = false;
+			++Phase;
+			return false;
+		}
+		if (FScreenshotRequest::IsScreenshotRequested())
+		{
+			if (FPlatformTime::Seconds() < Deadline) { return false; }
+			AddError(TEXT("MainMap 验收截图超时。"));
+			return true;
+		}
+		Player->Tick(0.0f);
+		const auto* Cursor = Player->GridCursor.Get();
+		if (!TestNotNull(TEXT("控制器生成建造光标"), Cursor)) { return true; }
+		if (Phase == 1)
+		{
+			if (++ViewportFrames < 4) { return false; }
+			if (!TestTrue(TEXT("建造态瞄准主塔侧格且显示全息块"), Player->CurrentGridCursorTarget.bValid
+				&& Player->CurrentGridCursorTarget.Surface == ECastleGridCursorSurface::MainTowerSide && !Cursor->IsHidden())) { return true; }
+			Capture(TEXT("Temp-MainMap-徽章槽与建造光标.png"));
+			++Phase;
+			return false;
+		}
+		if (Phase == 2)
+		{
+			// 经由 PlayerInput 的正式 P 键绑定进入路径编辑，使用正帧长派发普通输入。
+			Player->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::P, IE_Pressed, 1.0f));
+			Player->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::P, IE_Released, 0.0f));
+			Player->PlayerTick(1.0f / 60.0f);
+			TestTrue(TEXT("进入正式路径编辑态"), Route->IsEditing());
+			Player->Tick(0.0f);
+			TestTrue(TEXT("编辑态隐藏建造光标"), Cursor->IsHidden());
+			TestFalse(TEXT("编辑态清空旧建造落点"), Player->CurrentGridCursorTarget.bValid);
+			TestTrue(TEXT("编辑态保留经典模式中心准星"), Player->ShouldDrawCenterCrosshair());
+			Capture(TEXT("Temp-MainMap-路径编辑无建造光标.png"));
+			++Phase;
+			return false;
+		}
+
+		// 取消路径草稿后沿用同一瞄准射线，证明恢复由路径状态切换触发。
+		Route->CancelEditingDraft();
+		TestFalse(TEXT("退出路径编辑态"), Route->IsEditing());
+		Player->Tick(0.0f);
+		TestTrue(TEXT("恢复建造落点和全息块"), Player->CurrentGridCursorTarget.bValid && !Cursor->IsHidden());
+		return true;
+	}));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
+	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([bShowScreenMessages]()
+	{
+		// 包括断言失败时，退回编辑器后都恢复原有屏幕消息开关。
+		GAreScreenMessagesEnabled = bShowScreenMessages;
+		return true;
+	}));
+	return true;
+}
+#endif
 
 #endif
