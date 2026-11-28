@@ -8,9 +8,13 @@
 #include "CastleBuildingTestUtilities.h"
 #include "CastleBuildingDefinition.h"
 #include "Components/Button.h"
+#include "Components/Image.h"
+#include "Components/Overlay.h"
+#include "Components/OverlaySlot.h"
 #include "Components/PanelWidget.h"
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
+#include "Components/WrapBox.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -350,6 +354,29 @@ bool FCastleItemWidgetAssetTest::RunTest(const FString& Parameters)
 		{TEXT("StackCount"), TEXT("FrontCard")});
 	Verify(TEXT("WBP_BadgeBar"), UCastleBadgeBarWidget::StaticClass(),
 		{TEXT("BadgeSlots")});
+	// 直接核对正式 WBP 的布局，确保可命中的子槽不会被根容器屏蔽。
+	const auto* BadgeBarClass = Cast<UWidgetBlueprintGeneratedClass>(LoadClass<UCastleBadgeBarWidget>(nullptr,
+		TEXT("/Game/MovingCastle/UI/Items/WBP_BadgeBar.WBP_BadgeBar_C")));
+	const UWidgetTree* BadgeBarTree = BadgeBarClass ? BadgeBarClass->GetWidgetTreeArchetype() : nullptr;
+	const auto* BadgeSlots = BadgeBarTree ? Cast<UWrapBox>(BadgeBarTree->RootWidget) : nullptr;
+	if (TestNotNull(TEXT("徽章栏根控件为六槽换行容器"), BadgeSlots))
+	{
+		TestEqual(TEXT("根容器保留子槽命中"), BadgeSlots->GetVisibility(), ESlateVisibility::SelfHitTestInvisible);
+		TestEqual(TEXT("六个正式徽章槽"), BadgeSlots->GetChildrenCount(), UCastleBadgeSubsystem::MaxBadges);
+		TestTrue(TEXT("三列换行且左偏移 24 后仍在 220 安全边距内"), BadgeSlots->UseExplicitWrapSize()
+			&& BadgeSlots->GetWrapSize() == 186.f && BadgeSlots->GetInnerSlotPadding() == FVector2D(6, 6));
+		for (int32 Index = 0; Index < BadgeSlots->GetChildrenCount(); ++Index)
+		{
+			const auto* BadgeSlot = Cast<UOverlay>(BadgeSlots->GetChildAt(Index));
+			const auto* Icon = BadgeSlot ? Cast<UImage>(BadgeSlot->GetChildAt(1)) : nullptr;
+			const auto* IconLayout = Icon ? Cast<UOverlaySlot>(Icon->Slot) : nullptr;
+			if (TestNotNull(TEXT("图标位于叠层布局中"), IconLayout))
+			{
+				TestTrue(TEXT("36 像素图标水平垂直居中"), Icon->GetBrush().GetImageSize() == FVector2D(36, 36)
+					&& IconLayout->GetHorizontalAlignment() == HAlign_Center && IconLayout->GetVerticalAlignment() == VAlign_Center);
+			}
+		}
+	}
 	Verify(TEXT("WBP_BadgeReplaceModal"), UCastleBadgeReplaceModalWidget::StaticClass(),
 		{TEXT("PendingBadgeLabel"), TEXT("ReplaceSlots"), TEXT("DiscardButton")});
 	Verify(TEXT("WBP_WildcardRoomPicker"), UCastleWildcardRoomPickerWidget::StaticClass(),
