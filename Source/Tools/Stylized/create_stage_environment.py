@@ -111,6 +111,8 @@ def author_environment():
     require(len(weather) <= 1, f'{MAP} 含多个天气蓝图')
     require(sum(isinstance(actor, ue.SkyAtmosphere) for actor in scene) == 1, f'{MAP} 必须有一个原生大气')
     require(sum(isinstance(actor, ue.VolumetricCloud) for actor in scene) == 1, f'{MAP} 必须有一个原生体积云')
+    terrain = [actor for actor in scene if actor.get_class().get_name() == 'AerialTerrainBackdrop']
+    require(len(terrain) == 1, f'{MAP} 必须有一个远景地表')
     sky = make_sky()
 
     def place(kind, label, location=None, rotation=None):
@@ -137,7 +139,8 @@ def author_environment():
     sun.set_mobility(ue.ComponentMobility.MOVABLE)
     sun.set_editor_properties(dict(intensity=3.15, light_color=ue.Color(255, 249, 238, 255),
                                    light_source_angle=0.15, contact_shadow_length=0.0,
-                                   atmosphere_sun_light=True, cast_cloud_shadows=False))
+                                   atmosphere_sun_light=True, cast_cloud_shadows=False,
+                                   cloud_scattered_luminance_scale=ue.LinearColor(1.44, 1.56, 1.78, 1.0)))
     sun.set_transmission(False)
 
     dome = place(ue.StaticMeshActor, 'Stylized Sky Dome')
@@ -162,6 +165,9 @@ def author_environment():
     fog.set_editor_properties(dict(fog_density=0.012, fog_height_falloff=0.30,
                                    fog_inscattering_luminance=HORIZON, start_distance=30000.0,
                                    fog_max_opacity=0.18, enable_volumetric_fog=False))
+    # 地表使用作者提供的远端天空颜色和相同的固定太阳方向，插件无需引用关卡资源。
+    terrain[0].set_editor_properties(dict(haze_color=HORIZON,
+                                          sun_direction=ue.MathLibrary.get_forward_vector(SUN_ROTATION) * -1.0))
     configure_postprocess(place(ue.PostProcessVolume, 'Stylized Exposure'))
     for actor in weather:
         require(actors.destroy_actor(actor), f'无法删除 MainMap 旧天气 {actor.get_path_name()}')

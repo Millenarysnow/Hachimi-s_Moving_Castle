@@ -141,8 +141,8 @@ def make_material(coverage, volume):
     advanced = node(material, ue.MaterialExpressionVolumetricAdvancedMaterialOutput, 380, -340,
                     ray_march_volume_shadow=True, gray_scale_material=False,
                     multi_scattering_approximation_octave_count=1,
-                    const_multi_scattering_contribution=0.88, const_multi_scattering_occlusion=0.32,
-                    const_phase_g=-0.34, const_phase_g2=0.18, const_phase_blend=0.27)
+                    const_multi_scattering_contribution=0.92, const_multi_scattering_occlusion=0.28,
+                    const_phase_g=-0.25, const_phase_g2=0.12, const_phase_blend=0.31)
     connect(support, advanced, 'ConservativeDensity')
     cached = node(material, ue.MaterialExpressionVolumetricAdvancedMaterialInput, -375, 125)
     medium = custom(material, -140, 125, '三维团块消光与天空可见度',
@@ -155,20 +155,33 @@ def make_material(coverage, volume):
     occlusion = node(material, ue.MaterialExpressionComponentMask, 130, 300, r=False, g=True)
     connect(medium, density, '')
     connect(medium, occlusion, '')
-    # 颜色是线性反照率。用云体深度在暖白和偏紫的散射色间过渡，亮暗仍由体积受光决定。
+    # 色阶只影响线性散射反照率和天光补光，消光维持无色，云下地貌仍按透射率呈现。
     sunlit = node(material, ue.MaterialExpressionVectorParameter, -140, 525,
-                  parameter_name='CloudSunlitTint', default_value=ue.LinearColor(1.0, 0.96, 0.87, 1.0))
+                  parameter_name='CloudSunlitTint', default_value=ue.LinearColor(1.0, 0.98, 0.92, 1.0))
     interior = node(material, ue.MaterialExpressionVectorParameter, -140, 730,
-                    parameter_name='CloudInteriorTint', default_value=ue.LinearColor(1.0, 0.72, 0.88, 1.0))
-    albedo = custom(material, 380, 600, '云顶和云肩的散射色',
-                    'return lerp(Sunlit.rgb, Interior.rgb, smoothstep(0.12, 0.62, 1.0 - Visibility));',
+                    parameter_name='CloudInteriorTint', default_value=ue.LinearColor(0.54, 0.72, 0.96, 1.0))
+    band_lower, band_upper = 0.45, 0.59
+    assert 0.0 <= band_lower < band_upper <= 1.0, '云光照软色阶上下界无效'
+    lower, upper = [node(material, ue.MaterialExpressionScalarParameter, -160, y, parameter_name=name,
+                         default_value=value) for y, name, value in
+                    ((900, 'CloudBandLower', band_lower), (1050, 'CloudBandUpper', band_upper))]
+    band = custom(material, 400, 300, '云顶与云腹的软色阶',
+                  'return AerialCloudLitBand(Visibility, Height, Lower, Upper);',
+                  ue.CustomMaterialOutputType.CMOT_FLOAT1,
+                  dict(Visibility=(occlusion, ''), Height=(altitude, 'NormAltitudeInLayer'),
+                       Lower=(lower, ''), Upper=(upper, '')))
+    albedo = custom(material, 710, 585, '天蓝云腹与暖白云顶的散射色',
+                    'return lerp(Interior.rgb, Sunlit.rgb, Band);',
                     ue.CustomMaterialOutputType.CMOT_FLOAT3,
-                    dict(Sunlit=(sunlit, ''), Interior=(interior, ''), Visibility=(occlusion, '')))
+                    dict(Sunlit=(sunlit, ''), Interior=(interior, ''), Band=(band, '')))
+    boost = custom(material, 700, 340, '避免阴面天光降为灰黑', 'return lerp(0.72, 1.0, Band);',
+                   ue.CustomMaterialOutputType.CMOT_FLOAT1, dict(Band=(band, '')))
     assert EDIT.connect_material_property(density, '', ue.MaterialProperty.MP_SUBSURFACE_COLOR), '无法接入体积消光'
     assert EDIT.connect_material_property(albedo, '', ue.MaterialProperty.MP_BASE_COLOR), '无法接入体积反照率'
-    assert EDIT.connect_material_property(occlusion, '', ue.MaterialProperty.MP_AMBIENT_OCCLUSION), '无法接入云内天光遮蔽'
+    assert EDIT.connect_material_property(boost, '', ue.MaterialProperty.MP_AMBIENT_OCCLUSION), '无法接入云内天光遮蔽'
 
-    EDIT.recompile_material(material)
+    errors = EDIT.recompile_material(material)
+    assert not errors, f'{path} 编译失败：{errors}'
     save(material)
     ue.log(f'AERIAL_CLOUD_ASSET {material.get_path_name()}：云团、薄云与散射配色已制作。')
 
