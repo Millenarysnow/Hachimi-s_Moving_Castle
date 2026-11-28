@@ -1,6 +1,7 @@
 #if WITH_EDITOR && WITH_DEV_AUTOMATION_TESTS && !UE_BUILD_SHIPPING
 #include "Audio/CastleAudioSubsystem.h"
 #include "Castle/Automation/CastlePIEAutomation.h"
+#include "Blueprint/GameViewportSubsystem.h"
 #include "Blueprint/SlateBlueprintLibrary.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Camera/CameraActor.h"
@@ -22,6 +23,7 @@
 #include "Castle/UI/Director/CastleDirectorWidgets.h"
 #include "Castle/UI/Items/CastleBadgeBarWidget.h"
 #include "Castle/UI/Items/CastleWildcardRoomPickerWidget.h"
+#include "Castle/UI/Shop/CastleShopOfferSlotWidget.h"
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
@@ -46,6 +48,7 @@
 #include "EngineUtils.h"
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/FileManager.h"
+#include "ImageUtils.h"
 #include "Interaction/CastlePatrolRoute.h"
 #include "Items/CastleItemGrantLibrary.h"
 #include "Layout/WidgetPath.h"
@@ -57,6 +60,7 @@
 #include "Tests/AutomationCommon.h"
 #include "UnrealClient.h"
 #include "Widgets/SWindow.h"
+#include "Widgets/SViewport.h"
 
 using CastlePIEAutomation::StartPIE;
 using CastlePIEAutomation::StopPIE;
@@ -86,13 +90,58 @@ namespace
 		IFileManager::Get().MakeDirectory(*Directory, true);
 		FScreenshotRequest::RequestScreenshot(Directory / Filename, true, false);
 	}
+
+	/** 将桌面坐标处的一次鼠标按压和释放交给真实 PIE 窗口，走 Slate 命中、捕获与事件冒泡。 */
+	bool ClickPIEWindow(const FWidgetPath& Hit, const FVector2D Position)
+	{
+		auto& Slate = FSlateApplication::Get();
+		const uint32 PointerIndex = FSlateApplication::CursorPointerIndex;
+		const FPointerEvent Move(PointerIndex, Position, Position, {}, EKeys::Invalid, 0.0f, FModifierKeysState());
+		const FPointerEvent Down(PointerIndex, Position, Position, {EKeys::LeftMouseButton},
+			EKeys::LeftMouseButton, 0.0f, FModifierKeysState());
+		const FPointerEvent Up(PointerIndex, Position, Position, {}, EKeys::LeftMouseButton, 0.0f, FModifierKeysState());
+		// MCP 自动化窗口可能在后台。沿用商店输入测试的方式，仅在事件路由时允许 Slate 捕获指针。
+		const bool bPreviousBackgroundInput = Slate.GetHandleDeviceInputWhenApplicationNotActive();
+		Slate.SetHandleDeviceInputWhenApplicationNotActive(true);
+		// 按钮松手时验证悬停状态，先用同一条真实命中路径输入鼠标移动。
+		Slate.RoutePointerMoveEvent(Hit, Move, false);
+		const bool bDownHandled = Slate.RoutePointerDownEvent(Hit, Down).IsEventHandled();
+		const bool bUpHandled = Slate.RoutePointerUpEvent(Hit, Up).IsEventHandled();
+		Slate.SetHandleDeviceInputWhenApplicationNotActive(bPreviousBackgroundInput);
+		return bDownHandled && bUpHandled;
+	}
+
+	/** 通过 Slate 键盘焦点路由快捷键，验证商店恢复玩家的购买输入。 */
+	void PressPIEKey(const FKey Key)
+	{
+		auto& Slate = FSlateApplication::Get();
+		const FKeyEvent Event(Key, FModifierKeysState(), 0, false, 0, 0);
+		Slate.ProcessKeyDownEvent(Event);
+		Slate.ProcessKeyUpEvent(Event);
+	}
 }
 
 /** 通过真实棋盘、商店、路径与战斗驱动 S1–S14，不直接改写编排器阶段。 */
 class FCastleTutorialPIEDriver final : public IAutomationLatentCommand
 {
 public:
-	explicit FCastleTutorialPIEDriver(FAutomationTestBase& InTest) : Test(InTest) {}
+	explicit FCastleTutorialPIEDriver(FAutomationTestBase& InTest, UGameViewportSubsystem& Viewport)
+		: Test(InTest), ViewportSubsystem(&Viewport)
+	{
+		// UMG 的 Slot 只记录 ZOrder。挂载事件的 LocalPlayer 参数还能区分 Viewport 和 Player 层。
+		WidgetAddedHandle = Viewport.OnWidgetAdded.AddLambda([this](UWidget* Widget, ULocalPlayer* Player)
+		{
+			if (Widget->IsA<UCastleDialogueWidget>() || Widget->IsA<UCastleShopWidget>())
+			{
+				MountedOnViewport.Add(Widget, Player == nullptr);
+			}
+		});
+	}
+
+	~FCastleTutorialPIEDriver() override
+	{
+		if (auto* Viewport = ViewportSubsystem.Get()) { Viewport->OnWidgetAdded.Remove(WidgetAddedHandle); }
+	}
 
 	bool Update() override
 	{
@@ -178,6 +227,10 @@ public:
 			auto* Widget = FindScreenWidget<UCastleDialogueWidget>(*World);
 			auto* Choices = Widget ? Cast<UVerticalBox>(Widget->GetWidgetFromName(TEXT("ChoiceContainer"))) : nullptr;
 			if (!Choices) { return Fail(TEXT("读取不到保存后的对话控件")); }
+			if (Step == 5 || (Step == 13 && Controller->GetShop()->IsShopOpen()))
+			{
+				return DriveShopDialogue(*World, *Controller, *Dialogue, *Widget);
+			}
 			// 保留一帧当前句与游戏画面，下一轮再点击，避免截图前卸载对话。
 			FName Screenshot;
 			if (Step == 10) { Screenshot = TEXT("Tutorial-S10-Dialogue.png"); }
@@ -261,10 +314,21 @@ public:
 		case 5:
 			if (Action == 0)
 			{
-				// 先确认停留在商店的真实 Widget 可接收关闭台词后的快捷键。
+				// 对话关闭后的首次可操作帧必须恢复商店焦点，按 1 走玩家使用的购买入口。
 				auto* ShopWidget = FindScreenWidget<UCastleShopWidget>(*World);
-				if (!ShopWidget || !ShopWidget->HasUserFocus(Controller)) { return Wait(TEXT("商店未恢复键盘焦点")); }
-				if (!Shop->TryBuyOffer(0, Reason)) { return Fail(Reason.ToString()); }
+				if (!CheckedShopScripts.Contains(TEXT("DA_Tutorial_S05")) || !ShopWidget)
+				{
+					return Fail(TEXT("没有完成 S5 商店内对话验证或商店已卸载"));
+				}
+				if (!ShopWidget->GetIsEnabled() || !ShopWidget->HasUserFocus(Controller))
+				{
+					const auto Focused = FSlateApplication::Get().GetUserFocusedWidget(0);
+					return Wait(*FString::Printf(TEXT("对话关闭后商店未恢复启用及键盘焦点（Open=%d, Enabled=%d, Focus=%s）"),
+						Shop->IsShopOpen(), ShopWidget->GetIsEnabled(), Focused ? *Focused->ToString() : TEXT("无")));
+				}
+				const int32 Before = Backpack->GetItemCount();
+				PressPIEKey(EKeys::One);
+				if (!Test.TestEqual(TEXT("S5 通过商店快捷键 1 买入箭塔"), Backpack->GetItemCount(), Before + 1)) { return true; }
 				++Action;
 			}
 			break;
@@ -414,7 +478,16 @@ public:
 			else if (Action == 1 && ++ShopPause > 3)
 			{
 				auto* ShopWidget = FindScreenWidget<UCastleShopWidget>(*World);
-				if (!ShopWidget || !ShopWidget->HasUserFocus(Controller)) { return Wait(TEXT("缺货剧情关闭后商店未恢复焦点")); }
+				if (!CheckedShopScripts.Contains(TEXT("DA_Tutorial_OutOfStock")) || !ShopWidget)
+				{
+					return Fail(TEXT("缺货剧情未验证或商店已卸载"));
+				}
+				if (!ShopWidget->GetIsEnabled() || !ShopWidget->HasUserFocus(Controller))
+				{
+					const auto Focused = FSlateApplication::Get().GetUserFocusedWidget(0);
+					return Wait(*FString::Printf(TEXT("缺货剧情关闭后商店未恢复启用及焦点（Open=%d, Enabled=%d, Focus=%s）"),
+						Shop->IsShopOpen(), ShopWidget->GetIsEnabled(), Focused ? *Focused->ToString() : TEXT("无")));
+				}
 				const int32 Before = Backpack->GetItemCount();
 				Test.TestFalse(TEXT("教学固定货架拒绝出售"), Shop->TrySellBackpackItem(0, Reason));
 				Test.TestEqual(TEXT("禁售提示"), Reason.ToString(), FString(TEXT("新手教程期间暂不可出售房间卡")));
@@ -424,7 +497,26 @@ public:
 			}
 			else if (Action == 2 && !Shop->GetOffers().IsEmpty())
 			{
-				if (!Shop->TryBuyOffer(0, Reason)) { return Fail(Reason.ToString()); }
+				auto* ShopWidget = FindScreenWidget<UCastleShopWidget>(*World);
+				if (!CheckedShopScripts.Contains(TEXT("DA_Tutorial_FarmOffer")) || !ShopWidget
+					|| !ShopWidget->GetIsEnabled() || !ShopWidget->HasUserFocus(Controller))
+				{
+					return Wait(TEXT("农田上架对话未验证或关闭后商店未恢复启用及焦点"));
+				}
+				// 通过实际价格按钮买入农田，验证关闭剧情后鼠标也已交还给商店。
+				const auto* OfferSlot = ShopWidget->GetOfferSlots()[0];
+				const auto* Price = OfferSlot ? OfferSlot->GetWidgetFromName(TEXT("PriceButton")) : nullptr;
+				const auto Window = World->GetGameViewport()->GetWindow();
+				if (!Price || !Window) { return Fail(TEXT("找不到农田价格按钮或 PIE 窗口")); }
+				const FGeometry& Geometry = Price->GetCachedGeometry();
+				const FVector2D Position = Geometry.LocalToAbsolute(Geometry.GetLocalSize() * 0.5f);
+				const FWidgetPath Hit = FSlateApplication::Get().LocateWindowUnderMouse(Position, {Window.ToSharedRef()});
+				const int32 Before = Backpack->GetItemCount();
+				if (!Hit.ContainsWidget(Price->GetCachedWidget().Get()) || !ClickPIEWindow(Hit, Position)
+					|| !Test.TestEqual(TEXT("S13 点击价格按钮买入农田"), Backpack->GetItemCount(), Before + 1))
+				{
+					return Fail(TEXT("农田价格按钮没有完成购买"));
+				}
 				++Action;
 			}
 			break;
@@ -457,6 +549,105 @@ public:
 	}
 
 private:
+	bool DriveShopDialogue(UWorld& World, ACastlePlayerController& Controller,
+		const UCastleDialogueSubsystem& Dialogue, UCastleDialogueWidget& Widget)
+	{
+		const FName Script = GetFNameSafe(Dialogue.GetCurrentScript());
+		const bool bS5 = LastStep == 5;
+		const bool bExpectedScript = bS5 ? Script == TEXT("DA_Tutorial_S05")
+			: Script == TEXT("DA_Tutorial_OutOfStock") || Script == TEXT("DA_Tutorial_FarmOffer");
+		auto* ShopWidget = FindScreenWidget<UCastleShopWidget>(World);
+		auto* Continue = Widget.GetWidgetFromName(TEXT("ContinueButton"));
+		auto* Panel = Widget.GetWidgetFromName(TEXT("DialoguePanel"));
+		auto* Client = World.GetGameViewport();
+		auto* Viewport = ViewportSubsystem.Get();
+		if (!bExpectedScript || !Controller.GetShop()->IsShopOpen() || !ShopWidget
+			|| !Continue || !Panel || !Client || !Viewport)
+		{
+			return Fail(FString::Printf(TEXT("无法验证商店内对话 %s 的剧本或视口控件。"), *Script.ToString()));
+		}
+		const auto Window = Client->GetWindow();
+		const auto GameViewport = Client->GetGameViewportWidget();
+		const auto ContinueSlate = Continue->GetCachedWidget();
+		const auto ShopSlate = ShopWidget->GetCachedWidget();
+		if (!Window || !GameViewport || !ContinueSlate || !ShopSlate)
+		{
+			return Fail(TEXT("商店内对话需要有实际 Slate 控件的 PIE 窗口"));
+		}
+		if (Script != LastShopScript)
+		{
+			// 对话可能在本帧游戏 Tick 中刚挂载，等下一次 Slate 绘制填充命中网格。
+			LastShopScript = Script;
+			return false;
+		}
+
+		const FGeometry& ViewportGeometry = GameViewport->GetCachedGeometry();
+		const FGeometry& PanelGeometry = Panel->GetCachedGeometry();
+		if (ViewportGeometry.GetLocalSize().IsNearlyZero() || PanelGeometry.GetLocalSize().IsNearlyZero())
+		{
+			return Wait(TEXT("等待商店和对话完成真实视口布局"));
+		}
+		const FVector2D ViewportCenter = ViewportGeometry.LocalToAbsolute(ViewportGeometry.GetLocalSize() * 0.5f);
+		const FVector2D PanelCenter = PanelGeometry.LocalToAbsolute(PanelGeometry.GetLocalSize() * 0.5f);
+		auto& Slate = FSlateApplication::Get();
+		const FWidgetPath CenterHit = Slate.LocateWindowUnderMouse(ViewportCenter, {Window.ToSharedRef()});
+		const FWidgetPath PanelHit = Slate.LocateWindowUnderMouse(PanelCenter, {Window.ToSharedRef()});
+		const bool* DialogueLayer = MountedOnViewport.Find(&Widget);
+		const bool* ShopLayer = MountedOnViewport.Find(ShopWidget);
+		const FString Label = FString::Printf(TEXT("S%d %s"), LastStep, *Script.ToString());
+		const auto Verify = [&](const TCHAR* What, const bool bPassed)
+		{
+			return Test.TestTrue(Label + TEXT(" ") + What, bPassed);
+		};
+		if (!Verify(TEXT("商店与对话实际挂载到 Viewport 层，ZOrder 为 40 和 70"),
+				DialogueLayer && *DialogueLayer && ShopLayer && *ShopLayer
+				&& Viewport->GetWidgetSlot(&Widget).ZOrder == 70 && Viewport->GetWidgetSlot(ShopWidget).ZOrder == 40)
+			|| !Verify(TEXT("剧情期间商店置灰且两个采样点都在商店范围内"), !ShopWidget->GetIsEnabled()
+				&& ShopWidget->GetCachedGeometry().IsUnderLocation(ViewportCenter)
+				&& ShopWidget->GetCachedGeometry().IsUnderLocation(PanelCenter))
+			|| !Verify(TEXT("视口中心的实际 Slate 命中路径属于 ContinueButton"), CenterHit.ContainsWidget(ContinueSlate.Get())
+				&& !CenterHit.ContainsWidget(ShopSlate.Get()))
+			|| !Verify(TEXT("底部对话和商店重叠区域的实际 Slate 命中路径属于 ContinueButton"),
+				PanelHit.ContainsWidget(ContinueSlate.Get()) && !PanelHit.ContainsWidget(ShopSlate.Get())))
+		{
+			return true;
+		}
+
+		if (!CheckedShopScripts.Contains(Script))
+		{
+			// 调用 B 键绑定的玩法入口验证模态门控，避免测试注入按键排队到对话关闭之后。
+			Controller.ToggleShop();
+			if (!Verify(TEXT("剧情期间按 B 后商店仍打开及禁用"),
+				Controller.GetShop()->IsShopOpen() && !ShopWidget->GetIsEnabled())) { return true; }
+			CheckedShopScripts.Add(Script);
+			Test.AddInfo(Label + TEXT(" 通过 Viewport 层、中心和底部 Slate 命中及 B 键门控检查。"));
+			if (bS5)
+			{
+				// 整句显示后让下一帧完成布局，再读取实际 PIE 视口的合成画面。
+				Widget.CompleteCurrentLine();
+				return false;
+			}
+		}
+		if (bS5 && !bShopDialogueCaptured)
+		{
+			// 以对话所在的游戏视口为截图目标，包含商店、对话和游戏场景。
+			const FString Directory = FPaths::ProjectSavedDir() / TEXT("Coordinator");
+			const FString Filename = Directory / TEXT("Temp-Tutorial-S05-ShopDialogue.png");
+			TArray<FColor> Pixels;
+			FIntVector Size;
+			if (!IFileManager::Get().MakeDirectory(*Directory, true)
+				|| !Slate.TakeScreenshot(GameViewport.ToSharedRef(), Pixels, Size)
+				|| Size.X <= 0 || Size.Y <= 0 || Pixels.Num() != Size.X * Size.Y
+				|| !FImageUtils::SaveImageByExtension(*Filename, FImageView(Pixels.GetData(), Size.X, Size.Y)))
+			{
+				return Fail(TEXT("无法将 S5 的 PIE 合成画面写入 Saved/Coordinator"));
+			}
+			bShopDialogueCaptured = true;
+		}
+		if (!ClickPIEWindow(PanelHit, PanelCenter)) { return Fail(TEXT("真实 Slate 点击未被继续按钮消费")); }
+		return Wait(TEXT("商店内对话未能通过真实鼠标点击推进"));
+	}
+
 	bool Fail(const FString& Reason)
 	{
 		Test.AddError(FString::Printf(TEXT("教程 S%d：%s"), LastStep, *Reason));
@@ -465,6 +656,12 @@ private:
 
 	bool Wait(const TCHAR* Reason) { return FPlatformTime::Seconds() >= Deadline && Fail(Reason); }
 	FAutomationTestBase& Test;
+	TWeakObjectPtr<UGameViewportSubsystem> ViewportSubsystem;
+	FDelegateHandle WidgetAddedHandle;
+	TMap<TWeakObjectPtr<UWidget>, bool> MountedOnViewport;
+	TSet<FName> CheckedShopScripts;
+	FName LastShopScript;
+	bool bShopDialogueCaptured = false;
 	int32 LastStep = 0;
 	int32 Action = 0;
 	int32 ShopPause = 0;
@@ -497,8 +694,11 @@ bool FCastleTutorialEndToEndTest::RunTest(const FString&)
 	{
 		return false;
 	}
-	if (!StartPIE(*this, TEXT("/Game/MovingCastle/Maps/TutorialMap"))) { return false; }
-	ADD_LATENT_AUTOMATION_COMMAND(FCastleTutorialPIEDriver(*this));
+	auto* Viewport = UGameViewportSubsystem::Get();
+	if (!TestNotNull(TEXT("可监听 UMG 的实际视口挂载"), Viewport)) { return false; }
+	auto Driver = MakeShared<FCastleTutorialPIEDriver>(*this, *Viewport);
+	if (!StartPIE(*this, TEXT("/Game/MovingCastle/Maps/TutorialMap"), FIntPoint(1280, 720))) { return false; }
+	FAutomationTestFramework::Get().EnqueueLatentCommand(Driver);
 	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(StopPIE()));
 	return true;
 }

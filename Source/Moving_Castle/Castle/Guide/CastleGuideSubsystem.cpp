@@ -1,5 +1,6 @@
 #include "CastleGuideSubsystem.h"
 #include "Audio/CastleAudioSubsystem.h"
+#include "Blueprint/GameViewportSubsystem.h"
 
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Dialogue/CastleDialogueSubsystem.h"
@@ -44,9 +45,15 @@ bool UCastleGuideSubsystem::ShowEntryPopup(const FName EntryId, ACastlePlayerCon
 	}
 	UClass* WidgetClass = OutReason.IsEmpty() ? LoadRequiredWidgetClass(GuidePopupClassPath, OutReason) : nullptr;
 	UCastleGuidePopupWidget* Widget = WidgetClass ? CreateWidget<UCastleGuidePopupWidget>(Controller, WidgetClass) : nullptr;
-	if (OutReason.IsEmpty() && (!IsValid(Widget) || !Widget->Configure(this, *Entry) || !Widget->AddToPlayerScreen(71)))
+	// 百科与对话共用 Viewport 层，百科弹窗保持在同层对话的上方。
+	auto* Viewport = UGameViewportSubsystem::Get();
+	FGameViewportWidgetSlot Slot;
+	Slot.ZOrder = 71;
+	if (OutReason.IsEmpty() && (!IsValid(Widget) || !Widget->Configure(this, *Entry)
+		|| !Viewport || !Viewport->AddWidget(Widget, Slot)))
 	{
-		OutReason = FText::FromString(FString::Printf(TEXT("百科条目 %s 的弹窗 WBP 创建、绑定或挂载失败。"), *EntryId.ToString()));
+		OutReason = FText::FromString(FString::Printf(TEXT("百科条目 %s 的界面 %s 创建、绑定或挂载 Viewport 层失败。"),
+			*EntryId.ToString(), GuidePopupClassPath));
 	}
 	if (!OutReason.IsEmpty())
 	{
@@ -90,9 +97,15 @@ bool UCastleGuideSubsystem::ShowGuideBook(ACastlePlayerController* Controller, F
 		}
 	}
 	UCastleGuideBookWidget* Widget = WidgetClass ? CreateWidget<UCastleGuideBookWidget>(Controller, WidgetClass) : nullptr;
-	if (OutReason.IsEmpty() && (!IsValid(Widget) || !Widget->Configure(this, UnlockedEntries) || !Widget->AddToPlayerScreen(71)))
+	// 书册与一次性弹窗使用同一 Viewport 层优先级。
+	auto* Viewport = UGameViewportSubsystem::Get();
+	FGameViewportWidgetSlot Slot;
+	Slot.ZOrder = 71;
+	if (OutReason.IsEmpty() && (!IsValid(Widget) || !Widget->Configure(this, UnlockedEntries)
+		|| !Viewport || !Viewport->AddWidget(Widget, Slot)))
 	{
-		OutReason = INVTEXT("图文百科 WBP 创建、必需控件绑定或挂载失败。");
+		OutReason = FText::Format(INVTEXT("图文百科界面 {0} 创建、必需控件绑定或挂载 Viewport 层失败。"),
+			FText::FromString(GuideBookClassPath));
 	}
 	if (!OutReason.IsEmpty())
 	{

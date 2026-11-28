@@ -3,6 +3,7 @@
 #include "CastlePlayerController.h"
 
 #include "Audio/CastleAudioSubsystem.h"
+#include "Blueprint/GameViewportSubsystem.h"
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
 #include "Castle/Guide/CastleGuideSubsystem.h"
@@ -42,9 +43,14 @@ void ACastlePlayerController::ToggleControlSettings()
 	// 奖励、商店等模态继续拥有焦点。拆除菜单则在设置成功打开后被替换。
 	if (bModalInputActive) { return; }
 	auto* Settings = ControlSettingsClass ? CreateWidget<UCastleControlSettingsWidget>(this, ControlSettingsClass) : nullptr;
-	if (!Settings || !Settings->BindController(*this) || !Settings->AddToPlayerScreen(45))
+	// 在共用的 Viewport 层保持设置面板的既定优先级，挂载成功后才切换焦点。
+	auto* Viewport = UGameViewportSubsystem::Get();
+	FGameViewportWidgetSlot Slot;
+	Slot.ZOrder = 45;
+	if (!Settings || !Settings->BindController(*this) || !Viewport || !Viewport->AddWidget(Settings, Slot))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s 无法加载、绑定或挂载设置资产 %s。"), *GetPathName(), ControlSettingsPath);
+		if (Settings) { Settings->RemoveFromParent(); }
+		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s 无法加载、绑定或挂载设置资产 %s 至 Viewport 层。"), *GetPathName(), ControlSettingsPath);
 		return;
 	}
 	ControlSettings = Settings;
@@ -120,9 +126,15 @@ bool ACastlePlayerController::OpenBuildingDemolishMenu(ACastleBuildingBase& Buil
 	}
 	auto* Menu = BuildingDemolishMenuClass ? CreateWidget<UCastleBuildingDemolishMenuWidget>(this, BuildingDemolishMenuClass) : nullptr;
 	const FVector2D LogicalOffset = ControlMode == ECastleControlMode::Classic ? FVector2D(12.0, 12.0) : FVector2D::ZeroVector;
-	if (!Menu || !Menu->ConfigureTarget(Building, TargetCell, *ActiveBoard, ScreenPosition, LogicalOffset) || !Menu->AddToPlayerScreen(35))
+	// 新菜单保持在商店之下，成功挂载后再替换当前菜单。
+	auto* Viewport = UGameViewportSubsystem::Get();
+	FGameViewportWidgetSlot Slot;
+	Slot.ZOrder = 35;
+	if (!Menu || !Menu->ConfigureTarget(Building, TargetCell, *ActiveBoard, ScreenPosition, LogicalOffset)
+		|| !Viewport || !Viewport->AddWidget(Menu, Slot))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s 无法加载、绑定或挂载拆除资产 %s。"), *GetPathName(), DemolishMenuPath);
+		if (Menu) { Menu->RemoveFromParent(); }
+		UE_LOG(LogMoving_Castle, Error, TEXT("控制器 %s 无法加载、绑定或挂载拆除资产 %s 至 Viewport 层。"), *GetPathName(), DemolishMenuPath);
 		return false;
 	}
 	const bool bFirstOpen = !BuildingDemolishMenu;

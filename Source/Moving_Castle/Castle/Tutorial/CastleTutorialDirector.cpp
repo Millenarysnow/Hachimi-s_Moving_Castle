@@ -1,6 +1,7 @@
 #include "Castle/Tutorial/CastleTutorialDirector.h"
 
 #include "Audio/CastleAudioSubsystem.h"
+#include "Blueprint/GameViewportSubsystem.h"
 #include "Castle/Combat/CastleCombatConfigDataAsset.h"
 #include "Castle/Combat/CastleCombatSubsystem.h"
 #include "Castle/Dialogue/CastleDialogueScriptDataAsset.h"
@@ -167,13 +168,22 @@ bool ACastleTutorialDirector::InitializeTutorial(FText& OutReason)
 	}
 	HUD = CreateWidget<UCastleDirectorHUDWidget>(Controller, Configuration->HUDClass);
 	Objective = CreateWidget<UCastleTutorialTextWidget>(Controller, Configuration->ObjectiveClass);
+	// 教程 HUD 与目标提示共用商店的 Viewport 层。挂载中途失败时由 Fail 统一卸载教程界面。
+	auto* Viewport = UGameViewportSubsystem::Get();
+	FGameViewportWidgetSlot HUDSlot;
+	HUDSlot.ZOrder = 10;
+	FGameViewportWidgetSlot ObjectiveSlot;
+	ObjectiveSlot.ZOrder = 65;
 	if (!HUD || !Objective || !HUD->HasRequiredBindings() || !HUD->BindMainTowerHealth(Tower)
-		|| !Objective->SetTutorialText(FText::GetEmpty()) || !HUD->AddToPlayerScreen(10)
-		|| !Objective->AddToPlayerScreen(65) || !Controller->MountDirectorItemHUD(Backpack, false, OutReason))
+		|| !Objective->SetTutorialText(FText::GetEmpty()) || !Viewport
+		|| !Viewport->AddWidget(HUD, HUDSlot) || !Viewport->AddWidget(Objective, ObjectiveSlot))
 	{
-		if (OutReason.IsEmpty()) { OutReason = INVTEXT("正式 HUD、教程提示或道具栏绑定和挂载失败。"); }
+		OutReason = FText::Format(INVTEXT("教程 HUD {0} 或目标提示 {1} 创建、绑定或挂载 Viewport 层失败。"),
+			FText::FromString(GetPathNameSafe(Configuration->HUDClass.Get())),
+			FText::FromString(GetPathNameSafe(Configuration->ObjectiveClass.Get())));
 		return false;
 	}
+	if (!Controller->MountDirectorItemHUD(Backpack, false, OutReason)) { return false; }
 	HUD->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 	Objective->SetVisibility(ESlateVisibility::Collapsed);
 	Controller->OnBuildingDemolishedToBackpack.AddUObject(this, &ACastleTutorialDirector::HandleDemolished);
@@ -285,9 +295,14 @@ bool ACastleTutorialDirector::StartStepInteraction(FText& OutReason)
 	if (Step == 11)
 	{
 		Reward = CreateWidget<UCastleTutorialRewardWidget>(Controller, Configuration->RewardClass);
-		if (!Reward || !Reward->Configure(*this) || !Reward->AddToPlayerScreen(69))
+		// 单卡领取界面仍低于 Viewport 层中的剧情对话。
+		auto* Viewport = UGameViewportSubsystem::Get();
+		FGameViewportWidgetSlot Slot;
+		Slot.ZOrder = 69;
+		if (!Reward || !Reward->Configure(*this) || !Viewport || !Viewport->AddWidget(Reward, Slot))
 		{
-			OutReason = INVTEXT("教程奖励界面创建、绑定或挂载失败。");
+			OutReason = FText::Format(INVTEXT("教程奖励界面 {0} 创建、绑定或挂载 Viewport 层失败。"),
+				FText::FromString(GetPathNameSafe(Configuration->RewardClass.Get())));
 			return false;
 		}
 		Controller->SetPresentationModalState(true, Reward);

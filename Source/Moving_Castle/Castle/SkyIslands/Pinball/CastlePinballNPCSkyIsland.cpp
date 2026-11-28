@@ -1,5 +1,6 @@
 #include "CastlePinballNPCSkyIsland.h"
 
+#include "Blueprint/GameViewportSubsystem.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/Components/CastleEconomyComponent.h"
 #include "CastlePinballNPCConsoleComponent.h"
@@ -151,11 +152,16 @@ bool ACastlePinballNPCSkyIsland::EnterAimMode(ACastlePlayerController& Controlle
 		return false;
 	}
 
+	// 弹珠状态面板与建造栏使用同一 Viewport 层级，剧情和弹窗仍可覆盖它。
+	auto* Viewport = UGameViewportSubsystem::Get();
+	FGameViewportWidgetSlot Slot;
+	Slot.ZOrder = 20;
 	StatusWidget = CreateWidget<UCastlePinballNPCStatusWidget>(&Controller, LoadedStatusWidgetClass);
-	if (!StatusWidget || !StatusWidget->AddToPlayerScreen(20))
+	if (!StatusWidget || !Viewport || !Viewport->AddWidget(StatusWidget, Slot))
 	{
+		if (StatusWidget) { StatusWidget->RemoveFromParent(); }
 		StatusWidget = nullptr;
-		OutReason = INVTEXT("弹珠机状态面板无法加入本地玩家视口。");
+		OutReason = INVTEXT("弹珠机状态面板无法加入 Viewport 层。");
 		UE_LOG(LogMoving_Castle, Error, TEXT("面板 %s：%s"), *StatusWidgetClass.ToSoftObjectPath().ToString(), *OutReason.ToString());
 		return false;
 	}

@@ -1,6 +1,7 @@
 #include "CastleDialogueSubsystem.h"
 
 #include "Audio/CastleAudioSubsystem.h"
+#include "Blueprint/GameViewportSubsystem.h"
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Dialogue/CastleDialogueScriptDataAsset.h"
 #include "Castle/Dialogue/CastleDialogueWidget.h"
@@ -60,11 +61,16 @@ UCastleDialogueWidget* UCastleDialogueSubsystem::PrepareScript(UCastleDialogueSc
 	}
 	UCastleDialogueWidget* Widget = CreateWidget<UCastleDialogueWidget>(Controller, WidgetClass);
 	if (Widget) { Widget->SetVisibility(ESlateVisibility::Collapsed); }
-	if (!IsValid(Widget) || !Widget->ConfigureDialogue(this, Controller, OutReason) || !Widget->AddToPlayerScreen(70))
+	// 对话与商店共用 Viewport 层，ZOrder 才能同时控制绘制和 Slate 命中顺序。
+	auto* Viewport = UGameViewportSubsystem::Get();
+	FGameViewportWidgetSlot Slot;
+	Slot.ZOrder = 70;
+	if (!IsValid(Widget) || !Widget->ConfigureDialogue(this, Controller, OutReason)
+		|| !Viewport || !Viewport->AddWidget(Widget, Slot))
 	{
 		if (OutReason.IsEmpty())
 		{
-			OutReason = FText::FromString(FString::Printf(TEXT("剧本 %s 的界面 %s 创建或挂载失败。"),
+			OutReason = FText::FromString(FString::Printf(TEXT("剧本 %s 的界面 %s 创建或挂载 Viewport 层失败。"),
 				*Script->GetPathName(), DialogueWidgetClassPath));
 		}
 		if (IsValid(Widget)) { Widget->RemoveFromParent(); }
