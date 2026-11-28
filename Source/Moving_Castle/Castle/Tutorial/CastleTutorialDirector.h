@@ -47,6 +47,10 @@ private:
 	bool EnterStep(int32 Number, FText& OutReason);
 	bool ShowDialogue(UCastleDialogueScriptDataAsset* Script, FText& OutReason);
 	bool UpdatePresentation(FText& OutReason);
+	void SetShopAvailability(bool bAvailable);
+	bool StartStepInteraction(FText& OutReason);
+	bool CompleteTutorial(FText& OutReason);
+	void RemoveTutorialPresentation();
 	bool HasDoorCircuit() const;
 	bool HasRouteWithArcher() const;
 	bool IsBuildingOnPatrolPath(ECastleBuildingType Type) const;
@@ -79,6 +83,8 @@ private:
 	int32 NextGuide = 0;
 	FName ActiveGuide;
 	EShopLesson ShopLesson = EShopLesson::AwaitingOpen;
+	/** S10/S11 的开战和奖励挂载只在本步的第一轮交互前执行一次。 */
+	bool bStepInteractionStarted = false;
 	bool bRecoveredRoom = false;
 	bool bDispatched = false;
 	bool bBattleCleared = false;

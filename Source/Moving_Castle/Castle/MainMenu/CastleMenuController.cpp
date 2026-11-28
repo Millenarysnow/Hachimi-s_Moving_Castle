@@ -2,6 +2,8 @@
 
 #include "CastleMenuModel.h"
 #include "CastleMenuStage.h"
+#include "Castle/Input/CastleControlMode.h"
+#include "Engine/GameInstance.h"
 #include "Engine/Engine.h"
 #include "Engine/Font.h"
 #include "Engine/GameViewportClient.h"
@@ -15,7 +17,9 @@
 #include "Styling/CoreStyle.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/SOverlay.h"
 #include "Widgets/Layout/SConstraintCanvas.h"
 #include "Widgets/Layout/SScaleBox.h"
 #include "Widgets/SBoxPanel.h"
@@ -24,33 +28,72 @@
 #include "Editor.h"
 #endif
 
-/** 使用真正的 Slate 按钮保留键盘、手柄和触摸语义，显示部分只有一行字。 */
-class SCastleMenuTextButton final : public SButton
+namespace
 {
-public:
-	SLATE_BEGIN_ARGS(SCastleMenuTextButton) {}
-		SLATE_ARGUMENT(FText, Label)
-		SLATE_ARGUMENT(FSlateFontInfo, Font)
-		SLATE_EVENT(FOnClicked, OnChosen)
-	SLATE_END_ARGS()
+	// 顺序与舞台上的硬引用数组一一对应。尺寸和位置使用 layout.json 的设计像素。
+	enum EMenuSprite { TitleTop, TitleBottom, AccentRed, AccentBlue, AccentGold, AccentGreen,
+		TutorialLabel, TutorialMarker, StartLabel, StartMarker, ExitLabel, ExitMarker, FocusFill, FocusArrow };
+	const FVector2D MenuCanvasSize(1594, 1034);
+	const FVector2D SpriteSizes[] = {{463, 120}, {533, 138}, {14, 81}, {27, 14}, {30, 29}, {67, 13},
+		{175, 42}, {12, 40}, {175, 42}, {12, 40}, {175, 42}, {12, 40}, {339, 66}, {25, 20}};
+	const FVector2D TitlePositions[] = {{179, 224}, {181, 349}, {147, 231}, {145, 359}, {612, 207}, {651, 497}};
+	constexpr const TCHAR* SpriteNames[] = {TEXT("TitleTop"), TEXT("TitleBottom"), TEXT("AccentRed"), TEXT("AccentBlue"),
+		TEXT("AccentGold"), TEXT("AccentGreen"), TEXT("TutorialLabel"), TEXT("TutorialMarker"), TEXT("StartLabel"),
+		TEXT("StartMarker"), TEXT("ExitLabel"), TEXT("ExitMarker"), TEXT("FocusFill"), TEXT("FocusArrow")};
+	const FName MainMap(TEXT("/Game/MovingCastle/Maps/MainMap"));
+	const FName TutorialMap(TEXT("/Game/MovingCastle/Maps/TutorialMap"));
 
-	void Construct(const FArguments& Args)
+	FMargin DesignRect(FVector2D Position, FVector2D Size)
 	{
-		SButton::Construct(SButton::FArguments()
-			.ButtonStyle(&FCoreStyle::Get().GetWidgetStyle<FButtonStyle>("NoBorder"))
-			.ContentPadding(FMargin(16, 5)).HAlign(HAlign_Center).VAlign(VAlign_Center)
-			.Cursor(EMouseCursor::Hand).OnClicked(Args._OnChosen)
-			[ SNew(STextBlock).Text(Args._Label).Font(Args._Font).ColorAndOpacity(this, &SCastleMenuTextButton::Ink) ]);
+		// 固定锚点的 Slate 槽位用左上坐标和宽高表示；调用点显式采用左上对齐。
+		return FMargin(Position.X, Position.Y, Size.X, Size.Y);
 	}
-	/** 用字色表达焦点，不让全局 Slate 焦点框破坏纸面无边框排版。 */
-	virtual TOptional<bool> OnQueryShowFocus(EFocusCause) const override { return false; }
-private:
-	FSlateColor Ink() const
+
+	FString ValidateMenuAssets(const ACastleMenuStage& Stage)
 	{
-		return IsHovered() || HasKeyboardFocus() ? FLinearColor(0.027f, 0.026f, 0.026f)
-			: FLinearColor(0.15f, 0.14f, 0.135f);
+		if (!IsValid(Stage.MenuFont) || !IsValid(Stage.PaperMaterial))
+		{
+			return FString::Printf(TEXT("舞台 %s 的字体 %s 或纸纹 %s 无效。"), *Stage.GetPathName(),
+				*GetPathNameSafe(Stage.MenuFont), *GetPathNameSafe(Stage.PaperMaterial));
+		}
+		if (Stage.MenuTextures.Num() != UE_ARRAY_COUNT(SpriteSizes))
+		{
+			return FString::Printf(TEXT("舞台 %s 需要 14 张 Hachimis 贴图，已绑定 %d 张。"), *Stage.GetPathName(), Stage.MenuTextures.Num());
+		}
+		for (int32 Index = 0; Index < Stage.MenuTextures.Num(); ++Index)
+		{
+			const UTexture2D* Texture = Stage.MenuTextures[Index];
+			if (!IsValid(Texture) || Texture->GetSizeX() != SpriteSizes[Index].X * 2 || Texture->GetSizeY() != SpriteSizes[Index].Y * 2)
+			{
+				return FString::Printf(TEXT("舞台 %s 的 %s 贴图 %s 缺失或尺寸与 @2x 规格不符。"),
+					*Stage.GetPathName(), SpriteNames[Index], *GetPathNameSafe(Texture));
+			}
+		}
+		return {};
 	}
-};
+
+	/** 绘制层不参与命中，Slate 按钮整行接收鼠标、键盘和手柄输入。 */
+	class SCastleMenuSpriteButton final : public SButton
+	{
+	public:
+		void Construct(const FArguments& Args)
+		{
+			SButton::Construct(Args);
+		}
+
+		EVisibility FocusVisibility() const
+		{
+			return IsHovered() || HasKeyboardFocus() || IsPressed() ? EVisibility::HitTestInvisible : EVisibility::Hidden;
+		}
+
+		FSlateColor FillTint() const
+		{
+			return IsPressed() ? FLinearColor(0.79f, 0.67f, 0.65f) : FLinearColor::White;
+		}
+
+		virtual TOptional<bool> OnQueryShowFocus(EFocusCause) const override { return false; }
+	};
+}
 
 class SCastleStartMenu final : public SCompoundWidget
 {
@@ -62,51 +105,137 @@ public:
 
 	void Construct(const FArguments& Args)
 	{
-		ACastleMenuStage& Stage = *Args._Stage;
-		Logo.SetResourceObject(Stage.TitleTexture);
-		Logo.ImageSize = FVector2D(Stage.TitleTexture->GetSizeX(), Stage.TitleTexture->GetSizeY());
-		// 行高也包含文字上下可点击的留白，三个入口共用同一套字级和点击范围。
-		constexpr float ChoiceRowHeight = 58.0f;
-		const FSlateFontInfo Font(Stage.MenuFont.Get(), 26);
-		auto MakeChoice = [&](const FText& Label, ECastleMenuAction Action)
-		{
-			return SNew(SCastleMenuTextButton).Label(Label).Font(Font)
-				.OnChosen(FOnClicked::CreateUObject(Args._Controller, &ACastleMenuController::Choose, Action));
-		};
-		FirstChoice = MakeChoice(INVTEXT("新手教程"), ECastleMenuAction::Tutorial);
-		// 左列按设计宽度等比适配视口。字标在列内单独限宽，整组按内容高度居中，
-		// 这样调整标题时不会连带缩小入口文字，也不会给已经移除的英文副标题预留一行。
-		ChildSlot
+		const ACastleMenuStage& Stage = *Args._Stage;
+		Error = ValidateMenuAssets(Stage);
+		const FSlateFontInfo ErrorFont = FCoreStyle::GetDefaultFontStyle("Regular", 16);
+		const auto Root = SNew(SOverlay);
+		ChildSlot[Root];
+		Root->AddSlot(1).VAlign(VAlign_Bottom).Padding(24)
 		[
-			SNew(SConstraintCanvas)
-			+ SConstraintCanvas::Slot().Anchors(FAnchors(0.105f, 0.13f, 0.455f, 0.87f)).Offset(FMargin(0))
+			SAssignNew(ErrorText, STextBlock).Font(ErrorFont).Justification(ETextJustify::Center)
+			.AutoWrapText(true).ColorAndOpacity(FLinearColor(0.35f, 0.035f, 0.02f))
+		];
+		if (!Error.IsEmpty()) { return; }
+
+		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Brushes); ++Index)
+		{
+			Brushes[Index].SetResourceObject(Stage.MenuTextures[Index]);
+			Brushes[Index].ImageSize = SpriteSizes[Index];
+		}
+		const auto Canvas = SNew(SConstraintCanvas).Visibility(EVisibility::SelfHitTestInvisible);
+		for (int32 Index = 0; Index < UE_ARRAY_COUNT(TitlePositions); ++Index)
+		{
+			Canvas->AddSlot().Alignment(FVector2D::ZeroVector).Offset(DesignRect(TitlePositions[Index], SpriteSizes[Index]))
+			[ SNew(SImage).Image(&Brushes[Index]).Visibility(EVisibility::HitTestInvisible) ];
+		}
+		TutorialChoice = AddChoice(*Canvas, *Args._Controller, INVTEXT("新手教程"), ECastleMenuAction::Tutorial, 569, 34, TutorialLabel, TutorialMarker);
+		FirstChoice = AddChoice(*Canvas, *Args._Controller, INVTEXT("开始游戏"), ECastleMenuAction::Play, 645, 33, StartLabel, StartMarker);
+		AddChoice(*Canvas, *Args._Controller, INVTEXT("退出游戏"), ECastleMenuAction::Quit, 721, 33, ExitLabel, ExitMarker);
+		Root->AddSlot(0)
+		[
+			SAssignNew(MenuLayer, SScaleBox).Stretch(EStretch::ScaleToFit).Visibility(EVisibility::SelfHitTestInvisible)
+			[ SNew(SBox).WidthOverride(MenuCanvasSize.X).HeightOverride(MenuCanvasSize.Y).Visibility(EVisibility::SelfHitTestInvisible)[Canvas] ]
+		];
+
+		// 模态覆盖整张视口。经典/设计各自展示实际的按键映射，确认或取消后由控制器恢复焦点。
+		const FSlateFontInfo Heading(Stage.MenuFont.Get(), 28);
+		const FSlateFontInfo Body(Stage.MenuFont.Get(), 18);
+		const FLinearColor Ink(0.12f, 0.08f, 0.07f);
+		const auto Classic = MakeModeChoice(*Args._Controller, ECastleControlMode::Classic, INVTEXT("经典模式"), Heading, Body);
+		const auto Design = MakeModeChoice(*Args._Controller, ECastleControlMode::Design, INVTEXT("设计模式"), Heading, Body);
+		ModeChoice = Classic;
+		Root->AddSlot(2)
+		[
+			SAssignNew(ModeLayer, SBorder).Visibility(EVisibility::Collapsed)
+			.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(0.02f, 0.01f, 0.01f, 0.58f))
+			.HAlign(HAlign_Center).VAlign(VAlign_Center)
 			[
-				SNew(SScaleBox).Stretch(EStretch::ScaleToFit)
+				SNew(SBorder).Padding(26).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+				.BorderBackgroundColor(FLinearColor(0.95f, 0.90f, 0.82f))
 				[
-					SNew(SBox).WidthOverride(400)
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 0, 0, 18)
+					[ SNew(STextBlock).Text(INVTEXT("选择操作模式")).Font(Heading).ColorAndOpacity(Ink) ]
+					+ SVerticalBox::Slot().AutoHeight()
 					[
-						SNew(SVerticalBox)
-						+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
-						[ SNew(SBox).WidthOverride(340).HeightOverride(182)
-							[ SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[ SNew(SImage).Image(&Logo) ] ] ]
-						+ SVerticalBox::Slot().AutoHeight().Padding(0, 36, 0, 0).HAlign(HAlign_Center)
-						[ SNew(SBox).HeightOverride(ChoiceRowHeight)[FirstChoice.ToSharedRef()] ]
-						+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
-						[ SNew(SBox).HeightOverride(ChoiceRowHeight)[MakeChoice(INVTEXT("开始游戏"), ECastleMenuAction::Play)] ]
-						+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
-						[ SNew(SBox).HeightOverride(ChoiceRowHeight)[MakeChoice(INVTEXT("退出游戏"), ECastleMenuAction::Quit)] ]
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 10, 0)[Classic]
+						+ SHorizontalBox::Slot().AutoWidth()[Design]
+					]
+					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 18, 0, 0)
+					[
+						SNew(SButton).OnClicked(FOnClicked::CreateUObject(Args._Controller, &ACastleMenuController::CancelControlMode))
+						[ SNew(STextBlock).Text(INVTEXT("取消")).Font(Body) ]
 					]
 				]
 			]
-			+ SConstraintCanvas::Slot().Anchors(FAnchors(0.10f, 0.88f, 0.90f, 0.99f)).Offset(FMargin(0))
-			[ SAssignNew(ErrorText, STextBlock).Font(FSlateFontInfo(Stage.MenuFont.Get(), 13))
-				.Justification(ETextJustify::Center).AutoWrapText(true).ColorAndOpacity(FLinearColor(0.35f, 0.035f, 0.02f)) ]
 		];
 	}
+
+	void SetModeSelectionVisible(bool bVisible)
+	{
+		ModeLayer->SetVisibility(bVisible ? EVisibility::Visible : EVisibility::Collapsed);
+		MenuLayer->SetEnabled(!bVisible);
+	}
+
+	FString Error;
+	TSharedPtr<SWidget> TutorialChoice;
 	TSharedPtr<SWidget> FirstChoice;
+	TSharedPtr<SWidget> ModeChoice;
 	TSharedPtr<STextBlock> ErrorText;
+
 private:
-	FSlateBrush Logo;
+	TSharedRef<SWidget> AddChoice(SConstraintCanvas& Canvas, ACastleMenuController& Controller, const FText& Label,
+		ECastleMenuAction Action, float Y, float LabelX, EMenuSprite TextSprite, EMenuSprite MarkerSprite)
+	{
+		const auto Button = SNew(SCastleMenuSpriteButton)
+			.ButtonStyle(&FCoreStyle::Get().GetWidgetStyle<FButtonStyle>("NoBorder")).ContentPadding(FMargin(0))
+			.HAlign(HAlign_Fill).VAlign(VAlign_Fill).Cursor(EMouseCursor::Hand)
+			.OnClicked(FOnClicked::CreateUObject(&Controller, &ACastleMenuController::Choose, Action));
+#if WITH_ACCESSIBILITY
+		Button->SetAccessibleBehavior(EAccessibleBehavior::Custom, Label);
+#endif
+		const auto Art = SNew(SConstraintCanvas).Visibility(EVisibility::HitTestInvisible);
+		const auto AddArt = [&](EMenuSprite Sprite, FVector2D Offset, bool bFocus, bool bTint)
+		{
+			const auto Image = SNew(SImage).Image(&Brushes[Sprite]).Visibility(EVisibility::HitTestInvisible);
+			if (bFocus)
+			{
+				Image->SetVisibility(TAttribute<EVisibility>::CreateSP(&Button.Get(), &SCastleMenuSpriteButton::FocusVisibility));
+			}
+			if (bTint) { Image->SetColorAndOpacity(TAttribute<FSlateColor>::CreateSP(&Button.Get(), &SCastleMenuSpriteButton::FillTint)); }
+			Art->AddSlot().Alignment(FVector2D::ZeroVector).Offset(DesignRect(Offset, SpriteSizes[Sprite]))[Image];
+		};
+		AddArt(FocusFill, {-3, -3}, true, true);
+		AddArt(TextSprite, {LabelX, 9}, false, false);
+		AddArt(MarkerSprite, {9, 10}, false, false);
+		AddArt(FocusArrow, {289, 20}, true, false);
+		Button->SetContent(Art);
+		Canvas.AddSlot().Alignment(FVector2D::ZeroVector).Offset(DesignRect({183, Y}, {333, 60}))[Button];
+		return Button;
+	}
+
+	TSharedRef<SButton> MakeModeChoice(ACastleMenuController& Controller, ECastleControlMode Mode, const FText& Label,
+		const FSlateFontInfo& Heading, const FSlateFontInfo& Body)
+	{
+		const auto& Bindings = CastleControlInput::GetBindings(Mode);
+		const auto Key = [&](ECastleWorldInputAction Action) { return CastleControlInput::GetKeyDisplayText(Bindings.Get(Action)); };
+		const FText Look = Mode == ECastleControlMode::Classic ? INVTEXT("移动鼠标转动视角")
+			: FText::Format(INVTEXT("按住{0}转动视角"), Key(ECastleWorldInputAction::HoldCameraLook));
+		const FText Description = FText::Format(INVTEXT("{0}交互\n{1}拆除\n{2}"),
+			Key(ECastleWorldInputAction::PrimaryInteract), Key(ECastleWorldInputAction::Demolish), Look);
+		return SNew(SButton).ContentPadding(FMargin(22, 15)).Cursor(EMouseCursor::Hand)
+			.OnClicked(FOnClicked::CreateUObject(&Controller, &ACastleMenuController::ConfirmControlMode, Mode))
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)[ SNew(STextBlock).Text(Label).Font(Heading) ]
+				+ SVerticalBox::Slot().AutoHeight()[ SNew(STextBlock).Text(Description).Font(Body) ]
+			];
+	}
+
+	FSlateBrush Brushes[UE_ARRAY_COUNT(SpriteSizes)];
+	TSharedPtr<SScaleBox> MenuLayer;
+	TSharedPtr<SBorder> ModeLayer;
 };
 
 ACastleMenuGameMode::ACastleMenuGameMode()
@@ -125,6 +254,18 @@ ACastleMenuController::ACastleMenuController()
 	bShowMouseCursor = true;
 }
 
+bool ACastleMenuController::IsMenuReady() const
+{
+	return Menu.IsValid() && Menu->Error.IsEmpty();
+}
+
+#if WITH_DEV_AUTOMATION_TESTS
+TSharedPtr<SWidget> ACastleMenuController::GetPlayButtonForAutomation() const
+{
+	return Menu->FirstChoice;
+}
+#endif
+
 void ACastleMenuController::BeginPlay()
 {
 	Super::BeginPlay();
@@ -137,19 +278,11 @@ void ACastleMenuController::BeginPlay()
 		Report(FString::Printf(TEXT("开始地图 %s 需要本地游戏视口和唯一菜单舞台，当前舞台数 %d。"), *GetWorld()->GetPathName(), Count));
 		return;
 	}
-	if (!IsValid(Stage->TitleTexture) || !IsValid(Stage->MenuFont) || !IsValid(Stage->PaperMaterial))
-	{
-		Report(FString::Printf(TEXT("舞台 %s 菜单资产无效：标题 %s，字体 %s，纸纹 %s。"), *Stage->GetPathName(),
-			*GetPathNameSafe(Stage->TitleTexture), *GetPathNameSafe(Stage->MenuFont), *GetPathNameSafe(Stage->PaperMaterial)));
-		return;
-	}
 	SetViewTarget(Stage);
 	Menu = SNew(SCastleStartMenu).Stage(Stage).Controller(this);
 	GetWorld()->GetGameViewport()->AddViewportWidgetContent(Menu.ToSharedRef(), 10);
-	FInputModeUIOnly Input;
-	Input.SetWidgetToFocus(Menu->FirstChoice);
-	Input.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-	SetInputMode(Input);
+	if (!Menu->Error.IsEmpty()) { Report(Menu->Error); return; }
+	FocusMenuWidget(Menu->FirstChoice);
 	FailureHandle = GEngine->OnTravelFailure().AddUObject(this, &ACastleMenuController::TravelFailed);
 	FString Error;
 	const UCastleMenuModel* Model = UCastleMenuModel::LoadForMenu(this, Error);
@@ -160,7 +293,7 @@ void ACastleMenuController::BeginPlay()
 FReply ACastleMenuController::Choose(const ECastleMenuAction Action)
 {
 	// 同一帧的触摸和确认事件只派发一次旅行；旅行失败后恢复显式选择。
-	if (bLeaving) { return FReply::Handled(); }
+	if (!Menu || !Menu->Error.IsEmpty() || bLeaving || bModeSelectionOpen) { return FReply::Handled(); }
 	if (Action == ECastleMenuAction::Quit)
 	{
 		bLeaving = true;
@@ -175,14 +308,70 @@ FReply ACastleMenuController::Choose(const ECastleMenuAction Action)
 		UKismetSystemLibrary::QuitGame(this, this, EQuitPreference::Quit, false);
 		return FReply::Handled();
 	}
-	const TCHAR* Map = Action == ECastleMenuAction::Tutorial ? TEXT("/Game/MovingCastle/Maps/TutorialMap") : TEXT("/Game/MovingCastle/Maps/MainMap");
-	if (!FPackageName::DoesPackageExist(Map))
+	if (Action == ECastleMenuAction::Tutorial) { return TravelTo(TutorialMap); }
+	const auto* Session = GetGameInstance()->GetSubsystem<UCastleMenuSessionSubsystem>();
+	if (!Session)
 	{
-		Report(FString::Printf(TEXT("无法进入地图 %s，地图包缺失。"), Map));
+		Report(TEXT("无法开始游戏，当前 GameInstance 缺少菜单会话。"));
 		return FReply::Handled();
 	}
+	if (Session->bHasChosenControlModeThisSession) { return TravelTo(MainMap); }
+	bModeSelectionOpen = true;
+	Menu->SetModeSelectionVisible(true);
+	FocusMenuWidget(Menu->ModeChoice);
+	return FReply::Handled();
+}
+
+FReply ACastleMenuController::ConfirmControlMode(ECastleControlMode Mode)
+{
+	if (!bModeSelectionOpen || bLeaving) { return FReply::Handled(); }
+	return TravelTo(MainMap, Mode);
+}
+
+FReply ACastleMenuController::CancelControlMode()
+{
+	if (bModeSelectionOpen && !bLeaving)
+	{
+		bModeSelectionOpen = false;
+		Menu->SetModeSelectionVisible(false);
+		FocusMenuWidget(Menu->FirstChoice);
+	}
+	return FReply::Handled();
+}
+
+void ACastleMenuController::FocusMenuWidget(const TSharedPtr<SWidget>& Widget)
+{
+	FInputModeUIOnly Input;
+	Input.SetWidgetToFocus(Widget);
+	Input.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+	SetInputMode(Input);
+}
+
+FReply ACastleMenuController::TravelTo(FName Map, TOptional<ECastleControlMode> NewMode)
+{
+	if (!FPackageName::DoesPackageExist(Map.ToString()))
+	{
+		Report(FString::Printf(TEXT("无法进入地图 %s，地图包缺失。"), *Map.ToString()));
+		return FReply::Handled();
+	}
+	if (NewMode.IsSet())
+	{
+		auto* Session = GetGameInstance()->GetSubsystem<UCastleMenuSessionSubsystem>();
+		if (!Session)
+		{
+			Report(TEXT("无法确认操作模式，当前 GameInstance 缺少菜单会话。"));
+			return FReply::Handled();
+		}
+		// 仅操作预设使用既有的配置保存入口。首次确认标记随 GameInstance 跨图存在。
+		CastleControlInput::SaveMode(NewMode.GetValue());
+		Session->bHasChosenControlModeThisSession = true;
+		UE_LOG(LogMoving_Castle, Display, TEXT("开始菜单已确认操作模式：%s。"),
+			NewMode.GetValue() == ECastleControlMode::Classic ? TEXT("经典") : TEXT("设计"));
+		CancelControlMode();
+	}
 	bLeaving = true;
-	UGameplayStatics::OpenLevel(this, FName(Map));
+	UE_LOG(LogMoving_Castle, Display, TEXT("开始菜单请求进入地图 %s。"), *Map.ToString());
+	UGameplayStatics::OpenLevel(this, Map);
 	return FReply::Handled();
 }
 

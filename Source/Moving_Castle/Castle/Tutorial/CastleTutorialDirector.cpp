@@ -18,7 +18,6 @@
 #include "CastleNavigationSubsystem.h"
 #include "CastlePlayerController.h"
 #include "CastleShopComponent.h"
-#include "CastleTowerDispatchConfigDataAsset.h"
 #include "CastleTowerDispatchSubsystem.h"
 #include "Components/WidgetComponent.h"
 #include "Engine/GameInstance.h"
@@ -26,6 +25,9 @@
 #include "EngineUtils.h"
 #include "Interaction/CastlePatrolRoute.h"
 #include "Interaction/CastleTowerDispatchDoors.h"
+#include "Kismet/GameplayStatics.h"
+#include "MassEntityConfigAsset.h"
+#include "Misc/PackageName.h"
 #include "Moving_Castle.h"
 
 namespace
@@ -33,6 +35,7 @@ namespace
 	const FIntVector FrontOffset(1, 0, 0);
 	const FIntVector RearOffset(-1, 0, 0);
 	constexpr int32 TutorialStepCount = 14;
+	constexpr const TCHAR* TutorialReturnMap = TEXT("/Game/MovingCastle/Maps/StartMenu");
 
 	bool IsSameTutorialCard(const FCastleBuildingDescriptor& A, const FCastleBuildingDescriptor& B)
 	{
@@ -84,6 +87,7 @@ bool UCastleTutorialConfigDataAsset::ValidateTutorial(FText& OutReason) const
 	{
 		return Reject(TEXT("HUDClass / ObjectiveClass / BubbleClass / RewardClass / GhostBattle"));
 	}
+	if (!IsValid(TutorialLordNPCConfiguration)) { return Reject(TEXT("TutorialLordNPCConfiguration")); }
 	for (const auto* Script : {ClaimDialogue.Get(), OutOfStockDialogue.Get(), FarmOfferDialogue.Get(), ClosingDialogue.Get()})
 	{
 		if (!Script) { return Reject(TEXT("ClaimDialogue / OutOfStockDialogue / FarmOfferDialogue / ClosingDialogue")); }
@@ -121,6 +125,13 @@ bool ACastleTutorialDirector::InitializeTutorial(FText& OutReason)
 		return false;
 	}
 	if (!Configuration->ValidateTutorial(OutReason)) { return false; }
+	// 教程初始化时就验证城主模板，防止玩家完成前九步之后才发现 S10 资产不完整。
+	if (!Configuration->TutorialLordNPCConfiguration->GetMutableConfig().ValidateEntityTemplate(*World))
+	{
+		OutReason = FText::Format(INVTEXT("教程城主 Mass 配置 {0} 的实体模板校验失败。"),
+			FText::FromString(Configuration->TutorialLordNPCConfiguration->GetPathName()));
+		return false;
+	}
 	// 一心对应正式 HUD 的 20 格血条之一，教程受击和主动生命消耗都留在该下限。
 	if (!Tower->EnableTutorialHealthLock(OutReason)) { return false; }
 	Dialogue = Instance->GetSubsystem<UCastleDialogueSubsystem>();
@@ -174,7 +185,15 @@ bool ACastleTutorialDirector::InitializeTutorial(FText& OutReason)
 bool ACastleTutorialDirector::ShowDialogue(UCastleDialogueScriptDataAsset* Script, FText& OutReason)
 {
 	Objective->SetVisibility(ESlateVisibility::Collapsed);
+	SetShopAvailability(false);
 	return Dialogue->PlayScript(Script, Controller, OutReason);
+}
+
+void ACastleTutorialDirector::SetShopAvailability(bool bAvailable)
+{
+	const bool bShopStep = Step == 4 || Step == 5 || Step == 13;
+	Controller->SetTutorialShopAccess(bAvailable && bShopStep);
+	HUD->SetTutorialShopButtonEnabled(bAvailable && bShopStep);
 }
 
 bool ACastleTutorialDirector::EnterStep(const int32 Number, FText& OutReason)
@@ -182,10 +201,9 @@ bool ACastleTutorialDirector::EnterStep(const int32 Number, FText& OutReason)
 	Step = Number;
 	NextGuide = 0;
 	ActiveGuide = NAME_None;
+	bStepInteractionStarted = false;
 	Objective->SetVisibility(ESlateVisibility::Collapsed);
-	const bool bShopStep = Step == 4 || Step == 5 || Step == 13;
-	Controller->SetTutorialShopAccess(bShopStep);
-	HUD->SetTutorialShopButtonEnabled(bShopStep);
+	SetShopAvailability(false);
 
 	if (Step == 4)
 	{
@@ -194,28 +212,10 @@ bool ACastleTutorialDirector::EnterStep(const int32 Number, FText& OutReason)
 	}
 	else if (Step == 8 && !SpawnPathMarkers(OutReason)) { return false; }
 	else if (Step == 9) { RemovePathMarkers(); }
-	else if (Step == 10)
-	{
-		const auto* DispatchConfig = Dispatch->GetConfiguration();
-		if (!DispatchConfig)
-		{
-			OutReason = INVTEXT("教程主塔没有有效的出兵配置。");
-			return false;
-		}
-		// 单人待命池让城主沿真实路线出门，仍使用正式手动点击派兵入口。
-		if (!Dispatch->StartBattleDispatchSession(DispatchConfig->NPCConfiguration, 1, OutReason)
-			|| !Combat->StartBattle(ECastleBattleKind::Normal, 1, OutReason)) { return false; }
-	}
 	else if (Step == 11)
 	{
+		// 战斗结束即收回上一阶段的出兵权限，下一阶段自己的奖励由对话结束后挂载。
 		if (!Dispatch->EndBattleDispatchSession(OutReason)) { return false; }
-		Reward = CreateWidget<UCastleTutorialRewardWidget>(Controller, Configuration->RewardClass);
-		if (!Reward || !Reward->Configure(*this) || !Reward->AddToPlayerScreen(69))
-		{
-			OutReason = INVTEXT("教程奖励界面创建、绑定或挂载失败。");
-			return false;
-		}
-		Controller->SetPresentationModalState(true, Reward);
 	}
 	else if (Step == 13 && !Shop->SetScriptedOffers({}, MakeArrayView(&Configuration->Farm, 1), OutReason))
 	{
@@ -229,9 +229,13 @@ bool ACastleTutorialDirector::EnterStep(const int32 Number, FText& OutReason)
 
 bool ACastleTutorialDirector::UpdatePresentation(FText& OutReason)
 {
-	if (Dialogue->IsDialoguePlaying()) { return false; }
+	if (Dialogue->IsDialoguePlaying() || Guide->HasOpenModal())
+	{
+		Objective->SetVisibility(ESlateVisibility::Collapsed);
+		SetShopAvailability(false);
+		return false;
+	}
 	const auto& Row = Configuration->Steps[Step - 1];
-	if (Guide->HasOpenModal()) { return false; }
 	if (!ActiveGuide.IsNone())
 	{
 		if (!Guide->IsEntryUnlocked(ActiveGuide))
@@ -244,12 +248,47 @@ bool ACastleTutorialDirector::UpdatePresentation(FText& OutReason)
 	}
 	if (Row.GuideEntries.IsValidIndex(NextGuide))
 	{
+		Objective->SetVisibility(ESlateVisibility::Collapsed);
+		SetShopAvailability(false);
 		ActiveGuide = Row.GuideEntries[NextGuide];
 		if (!Guide->ShowEntryPopup(ActiveGuide, Controller, OutReason)) { return false; }
 		return false;
 	}
+	if (!bStepInteractionStarted)
+	{
+		if (!StartStepInteraction(OutReason)) { return false; }
+		bStepInteractionStarted = true;
+	}
+	if (Reward && bCopyChosen && Reward->GetVisibility() == ESlateVisibility::Collapsed)
+	{
+		// 领取卡在子对话结束后才重新绘制并成为模态焦点。
+		Reward->SetVisibility(ESlateVisibility::Visible);
+		Controller->SetPresentationModalState(true, Reward);
+	}
+	SetShopAvailability(true);
 	Objective->SetTutorialText(UCastleDialogueSubsystem::ResolveInputText(Row.Objective, *Controller));
 	Objective->SetVisibility(ESlateVisibility::HitTestInvisible);
+	return true;
+}
+
+bool ACastleTutorialDirector::StartStepInteraction(FText& OutReason)
+{
+	if (Step == 10)
+	{
+		// 单人待命池沿正式路线出门。直到 S10 对话完全关闭，战斗时间和出兵才开始。
+		return Dispatch->StartBattleDispatchSession(Configuration->TutorialLordNPCConfiguration, 1, OutReason)
+			&& Combat->StartBattle(ECastleBattleKind::Normal, 1, OutReason);
+	}
+	if (Step == 11)
+	{
+		Reward = CreateWidget<UCastleTutorialRewardWidget>(Controller, Configuration->RewardClass);
+		if (!Reward || !Reward->Configure(*this) || !Reward->AddToPlayerScreen(69))
+		{
+			OutReason = INVTEXT("教程奖励界面创建、绑定或挂载失败。");
+			return false;
+		}
+		Controller->SetPresentationModalState(true, Reward);
+	}
 	return true;
 }
 
@@ -342,10 +381,7 @@ void ACastleTutorialDirector::Tick(const float DeltaSeconds)
 	case 14:
 		if (bClosing)
 		{
-			bCompleted = true;
-			Objective->SetTutorialText(INVTEXT("新手教程完成"));
-			SetActorTickEnabled(false);
-			UE_LOG(LogMoving_Castle, Display, TEXT("教程 %s 已完成全部 14 步。"), *GetPathName());
+			if (!CompleteTutorial(Reason)) { Fail(Reason); }
 		}
 		else if (!Route->IsEditing() && IsBuildingOnPatrolPath(ECastleBuildingType::Farm))
 		{
@@ -515,19 +551,22 @@ void ACastleTutorialDirector::HandleBattleFailed(ECastleBattleKind, int32, const
 
 void ACastleTutorialDirector::ChooseCopyReward()
 {
-	if (Step != 11 || bCopyChosen || Dialogue->IsDialoguePlaying()) { return; }
+	if (Step != 11 || !Reward || !bStepInteractionStarted || bCopyChosen || Dialogue->IsDialoguePlaying() || Guide->HasOpenModal()) { return; }
 	FText Reason;
+	Reward->SetVisibility(ESlateVisibility::Collapsed);
 	if (!Reward->ShowCard(Configuration->Archer, *Board) || !ShowDialogue(Configuration->ClaimDialogue, Reason))
 	{
 		Fail(Reason.IsEmpty() ? INVTEXT("无法显示复制的箭塔卡。") : Reason);
 		return;
 	}
+	Controller->SetPresentationModalState(false, Reward);
 	bCopyChosen = true;
 }
 
 void ACastleTutorialDirector::ClaimCopyReward()
 {
-	if (Step != 11 || !bCopyChosen || bCopyClaimed || Dialogue->IsDialoguePlaying()) { return; }
+	if (Step != 11 || !Reward || Reward->GetVisibility() != ESlateVisibility::Visible
+		|| !bCopyChosen || bCopyClaimed || Dialogue->IsDialoguePlaying() || Guide->HasOpenModal()) { return; }
 	int32 Index = INDEX_NONE;
 	FText Reason;
 	if (!Board->PrototypeBackpack->TryAddItem(Configuration->Archer, Index, Reason))
@@ -541,6 +580,23 @@ void ACastleTutorialDirector::ClaimCopyReward()
 	Reward = nullptr;
 }
 
+bool ACastleTutorialDirector::CompleteTutorial(FText& OutReason)
+{
+	if (!FPackageName::DoesPackageExist(TutorialReturnMap))
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("教程完成后无法返回主界面，缺少地图包 %s。"), TutorialReturnMap));
+		return false;
+	}
+	if (Dispatch->IsSessionActive() && !Dispatch->EndBattleDispatchSession(OutReason)) { return false; }
+	SetShopAvailability(false);
+	RemoveTutorialPresentation();
+	bCompleted = true;
+	SetActorTickEnabled(false);
+	UE_LOG(LogMoving_Castle, Display, TEXT("教程 %s 已完成全部 14 步，返回 %s。"), *GetPathName(), TutorialReturnMap);
+	UGameplayStatics::OpenLevel(GetWorld(), FName(TutorialReturnMap));
+	return true;
+}
+
 void ACastleTutorialDirector::Fail(const FText& Reason)
 {
 	EndTutorialDispatch();
@@ -552,6 +608,7 @@ void ACastleTutorialDirector::Fail(const FText& Reason)
 		Controller->SetTutorialShopAccess(false);
 		Controller->ShowDirectorMessage(Failure);
 	}
+	RemoveTutorialPresentation();
 	SetActorTickEnabled(false);
 }
 
@@ -566,14 +623,25 @@ void ACastleTutorialDirector::EndPlay(const EEndPlayReason::Type Reason)
 		Combat->OnBattleCleared.RemoveAll(this);
 		Combat->OnBattleFailed.RemoveAll(this);
 	}
+	RemoveTutorialPresentation();
+	Super::EndPlay(Reason);
+}
+
+void ACastleTutorialDirector::RemoveTutorialPresentation()
+{
 	if (Reward && Controller) { Controller->SetPresentationModalState(false, Reward); }
 	for (UUserWidget* Widget : {static_cast<UUserWidget*>(HUD.Get()), static_cast<UUserWidget*>(Objective.Get()),
 		static_cast<UUserWidget*>(Reward.Get())})
 	{
 		if (Widget) { Widget->RemoveFromParent(); }
 	}
+	Reward = nullptr;
+	if (Bubble)
+	{
+		Bubble->DestroyComponent();
+		Bubble = nullptr;
+	}
 	RemovePathMarkers();
-	Super::EndPlay(Reason);
 }
 
 void ACastleTutorialDirector::EndTutorialDispatch()

@@ -10,6 +10,7 @@ class UCastleDialogueScriptDataAsset;
 class UCastleDirectorHUDWidget;
 class UCastleTutorialTextWidget;
 class UCastleTutorialRewardWidget;
+class UMassEntityConfigAsset;
 
 /** 每行与一项真实玩法验成条件对应，文本与机制介绍由资产配置。 */
 USTRUCT(BlueprintType)
@@ -35,6 +36,8 @@ public:
 	UPROPERTY(EditAnywhere, Category = "教程") FCastleBuildingDescriptor Farm;
 	UPROPERTY(EditAnywhere, Category = "教程") int32 StartingGold = 0;
 	UPROPERTY(EditAnywhere, Category = "教程") TObjectPtr<UCastleCombatConfigDataAsset> GhostBattle;
+	/** S10 的单人待命池专用配置，正式局仍使用主塔的 NPC 配置。 */
+	UPROPERTY(EditAnywhere, Category = "教程") TObjectPtr<UMassEntityConfigAsset> TutorialLordNPCConfiguration;
 	UPROPERTY(EditAnywhere, Category = "教程") TObjectPtr<UCastleDialogueScriptDataAsset> ClaimDialogue;
 	UPROPERTY(EditAnywhere, Category = "教程") TObjectPtr<UCastleDialogueScriptDataAsset> OutOfStockDialogue;
 	UPROPERTY(EditAnywhere, Category = "教程") TObjectPtr<UCastleDialogueScriptDataAsset> FarmOfferDialogue;

@@ -94,7 +94,8 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|商店")
 	void ToggleShop();
 	/** 只由教学导演设置，普通关卡继续采用原访问权限。 */
-	void SetTutorialShopAccess(bool bAllowed) { TutorialShopAccess = bAllowed; }
+	/** 教学对话期间暂停现有商店控件的输入，保留货架和本次商店会话。 */
+	void SetTutorialShopAccess(bool bAllowed);
 
 	/** 导演界面与商店共用单一输入状态，避免 IgnoreInput 计数叠加或遗漏恢复。 */
 	void SetDirectorModalState(bool bRewardOpen, bool bGameOverOpen, UUserWidget* FocusWidget);

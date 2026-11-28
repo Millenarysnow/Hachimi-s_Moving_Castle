@@ -319,10 +319,34 @@ void UCastleMassAnimationProcessor::Execute(FMassEntityManager& EntityManager, F
 		{
 			FCastleMassAnimationFragment& Animation = Animations[It];
 			const bool bAttacking = AttackStates[It].bInAttackState && Parameters.AttackSequence != INDEX_NONE;
-			const bool bMoving = Velocities[It].Value.SizeSquared() > 1.0;
-			const int32 Sequence = bAttacking ? Parameters.AttackSequence : (bMoving ? Parameters.MoveSequence : Parameters.IdleSequence);
-			const float Length = FMath::Max(UE_SMALL_NUMBER, bAttacking ? Parameters.AttackLength : (bMoving ? Parameters.MoveLength : Parameters.IdleLength));
-			const float PlayRate = bAttacking ? Parameters.AttackPlayRate : (bMoving ? Parameters.MovePlayRate : 1.0f);
+			const bool bHasRun = Parameters.RunSequence != INDEX_NONE;
+			// 仅启用走跑的地面角色使用水平速度。敌人的三维移动判定与固定倍率保持原语义。
+			const FVector& Velocity = Velocities[It].Value;
+			const double SpeedSquared = bHasRun ? Velocity.SizeSquared2D() : Velocity.SizeSquared();
+			const bool bMoving = SpeedSquared > 1.0;
+			const bool bRunning = bHasRun && bMoving && SpeedSquared > FMath::Square(static_cast<double>(Parameters.RunSpeedThreshold));
+			int32 Sequence = Parameters.IdleSequence;
+			float Length = Parameters.IdleLength;
+			float PlayRate = 1.0f;
+			if (bAttacking)
+			{
+				Sequence = Parameters.AttackSequence;
+				Length = Parameters.AttackLength;
+				PlayRate = Parameters.AttackPlayRate;
+			}
+			else if (bMoving)
+			{
+				Sequence = bRunning ? Parameters.RunSequence : Parameters.MoveSequence;
+				Length = bRunning ? Parameters.RunLength : Parameters.MoveLength;
+				PlayRate = Parameters.MovePlayRate;
+				if (bHasRun)
+				{
+					// 走路以正式 NPC 的常速为基准，跑步以切入阈值为基准；限制步频范围以避免画面抖动。
+					const float ReferenceSpeed = bRunning ? Parameters.RunSpeedThreshold : 200.0f;
+					PlayRate *= FMath::Clamp(static_cast<float>(FMath::Sqrt(SpeedSquared)) / ReferenceSpeed, 0.75f, 1.8f);
+				}
+			}
+			Length = FMath::Max(UE_SMALL_NUMBER, Length);
 			const bool bChanged = Sequence != Animation.CurrentSequence;
 			Animation.Position = bChanged ? Animation.Phase * Length
 				: FMath::Fmod(Animation.Position + DeltaTime * PlayRate, Length);

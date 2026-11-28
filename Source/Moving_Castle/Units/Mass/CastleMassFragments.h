@@ -142,6 +142,16 @@ struct MOVING_CASTLE_API FCastleMassAnimationParameters : public FMassConstShare
 	UPROPERTY()
 	int32 MoveSequence = 1;
 
+	/** 未配置跑步的模板沿用原有移动判定和固定倍率。 */
+	UPROPERTY()
+	int32 RunSequence = INDEX_NONE;
+
+	UPROPERTY()
+	float RunSpeedThreshold = 250.0f;
+
+	UPROPERTY()
+	float RunLength = 0.0f;
+
 	UPROPERTY()
 	float IdleLength = 1.0f;
 

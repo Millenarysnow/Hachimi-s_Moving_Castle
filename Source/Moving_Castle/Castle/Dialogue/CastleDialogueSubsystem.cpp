@@ -208,6 +208,9 @@ void UCastleDialogueSubsystem::CancelForController(const ACastlePlayerController
 
 void UCastleDialogueSubsystem::FinishDialogue(const bool bCompleted)
 {
+	// 记录剧本结束位置，便于区分正常结束和地图退出时的取消。
+	UE_LOG(LogMoving_Castle, Verbose, TEXT("对话子系统 %s 结束剧本 %s（当前行 %d，正常完成 %s）。"),
+		*GetPathName(), *GetPathNameSafe(CurrentScript), CurrentLineIndex, bCompleted ? TEXT("是") : TEXT("否"));
 	if (ACastlePlayerController* Controller = CurrentController.Get())
 	{
 		Controller->SetPresentationModalState(false, CurrentWidget);

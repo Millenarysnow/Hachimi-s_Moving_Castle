@@ -2,10 +2,12 @@
 #include "Castle/Automation/CastlePIEAutomation.h"
 #include "Blueprint/SlateBlueprintLibrary.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
+#include "Camera/CameraActor.h"
 #include "Castle/Dialogue/CastleDialogueScriptDataAsset.h"
 #include "Castle/Dialogue/CastleDialogueSubsystem.h"
 #include "Castle/Dialogue/CastleDialogueWidget.h"
 #include "Castle/Combat/CastleCombatConfigDataAsset.h"
+#include "Castle/Combat/CastleCombatSubsystem.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/Guide/CastleGuideSubsystem.h"
 #include "Castle/Guide/CastleGuideWidgets.h"
@@ -23,6 +25,7 @@
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
+#include "CastleMassUnitSubsystem.h"
 #include "Castle/Components/CastleMainTowerComponent.h"
 #include "CastleNavigationSubsystem.h"
 #include "CastlePlayerController.h"
@@ -30,6 +33,8 @@
 #include "CastleShopWidget.h"
 #include "CastleTowerDispatchSubsystem.h"
 #include "Components/Image.h"
+#include "Components/InstancedSkinnedMeshComponent.h"
+#include "Components/CanvasPanelSlot.h"
 #include "Components/PanelWidget.h"
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
@@ -38,12 +43,17 @@
 #include "Engine/GameInstance.h"
 #include "Engine/GameViewportClient.h"
 #include "EngineUtils.h"
+#include "Framework/Application/SlateApplication.h"
+#include "HAL/FileManager.h"
 #include "Interaction/CastlePatrolRoute.h"
 #include "Items/CastleItemGrantLibrary.h"
+#include "Layout/WidgetPath.h"
 #include "MassEntityConfigAsset.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/Paths.h"
 #include "Slate/SceneViewport.h"
 #include "Tests/AutomationCommon.h"
+#include "UnrealClient.h"
 #include "Widgets/SWindow.h"
 
 using CastlePIEAutomation::StartPIE;
@@ -67,6 +77,13 @@ namespace
 		return true;
 	}
 
+	/** 从普通 PIE 窗口截图，保留 UMG 和游戏画面供验收。 */
+	void CaptureTutorialScreenshot(const TCHAR* Filename)
+	{
+		const FString Directory = FPaths::ProjectSavedDir() / TEXT("WorkerC/Screenshots");
+		IFileManager::Get().MakeDirectory(*Directory, true);
+		FScreenshotRequest::RequestScreenshot(Directory / Filename, true, false);
+	}
 }
 
 /** 通过真实棋盘、商店、路径与战斗驱动 S1–S14，不直接改写编排器阶段。 */
@@ -78,6 +95,13 @@ public:
 	bool Update() override
 	{
 		UWorld* World = GEditor->PlayWorld;
+		// S14 已改为自动旅行，完成证据由实际进入主菜单关卡而不是旧教程 Actor 存活提供。
+		if (World && LastStep == 14 && World->GetMapName().EndsWith(TEXT("StartMenu")))
+		{
+			Test.TestTrue(TEXT("完成 S14 结尾对话后已自动返回 StartMenu"), World->GetMapName().EndsWith(TEXT("StartMenu")));
+			Test.TestTrue(TEXT("S10 已实际派出 Meshy 城主并挂载气泡"), bSawTutorialLordDispatch);
+			return true;
+		}
 		auto* Controller = World ? Cast<ACastlePlayerController>(World->GetFirstPlayerController()) : nullptr;
 		if (!Controller || !Controller->GetPawn()) { return Wait(TEXT("教学地图 PIE 未就绪")); }
 		TActorIterator<ACastleTutorialDirector> Tutorial(World);
@@ -85,6 +109,7 @@ public:
 		TActorIterator<ACastlePatrolRoute> Route(World);
 		if (!Tutorial || !Board || !Route) { return Wait(TEXT("教学导演、棋盘或路线入口缺失")); }
 		const int32 Step = Tutorial->GetCurrentStep();
+		if (Tutorial->HasShownDispatchBubble()) { bSawTutorialLordDispatch = true; }
 		if (!Tutorial->IsActorTickEnabled() && !Tutorial->HasCompletedTutorial())
 		{
 			Test.AddError(FString::Printf(TEXT("教学导演在 S%d 停止。"), Step));
@@ -103,11 +128,8 @@ public:
 		}
 		if (Tutorial->HasCompletedTutorial())
 		{
-			Test.TestTrue(TEXT("S10 已实际派出城主并挂载气泡"), Tutorial->HasShownDispatchBubble());
-			Test.TestEqual(TEXT("完成于 S14"), Step, 14);
-			Test.TestEqual(TEXT("摆上农田后仍使用 S8 原始路点"),
-				World->GetSubsystem<UCastleNavigationSubsystem>()->GetRequestedWaypoints(), OriginalWaypoints);
-			return true;
+			// 完成标记先于地图旅行设置，用例继续等待真正载入 StartMenu。
+			return Wait(TEXT("结尾对话已经结束，但尚未返回 StartMenu"));
 		}
 		if (Step != LastStep)
 		{
@@ -122,9 +144,48 @@ public:
 		auto* Guide = World->GetGameInstance()->GetSubsystem<UCastleGuideSubsystem>();
 		if (Dialogue->IsDialoguePlaying())
 		{
+			// 在实际对话期间读取生产状态，验证交互既未提前开始，也没有覆盖子对话。
+			if (Step == 10)
+			{
+				Test.TestFalse(TEXT("S10 对话期间战斗尚未开始"), World->GetSubsystem<UCastleCombatSubsystem>()->IsBattleActive());
+				Test.TestFalse(TEXT("S10 对话期间城主待命会话尚未创建"), World->GetSubsystem<UCastleTowerDispatchSubsystem>()->IsSessionActive());
+			}
+			else if (Step == 11)
+			{
+				const auto* Reward = FindScreenWidget<UCastleTutorialRewardWidget>(*World);
+				if (Action == 0)
+				{
+					Test.TestNull(TEXT("S11 开场对话期间三选一尚未挂载"), Reward);
+				}
+				else
+				{
+					Test.TestTrue(TEXT("复制奖励对话期间单卡领取层保持隐藏"),
+						Reward && Reward->GetVisibility() == ESlateVisibility::Collapsed);
+				}
+			}
+			else if (Step == 14 && Action == 2)
+			{
+				// 结尾台词播放时农田已放置，趁地图旅行前核对原始路径点。
+				Test.TestEqual(TEXT("摆上农田后仍使用 S8 原始路点"),
+					World->GetSubsystem<UCastleNavigationSubsystem>()->GetRequestedWaypoints(), OriginalWaypoints);
+			}
 			auto* Widget = FindScreenWidget<UCastleDialogueWidget>(*World);
 			auto* Choices = Widget ? Cast<UVerticalBox>(Widget->GetWidgetFromName(TEXT("ChoiceContainer"))) : nullptr;
 			if (!Choices) { return Fail(TEXT("读取不到保存后的对话控件")); }
+			// 保留一帧当前句与游戏画面，下一轮再点击，避免截图前卸载对话。
+			FName Screenshot;
+			if (Step == 10) { Screenshot = TEXT("Tutorial-S10-Dialogue.png"); }
+			else if (Step == 11)
+			{
+				Screenshot = Action == 0 ? TEXT("Tutorial-S11-Dialogue.png") : TEXT("Tutorial-S11-ClaimDialogue.png");
+			}
+			if (!Screenshot.IsNone() && !DialogueScreenshots.Contains(Screenshot))
+			{
+				DialogueScreenshots.Add(Screenshot);
+				Widget->CompleteCurrentLine();
+				CaptureTutorialScreenshot(*Screenshot.ToString());
+				return false;
+			}
 			if (Choices->GetVisibility() == ESlateVisibility::Visible)
 			{
 				auto* Choice = Cast<UButton>(Choices->GetChildAt(1));
@@ -235,24 +296,97 @@ public:
 		case 10:
 			if (Action++ == 0)
 			{
+				Test.TestTrue(TEXT("S10 对话关闭后才启动出兵战斗"), World->GetSubsystem<UCastleCombatSubsystem>()->IsBattleActive());
+				Test.TestTrue(TEXT("S10 对话关闭后才创建城主待命会话"), World->GetSubsystem<UCastleTowerDispatchSubsystem>()->IsSessionActive());
 				auto* Dispatch = World->GetSubsystem<UCastleTowerDispatchSubsystem>();
 				Test.TestFalse(TEXT("手动点塔前拒绝开启自动出兵"), Dispatch->SetAutoDispatchEnabled(true));
 				Test.TestFalse(TEXT("拒绝自动出兵时尚未产生城主气泡"), Tutorial->HasShownDispatchBubble());
-				if (!Dispatch->BeginManualDispatch(Reason)) { return Fail(Reason.ToString()); }
+				// 手动派兵立即广播实体句柄，只在本次调用范围内监听，供截图定位实际城主。
+				const FDelegateHandle CaptureHandle = Dispatch->OnNPCDispatched.AddLambda(
+					[this](const FCastleMassUnitHandle& Unit) { Lord = Unit; });
+				const bool bDispatched = Dispatch->BeginManualDispatch(Reason);
+				Dispatch->OnNPCDispatched.Remove(CaptureHandle);
+				if (!bDispatched) { return Fail(Reason.ToString()); }
 				Dispatch->StopManualDispatch();
+				// 出门后的第一段有房间墙体，等城主走到巡逻路线中段再拍摄。
+				LordCaptureTime = World->GetTimeSeconds() + 6.0;
+			}
+			else if (Tutorial->HasShownDispatchBubble() && !bLordScreenshotSaved)
+			{
+				if (World->GetTimeSeconds() < LordCaptureTime) { return false; }
+				// 临时相机随巡逻实体移动，留出 Mass 表现更新和视口绘制时间。
+				FCastleMassUnitSnapshot Snapshot;
+				if (!World->GetSubsystem<UCastleMassUnitSubsystem>()->GetUnitSnapshot(Lord, Snapshot))
+				{
+					return Fail(TEXT("截取城主出场时无法读取实际派出的 Mass 实体"));
+				}
+				const FVector Location = Snapshot.Transform.GetLocation();
+				// 相机沿通道方向置于屋顶下，与城主共处房间内部。
+				const FVector Eye = Snapshot.Transform.TransformPosition(FVector(185, 30, 150));
+				const FRotator Look = (Location + FVector(0, 0, 85) - Eye).Rotation();
+				if (!LordCamera.IsValid())
+				{
+					LordCamera = World->SpawnActor<ACameraActor>(Eye, Look);
+					if (!LordCamera.IsValid()) { return Fail(TEXT("无法创建城主截图相机")); }
+					PreviousViewTarget = Controller->GetViewTarget();
+					Controller->SetViewTarget(LordCamera.Get());
+					LordCameraReadyTime = World->GetTimeSeconds() + 1.0;
+					return false;
+				}
+				if (!bLordScreenshotRequested)
+				{
+					LordCamera->SetActorLocationAndRotation(Eye, Look);
+					if (World->GetTimeSeconds() < LordCameraReadyTime) { return false; }
+					// 以 Meshy 实例和场景代理为证据，避免只凭城主的教学气泡判定已渲染。
+					bool bFoundLord = false;
+					for (TObjectIterator<UInstancedSkinnedMeshComponent> It; It; ++It)
+					{
+						if (It->GetWorld() != World || GetNameSafe(It->GetSkinnedAsset()) != TEXT("SK_TutorialLord")) { continue; }
+						FTransform VisibleTransform;
+						if (It->GetInstanceCount() == 1 && It->GetSceneProxy()
+							&& It->GetInstanceTransform(It->GetInstanceId(0), VisibleTransform, true))
+						{
+							bFoundLord = true;
+							Test.AddInfo(FString::Printf(TEXT("Meshy 城主实体位置 %s，渲染实例变换 %s"),
+								*Location.ToString(), *VisibleTransform.ToHumanReadableString()));
+						}
+					}
+					Test.TestTrue(TEXT("S10 实际渲染批次包含 Meshy 城主"), bFoundLord);
+					CaptureTutorialScreenshot(TEXT("Tutorial-S10-LordDispatched.png"));
+					bLordScreenshotRequested = true;
+					return false;
+				}
+				Controller->SetViewTarget(PreviousViewTarget.Get());
+				LordCamera->Destroy();
+				bLordScreenshotSaved = true;
 			}
 			break;
 		case 11:
 		{
 			auto* Reward = FindScreenWidget<UCastleTutorialRewardWidget>(*World);
-			if (!Reward) { return Fail(TEXT("教学三选一未挂载")); }
+			if (!Reward) { return Fail(TEXT("S11 对话关闭后教学三选一未挂载")); }
 			if (Action == 0)
 			{
+				// 三选一先实际绘制，再点击复制并进入领取对话。
+				if (!bRewardChoicesScreenshotSaved)
+				{
+					CaptureTutorialScreenshot(TEXT("Tutorial-S11-RewardChoices.png"));
+					bRewardChoicesScreenshotSaved = true;
+					return false;
+				}
 				if (!Click(*Reward, TEXT("CopyButton"))) { return Fail(TEXT("找不到第三项奖励")); }
 				++Action;
 			}
 			else if (Action == 1)
 			{
+				// 点击对话推进后的下一轮由导演恢复奖励模态，测试随后才能真实点击单卡领取。
+				if (Reward->GetVisibility() == ESlateVisibility::Collapsed) { return Wait(TEXT("等待复制奖励对话结束并恢复领取")); }
+				if (!bRewardScreenshotSaved)
+				{
+					CaptureTutorialScreenshot(TEXT("Tutorial-S11-Reward.png"));
+					bRewardScreenshotSaved = true;
+					return false;
+				}
 				if (!Click(*Reward, TEXT("CardButton"))) { return Fail(TEXT("找不到复制箭塔卡")); }
 				++Action;
 			}
@@ -327,6 +461,17 @@ private:
 	int32 Action = 0;
 	int32 ShopPause = 0;
 	bool bTutorialHealthLockChecked = false;
+	bool bSawTutorialLordDispatch = false;
+	bool bLordScreenshotSaved = false;
+	bool bLordScreenshotRequested = false;
+	bool bRewardChoicesScreenshotSaved = false;
+	bool bRewardScreenshotSaved = false;
+	TSet<FName> DialogueScreenshots;
+	double LordCaptureTime = 0.0;
+	double LordCameraReadyTime = 0.0;
+	FCastleMassUnitHandle Lord;
+	TWeakObjectPtr<ACameraActor> LordCamera;
+	TWeakObjectPtr<AActor> PreviousViewTarget;
 	TArray<FVector> OriginalWaypoints;
 	double Deadline = FPlatformTime::Seconds() + 30.0;
 };
@@ -367,7 +512,21 @@ bool FCastleTutorialDialogueViewportTest::RunTest(const FString&)
 		if (!Player || !Widget || !BuildBar)
 		{
 			if (FPlatformTime::Seconds() < Deadline) { return false; }
-			AddError(TEXT("教程 PIE 未挂载预期的对话和建造栏。"));
+			// 区分 PIE 尚未初始化、剧本未播放和控件未挂载，保留失败现场的信息。
+			TArray<UUserWidget*> DialogueWidgets;
+			TArray<UUserWidget*> AllDialogueWidgets;
+			TArray<UUserWidget*> BuildBarWidgets;
+			if (World)
+			{
+				UWidgetBlueprintLibrary::GetAllWidgetsOfClass(World, DialogueWidgets, UCastleDialogueWidget::StaticClass(), true);
+				UWidgetBlueprintLibrary::GetAllWidgetsOfClass(World, AllDialogueWidgets, UCastleDialogueWidget::StaticClass(), false);
+				UWidgetBlueprintLibrary::GetAllWidgetsOfClass(World, BuildBarWidgets, UCastleBuildBarWidget::StaticClass(), true);
+			}
+			const auto* DialogueSubsystem = World && World->GetGameInstance()
+				? World->GetGameInstance()->GetSubsystem<UCastleDialogueSubsystem>() : nullptr;
+			AddError(FString::Printf(TEXT("教程 PIE 未挂载预期界面，玩家=%s、对话播放=%s、顶级/全部对话控件=%d/%d、建造栏控件=%d，地图=%s。"),
+				*GetNameSafe(Player), DialogueSubsystem && DialogueSubsystem->IsDialoguePlaying() ? TEXT("是") : TEXT("否"),
+				DialogueWidgets.Num(), AllDialogueWidgets.Num(), BuildBarWidgets.Num(), *GetNameSafe(World)));
 			return true;
 		}
 		auto* Dialogue = World->GetGameInstance()->GetSubsystem<UCastleDialogueSubsystem>();
@@ -376,6 +535,15 @@ bool FCastleTutorialDialogueViewportTest::RunTest(const FString&)
 		{
 			return true;
 		}
+		auto* Continue = Cast<UButton>(Widget->GetWidgetFromName(TEXT("ContinueButton")));
+		auto* ContinueSlot = Continue ? Cast<UCanvasPanelSlot>(Continue->Slot) : nullptr;
+		auto* Choice = Widget->GetWidgetFromName(TEXT("ChoiceContainer"));
+		auto* ChoiceSlot = Choice ? Cast<UCanvasPanelSlot>(Choice->Slot) : nullptr;
+		TestTrue(TEXT("对话推进按钮锚定并覆盖整个视口"), ContinueSlot
+			&& ContinueSlot->GetAnchors() == FAnchors(0, 0, 1, 1)
+			&& ContinueSlot->GetOffsets() == FMargin(0) && !ContinueSlot->GetAutoSize());
+		TestTrue(TEXT("分支选项绘制层高于全屏推进层"), ContinueSlot && ChoiceSlot
+			&& ContinueSlot->GetZOrder() < ChoiceSlot->GetZOrder());
 
 		if (!bBothPortraits)
 		{
@@ -399,6 +567,7 @@ bool FCastleTutorialDialogueViewportTest::RunTest(const FString&)
 			{
 				return true;
 			}
+			Widget->CompleteCurrentLine();
 			bBothPortraits = true;
 			return false;
 		}
@@ -446,6 +615,16 @@ bool FCastleTutorialDialogueViewportTest::RunTest(const FString&)
 			&& RightBox->GetWidthOverride() == 380.0f && RightBox->GetHeightOverride() == 380.0f);
 		TestEqual(TEXT("实际对话期收起建造栏"), BuildBar->GetVisibility(), ESlateVisibility::Collapsed);
 		TestNull(TEXT("教程视口没有正式徽章栏"), FindScreenWidget<UCastleBadgeBarWidget>(*World));
+		// 从实际 Slate 窗口取命中路径，验证对话面板上方的空白也落在继续按钮上。
+		const TSharedPtr<SWindow> Window = World->GetGameViewport()->GetWindow();
+		const TSharedPtr<SWidget> ContinueSlate = Continue ? Continue->GetCachedWidget() : nullptr;
+		if (TestTrue(TEXT("全屏推进按钮已有 Slate 控件和 PIE 窗口"), ContinueSlate.IsValid() && Window.IsValid()))
+		{
+			const FGeometry& Geometry = Continue->GetCachedGeometry();
+			const FVector2D BlankSpace = Geometry.LocalToAbsolute(Geometry.GetLocalSize() * 0.15f);
+			const FWidgetPath Hit = FSlateApplication::Get().LocateWindowUnderMouse(BlankSpace, {Window.ToSharedRef()});
+			TestTrue(TEXT("实际 Slate 命中路径包含空白区的全屏推进按钮"), Hit.ContainsWidget(ContinueSlate.Get()));
+		}
 		// 完成本段剧本后由子系统发出活动状态变更，检查无需等待 UMG Tick 的即时恢复。
 		const int32 OpeningLineCount = Dialogue->GetCurrentScript()->Lines.Num();
 		for (int32 Step = 0; Step < OpeningLineCount && Dialogue->IsDialoguePlaying(); ++Step)
@@ -453,7 +632,8 @@ bool FCastleTutorialDialogueViewportTest::RunTest(const FString&)
 			Dialogue->AdvanceDialogueForAutomation();
 		}
 		TestFalse(TEXT("开场对话已播放完成"), Dialogue->IsDialoguePlaying());
-		TestEqual(TEXT("对话结束立即恢复底部建造栏"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		TestEqual(TEXT("对话结束立即恢复可穿透根容器的底部建造栏"),
+			BuildBar->GetVisibility(), ESlateVisibility::SelfHitTestInvisible);
 		return true;
 	}));
 	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(StopPIE()));
@@ -627,6 +807,10 @@ bool FCastleDialoguePresentationTest::RunTest(const FString&)
 			{
 				return true;
 			}
+			// 分支已可见时，再点全屏推进层不能跳过当前行。
+			const FString ChoiceLine = Dialogue->GetResolvedCurrentLineText().ToString();
+			Click(*Widget, TEXT("ContinueButton"));
+			TestEqual(TEXT("选择前点击空白不跳过分支行"), Dialogue->GetResolvedCurrentLineText().ToString(), ChoiceLine);
 			Choice->OnClicked.Broadcast();
 			if (Option == 1)
 			{

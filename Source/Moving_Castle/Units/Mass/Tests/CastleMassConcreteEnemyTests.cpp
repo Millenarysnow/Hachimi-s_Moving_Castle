@@ -34,6 +34,7 @@
 #include "MassExecutionContext.h"
 #include "MassMovementFragments.h"
 #include "MassLODTrait.h"
+#include "Animation/AnimSequence.h"
 #include "Animation/AnimSequenceTransformProviderData.h"
 #include "Engine/SkeletalMesh.h"
 #include "Materials/MaterialInstanceConstant.h"
@@ -382,6 +383,63 @@ bool FCastleAttackAnimationTest::RunTest(const FString& Parameters)
 		Step<UCastleMassAnimationProcessor>(Scope, 0.1f);
 		TestEqual(TEXT("停止后恢复待机"), Data.SequenceIndex, Visual->IdleSequence);
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleNPCSpeedAnimationTest, "MovingCastle.Mass.NPCSpeedAnimation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleNPCSpeedAnimationTest::RunTest(const FString& Parameters)
+{
+	using namespace CastleMassConcreteTests;
+	FWorld Scope;
+	auto* Formal = LoadObject<UMassEntityConfigAsset>(nullptr, TEXT("/Game/MovingCastle/Mass/DA_MassNPCBase"));
+	auto* Lord = LoadObject<UMassEntityConfigAsset>(nullptr, TEXT("/Game/MovingCastle/Mass/DA_MassNPC_TutorialLord"));
+	auto* Enemy = LoadObject<UMassEntityConfigAsset>(nullptr, TEXT("/Game/MovingCastle/Mass/DA_MassEnemyBase"));
+	if (!TestNotNull(TEXT("正式 NPC 配置"), Formal) || !TestNotNull(TEXT("教程城主配置"), Lord)
+		|| !TestNotNull(TEXT("旧敌人配置"), Enemy)) { return false; }
+	TestTrue(TEXT("正式 NPC 通过实体模板校验"), Formal->GetMutableConfig().ValidateEntityTemplate(*Scope.World));
+	TestTrue(TEXT("教程城主通过实体模板校验"), Lord->GetMutableConfig().ValidateEntityTemplate(*Scope.World));
+	const auto* Visual = Cast<UCastleMassHumanoidVisualizationTrait>(Formal->FindTrait(UCastleMassHumanoidVisualizationTrait::StaticClass()));
+	const auto* OldVisual = Cast<UCastleMassHumanoidVisualizationTrait>(Enemy->FindTrait(UCastleMassHumanoidVisualizationTrait::StaticClass()));
+	if (!TestNotNull(TEXT("正式 NPC 人形动画配置"), Visual) || !TestNotNull(TEXT("旧敌人人形动画配置"), OldVisual)
+		|| !TestNotNull(TEXT("正式 NPC 动画提供器"), Visual->AnimationProvider.Get())) { return false; }
+	TestEqual(TEXT("旧敌人不启用跑步"), OldVisual->RunSequence, INDEX_NONE);
+	const auto& Sequences = Visual->AnimationProvider->GetSequences();
+	if (!TestTrue(TEXT("正式 NPC 的走跑使用提供器中的两个完整序列"), Sequences.IsValidIndex(Visual->MoveSequence)
+		&& Sequences.IsValidIndex(Visual->RunSequence) && Sequences[Visual->MoveSequence].Sequence
+		&& Sequences[Visual->RunSequence].Sequence)) { return false; }
+	TestEqual(TEXT("正式 NPC 行走素材"), Sequences[Visual->MoveSequence].Sequence->GetFName(), FName(TEXT("NormalWalk_noWeaponAnim")));
+	TestEqual(TEXT("正式 NPC 跑步素材"), Sequences[Visual->RunSequence].Sequence->GetFName(), FName(TEXT("NormalRun_noWeaponAnim")));
+	TArray<FCastleMassUnitHandle> FormalHandles, EnemyHandles;
+	FText Reason;
+	if (!Scope.Units().SpawnUnits(Formal, {FTransform::Identity}, FormalHandles, Reason)
+		|| !Scope.Units().SpawnUnits(Enemy, {FTransform::Identity}, EnemyHandles, Reason))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	// 直接喂入实体在本帧的实际速度，验证下游 GPU 轨道选择，而非复制判定条件。
+	const auto UpdateAtSpeed = [&](const FVector& Velocity) -> const FAnimSequenceTrackAutoPlayData&
+	{
+		for (const FMassEntityHandle Entity : {FormalHandles[0].Entity, EnemyHandles[0].Entity})
+		{
+			Scope.Manager().GetFragmentDataChecked<FMassVelocityFragment>(Entity).Value = Velocity;
+		}
+		Step<UCastleMassAnimationProcessor>(Scope, 0.1f);
+		return Scope.Manager().GetFragmentDataChecked<FMassRepresentationAnimationFragment>(FormalHandles[0].Entity).AnimData;
+	};
+	TestEqual(TEXT("默认 200 cm/s 行走"), UpdateAtSpeed(FVector(200, 0, 200)).SequenceIndex, Visual->MoveSequence);
+	TestEqual(TEXT("正好 250 cm/s 仍行走"), UpdateAtSpeed(FVector(250, 0, 0)).SequenceIndex, Visual->MoveSequence);
+	const auto RunData = UpdateAtSpeed(FVector(350, 0, 0));
+	TestEqual(TEXT("增益超过阈值切入跑步"), RunData.SequenceIndex, Visual->RunSequence);
+	TestEqual(TEXT("走跑以 0.2 秒过渡"), RunData.BlendTime, 0.2f);
+	TestTrue(TEXT("跑步步频随实际移速增加"), RunData.PlayRate > 1.0f);
+	const auto& OldData = Scope.Manager().GetFragmentDataChecked<FMassRepresentationAnimationFragment>(EnemyHandles[0].Entity).AnimData;
+	TestEqual(TEXT("未配置跑步的敌人继续使用原移动序列"), OldData.SequenceIndex, OldVisual->MoveSequence);
+	TestEqual(TEXT("未配置跑步的敌人继续使用固定倍率"), OldData.PlayRate, OldVisual->MovePlayRate);
+	TestEqual(TEXT("NPC 停止水平移动后待机"), UpdateAtSpeed(FVector(0, 0, 350)).SequenceIndex, Visual->IdleSequence);
+	TestEqual(TEXT("敌人仍采用原来的三维移速判定"), OldData.SequenceIndex, OldVisual->MoveSequence);
 	return true;
 }
 

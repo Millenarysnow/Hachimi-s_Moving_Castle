@@ -565,21 +565,47 @@ namespace CastleFortressUI
 		Root.AddChildToCanvas(Panel)->SetAutoSize(true);
 	}
 
-	// 保持原对话树及其锚点，只替换底板和增加分支按钮样式模板。
+	// 保留立绘、正文及选项锚点，继续按钮迁移到根画布覆盖整个视口。
 	bool StyleDialogue(UWidgetBlueprint& Asset, const FPalette& Palette)
 	{
 		FLayout L{*Asset.WidgetTree, Palette};
+		auto* Root = Cast<UCanvasPanel>(Asset.WidgetTree->RootWidget);
 		auto* Panel = Cast<UOverlay>(Asset.WidgetTree->FindWidget(TEXT("DialoguePanel")));
 		auto* Border = Panel ? Cast<UBorder>(Panel->GetChildAt(0)) : nullptr;
-		auto* Continue = Panel ? Cast<UButton>(Panel->GetChildAt(1)) : nullptr;
-		if (!Border || !Continue || Continue->GetFName() != TEXT("ContinueButton") || Continue->GetContent())
+		auto* Continue = Cast<UButton>(Asset.WidgetTree->FindWidget(TEXT("ContinueButton")));
+		auto* Choices = Cast<UVerticalBox>(Asset.WidgetTree->FindWidget(TEXT("ChoiceContainer")));
+		auto* ChoiceSlot = Choices ? Cast<UCanvasPanelSlot>(Choices->Slot) : nullptr;
+		if (!Root || !Border || !Continue || Continue->GetContent() || !ChoiceSlot || Choices->GetParent() != Root
+			|| (Continue->GetParent() != Panel && Continue->GetParent() != Root))
 		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("%s 缺少独立点击层或底栏的原始布局。"), *Asset.GetPathName());
+			UE_LOG(LogMoving_Castle, Error, TEXT("%s 的根画布、对话底栏、继续按钮或选项层级无效。"), *Asset.GetPathName());
 			return false;
 		}
+		if (Continue->GetParent() == Panel)
+		{
+			Continue->RemoveFromParent();
+			Root->AddChildToCanvas(Continue);
+		}
+		auto* ContinueSlot = CastChecked<UCanvasPanelSlot>(Continue->Slot);
+		ContinueSlot->SetAnchors(FAnchors(0, 0, 1, 1));
+		ContinueSlot->SetOffsets(FMargin(0));
+		ContinueSlot->SetAlignment(FVector2D::ZeroVector);
+		ContinueSlot->SetAutoSize(false);
+		// 点击区覆盖立绘和底栏。分支容器在它上方保有选项热区，容器空隙仍交给继续按钮处理。
+		int32 VisualZOrder = 0;
+		for (UWidget* Child : Root->GetAllChildren())
+		{
+			if (Child != Continue && Child != Choices)
+			{
+				VisualZOrder = FMath::Max(VisualZOrder, CastChecked<UCanvasPanelSlot>(Child->Slot)->GetZOrder());
+			}
+		}
+		ContinueSlot->SetZOrder(VisualZOrder + 1);
+		ChoiceSlot->SetZOrder(VisualZOrder + 2);
+		UCastleShopWBPBuilderLibrary::ConfigureTransparentButton(Continue, false);
 		if (auto* Existing = Cast<UOverlay>(Border->GetContent()); Existing && Existing->GetFName() == TEXT("FortressDialogueSkin"))
 		{
-			// 再次生成时直接更新两层笔刷，至关重要的正文和点击层均留在原槽位。
+			// 再次生成时直接更新两层笔刷，保留原正文和标题组件。
 			auto* Fill = Cast<UImage>(Existing->GetChildAt(0));
 			auto* Rim = Cast<UImage>(Existing->GetChildAt(1));
 			auto* Template = Cast<UButton>(Asset.WidgetTree->FindWidget(TEXT("ChoiceButtonTemplate")));
@@ -600,7 +626,7 @@ namespace CastleFortressUI
 			Slot->SetHorizontalAlignment(HAlign_Fill);
 			Slot->SetVerticalAlignment(VAlign_Fill);
 		}
-		// 在旧底板内部承载切图和原正文，继续按钮仍是底板的兄弟节点。
+		// 在旧底板内承载切图与原正文。
 		UWidget* Body = Border->GetContent();
 		if (!Body)
 		{
@@ -617,7 +643,6 @@ namespace CastleFortressUI
 		Border->SetBrush(Empty);
 		Border->SetPadding(FMargin(0));
 		Border->SetContent(Skin);
-		UCastleShopWBPBuilderLibrary::ConfigureTransparentButton(Continue, false);
 		auto* Template = L.Add<UButton>(TEXT("ChoiceButtonTemplate"));
 		Template->SetVisibility(ESlateVisibility::Collapsed);
 		L.RowStyle(*Template);
@@ -810,6 +835,16 @@ UClass* PublishCastleFortressTutorialPopup(FName Name)
 	return Asset->GeneratedClass;
 }
 #endif
+
+bool UCastleFortressUIPublisherLibrary::PublishDialogueWidget()
+{
+#if WITH_EDITOR
+	return PublishCastleFortressTutorialPopup(TEXT("WBP_CastleDialogue")) != nullptr;
+#else
+	UE_LOG(LogMoving_Castle, Error, TEXT("对话 WBP 发布须在编辑器中执行。"));
+	return false;
+#endif
+}
 
 bool UCastleFortressUIPublisherLibrary::PublishGoldRewardWidgets()
 {

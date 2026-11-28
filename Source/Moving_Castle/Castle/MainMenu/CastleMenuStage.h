@@ -16,8 +16,8 @@ class ACastleMenuStage : public AActor
 	GENERATED_BODY()
 public:
 	ACastleMenuStage();
-	/** 三项资产均由菜单地图明确引用，随地图 Cook。 */
-	UPROPERTY(EditAnywhere, Category="开始界面") TObjectPtr<UTexture2D> TitleTexture;
+	/** 设计坐标表中的 14 个切图按发布脚本的顺序保存，由菜单地图随 Cook 引用。 */
+	UPROPERTY(EditAnywhere, Category="开始界面") TArray<TObjectPtr<UTexture2D>> MenuTextures;
 	UPROPERTY(EditAnywhere, Category="开始界面") TObjectPtr<UFont> MenuFont;
 	UPROPERTY(EditAnywhere, Category="开始界面") TObjectPtr<UMaterialInterface> PaperMaterial;
 
