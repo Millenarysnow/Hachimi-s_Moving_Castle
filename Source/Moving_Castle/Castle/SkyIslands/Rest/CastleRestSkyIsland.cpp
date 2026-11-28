@@ -1,4 +1,5 @@
 #include "CastleRestSkyIsland.h"
+#include "Castle/Rendering/CastleRenderingConstants.h"
 
 #include "Castle/Components/CastleEconomyComponent.h"
 #include "Castle/Components/CastleMainTowerComponent.h"
@@ -83,7 +84,8 @@ ACastleRestSkyIsland::ACastleRestSkyIsland()
 	SetDepartureArtMesh(TEXT("SM_SkyIsland_Departure_Rest"));
 	ConfigAsset = TSoftObjectPtr<UCastleRestSkyIslandDataAsset>(FSoftObjectPath(
 		TEXT("/Game/MovingCastle/Data/SkyIslands/DA_RestSkyIsland.DA_RestSkyIsland")));
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+	// 领取后的台座仍是实体，动态实例用 Color 表达已领取状态。
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(CastleRenderingConstants::ToonBasicColorMaterialPath);
 	StationMaterial = Material.Object;
 	// 三台横向展开，牌面朝向入口；入口至离开门的中心通道保持可飞行。
 	const auto MakeStation = [this](FName Name, UStaticMesh* Mesh, const FVector& Location)

@@ -53,7 +53,10 @@ def make_material(name):
     if ASSET.does_asset_exist(path):
         material = ASSET.load_asset(path)
         assert isinstance(material, ue.Material), f'{path} 不是 Material'
-        EDIT.delete_all_material_expressions(material)
+        # UE 5.8 的批量删除可能漏掉相邻节点，先取副本再逐个移除。
+        for expression in list(EDIT.get_material_expressions(material)):
+            EDIT.delete_material_expression(material, expression)
+        assert EDIT.get_num_material_expressions(material) == 0, f'{path} 仍有旧节点'
     else:
         material = ue.AssetToolsHelpers.get_asset_tools().create_asset(name, folder, ue.Material, ue.MaterialFactoryNew())
     assert material, f'无法创建或打开 {path}'
@@ -62,7 +65,8 @@ def make_material(name):
 
 
 def save_material(material):
-    EDIT.recompile_material(material)
+    errors = EDIT.recompile_material(material)
+    assert not errors, f'{material.get_path_name()} 编译失败：{errors}'
     assert ASSET.save_loaded_asset(material, only_if_is_dirty=False), f'无法保存 {material.get_path_name()}'
 
 
@@ -123,8 +127,8 @@ def make_surface_material():
     material = make_material('M_AerialTerrainSurface')
     material.set_editor_property('blend_mode', ue.BlendMode.BLEND_MASKED)
     material.set_editor_property('has_pixel_animation', True)
-    # 材质显式混合天光亮度。避免引擎在该像素再叠加一次 Sky Atmosphere 的空气透视；地图的体积雾仍生效。
-    material.set_editor_property('is_sky', True)
+    # 地貌保留自身深度，远处才通过色值融入背景。标为天空会与 MainMap 的天空球争抢天空通道。
+    material.set_editor_property('is_sky', False)
     uv = node(material, ue.MaterialExpressionTextureCoordinate, -840, -200)
     # UV1 不用于美术贴图；其两个分量是以面片边长为单位的网格采样足迹。
     spacing = node(material, ue.MaterialExpressionTextureCoordinate, -840, -290, coordinate_index=1)
@@ -136,20 +140,19 @@ def make_surface_material():
     offset = vector4_parameter(material, -840, -40, 'SamplingOffset', (0.42, 0.31, 0, 0))
     geometry = vector4_parameter(material, -840, 140, 'GeometrySettings', (1.18, 235000, 0.038, 1 / 2048))
     sun = vector4_parameter(material, -840, 320, 'SunAndHazeStart', (-0.64, 0.12, 0.76, 850000))
-    haze = vector4_parameter(material, -840, 510, 'HazeAndFadeEnd', (0.43, 0.61, 0.78, 3050000))
+    haze = vector4_parameter(material, -840, 510, 'HazeAndFadeEnd', (0.69, 0.81, 0.86, 3050000))
     camera_relative = node(material, ue.MaterialExpressionWorldPosition, -840, 705,
                            world_position_shader_offset=ue.WorldPositionIncludedOffsets.WPT_CAMERA_RELATIVE)
     distance = node(material, ue.MaterialExpressionLength, -585, 705)
     assert EDIT.connect_material_expressions(camera_relative, '', distance, ''), '无法读取地表像素的视距'
-    sky = node(material, ue.MaterialExpressionSkyAtmosphereViewLuminance, -840, 925)
     common_inputs = {'Field': field, 'UV': uv, 'GridSpacing': spacing, 'Offset': offset, 'Geometry': geometry}
     displacement = create_custom(material, (-335, -410), '滚动高度场，水线与地形共用网格', 'AerialTerrainSurface',
                                  'return AerialTerrainDisplacement(Field, FieldSampler, UV, GridSpacing, Offset, Geometry);',
                                  ue.CustomMaterialOutputType.CMOT_FLOAT3, common_inputs)
     color = create_custom(material, (-335, -85), '气候群系、林冠、浅滩与空气透视', 'AerialTerrainSurface',
-                         'return AerialTerrainColor(Field, FieldSampler, UV, GridSpacing, Offset, Geometry, Sun, Haze, Sky, DistanceCm);',
+                          'return AerialTerrainColor(Field, FieldSampler, UV, GridSpacing, Offset, Geometry, Sun, Haze, DistanceCm);',
                          ue.CustomMaterialOutputType.CMOT_FLOAT3,
-                         {**common_inputs, 'Sun': sun, 'Haze': haze, 'Sky': sky, 'DistanceCm': distance})
+                          {**common_inputs, 'Sun': sun, 'Haze': haze, 'DistanceCm': distance})
     # 颜色先在远处完全融入天空，再裁掉面片外缘。遮罩不再随逐帧抖动改变覆盖范围。
     cutoff = create_custom(material, (-335, 390), '天空颜色融合后裁掉地表外缘', 'AerialTerrainSurface',
                            'return AerialTerrainCoverage(Haze, DistanceCm);',

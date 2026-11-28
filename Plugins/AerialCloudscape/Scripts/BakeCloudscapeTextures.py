@@ -72,13 +72,14 @@ def bake_shape(output):
     points = grid(64, 3)
     # 三维基底兼有宽阔的光照面和团块间的凹谷。小尺度场独立于主形，不使云边退化成锯齿纹。
     curl = np.stack([grad_noise(points, 4, seed) for seed in (54, 71, 93)])
-    warped = points + 0.057 * curl
+    warped = points + 0.043 * curl
     wide = cellular(warped, 4, 188)
-    medium = cellular(warped, 8, 337)
-    fine = cellular(points, 13, 445)
-    base = normalize(0.60 * wide + 0.24 * medium + 0.16 * (0.5 + grad_noise(points, 5, 19)), 3, 98)
-    shoulder = normalize(0.70 * medium + 0.30 * cellular(warped, 6, 789), 5, 97)
-    erosion = normalize(0.68 * fine + 0.32 * cellular(points, 19, 929), 4, 97)
+    medium = cellular(warped, 7, 337)
+    fine = cellular(points, 11, 445)
+    # 宽圆丘主导体积，较小的泡团只托起轮廓，不切碎正面的受光块面。
+    base = normalize(0.74 * wide + 0.18 * medium + 0.08 * (0.5 + grad_noise(points, 5, 19)), 3, 98)
+    shoulder = normalize(0.58 * medium + 0.42 * cellular(warped, 5, 789), 5, 97)
+    erosion = normalize(0.80 * fine + 0.20 * cellular(points, 15, 929), 4, 97)
     voxels = quantize((base, shoulder, erosion))
 
     # UE 的体积纹理工厂从 8×8 的行优先图集中恢复 64 个正方形切片。

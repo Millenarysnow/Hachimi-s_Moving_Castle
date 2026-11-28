@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleGroundTileActor.h"
+#include "Castle/Rendering/CastleRenderingConstants.h"
 
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -48,17 +49,23 @@ ACastleGroundTileActor::ACastleGroundTileActor()
 		PrototypeCubeMesh = CubeMeshFinder.Object;
 	}
 
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface> MaterialFinder(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-	if (MaterialFinder.Succeeded())
-	{
-		PrototypeMaterial = MaterialFinder.Object;
-	}
+	// 地块实体受光，数字底板的明度由界面语义决定。
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> MaterialFinder(CastleRenderingConstants::ToonBasicColorMaterialPath);
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> PlateFinder(CastleRenderingConstants::InfoUnlitColorMaterialPath);
+	PrototypeMaterial = MaterialFinder.Object;
+	NumberPlateMaterial = PlateFinder.Object;
 }
 
 bool ACastleGroundTileActor::InitializeGroundCell(const FCastleGroundCell& InGroundCell, const float GroundTileSize, const float LayerHeight)
 {
+	if (!PrototypeMaterial || !NumberPlateMaterial)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("地块 %s 缺少显式材质 %s 或 %s。"), *GetPathName(),
+			CastleRenderingConstants::ToonBasicColorMaterialPath, CastleRenderingConstants::InfoUnlitColorMaterialPath);
+		return false;
+	}
 	if (bInitialized || GroundTileSize <= 0.0f || LayerHeight <= 0.0f
-		|| PrototypeCubeMesh == nullptr || PrototypeMaterial == nullptr
+		|| PrototypeCubeMesh == nullptr
 		|| TileMesh == nullptr || NumberPlate == nullptr || NumberLabel == nullptr)
 	{
 		return false;
@@ -74,7 +81,7 @@ bool ACastleGroundTileActor::InitializeGroundCell(const FCastleGroundCell& InGro
 	}
 
 	UMaterialInstanceDynamic* TileMaterial = UMaterialInstanceDynamic::Create(PrototypeMaterial, TileMesh);
-	UMaterialInstanceDynamic* PlateMaterial = UMaterialInstanceDynamic::Create(PrototypeMaterial, NumberPlate);
+	UMaterialInstanceDynamic* PlateMaterial = UMaterialInstanceDynamic::Create(NumberPlateMaterial, NumberPlate);
 	if (TileMaterial == nullptr || PlateMaterial == nullptr)
 	{
 		return false;

@@ -32,34 +32,34 @@ float2 AerialCloudMedium(Texture3D Shape, SamplerState ShapeSampler, float2 UV, 
 
     // 跨过完整云周期时，各轴的采样相位回到完全相同的体积数据。Z 的物理尺度跟 XY 一致，
     // 不让一整个噪声立方体被硬压到很薄的云层里。不同剖面来自云团本身，而非相机方向。
-    const float3 ShapeUV = 8.0 * float3(UV, HeightCm / (PeriodKm * 100000.0)) + float3(0.237, 0.583, 0.317);
+    const float3 ShapeUV = 6.0 * float3(UV, HeightCm / (PeriodKm * 100000.0)) + float3(0.237, 0.583, 0.317);
     const float2 Macro = Shape.SampleLevel(ShapeSampler, ShapeUV, 0).rg;
     const float2 Shoulder = Shape.SampleLevel(ShapeSampler, ShapeUV * 2.0 + float3(0.31, 0.17, 0.59), 0).gb;
-    const float CloudBody = 0.66 * Macro.r + 0.12 * Macro.g + 0.22 * Shoulder.x;
+    const float CloudBody = 0.73 * Macro.r + 0.14 * Macro.g + 0.13 * Shoulder.x;
 
-    const float LocalTop = 0.30 + 0.22 * Coverage + 0.21 * HeightPattern + 0.25 * CloudBody + 0.15 * Shoulder.x;
+    const float LocalTop = 0.27 + 0.17 * Coverage + 0.16 * HeightPattern + 0.39 * CloudBody + 0.10 * Shoulder.x;
     const float DepthUnderLobe = LocalTop - Height;
     const float LowerSoftness = smoothstep(0.025, 0.205 + 0.08 * HeightPattern, Height);
-    const float UpperSoftness = smoothstep(0.0, 0.19, DepthUnderLobe) * (1.0 - smoothstep(0.86, 0.98, Height));
+    const float UpperSoftness = smoothstep(0.0, 0.12, DepthUnderLobe) * (1.0 - smoothstep(0.86, 0.98, Height));
 
     // 主密度隆起、包住团块；更细的蚀刻只在团块肩部最明显，避免在实心亮面上铺一层噪点。
     const float BodyField = CloudBody + 0.32 * Coverage - 0.45;
     const float Edge = 1.0 - smoothstep(0.10, 0.41, BodyField);
     const float Detail = Shape.SampleLevel(ShapeSampler, ShapeUV * 3.0 + float3(0.23, 0.39, 0.11), 0).b;
-    const float Body = smoothstep(-0.08, 0.28, BodyField - Edge * (1.0 - Detail) * 0.16);
-    // 让云团和碎絮穿过大尺度过渡带，而不是共用一条只取决于 XY 覆盖图的边缘。
-    const float Bank = smoothstep(0.10, 0.74, Coverage + 0.27 * (CloudBody - 0.48) + 0.10 * (Detail - 0.5));
+    const float Body = smoothstep(-0.04, 0.23, BodyField - Edge * (1.0 - Detail) * 0.046);
+    // 提高厚云聚集的覆盖阈值，给垂直穿过云层的视线留出间隙。云肩与碎絮仍跨过过渡带。
+    const float Bank = smoothstep(0.56, 0.85, Coverage + 0.34 * (CloudBody - 0.48) + 0.045 * (Detail - 0.5));
     const float Lobe = Bank * LowerSoftness * UpperSoftness * Body;
 
     // 薄云使用同一份滚动的三维场，但不被厚云顶部截断。垂直穿过时透出地貌，斜穿时由原生追踪
     // 沿更长的路径自然累积消光；不根据俯仰角或屏幕中心划一个透明区域。
     const float VeilHeight = smoothstep(0.06, 0.25, Height) * (1.0 - smoothstep(0.57, 0.94, Height));
     const float VeilPattern = smoothstep(0.20, 0.81, 0.32 * Coverage + 0.50 * CloudBody + 0.18 * Detail);
-    const float Veil = 0.0036 * VeilHeight * lerp(0.28, 1.0, VeilPattern);
+    const float Veil = 0.00028 * VeilHeight * lerp(0.20, 1.0, VeilPattern);
     // 云隙中也有轮廓可辨的碎云：让三维云肩聚集成雾丝，再用不同的垂直剖面错开厚云顶部。
     const float WispHeight = smoothstep(0.22, 0.39, Height) * (1.0 - smoothstep(0.51 + 0.12 * HeightPattern, 0.78 + 0.12 * HeightPattern, Height));
     const float WispPattern = smoothstep(0.45, 0.78, 0.61 * CloudBody + 0.30 * Shoulder.x + 0.09 * Detail);
-    const float Wisps = 0.026 * WispHeight * WispPattern * (1.0 - 0.55 * Bank);
+    const float Wisps = 0.006 * WispHeight * WispPattern * (1.0 - 0.55 * Bank);
     const float Density = Extinction * FarWeight * (Lobe + Veil + Wisps);
 
     // 天光遮蔽只随上覆厚云和云肩增强；稀薄云不压成灰黑面，厚云仍由同一消光场产生自阴影。
@@ -67,6 +67,14 @@ float2 AerialCloudMedium(Texture3D Shape, SamplerState ShapeSampler, float2 UV, 
     const float Valley = (1.0 - smoothstep(0.28, 0.70, CloudBody)) * Bank;
     const float SkyVisibility = exp2(-1.05 * Overburden - 0.74 * Valley * (0.45 + 0.55 * Shoulder.y));
     return float2(Density, lerp(1.0, SkyVisibility, FarWeight));
+}
+
+// 高度与云内遮蔽共同决定软色阶，保留连续过渡供原生体积积分做时间抗锯齿。
+float AerialCloudLitBand(float Visibility, float Height, float Lower, float Upper)
+{
+    // 云腹的高度权重更大，减少下部无遮挡碎絮误入暖白亮阶，同时保留连续过渡。
+    const float Exposure = 0.62 * Visibility + 0.38 * smoothstep(0.24, 0.76, Height);
+    return smoothstep(Lower, Upper, Exposure);
 }
 
 #endif

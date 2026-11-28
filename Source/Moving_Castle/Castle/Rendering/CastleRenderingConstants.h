@@ -10,8 +10,14 @@
  */
 namespace CastleRenderingConstants
 {
-	/** 预留给未来风格化渲染的信息位，当前不由悬停高亮修改。 */
+	/** 塔侧数字等信息面的风格描边排除位，悬停高亮只写自己的位。 */
 	inline constexpr int32 StylizedNoOutlineStencilBit = 1 << 0;
+
+	/** 世界几何和不受光信息面共同保留 Color 参数，供现有动态材质着色。 */
+	inline constexpr TCHAR ToonBasicColorMaterialPath[] =
+		TEXT("/Game/MovingCastle/Rendering/Materials/M_Toon_BasicColor.M_Toon_BasicColor");
+	inline constexpr TCHAR InfoUnlitColorMaterialPath[] =
+		TEXT("/Game/MovingCastle/Rendering/Materials/M_Info_UnlitColor.M_Info_UnlitColor");
 
 	/** 悬停白色外轮廓独占的 Stencil 位掩码。 */
 	inline constexpr int32 HoverOutlineStencilBit = 1 << 1;
