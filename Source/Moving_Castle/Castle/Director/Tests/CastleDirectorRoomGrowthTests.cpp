@@ -97,21 +97,30 @@ namespace
 				1, ECastleTileColor::Red, Side->Number, OneCell, Reason))) { return; }
 			auto* Placed = Board.PlaceBuildingAtCursor(Target, OneCell, false, Reason);
 			if (!Test.TestTrue(TEXT("正式建造面登记一格"), CastleBuildingTests::CompletePlacement(Placed))) { return; }
-			Test.TestEqual(TEXT("棋盘一格加开局主栏五格"), Director.GetOwnedRoomCount(), 6);
+			Test.TestEqual(TEXT("只统计棋盘上已建造的一格"), Director.GetOwnedRoomCount(), 1);
 
 			Player->ToggleShop();
 			if (!Test.TestTrue(TEXT("正式商店模态已打开"), Shop.IsShopOpen() && Player->IsModalInputActive())) { return; }
-			CheckProgress(*ShopWidget, TEXT("主塔 Lv.1 (6/30)"), 6.0f / 30.0f);
+			CheckProgress(*ShopWidget, TEXT("主塔 Lv.1 (1/30)"), 1.0f / 30.0f);
 			if (!Test.TestTrue(TEXT("卖牌腾一个真实背包槽"), Shop.TrySellBackpackItem(0, Reason))) { return; }
-			CheckProgress(*ShopWidget, TEXT("主塔 Lv.1 (5/30)"), 5.0f / 30.0f);
+			CheckProgress(*ShopWidget, TEXT("主塔 Lv.1 (1/30)"), 1.0f / 30.0f);
 			if (!Test.TestTrue(TEXT("购买一格房间"), Shop.TryBuyOffer(0, Reason))) { return; }
-			CheckProgress(*ShopWidget, TEXT("主塔 Lv.1 (6/30)"), 6.0f / 30.0f);
+			CheckProgress(*ShopWidget, TEXT("主塔 Lv.1 (1/30)"), 1.0f / 30.0f);
 			Player->ToggleShop();
-			// 新发的 24 张先补满主栏剩余五槽，再把 19 张压入临时栏，合计恰好达阈值。
-			if (!AddCells(Backpack, OneCell, 24)) { return; }
-			Test.TestEqual(TEXT("十九张待放置的单格房排在临时栏"), Backpack.GetTempItemCount(), 19);
+			// 两栏库存达到阈值的数值时，导演仍须等待真实建造。
+			if (!AddCells(Backpack, OneCell, 25)) { return; }
+			Test.TestEqual(TEXT("二十张待放置的单格房排在临时栏"), Backpack.GetTempItemCount(), 20);
+			Director.Tick(0.0f);
+			Test.TestEqual(TEXT("库存达到30张仍为 Lv1"), Director.GetLevel(), 1);
+			Test.TestEqual(TEXT("库存不计入导演场内占格"), Director.GetOwnedRoomCount(), 1);
+			if (!Test.TestTrue(TEXT("通过真实放置达到30格"), CastleBuildingTests::FillRoomCells(Board, *Placed, OneCell, 30, Reason)))
+			{
+				Test.AddError(Reason.ToString());
+				return;
+			}
 			Player->ToggleShop();
-			Test.TestEqual(TEXT("导演和商店共同读到30格"), Shop.GetOwnedRoomCount(), Director.GetOwnedRoomCount());
+			Test.TestEqual(TEXT("商店读到30格"), Shop.GetOwnedRoomCount(), 30);
+			Test.TestEqual(TEXT("导演读到30格"), Director.GetOwnedRoomCount(), 30);
 			CheckProgress(*ShopWidget, TEXT("主塔 Lv.1 (30/30)"), 1.0f);
 			const auto Offers = Shop.GetOffers();
 			const int32 Unsold = Offers.IndexOfByPredicate([](const FCastleShopOffer& Offer) { return !Offer.bSold; });
@@ -154,16 +163,36 @@ namespace
 			Test.TestEqual(TEXT("点击 Lv2 普通 NPC 项后待命池加2"), Director.GetRunNPCCount(), 3);
 			Director.DiscardTowerUpgradeRewards();
 
-			// 一次达到 Lv3 阈值，从 Lv2 直接升到 Lv4，两级待领奖励在同一面板。
-			if (!AddCells(Backpack, OneCell, 120)) { return; }
-			Director.Tick(0.0f);
-			if (!Test.TestEqual(TEXT("150 格从 Lv2 跨到 Lv4"), Director.GetLevel(), 4)
-				|| !Test.TestEqual(TEXT("Lv3 与 Lv4 合计 19 行赠品"), Rows->GetChildrenCount(), 19)) { return; }
-			CastChecked<UButton>(Rows->GetChildAt(1))->OnClicked.Broadcast();
-			CastChecked<UButton>(Rows->GetChildAt(7))->OnClicked.Broadcast();
-			Test.TestEqual(TEXT("跨级两行分别可领 3 与 5 名 NPC"), Director.GetRunNPCCount(), 11);
-			Director.DiscardTowerUpgradeRewards();
-			if (!AddCells(Backpack, OneCell, 350)) { return; }
+			// 逐级走实际占格阈值，每级提交后才允许继续建造。
+			for (const int32 Limit : {80, 150})
+			{
+				if (!Test.TestTrue(TEXT("建到当前主塔容量"), CastleBuildingTests::FillRoomCells(Board, *Placed, OneCell, Limit, Reason)))
+				{
+					Test.AddError(Reason.ToString());
+					return;
+				}
+				Director.Tick(0.0f);
+				const int32 ExpectedLevel = Limit == 80 ? 3 : 4;
+				if (!Test.TestEqual(TEXT("达到实际占格阈值后升级"), Director.GetLevel(), ExpectedLevel)
+					|| !Test.TestEqual(TEXT("对应级别待领奖励"), Rows->GetChildrenCount(), ExpectedLevel == 3 ? 7 : 12)) { return; }
+				CastChecked<UButton>(Rows->GetChildAt(1))->OnClicked.Broadcast();
+				Director.DiscardTowerUpgradeRewards();
+			}
+			Test.TestEqual(TEXT("Lv3 与 Lv4 分别领取 3 与 5 名 NPC"), Director.GetRunNPCCount(), 11);
+			// 留出最后两层中一个可建造的塔侧邻格，用于检验满容量时的预览和点击。
+			FCastleGridCursorTarget Extra = Target;
+			Extra.Cell.Z += Board.GetUnlockedLayerCount() - 1;
+			Extra.AdjacentCell.Z = Extra.Cell.Z;
+			const auto* ExtraSide = Board.FindTowerSideCell(Extra.Cell, Extra.Face);
+			if (!Test.TestNotNull(TEXT("满级顶层侧格"), ExtraSide)) { return; }
+			FCastleBuildingDescriptor ExtraCard = OneCell;
+			ExtraCard.Number = ExtraSide->Number;
+			if (!Test.TestTrue(TEXT("通过真实建造达到500格"), CastleBuildingTests::FillRoomCells(
+				Board, *Placed, OneCell, 500, Reason, Extra.AdjacentCell)))
+			{
+				Test.AddError(Reason.ToString());
+				return;
+			}
 			Director.Tick(0.0f);
 			Test.TestEqual(TEXT("达到 Lv4 容量后仍是 Lv4"), Director.GetLevel(), 4);
 			Test.TestEqual(TEXT("满级继续保持九层"), Board.GetUnlockedLayerCount(), 9);
@@ -174,6 +203,10 @@ namespace
 			Test.TestFalse(TEXT("Lv4 达上限仍阻止购买"), Shop.TryBuyOffer(Unsold, Reason));
 			CheckProgress(*ShopWidget, TEXT("主塔 Lv.4 (已满级)"), 1.0f);
 			Player->ToggleShop();
+			Test.TestFalse(TEXT("满500格时预览拒绝"), Board.CanPlaceBuildingAtCursor(Extra, ExtraCard, Reason));
+			Test.TestTrue(TEXT("预览提示容量原因"), Reason.ToString().Contains(TEXT("超过当前主塔房间上限")));
+			Test.TestNull(TEXT("满500格时坐标放置拒绝"), Board.PlaceBuilding(Extra.AdjacentCell, ExtraCard, false, Reason));
+			Test.TestTrue(TEXT("坐标入口给出同一容量原因"), Reason.ToString().Contains(TEXT("超过当前主塔房间上限")));
 			Test.TestTrue(TEXT("拆除已登记房间"), Board.RemoveBuilding(Placed, Reason));
 			Director.Tick(0.0f);
 			Test.TestEqual(TEXT("房间减少后保持满级"), Director.GetLevel(), 4);

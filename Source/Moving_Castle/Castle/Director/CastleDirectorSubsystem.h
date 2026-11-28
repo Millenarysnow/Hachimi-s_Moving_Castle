@@ -49,7 +49,7 @@ public:
 	bool IsShopAccessAllowed(FText& OutReason) const;
 	ECastleDirectorPhase GetPhase() const { return Phase; }
 	int32 GetLevel() const { return Level; }
-	/** 已拥有的房间格数包含场上、主建筑栏和临时栏；棋盘或背包失效时报告错误并返回 INDEX_NONE。 */
+	/** 返回已建造的实际占格数。棋盘失效时报告错误并返回 INDEX_NONE。 */
 	int32 GetOwnedRoomCount() const;
 	/** 查询当前已提交等级的房间容量；配置或等级无效时报告错误并返回 INDEX_NONE。 */
 	int32 GetCurrentRoomLimit() const;

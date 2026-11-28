@@ -65,6 +65,43 @@ namespace CastleBuildingTests
 		return !IsValid(Building) || Building->bHasCompletedPlacement;
 	}
 
+	/** 从一间已建房向六个面延伸，真实登记占格，用于容量和主塔升级的回归。 */
+	inline bool FillRoomCells(ACastleBoard& Board, ACastleBuildingBase& Seed, const FCastleBuildingDescriptor& Card,
+		const int32 TargetCount, FText& OutReason, const TOptional<FIntVector>& Reserved = {})
+	{
+		const FIntVector Offsets[] = {{1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}};
+		const ECastleGridFace Faces[] = {ECastleGridFace::PositiveX, ECastleGridFace::NegativeX,
+			ECastleGridFace::PositiveY, ECastleGridFace::NegativeY, ECastleGridFace::Up, ECastleGridFace::Down};
+		const FIntVector TowerBase = Board.GetBoardCenterCoordinate();
+		TArray<FIntVector> Pending = Seed.GetOccupiedCoordinates();
+		TSet<FIntVector> Visited;
+		for (int32 Index = 0; Index < Pending.Num() && Board.GetOccupiedRoomCellCount() < TargetCount; ++Index)
+		{
+			const FIntVector Cell = Pending[Index];
+			for (int32 Side = 0; Side < UE_ARRAY_COUNT(Offsets) && Board.GetOccupiedRoomCellCount() < TargetCount; ++Side)
+			{
+				const FIntVector Adjacent = Cell + Offsets[Side];
+				if ((Reserved.IsSet() && Reserved.GetValue() == Adjacent) || Visited.Contains(Adjacent) || !Board.IsCoordinateWithinBoard(Adjacent)
+					|| (Adjacent.X == TowerBase.X && Adjacent.Y == TowerBase.Y)) { continue; }
+				Visited.Add(Adjacent);
+				if (!Board.GetBuildingAt(Adjacent))
+				{
+					FCastleGridCursorTarget Cursor;
+					Cursor.bValid = true;
+					Cursor.Surface = ECastleGridCursorSurface::Building;
+					Cursor.Face = Faces[Side];
+					Cursor.Cell = Cell;
+					Cursor.AdjacentCell = Adjacent;
+					if (!CompletePlacement(Board.PlaceBuildingAtCursor(Cursor, Card, false, OutReason))) { return false; }
+				}
+				Pending.Add(Adjacent);
+			}
+		}
+		if (Board.GetOccupiedRoomCellCount() == TargetCount) { return true; }
+		OutReason = INVTEXT("测试布局没有足够的连续空格。");
+		return false;
+	}
+
 	/** 异步动画替换 Actor 后按最终等级重新查询棋盘，避免继续使用已销毁的放置指针。 */
 	inline ACastleBuildingBase* FindPlacedLevel(ACastleBoard* Board, const int32 Level)
 	{

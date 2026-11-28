@@ -138,7 +138,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|商店")
 	int32 GetOwnedRoomCount() const;
 
-	/** 商店与导演共用占格统计，失败原因交给业务入口报告。 */
+	/** 商店与导演只统计棋盘占用索引中的实际格数，配置无效时报告错误。 */
 	static bool TryCountOwnedRoomCells(const ACastleBoard* InBoard, int32& OutCells, FText& OutReason);
 
 	/** 表现层订阅此事件，避免商品操作依赖某一种 Widget。 */
@@ -147,6 +147,8 @@ public:
 
 private:
 	friend class UCastleDirectorSubsystem;
+	/** 准备依赖与随机流。奖励开店在候选提交后才绑定正式商店。 */
+	bool InitializeShopState(UCastleEconomyComponent* InEconomy, ACastleBoard* InBoard, FText& OutFailureReason);
 	/** 导演通过整张成长表校验并成功扩层后，一次写入已验证的新商店上限。 */
 	void CommitValidatedTowerGrowth(int32 NewRoomLimit, int32 NewMaxNumber);
 

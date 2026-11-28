@@ -1062,10 +1062,7 @@ int32 UCastleDirectorSubsystem::GetOwnedRoomCount() const
 {
 	int32 Cells = INDEX_NONE;
 	FText Reason;
-	if (!UCastleShopComponent::TryCountOwnedRoomCells(Board, Cells, Reason))
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("导演配置 %s 无法读取房间总量：%s"), *GetPathNameSafe(Config), *Reason.ToString());
-	}
+	UCastleShopComponent::TryCountOwnedRoomCells(Board, Cells, Reason);
 	return Cells;
 }
 

@@ -19,6 +19,7 @@ class ACastleGroundTileActor;
 class ACastleMassEnemySpawner;
 class UAssemblyFlightComponent;
 class UCastleBackpackComponent;
+class UCastleShopComponent;
 class UCastleCombatDataAsset;
 class UCastleGroundGenerator;
 class UCastleMainTowerComponent;
@@ -447,6 +448,11 @@ protected:
 	/** 每个被占用坐标对应的建筑 Actor，合成 Actor 会映射多个坐标。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "棋盘|建筑")
 	TMap<FIntVector, TObjectPtr<ACastleBuildingBase>> BuildingByCoordinate;
+
+	/** 独立棋盘只受显式初始化并绑定到自己的商店约束。 */
+	friend class UCastleShopComponent;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UCastleShopComponent>> BoundShops;
 
 	/** 获取六个面相邻坐标，不包含斜角坐标。 */
 	void GetFaceNeighborCoordinates(const FIntVector& Coordinate, TArray<FIntVector>& OutNeighbors) const;

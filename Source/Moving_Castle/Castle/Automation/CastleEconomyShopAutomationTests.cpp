@@ -101,7 +101,7 @@ bool FCastleShopTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("出售释放背包容量"), Board->PrototypeBackpack->GetItemCount(), 0);
 	TestFalse(TEXT("无效槽位不能重复卖"), Shop->TrySellBackpackItem(0, Reason));
 
-	// 全局房间额度和背包槽位容量是两套限制，两张一级卡可先占满测试设定的房间额度。
+	// 两张库存卡已达到测试上限的数值，但没有占用场内格子。
 	int32 AddedIndex = INDEX_NONE;
 	Board->PrototypeBackpack->TrySetCapacity(10, Reason);
 	for (int32 Index = 0; Index < 2; ++Index)
@@ -110,8 +110,8 @@ bool FCastleShopTest::RunTest(const FString& Parameters)
 			Board->FindBuildingDefinition(ECastleBuildingType::ArcherTower), 1, ECastleTileColor::Red, 3, AddedIndex, Reason));
 	}
 	Shop->RoomLimit = 2;
-	TestEqual(TEXT("库存两张一级卡计入全局房间总量"), Shop->GetOwnedRoomCount(), 2);
-	TestFalse(TEXT("全局上限拒绝新购买"), Shop->TryBuyOffer(1, Reason));
+	TestEqual(TEXT("库存卡不计入场内房间总量"), Shop->GetOwnedRoomCount(), 0);
+	TestTrue(TEXT("背包有空位且场内未达上限时可继续购买"), Shop->TryBuyOffer(1, Reason));
 	Shop->RoomLimit = 30;
 	const int32 GoldBeforeRefresh = Economy->GetGold();
 	TestTrue(TEXT("刷新成功"), Shop->TryRefreshOffers(Reason));
@@ -127,7 +127,7 @@ bool FCastleShopTest::RunTest(const FString& Parameters)
 	// 即使卖出能释放容量，也必须先保证收款不会溢出，不能先删除卡牌再发现无法入账。
 	Economy->TryAddGold(MAX_int32 - Economy->GetGold(), Reason);
 	TestFalse(TEXT("金币已满时出售失败"), Shop->TrySellBackpackItem(0, Reason));
-	TestEqual(TEXT("出售失败保留所有卡牌"), Board->PrototypeBackpack->GetItemCount(), 2);
+	TestEqual(TEXT("出售失败保留所有卡牌"), Board->PrototypeBackpack->GetItemCount(), 3);
 	TestEqual(TEXT("出售失败保留余额"), Economy->GetGold(), MAX_int32);
 	return true;
 }
@@ -176,6 +176,7 @@ bool FCastleShopConstructionTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+	TestEqual(TEXT("买牌后尚未占用场内格"), Shop->GetOwnedRoomCount(), 0);
 	FCastleGridCursorTarget Target;
 	Target.bValid = true;
 	Target.Surface = ECastleGridCursorSurface::Ground;
@@ -191,7 +192,7 @@ bool FCastleShopConstructionTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("放置消耗背包卡牌"), Board->PrototypeBackpack->GetItemCount(), 0);
 	TestEqual(TEXT("场上新增一个占用格"), Board->GetOccupiedRoomCellCount(), 1);
 	TestTrue(TEXT("Actor 保留购买的随机属性"), Placed->GetBuildingColor() == Card.Color && Placed->GetBuildingNumber() == Card.Number);
-	TestEqual(TEXT("买牌到建造总量保持不变"), Shop->GetOwnedRoomCount(), 1);
+	TestEqual(TEXT("建成后增加场内总量"), Shop->GetOwnedRoomCount(), 1);
 	return true;
 }
 

@@ -345,6 +345,7 @@ void UCastleShopWidget::RefreshShop()
 	}
 
 	const int32 CurrentGold = Economy->GetGold();
+	// 进度条和限购读取同一场内占格数，背包容量只影响本次交易。
 	const int32 OwnedRooms = Shop->GetOwnedRoomCount();
 	const int32 RoomLimit = Shop->RoomLimit;
 	const TArray<FCastleBuildingDescriptor> BackpackItems = Shop->GetBackpackItems();

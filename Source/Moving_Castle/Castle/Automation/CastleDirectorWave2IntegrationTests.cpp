@@ -87,18 +87,26 @@ private:
 		Director.Config = DuplicateObject(Director.Config.Get(), Director.GetWorld());
 		FCastleBuildingDescriptor Card;
 		const auto* Definition = Director.Board->FindBuildingDefinition(ECastleBuildingType::NormalRoom);
-		if (!Test.TestTrue(TEXT("成长测试使用正式普通房牌面"), Definition && Definition->CreateDescriptor(
-			1, ECastleTileColor::Red, 1, Card, Reason))) { return; }
+		// 用真实塔侧面启动一个连续房间布局，后续各级都以实际建造达到阈值。
+		const FIntVector Base = Director.Board->GetBoardCenterCoordinate();
+		const auto* Side = Director.Board->FindTowerSideCell(Base, ECastleGridFace::PositiveY);
+		if (!Test.TestTrue(TEXT("成长测试使用正式普通房牌面"), Side && Definition && Definition->CreateDescriptor(
+			1, Side->Color, Side->Number, Card, Reason))) { return; }
+		FCastleGridCursorTarget Cursor;
+		Cursor.bValid = true;
+		Cursor.Surface = ECastleGridCursorSurface::MainTowerSide;
+		Cursor.Face = ECastleGridFace::PositiveY;
+		Cursor.Cell = Base;
+		Cursor.AdjacentCell = Base + FIntVector(0, 1, 0);
+		auto* Seed = Director.Board->PlaceBuildingAtCursor(Cursor, Card, false, Reason);
+		if (!Test.TestTrue(TEXT("登记增长布局起始格"), CastleBuildingTests::CompletePlacement(Seed))) { return; }
 		int32 ExpectedNPCs = 1;
 		for (int32 Level = 1; Level <= 4; ++Level)
 		{
 			if (Level > 1)
 			{
 				Director.Tower->ApplyDamage(25.0f);
-				// 达到当前等级阈值，补发的房间允许溢出到临时栏，和局内房间组走相同入口。
-				TArray<FCastleBuildingDescriptor> Cards;
-				Cards.Init(Card, Limits[Level - 2] - Director.GetOwnedRoomCount());
-				if (!Test.TestTrue(TEXT("批量补足升级所需占格"), Director.Board->PrototypeBackpack->TryAddItemsAllowOverflow(Cards, Reason))
+				if (!Test.TestTrue(TEXT("建造至当前等级阈值"), CastleBuildingTests::FillRoomCells(*Director.Board, *Seed, Card, Limits[Level - 2], Reason))
 					|| !Test.TestTrue(TEXT("达标触发升级"), Director.TryCheckTowerUpgrade(Reason)))
 				{
 					Test.AddError(Reason.ToString());

@@ -20,6 +20,7 @@
 #include "CastleMainTowerBalloonComponent.h"
 #include "CastleMainTowerComponent.h"
 #include "CastleMassEnemySpawner.h"
+#include "CastleShopComponent.h"
 #include "CastleNavigationSubsystem.h"
 #include "CastleTowerDispatchConfigDataAsset.h"
 #include "CastleTowerDispatchSubsystem.h"
@@ -836,6 +837,43 @@ bool ACastleBoard::CanPlaceBuildingInternal(const FIntVector& Coordinate, const 
 		{
 			OutFailureReason = FText::FromString(TEXT("建筑占用范围中有格子已被占用。"));
 			return false;
+		}
+	}
+	// 多格建筑按本次实际占用的格数计量，恰好达到本级容量时仍可放置。
+	const int64 ResultingCells = static_cast<int64>(GetOccupiedRoomCellCount()) + Footprint.Num();
+	const auto WithinRoomLimit = [&](const int32 Limit, const UObject* Source)
+	{
+		if (Limit < 1)
+		{
+			OutFailureReason = INVTEXT("主塔房间上限无效，无法放置。");
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 的房间上限来源 %s 返回了无效容量 %d。"),
+				*GetPathName(), *GetPathNameSafe(Source), Limit);
+			return false;
+		}
+		if (ResultingCells > Limit)
+		{
+			OutFailureReason = FText::Format(INVTEXT("本次放置会超过当前主塔房间上限（{0} 格）。"), Limit);
+			return false;
+		}
+		return true;
+	};
+	const UWorld* World = GetWorld();
+	const auto* Director = World ? World->GetSubsystem<UCastleDirectorSubsystem>() : nullptr;
+	if (Director && Director->IsRunning())
+	{
+		if (!WithinRoomLimit(Director->GetCurrentRoomLimit(), Director)) { return false; }
+	}
+	else
+	{
+		for (const UCastleShopComponent* Shop : BoundShops)
+		{
+			if (!IsValid(Shop))
+			{
+				OutFailureReason = INVTEXT("棋盘绑定的商店无效，无法读取房间上限。");
+				UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 的绑定商店 %s 无效。"), *GetPathName(), *GetPathNameSafe(Shop));
+				return false;
+			}
+			if (!WithinRoomLimit(Shop->RoomLimit, Shop)) { return false; }
 		}
 	}
 	// 整座建筑只逐格检查高度、水平边界与占用，不要求下方存在地面或建筑。
