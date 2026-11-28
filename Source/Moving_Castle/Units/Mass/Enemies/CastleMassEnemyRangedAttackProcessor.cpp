@@ -1,4 +1,5 @@
 #include "CastleMassEnemyRangedAttackProcessor.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "CastleMainTowerComponent.h"
 #include "CastleMassEnemyRangedAttackFragments.h"
@@ -6,6 +7,7 @@
 #include "CastleMassDeathSplitFragments.h"
 #include "CastleMassProcessors.h"
 #include "CastleMassUnitSubsystem.h"
+#include "Enemies/Flight/CastleMassFlightTargeting.h"
 #include "Engine/World.h"
 #include "MassCommands.h"
 #include "MassCommonFragments.h"
@@ -28,10 +30,11 @@ UCastleMassEnemyRangedAttackProcessor::UCastleMassEnemyRangedAttackProcessor() :
 void UCastleMassEnemyRangedAttackProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
 {
 	Query.AddTagRequirement<FCastleMassEnemyTag>(EMassFragmentPresence::All);
-	Query.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
+	Query.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassSpawnBurstFragment>(EMassFragmentAccess::None, EMassFragmentPresence::None);
-	Query.AddRequirement<FMassVelocityFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassMoveTargetFragment>(EMassFragmentAccess::ReadWrite);
+	Query.AddRequirement<FCastleMassFlightIntentFragment>(EMassFragmentAccess::ReadWrite);
+	Query.AddRequirement<FAgentRadiusFragment>(EMassFragmentAccess::ReadOnly);
 	Query.AddRequirement<FCastleMassUnitFragment>(EMassFragmentAccess::ReadOnly);
 	Query.AddRequirement<FCastleMassEnemyRangedAttackFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassAttackAnimationFragment>(EMassFragmentAccess::ReadWrite, EMassFragmentPresence::Optional);
@@ -50,24 +53,28 @@ void UCastleMassEnemyRangedAttackProcessor::Execute(FMassEntityManager& EntityMa
 	bool bAnyMissing = false;
 	Query.ForEachEntityChunk(Context, [this, Shields, Main, Support, &bAnyMissing](FMassExecutionContext& Chunk)
 	{
-		const auto Transforms = Chunk.GetFragmentView<FTransformFragment>();
+		const auto Transforms = Chunk.GetMutableFragmentView<FTransformFragment>();
 		const auto Units = Chunk.GetFragmentView<FCastleMassUnitFragment>();
-		const auto Velocities = Chunk.GetMutableFragmentView<FMassVelocityFragment>();
 		const auto Targets = Chunk.GetMutableFragmentView<FCastleMassMoveTargetFragment>();
+		const auto FlightIntents = Chunk.GetMutableFragmentView<FCastleMassFlightIntentFragment>();
+		const auto Radii = Chunk.GetFragmentView<FAgentRadiusFragment>();
 		const auto Attacks = Chunk.GetMutableFragmentView<FCastleMassEnemyRangedAttackFragment>();
 		const auto Animations = Chunk.GetMutableFragmentView<FCastleMassAttackAnimationFragment>();
 		for (FMassExecutionContext::FEntityIterator It = Chunk.CreateEntityIterator(); It; ++It)
 		{
 			if (Units[It].Health <= 0.0f) { continue; }
 			auto& Attack = Attacks[It];
-			const FVector Origin = Transforms[It].GetTransform().GetLocation();
+			FTransform& Transform = Transforms[It].GetMutableTransform();
+			const FVector Origin = Transform.GetLocation();
 			FVector TargetLocation;
 			// 仇恨距离和武器射程相互独立：获选气球即使尚未进入射程也会被追踪。
 			uint64 BalloonId = 0;
 			const bool bBalloonTarget = Support->FindBalloonTarget(Origin, BalloonId, TargetLocation);
 			uint64 ShieldId = 0;
 			const bool bShieldTarget = !bBalloonTarget && Shields->FindNearestActiveShield(Origin, Attack.AttackRange, false, ShieldId, TargetLocation);
-			if (!bBalloonTarget && !bShieldTarget && !Main->GetMainTowerTargetLocation(TargetLocation))
+			const bool bTowerTarget = !bBalloonTarget && !bShieldTarget && Main
+				&& Main->GetMainTowerTargetLocation(TargetLocation);
+			if (!bBalloonTarget && !bShieldTarget && !bTowerTarget)
 			{
 				bAnyMissing = true;
 				if (!bLoggedMissingTargets)
@@ -76,27 +83,50 @@ void UCastleMassEnemyRangedAttackProcessor::Execute(FMassEntityManager& EntityMa
 					bLoggedMissingTargets = true;
 				}
 				Attack.bInAttackRange = false;
-				Targets[It] = FCastleMassMoveTargetFragment();
-				Velocities[It].Value = FVector::ZeroVector;
+				CastleMassFlightTargeting::SetStopIntent(Targets[It], FlightIntents[It]);
 				if (!Animations.IsEmpty()) { Animations[It].bInAttackState = false; }
 				continue;
 			}
-			Attack.bInAttackRange = FVector::DistSquared(Origin, TargetLocation) <= FMath::Square(static_cast<double>(Attack.AttackRange));
+			FVector AttackPoint = TargetLocation;
+			if (bTowerTarget)
+			{
+				const float EffectiveRadius = Radii[It].Radius * Transform.GetScale3D().GetAbsMax();
+				const float IdealStandOff = FMath::Max(EffectiveRadius + 20.0f, Attack.AttackRange - 40.0f);
+				float SurfaceDistance = 0.0f;
+				if (!CastleMassFlightTargeting::SetMainTowerTarget(Main, Transform, Radii[It].Radius,
+					Attack.AttackRange, IdealStandOff, Chunk.GetEntity(It).Index, Targets[It],
+					FlightIntents[It], AttackPoint, SurfaceDistance))
+				{
+					bAnyMissing = true;
+					Attack.bInAttackRange = false;
+					CastleMassFlightTargeting::SetStopIntent(Targets[It], FlightIntents[It]);
+					if (!Animations.IsEmpty()) { Animations[It].bInAttackState = false; }
+					continue;
+				}
+				Attack.bInAttackRange = FlightIntents[It].bInAttackRange;
+			}
+			else
+			{
+				Attack.bInAttackRange = FVector::DistSquared(Origin, TargetLocation)
+					<= FMath::Square(static_cast<double>(Attack.AttackRange));
+				CastleMassFlightTargeting::SetAlternateTarget(TargetLocation, Attack.AttackRange,
+					Attack.bInAttackRange, Targets[It], FlightIntents[It]);
+			}
 			if (!Attack.bInAttackRange)
 			{
 				if (!Animations.IsEmpty()) { Animations[It].bInAttackState = false; }
-				Targets[It].Target = TargetLocation;
-				Targets[It].DesiredVelocity = FVector::ZeroVector;
-				Targets[It].bHasTarget = true;
 				continue;
 			}
-			Targets[It] = FCastleMassMoveTargetFragment();
-			Velocities[It].Value = FVector::ZeroVector;
+			FVector Facing = AttackPoint - Origin;
+			Facing.Z = 0.0f;
+			if (!Facing.IsNearlyZero()) { Transform.SetRotation(Facing.Rotation().Quaternion()); }
 			if (!Animations.IsEmpty()) { Animations[It].bInAttackState = true; }
 			Attack.AttackCooldown = FMath::Max(0.0, Attack.AttackCooldown - Chunk.GetDeltaTimeSeconds());
 			if (Attack.AttackCooldown > 0.0f) { continue; }
 			FCastleMassEnemyProjectileSpawn Launch;
 			Launch.Origin = Origin;
+			Launch.TargetLocation = AttackPoint;
+			Launch.bHasTargetLocation = true;
 			Launch.Attacker.World = GetWorld();
 			Launch.Attacker.Entity = Chunk.GetEntity(It);
 			Launch.ShieldId = ShieldId;
@@ -123,6 +153,8 @@ void UCastleMassEnemyRangedAttackProcessor::Execute(FMassEntityManager& EntityMa
 					return;
 				}
 				if (!UnitSubsystem->SpawnEnemyProjectiles(Configuration, {Launch}, Projectiles, Reason)) { return; }
+				// 延迟命令成功创建吐息弹后才反馈开火。
+				UCastleAudioSubsystem::PlaySFX(World.Get(), ECastleSFXEvent::DragonFire);
 				if (Manager.IsEntityActive(Launch.Attacker.Entity))
 				{
 					if (auto* State = Manager.GetFragmentDataPtr<FCastleMassEnemyRangedAttackFragment>(Launch.Attacker.Entity))

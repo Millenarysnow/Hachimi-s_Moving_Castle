@@ -7,13 +7,14 @@
 #include "CollisionShape.h"
 #include "Components/SphereComponent.h"
 #include "Components/PrimitiveComponent.h"
-#include "Components/StaticMeshComponent.h"
 #include "Components/WidgetComponent.h"
 #include "Engine/World.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Moving_Castle.h"
+#include "NiagaraComponent.h"
+#include "NiagaraSystem.h"
 
 ACastleDirectorNodeActor::ACastleDirectorNodeActor()
 {
@@ -21,14 +22,20 @@ ACastleDirectorNodeActor::ACastleDirectorNodeActor()
 	Trigger = CreateDefaultSubobject<USphereComponent>(TEXT("Trigger"));
 	SetRootComponent(Trigger);
 	Trigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	// 与飞行 Pawn 的双向查询使用明确的 WorldDynamic / Pawn 对象通道。
+	Trigger->SetCollisionObjectType(ECC_WorldDynamic);
 	Trigger->SetCollisionResponseToAllChannels(ECR_Ignore);
 	Trigger->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
 	Trigger->SetGenerateOverlapEvents(true);
 	Trigger->OnComponentBeginOverlap.AddDynamic(this, &ACastleDirectorNodeActor::HandleBeginOverlap);
 	Trigger->OnComponentEndOverlap.AddDynamic(this, &ACastleDirectorNodeActor::HandleEndOverlap);
-	Mesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Mesh"));
-	Mesh->SetupAttachment(Trigger);
-	Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Portal = CreateDefaultSubobject<UNiagaraComponent>(TEXT("Portal"));
+	Portal->SetupAttachment(Trigger);
+	Portal->SetAutoActivate(false);
+	Portal->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Portal->SetCanEverAffectNavigation(false);
+	// 原资产的圆环在本地 XY 面。转起后令圆环正面朝向节点的 X 轴，即主塔方向。
+	Portal->SetRelativeRotation(FRotator(-90.0, 0.0, 0.0));
 	Label = CreateDefaultSubobject<UWidgetComponent>(TEXT("Label"));
 	Label->SetupAttachment(Trigger);
 	Label->SetWidgetSpace(EWidgetSpace::Screen);
@@ -40,10 +47,12 @@ ACastleDirectorNodeActor::ACastleDirectorNodeActor()
 bool ACastleDirectorNodeActor::Configure(const UCastleDirectorConfigDataAsset& Config, const int32 Step,
 	const ECastleDirectorNodeKind Kind)
 {
-	if (!IsValid(Config.NodeMesh) || !Config.NodeLabelWidgetClass)
+	if (!IsValid(Config.NodePortalSystem) || !FMath::IsFinite(Config.NodePortalScale) || Config.NodePortalScale <= 0.0f
+		|| !Config.NodeLabelWidgetClass)
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("节点配置失败：资产 %s 的 NodeMesh=%s 或 NodeLabelWidgetClass=%s 无效。"),
-			*Config.GetPathName(), *GetPathNameSafe(Config.NodeMesh), *GetPathNameSafe(Config.NodeLabelWidgetClass.Get()));
+		UE_LOG(LogMoving_Castle, Error, TEXT("节点配置失败：资产 %s 的 NodePortalSystem=%s、NodePortalScale=%g 或 NodeLabelWidgetClass=%s 无效。"),
+			*Config.GetPathName(), *GetPathNameSafe(Config.NodePortalSystem), Config.NodePortalScale,
+			*GetPathNameSafe(Config.NodeLabelWidgetClass.Get()));
 		return false;
 	}
 	APlayerController* LocalController = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
@@ -58,8 +67,16 @@ bool ACastleDirectorNodeActor::Configure(const UCastleDirectorConfigDataAsset& C
 	StepNumber = Step;
 	LabelWidgetClass = Config.NodeLabelWidgetClass;
 	Trigger->SetSphereRadius(Config.NodeTriggerRadius);
-	Mesh->SetStaticMesh(Config.NodeMesh);
-	Mesh->SetRelativeScale3D(FVector(Config.NodeMeshScale));
+	Portal->SetAsset(Config.NodePortalSystem);
+	Portal->SetVariableFloat(TEXT("User.Size"), Config.NodePortalScale);
+	// 普通战斗保留 Light 门户原始金色，其他三种节点用独立色彩，文字仍给出准确类型。
+	switch (Kind)
+	{
+	case ECastleDirectorNodeKind::Normal: break;
+	case ECastleDirectorNodeKind::Elite: Portal->SetVariableLinearColor(TEXT("User.Color"), FLinearColor(1.0f, 0.06f, 0.10f)); break;
+	case ECastleDirectorNodeKind::RewardIsland: Portal->SetVariableLinearColor(TEXT("User.Color"), FLinearColor(0.06f, 0.50f, 1.0f)); break;
+	case ECastleDirectorNodeKind::RestIsland: Portal->SetVariableLinearColor(TEXT("User.Color"), FLinearColor(0.10f, 1.0f, 0.25f)); break;
+	}
 	Label->SetRelativeLocation(FVector(0.0f, 0.0f, Config.NodeTriggerRadius + 160.0f));
 	Label->SetWidgetClass(LabelWidgetClass);
 	Label->SetOwnerPlayer(LocalPlayer);
@@ -109,6 +126,7 @@ void ACastleDirectorNodeActor::ActivateNode()
 	}
 	bActive = true;
 	SetActorHiddenInGame(false);
+	Portal->Activate();
 	Trigger->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 }
 

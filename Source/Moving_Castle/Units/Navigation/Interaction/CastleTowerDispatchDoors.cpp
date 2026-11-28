@@ -6,9 +6,8 @@
 #include "Castle/Actors/CastleBuildingBase.h"
 #include "Castle/PCG/HachimisV4/CastleHachimisV4Layout.h"
 #include "Components/StaticMeshComponent.h"
-#include "Components/TextRenderComponent.h"
 #include "Engine/StaticMesh.h"
-#include "Math/RotationMatrix.h"
+#include "Materials/MaterialInterface.h"
 #include "Moving_Castle.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -21,13 +20,16 @@ namespace
 	constexpr double InnerGapHalfWidth = 30.0;
 	// 主塔 ±Y 两侧无门，地板向内收进 77.5 cm，防止与 ±Y 紧邻的开放底盘房间意外连通。
 	constexpr double SideInsetY = 77.5;
+	constexpr TCHAR DoorSignPath[] = TEXT("/Game/MovingCastle/Model/MainTower/DoorSigns/SM_MainTower_DoorSigns_560.SM_MainTower_DoorSigns_560");
 }
 
 UCastleTowerDispatchDoors::UCastleTowerDispatchDoors()
 {
 	PrimaryComponentTick.bCanEverTick = false;
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
-	DoorMarkerMesh = Cube.Object;
+	DoorFloorMesh = Cube.Object;
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> Signs(DoorSignPath);
+	DoorSignMesh = Signs.Object;
 }
 
 bool UCastleTowerDispatchDoors::Initialize(const ACastleBoard& InBoard, FText& OutReason)
@@ -35,14 +37,31 @@ bool UCastleTowerDispatchDoors::Initialize(const ACastleBoard& InBoard, FText& O
 	OutReason = FText::GetEmpty();
 	AActor* Tower = GetOwner();
 	USceneComponent* Root = IsValid(Tower) ? Tower->GetRootComponent() : nullptr;
-	const double SlabLengthX = InBoard.CellSize * 0.5 - InnerGapHalfWidth;
-	const double SlabWidthY = InBoard.CellSize - 2.0 * SideInsetY;
-	if (Board.IsValid() || !IsValid(Root) || !IsValid(DoorMarkerMesh) || Tower->GetOwner() != &InBoard
-		|| !FMath::IsFinite(InBoard.CellSize) || SlabLengthX <= 100.0 || SlabWidthY <= 100.0)
+	const auto Reject = [&](const FString& Detail)
 	{
-		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 无法初始化双门：棋盘、塔根、格距或占位 Cube 无效，或已初始化。"), *GetPathNameSafe(Tower)));
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 无法初始化双门：%s。"),
+			*GetPathNameSafe(Tower), *Detail));
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
+	};
+	const double SlabLengthX = InBoard.CellSize * 0.5 - InnerGapHalfWidth;
+	const double SlabWidthY = InBoard.CellSize - 2.0 * SideInsetY;
+	if (Board.IsValid() || !IsValid(Root) || !IsValid(DoorFloorMesh) || Tower->GetOwner() != &InBoard
+		|| !FMath::IsFinite(InBoard.CellSize) || SlabLengthX <= 100.0 || SlabWidthY <= 100.0)
+	{
+		return Reject(TEXT("棋盘、塔根、格距或功能地板网格 /Engine/BasicShapes/Cube 无效，或已初始化"));
+	}
+	if (!IsValid(DoorSignMesh) || DoorSignMesh->GetStaticMaterials().IsEmpty())
+	{
+		return Reject(FString::Printf(TEXT("正式双门网格 %s 缺失或没有材质槽"), DoorSignPath));
+	}
+	for (const FStaticMaterial& Material : DoorSignMesh->GetStaticMaterials())
+	{
+		if (!IsValid(Material.MaterialInterface) || Material.MaterialInterface->GetFName() != Material.MaterialSlotName)
+		{
+			return Reject(FString::Printf(TEXT("正式双门网格 %s 的材质槽 %s 没有同名作者材质"),
+				DoorSignPath, *Material.MaterialSlotName.ToString()));
+		}
 	}
 	// 主塔美术网格不参与导航也不阻挡 Pawn，防止闭合外墙模型截断门 A/B 内外连通；仅由下方不可见功能地板提供行走面与 Pawn 碰撞。
 	TInlineComponentArray<UStaticMeshComponent*> ExistingMeshes(Tower);
@@ -57,36 +76,20 @@ bool UCastleTowerDispatchDoors::Initialize(const ACastleBoard& InBoard, FText& O
 		Mesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 		Mesh->SetCanEverAffectNavigation(false);
 	}
-	TArray<USceneComponent*, TInlineAllocator<6>> Parts;
+	TArray<UStaticMeshComponent*, TInlineAllocator<3>> Parts;
+	// FBX 已使用塔根原点并同时包含 +X 正门和 -X 后门，保持作者变换即可对齐塔身。
+	UStaticMeshComponent* SignsMesh = NewObject<UStaticMeshComponent>(Tower, TEXT("MainTowerDoorSigns"));
+	SignsMesh->SetupAttachment(Root);
+	SignsMesh->SetMobility(EComponentMobility::Movable);
+	SignsMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	SignsMesh->SetCanEverAffectNavigation(false);
+	SignsMesh->SetGenerateOverlapEvents(false);
+	SignsMesh->SetStaticMesh(DoorSignMesh);
+	Parts.Add(SignsMesh);
 	const int32 Signs[] = {1, -1};
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Signs); ++Index)
 	{
 		const int32 Sign = Signs[Index];
-		const FVector Outward(Sign, 0, 0);
-		const FRotator Rotation = FRotationMatrix::MakeFromXZ(Outward, FVector::UpVector).Rotator();
-		// 门标识位于侧格下沿，保留格号可读性。正对塔外的标记使用 A/B，默认字体也能完整显示。
-		const FVector Center = Outward * (InBoard.TowerSideSurfaceOffset + 7.0) + FVector(0, 0, InBoard.LayerHeight * 0.12);
-		UStaticMeshComponent* Marker = NewObject<UStaticMeshComponent>(Tower);
-		Marker->SetupAttachment(Root);
-		Marker->SetRelativeLocationAndRotation(Center, Rotation);
-		Marker->SetRelativeScale3D(FVector(0.08, 0.44, 0.54));
-		// 先关闭碰撞与导航资格再赋静态网格，防止未注册组件在 SetStaticMesh 时被写入导航仓库。
-		Marker->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		Marker->SetCanEverAffectNavigation(false);
-		Marker->SetStaticMesh(DoorMarkerMesh);
-		Parts.Add(Marker);
-		UTextRenderComponent* Label = NewObject<UTextRenderComponent>(Tower);
-		Label->SetupAttachment(Root);
-		Label->SetRelativeLocationAndRotation(Center + Outward * 6.0, Rotation);
-		Label->SetCanEverAffectNavigation(false);
-		Label->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		Label->SetHorizontalAlignment(EHTA_Center);
-		Label->SetVerticalAlignment(EVRTA_TextCenter);
-		Label->SetWorldSize(36.0f);
-		Label->SetTextRenderColor(Sign > 0 ? FColor::Green : FColor::Cyan);
-		Label->SetText(FText::FromString(Sign > 0 ? TEXT("A") : TEXT("B")));
-		Parts.Add(Label);
-
 		// 主塔一楼内部门 A (+X) 与门 B (−X) 各置一块不可见功能导航地板，外沿齐平主塔 ±X 格界以衔接门外房间。
 		const double DoorAnchorX = Sign * (InBoard.CellSize * 0.5 + InnerGapHalfWidth) * 0.5;
 		UStaticMeshComponent* Floor = NewObject<UStaticMeshComponent>(Tower, Index == 0 ? TEXT("MainTowerDoorAFloor") : TEXT("MainTowerDoorBFloor"));
@@ -101,26 +104,35 @@ bool UCastleTowerDispatchDoors::Initialize(const ACastleBoard& InBoard, FText& O
 		Floor->SetGenerateOverlapEvents(false);
 		Floor->SetVisibility(false);
 		Floor->SetHiddenInGame(true);
-		Floor->SetStaticMesh(DoorMarkerMesh);
+		Floor->SetStaticMesh(DoorFloorMesh);
 		Floor->SetCanEverAffectNavigation(true);
 		DoorFloors[Index] = Floor;
 		Parts.Add(Floor);
 	}
-	for (USceneComponent* Part : Parts)
+	for (UStaticMeshComponent* Part : Parts)
 	{
 		Tower->AddInstanceComponent(Part);
 		Part->RegisterComponent();
 		if (!Part->IsRegistered())
 		{
-			for (USceneComponent* Added : Parts) { Added->DestroyComponent(); }
+			const FString Detail = FString::Printf(TEXT("组件 %s 注册失败，网格 %s"),
+				*Part->GetName(), *GetPathNameSafe(Part->GetStaticMesh()));
+			for (UStaticMeshComponent* Added : Parts) { Added->DestroyComponent(); }
 			DoorFloors[0] = DoorFloors[1] = nullptr;
-			OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 的双门标识或内部导航地板注册失败。"), *Tower->GetPathName()));
-			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
-			return false;
+			return Reject(Detail);
 		}
 	}
+	DoorSigns = SignsMesh;
 	Board = &InBoard;
 	return true;
+}
+
+void UCastleTowerDispatchDoors::OnComponentDestroyed(const bool bDestroyingHierarchy)
+{
+	// 标识只有美术职责；两块功能楼板继续沿用原先的 Actor 所有权和导航语义。
+	if (IsValid(DoorSigns)) { DoorSigns->DestroyComponent(); }
+	DoorSigns = nullptr;
+	Super::OnComponentDestroyed(bDestroyingHierarchy);
 }
 
 bool UCastleTowerDispatchDoors::TryGetDoorWaypoints(FVector& OutExit, FVector& OutEntrance, FText& OutReason) const

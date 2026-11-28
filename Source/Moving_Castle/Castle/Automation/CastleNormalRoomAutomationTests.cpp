@@ -13,7 +13,7 @@
 #include "Misc/AutomationTest.h"
 #include "UObject/SoftObjectPath.h"
 
-/** 用正式资产穷举五色 1～9，防止普通房间仍在某个入口被当成灰色 0 号特例。 */
+/** 用正式资产穷举四种玩法色与 1～9，验证普通房和商品使用相同的属性规则。 */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleNormalRoomRulesTest, "MovingCastle.Logic.NormalRoomRules",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -51,12 +51,15 @@ bool FCastleNormalRoomRulesTest::RunTest(const FString& Parameters)
 
 	UCastleSimpleCardPricing* Pricing = NewObject<UCastleSimpleCardPricing>();
 	FCastleBuildingDescriptor Card;
-	for (uint8 Color = static_cast<uint8>(ECastleTileColor::Red); Color <= static_cast<uint8>(ECastleTileColor::Purple); ++Color)
+	const ECastleTileColor ExpectedColors[] = {
+		ECastleTileColor::Red, ECastleTileColor::Yellow, ECastleTileColor::Blue, ECastleTileColor::Green
+	};
+	for (const ECastleTileColor Color : ExpectedColors)
 	{
 		for (int32 Number = 1; Number <= 9; ++Number)
 		{
-			if (!TestTrue(TEXT("五色 1～9 全部可以创建普通房间卡"),
-				Definition->CreateDescriptor(1, static_cast<ECastleTileColor>(Color), Number, Card, Reason))) { return false; }
+			if (!TestTrue(TEXT("四色 1～9 全部可以创建普通房间卡"),
+				Definition->CreateDescriptor(1, Color, Number, Card, Reason))) { return false; }
 			int32 Price = 0;
 			TestTrue(TEXT("普通房间可以购买报价"), Pricing->TryCalculatePrice_Implementation(Card, ECastleCardPriceKind::Buy, Price, Reason));
 			TestEqual(TEXT("普通房间购买价为 5 + 数字×2"), Price, 5 + Number * 2);
@@ -65,6 +68,7 @@ bool FCastleNormalRoomRulesTest::RunTest(const FString& Parameters)
 		}
 	}
 	TestFalse(TEXT("普通房间拒绝灰色，即使数字有效"), Definition->CreateDescriptor(1, ECastleTileColor::Gray, 3, Card, Reason));
+	TestFalse(TEXT("普通房间拒绝旧紫色序号"), Definition->CreateDescriptor(1, static_cast<ECastleTileColor>(5), 3, Card, Reason));
 	TestFalse(TEXT("普通房间拒绝 0 号，即使颜色有效"), Definition->CreateDescriptor(1, ECastleTileColor::Red, 0, Card, Reason));
 	TestFalse(TEXT("普通房间拒绝越界数字"), Definition->CreateDescriptor(1, ECastleTileColor::Blue, 10, Card, Reason));
 	TestFalse(TEXT("普通房间拒绝越界颜色"), Definition->CreateDescriptor(1, static_cast<ECastleTileColor>(255), 3, Card, Reason));
@@ -95,9 +99,9 @@ bool FCastleNormalRoomRulesTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("每次生成六个商品"), Shop->GetOffers().Num(), 6);
 		for (const FCastleShopOffer& Offer : Shop->GetOffers())
 		{
-			TestTrue(TEXT("普通房间商品保留定义和一级五色数字"), Offer.Descriptor.Definition == Definition
-				&& Offer.Descriptor.Level == 1 && Offer.Descriptor.Color >= ECastleTileColor::Red
-				&& Offer.Descriptor.Color <= ECastleTileColor::Purple && Offer.Descriptor.Number >= 1 && Offer.Descriptor.Number <= 9);
+			TestTrue(TEXT("普通房间商品保留定义、等级和有效色号"), Offer.Descriptor.Definition == Definition
+				&& Offer.Descriptor.Level == 1 && MakeArrayView(ExpectedColors).Contains(Offer.Descriptor.Color)
+				&& Offer.Descriptor.Number >= 1 && Offer.Descriptor.Number <= 9);
 			TestEqual(TEXT("商品显示报价符合统一公式"), Offer.Price, 5 + Offer.Descriptor.Number * 2);
 		}
 	}
@@ -117,8 +121,8 @@ bool FCastleNormalRoomGroundValidationTest::RunTest(const FString& Parameters)
 	Cell.Color = ECastleTileColor::Red;
 	Cell.Number = 3;
 	FText Reason;
-	if (!TestTrue(TEXT("接收五色有效地面"), Board->ApplyGroundGenerationResult(Ground, Reason))) { return false; }
-	AddExpectedError(TEXT("拒绝非法地面"), EAutomationExpectedErrorFlags::Contains, 3);
+	if (!TestTrue(TEXT("接收有效地面"), Board->ApplyGroundGenerationResult(Ground, Reason))) { return false; }
+	AddExpectedError(TEXT("拒绝非法地面"), EAutomationExpectedErrorFlags::Contains, 4);
 	Cell.Color = ECastleTileColor::Gray;
 	TestFalse(TEXT("灰色即使非零也必须拒绝"), Board->ApplyGroundGenerationResult(Ground, Reason));
 	Cell.Color = ECastleTileColor::Red;
@@ -127,6 +131,8 @@ bool FCastleNormalRoomGroundValidationTest::RunTest(const FString& Parameters)
 	Cell.Color = static_cast<ECastleTileColor>(255);
 	Cell.Number = 3;
 	TestFalse(TEXT("越界颜色必须拒绝"), Board->ApplyGroundGenerationResult(Ground, Reason));
+	Cell.Color = static_cast<ECastleTileColor>(5);
+	TestFalse(TEXT("地面拒绝旧紫色序号"), Board->ApplyGroundGenerationResult(Ground, Reason));
 	FCastleGroundCell Preserved;
 	TestTrue(TEXT("拒绝后旧地面仍然存在"), Board->TryGetGroundCell(FIntVector::ZeroValue, Preserved));
 	TestTrue(TEXT("拒绝后没有修正或提交错误输入"), Preserved.Color == ECastleTileColor::Red && Preserved.Number == 3);

@@ -1,15 +1,22 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #include "CastleDirectorSubsystem.h"
+#include "Audio/CastleAudioSubsystem.h"
+#include "Castle/MainMenu/CastleMenuModel.h"
 #include "Castle/Support/CastleSupportTowerSubsystem.h"
 #include "Castle/Items/CastleBadgeSubsystem.h"
 #include "Castle/Items/CastleItemGrantLibrary.h"
 #include "Castle/Items/CastlePendingRoomReward.h"
+#include "Castle/Items/CastleRoomTraitComponent.h"
 #include "Castle/UI/Director/CastleTowerUpgradeRewardWidget.h"
 #include "Castle/UI/Items/CastleWildcardRoomPickerWidget.h"
 #include "Castle/SkyIslands/CastleSkyIslandBase.h"
 #include "Castle/SkyIslands/CastleSkyIslandTestFixture.h"
 
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
+#include "Castle/Dialogue/CastleDialogueScriptDataAsset.h"
+#include "Castle/Dialogue/CastleDialogueSubsystem.h"
+#include "Castle/Dialogue/CastleDialogueWidget.h"
+#include "Engine/GameInstance.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/Director/CastleDirectorSettings.h"
 #include "CastleBoard.h"
@@ -17,6 +24,7 @@
 #include "CastleMainTowerComponent.h"
 #include "CastleShopComponent.h"
 #include "CastleBackpackComponent.h"
+#include "CastleEconomyComponent.h"
 #include "CastleBuildingBase.h"
 #include "CastleNavigationSubsystem.h"
 #include "Blueprint/UserWidget.h"
@@ -58,7 +66,10 @@ void UCastleDirectorSubsystem::Tick(const float DeltaTime)
 		FText Failure;
 		if (!TryDepartSkyIsland(Failure)) { ShowMessage(Failure, true); }
 	}
-	if (PendingNode.IsValid())
+	// 返编辑的同一帧先检查成长。若弹出领奖，待领奖结束后再消费已排队的节点。
+	FText UpgradeReason;
+	TryCheckTowerUpgrade(UpgradeReason);
+	if (PendingNode.IsValid() && UpgradeRewards.IsEmpty() && !WildcardPicker)
 	{
 		// 回调可能由 Mass 处理中的碰撞触发；直到世界子系统 Tick 才消费唯一选择。
 		ACastleDirectorNodeActor* Selected = PendingNode.Get();
@@ -156,17 +167,26 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 	if (!Controller->GetShop()->TrySetRoomLimit(Initial.RoomLimit, OutReason)
 		|| !Controller->GetShop()->TrySetOfferNumberRange(1, Initial.MaxShopNumber, OutReason)
 		|| !Tower->SetTowerBalloonTier(Initial.BalloonCount, Initial.BaseMaxHealth, true, OutReason)
-		|| !Controller->MountDirectorItemHUD(Board->PrototypeBackpack, OutReason))
+		|| !Controller->MountDirectorItemHUD(Board->PrototypeBackpack, true, OutReason))
 	{
 		for (ACastleDirectorNodeActor* Node : Candidates) { Node->Destroy(); }
 		return false;
 	}
+	// 正式地图的外观槽属于本局启动事务。写入失败时走导演已有的报错出口并撤销待发布节点。
+	if (UWorld::RemovePIEPrefix(GetWorld()->GetOutermost()->GetName()) == TEXT("/Game/MovingCastle/Maps/MainMap"))
+	{
+		MenuRecorder = NewObject<UCastleMenuRecorder>(this);
+		FString Error;
+		if (!MenuRecorder->Start(*Board, Error))
+		{
+			OutReason = FText::FromString(Error);
+			for (ACastleDirectorNodeActor* Node : Candidates) { Node->Destroy(); }
+			return false;
+		}
+	}
 	Level = 1;
 	RunNPCCount = Config->InitialNPCCount;
-	Experience = 0;
 	ClearedSteps = 0;
-	bShopPermission = false;
-	bShopPermissionBeforeIsland = false;
 	bRunning = true;
 	BattleClearedHandle = Combat->OnBattleCleared.AddUObject(this, &UCastleDirectorSubsystem::HandleBattleCleared);
 	BattleFailedHandle = Combat->OnBattleFailed.AddUObject(this, &UCastleDirectorSubsystem::HandleBattleFailed);
@@ -178,6 +198,8 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 		Badges->OnBadgesChanged.AddUniqueDynamic(this, &UCastleDirectorSubsystem::HandleBadgesChanged);
 		HandleBadgesChanged();
 	}
+	// 开局订阅者读取已准备的本局依赖，并可在第一次编辑阶段初始化配额之前发放初始奖励。
+	OnRunStarted.Broadcast();
 	SetPhase(ECastleDirectorPhase::Editing);
 	for (ACastleDirectorNodeActor* Node : Nodes) { Node->ActivateNode(); }
 	// 下一关指引由 WBP HUD 读取，避免同一句话叠加到屏幕调试层。
@@ -197,7 +219,8 @@ int32 UCastleDirectorSubsystem::GetNodeCountForStep(const UCastleDirectorConfigD
 
 ECastleDirectorNodeKind UCastleDirectorSubsystem::GetNodeKindForStep(const UCastleDirectorConfigDataAsset& InConfig, const int32 Step)
 {
-	return Step % InConfig.EliteEveryNSteps == 0 ? ECastleDirectorNodeKind::Elite : ECastleDirectorNodeKind::Normal;
+	return CastleCombat::GetBattleKindForStage(Step, InConfig.EliteEveryNSteps) == ECastleBattleKind::Elite
+		? ECastleDirectorNodeKind::Elite : ECastleDirectorNodeKind::Normal;
 }
 
 TArray<ECastleDirectorNodeKind> UCastleDirectorSubsystem::GetNodeKindsForStep(
@@ -335,11 +358,6 @@ bool UCastleDirectorSubsystem::IsShopAccessAllowed(FText& OutReason) const
 			: Phase == ECastleDirectorPhase::Reward ? TEXT("选择奖励时无法使用商店") : TEXT("游戏结束后无法使用商店"));
 		return false;
 	}
-	if (bRunning && !bShopPermission)
-	{
-		OutReason = FText::FromString(TEXT("本轮未选择商店"));
-		return false;
-	}
 	return true;
 }
 
@@ -365,7 +383,9 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s %s"), *Node->GetPathName(), *OutReason.ToString());
 		return false;
 	}
-	UE_LOG(LogMoving_Castle, Display, TEXT("选择导演节点 %s：第 %d 关，类型 %d。"), *GetPathNameSafe(Node), GetNextStep(), static_cast<int32>(Node->GetKind()));
+	// 节点、难度配置与战斗结果统一使用导演的当前关号。
+	const int32 Stage = GetNextStep();
+	UE_LOG(LogMoving_Castle, Display, TEXT("选择导演节点 %s：第 %d 关，类型 %d。"), *GetPathNameSafe(Node), Stage, static_cast<int32>(Node->GetKind()));
 	UCastleNavigationSubsystem* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
 	const auto Path = Navigation ? Navigation->AcquireSharedPath() : nullptr;
 	if (!Path || !Path->bValid || Path->bClosedLoop || !Path->bTowerDispatch || Path->Length <= UE_DOUBLE_SMALL_NUMBER)
@@ -391,37 +411,39 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 		return Reject(TEXT("棋盘、控制器、战斗系统、配置无效，或上场 NPC 尚未回收。"));
 	}
 	const ECastleBattleKind Kind = Node->GetKind() == ECastleDirectorNodeKind::Elite ? ECastleBattleKind::Elite : ECastleBattleKind::Normal;
-	const int32 PreviousCount = Kind == ECastleBattleKind::Elite ? EliteBattles : NormalBattles;
-	if (PreviousCount == MAX_int32) { return Reject(TEXT("本类战斗序号溢出。")); }
 	FText Failure;
+	FTransform TowerView;
+	if (!PrepareTowerOverview(TowerView, Failure)) { return Reject(Failure.ToString()); }
 	// 显隐校验在撤下商店和巡逻草稿之前，失败不得推进开战事务。
 	if (!Board->SetPlacementSurfacePresentationHidden(true, Failure)) { return Reject(Failure.ToString()); }
-	const bool bPreviousPermission = bShopPermission;
 	const bool bShopWasOpen = Controller->GetShop()->IsShopOpen();
 	Controller->GetShop()->CloseShop();
-	bShopPermission = false;
 	for (TActorIterator<ACastlePatrolRoute> It(GetWorld()); It; ++It) { It->CancelEditingDraft(); }
 	Controller->HideDirectorEditingPresentation();
 	// 会话只登记待命池。玩家点击主塔或开启自动出兵后，NPC 才沿门到门快照派出。
 	const bool bNPCsReady = Dispatch->StartBattleDispatchSession(Config->NPCConfiguration, RunNPCCount, Failure);
-	if (!bNPCsReady || !Combat->StartBattle(Kind, PreviousCount + 1, Failure))
+	if (!bNPCsReady || !Combat->StartStageBattle(Kind, Stage, Config->EliteEveryNSteps, Failure))
 	{
 		FText CleanupFailure;
 		const bool bRecalled = RecallBattleNPCs(CleanupFailure);
 		FText SurfaceFailure;
 		const bool bSurfaceRestored = Board->SetPlacementSurfacePresentationHidden(false, SurfaceFailure);
-		bShopPermission = bPreviousPermission;
 		if (bShopWasOpen) { Controller->ToggleShop(); }
 		return Reject(Failure.ToString() + (bRecalled ? FString() : TEXT("；NPC 回收失败：") + CleanupFailure.ToString())
 			+ (bSurfaceRestored ? FString() : TEXT("；建造面恢复失败：") + SurfaceFailure.ToString()));
 	}
-	ActiveBattleKind = Kind;
-	ActiveBattleOrdinal = PreviousCount + 1;
-	if (Kind == ECastleBattleKind::Elite) { ++EliteBattles; } else { ++NormalBattles; }
 	DestroyNodes();
 	SetPhase(ECastleDirectorPhase::Battle);
-	ShowMessage(FText::FromString(TEXT("战斗进行中")), false);
-	UE_LOG(LogMoving_Castle, Display, TEXT("导演开战提交：第 %d 关，本类第 %d 场，门到门待命池 %d 个 NPC。"), GetNextStep(), ActiveBattleOrdinal, RunNPCCount);
+	// 开战和 NPC 会话已提交，只有销毁该批门户后才移动玩家，避免视角移动引发一次重复选择。
+	if (!TeleportPlayerToTowerOverview(TowerView, Failure))
+	{
+		OutReason = FText::Format(INVTEXT("第 {0} 关战斗已开始。{1}"), Stage, Failure);
+		ShowMessage(OutReason, true);
+		return false;
+	}
+	const FText BattleLabel = Kind == ECastleBattleKind::Elite ? INVTEXT("精英战斗开始") : INVTEXT("普通战斗开始");
+	ShowMessage(FText::Format(INVTEXT("第 {0} 关 · {1}"), Stage, BattleLabel), false);
+	UE_LOG(LogMoving_Castle, Display, TEXT("导演开战提交：第 %d 关，门到门待命池 %d 个 NPC。"), Stage, RunNPCCount);
 	return true;
 }
 
@@ -465,7 +487,8 @@ bool UCastleDirectorSubsystem::TryEnterSkyIsland(ACastleDirectorNodeActor& Node,
 }
 
 bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirectorConfigDataAsset& IslandConfig,
-	const ECastleSkyIslandType Type, const int32 Seed, const ACastleDirectorNodeActor* Node, FText& OutReason)
+	const ECastleSkyIslandType Type, const int32 Seed, const ACastleDirectorNodeActor* Node, FText& OutReason,
+	ACastleBuildingBase* PortalRoom)
 {
 	OutReason = FText::GetEmpty();
 	const FText TypeName = StaticEnum<ECastleSkyIslandType>()->GetDisplayNameTextByValue(static_cast<int64>(Type));
@@ -473,23 +496,35 @@ bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirector
 	{
 		OutReason = Reason;
 		UE_LOG(LogMoving_Castle, Error, TEXT("导演配置 %s 空岛类型 %s，入口 %s：%s"),
-			*IslandConfig.GetPathName(), *TypeName.ToString(), Node ? *Node->GetPathName() : TEXT("CastleEnterSkyIsland"),
+			*IslandConfig.GetPathName(), *TypeName.ToString(),
+			PortalRoom ? *PortalRoom->GetPathName() : (Node ? *Node->GetPathName() : TEXT("CastleEnterSkyIsland")),
 			*Reason.ToString());
 		return false;
 	};
 	// 待领奖励或已激活的空岛仍占用单局事务，任何入口都必须先通过同一组编辑阶段检查。
 	APawn* Pawn = IsValid(Controller) ? Controller->GetPawn() : nullptr;
-	if (!bRunning || Phase != ECastleDirectorPhase::Editing || !UpgradeRewards.IsEmpty() || WildcardPicker
+	if (!bRunning || Phase != ECastleDirectorPhase::Editing || bEnteringSkyIsland || !UpgradeRewards.IsEmpty() || WildcardPicker
 		|| !IsValid(Pawn) || !Pawn->GetMovementComponent() || !IsValid(Board) || !IsValid(Tower) || !IsValid(Tower->GetOwner())
 		|| !IsValid(PatrolRoute) || ActiveSkyIsland)
 	{
 		return Reject(INVTEXT("只有可操作的编辑阶段且玩家、主塔与路线有效时才能进入空岛。"));
 	}
+	TGuardValue<bool> EntryGuard(bEnteringSkyIsland, true);
 	UClass* Class = IslandConfig.SkyIslandClasses.FindRef(Type).Get();
 	if (!IsValid(Class) || Class->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists))
 	{
 		return Reject(FText::Format(INVTEXT("空岛类型 {0} 尚未配置具体玩法类，或已登记的类无效：{1}。"),
 			TypeName, FText::FromString(GetPathNameSafe(Class))));
+	}
+	// 首访剧情只属于正式地图。先校验依赖，避免因数据缺失而传送玩家或消耗访问机会。
+	const bool bRequiresDialogue = Type != ECastleSkyIslandType::Rest
+		&& UWorld::RemovePIEPrefix(GetWorld()->GetOutermost()->GetName()) == TEXT("/Game/MovingCastle/Maps/MainMap");
+	auto* GameInstance = GetWorld()->GetGameInstance();
+	auto* Dialogue = bRequiresDialogue && GameInstance ? GameInstance->GetSubsystem<UCastleDialogueSubsystem>() : nullptr;
+	UCastleDialogueScriptDataAsset* ArrivalScript = IslandConfig.SkyIslandArrivalDialogues.FindRef(Type).Get();
+	if (bRequiresDialogue && (!Dialogue || !IsValid(ArrivalScript)))
+	{
+		return Reject(INVTEXT("缺少对话子系统或空岛类型对应的 SkyIslandArrivalDialogues 剧本。"));
 	}
 	// 所有玩法依赖由空岛初始化验证。准备失败的岛立即销毁，玩家和当前节点留在主塔。
 	const FVector Origin = Tower->GetOwner()->GetActorLocation() + Board->GetActorForwardVector() * IslandConfig.SkyIslandSpawnDistance
@@ -505,34 +540,64 @@ bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirector
 		Island->Destroy();
 		return Reject(OutReason);
 	}
+	UCastleDialogueWidget* ArrivalWidget = nullptr;
+	if (bRequiresDialogue && !Dialogue->HasPlayedFirstVisitSkyIslandDialogue(Type))
+	{
+		// 校验台词、类和实际 BindWidget，并在传送前完成可失败的视口挂载。
+		ArrivalWidget = Dialogue->PrepareScript(ArrivalScript, Controller.Get(), OutReason);
+		if (!ArrivalWidget)
+		{
+			Island->Destroy();
+			FText RestoreReason;
+			if (!Board->SetPlacementSurfacePresentationHidden(false, RestoreReason)) { return Reject(RestoreReason); }
+			return Reject(OutReason);
+		}
+	}
 	const FTransform Arrival = Island->GetPlayerArrivalTransform();
-	const FTransform ReturnTransform = Pawn->GetActorTransform();
-	const FRotator ReturnControlRotation = Controller->GetControlRotation();
 	if (!Pawn->TeleportTo(Arrival.GetLocation(), Arrival.Rotator()))
 	{
+		if (ArrivalWidget) { ArrivalWidget->RemoveFromParent(); }
 		Island->Destroy();
 		FText RestoreReason;
 		if (!Board->SetPlacementSurfacePresentationHidden(false, RestoreReason)) { return Reject(RestoreReason); }
 		return Reject(INVTEXT("玩家无法传送至空岛到达锚点。"));
 	}
-	// 传送成功后再提交返塔信息，并移除已离开编辑阶段的节点及其待处理重叠。
-	IslandReturnTransform = ReturnTransform;
-	IslandReturnControlRotation = ReturnControlRotation;
+	// 传送成功后再处理节点。额外空岛暂时隐藏原节点，正式空岛消耗节点批次。
 	Pawn->GetMovementComponent()->StopMovementImmediately();
 	Controller->SetControlRotation(Arrival.Rotator());
-	// 只在入岛传送成功后保存主塔权限；初始化或传送失败不改变进岛前的值。
-	bShopPermissionBeforeIsland = bShopPermission;
 	Controller->GetShop()->CloseShop();
-	bShopPermission = false;
 	PatrolRoute->CancelEditingDraft();
 	Controller->HideDirectorEditingPresentation();
 	ActiveSkyIsland = Island;
 	bIslandShopGranted = false;
+	bCurrentIslandIsBonus = PortalRoom != nullptr;
 	Island->OnDepartureRequested.AddWeakLambda(this, [this] { bDepartureRequested = true; });
 	PendingNode.Reset();
-	DestroyNodes();
+	if (bCurrentIslandIsBonus)
+	{
+		for (ACastleDirectorNodeActor* Current : Nodes)
+		{
+			Current->SetActorEnableCollision(false);
+			Current->SetActorHiddenInGame(true);
+		}
+		PortalRoom->ConsumeSkyIslandPortal();
+		++BonusSkyIslandVisitCount;
+		UE_LOG(LogMoving_Castle, Display, TEXT("传送门房间 %s 已消耗门体，保留第 %d 步的节点。"),
+			*PortalRoom->GetPathName(), GetNextStep());
+	}
+	else { DestroyNodes(); }
 	SetPhase(ECastleDirectorPhase::SkyIsland);
-	ShowMessage(FText::Format(INVTEXT("已到达空岛。瞄准物件并按 {0} 交互。"), IslandConfig.SkyIslandInteractKey.GetDisplayName()), false);
+	if (ArrivalWidget) { Dialogue->StartPreparedSkyIslandDialogue(Type, *ArrivalScript, *Controller.Get(), *ArrivalWidget); }
+	if (Controller->GetControlMode() == ECastleControlMode::Design)
+	{
+		// 设计模式的物件交互使用当前主交互键，避免继续提示已被升降占用的 E 键。
+		ShowMessage(FText::Format(INVTEXT("已到达空岛。将鼠标对准物件并按{0}交互。"),
+			Controller->GetPrimaryPlaceInteractKeyDisplayText()), false);
+	}
+	else
+	{
+		ShowMessage(FText::Format(INVTEXT("已到达空岛。瞄准物件并按 {0} 交互。"), IslandConfig.SkyIslandInteractKey.GetDisplayName()), false);
+	}
 	UE_LOG(LogMoving_Castle, Display, TEXT("导演进入空岛 %s，第 %d 步。"), *Island->GetPathName(), GetNextStep());
 	return true;
 }
@@ -540,47 +605,117 @@ bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirector
 bool UCastleDirectorSubsystem::TryDepartSkyIsland(FText& OutReason)
 {
 	if (!ValidateIslandAction(ActiveSkyIsland, OutReason)) { return false; }
-	APawn* Pawn = Controller->GetPawn();
-	if (!IsValid(Pawn) || !Pawn->GetMovementComponent() || GetNextStep() >= MAX_int32)
+	if (!bCurrentIslandIsBonus && GetNextStep() >= MAX_int32)
 	{
-		OutReason = INVTEXT("玩家 Pawn 或下一步编号无效，无法离岛。");
-		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+		OutReason = INVTEXT("下一步编号无效，无法离岛。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("空岛 %s：%s"), *ActiveSkyIsland->GetPathName(), *OutReason.ToString());
 		return false;
 	}
-	// 玩家仍在岛上时准备下一批节点；任何准备失败都保留当前空岛和步数。
+	FTransform TowerView;
+	if (!PrepareTowerOverview(TowerView, OutReason)) { return false; }
+	// 正式空岛先准备下一步批次；额外空岛核对本步藏起的原节点，返塔时重新启用。
+	const bool bReturningFromBonusIsland = bCurrentIslandIsBonus;
 	TArray<TObjectPtr<ACastleDirectorNodeActor>> Candidates;
-	if (!PrepareNodes(GetNextStep() + 1, Candidates, OutReason)) { return false; }
+	if (bReturningFromBonusIsland)
+	{
+		if (Nodes.ContainsByPredicate([](const auto& Node) { return !IsValid(Node.Get()); }))
+		{
+			OutReason = INVTEXT("额外空岛暂存的原节点已失效，无法返塔。");
+			UE_LOG(LogMoving_Castle, Error, TEXT("空岛 %s：%s"), *ActiveSkyIsland->GetPathName(), *OutReason.ToString());
+			return false;
+		}
+	}
+	else if (!PrepareNodes(GetNextStep() + 1, Candidates, OutReason)) { return false; }
 	if (!Board->SetPlacementSurfacePresentationHidden(false, OutReason))
 	{
 		for (ACastleDirectorNodeActor* Candidate : Candidates) { Candidate->Destroy(); }
 		return false;
 	}
-	if (!Pawn->TeleportTo(IslandReturnTransform.GetLocation(), IslandReturnTransform.Rotator()))
+	if (!TeleportPlayerToTowerOverview(TowerView, OutReason))
 	{
+		// 返塔未提交，撤销这次准备的节点与建造面显隐。原空岛及关号仍属于本次访问。
 		for (ACastleDirectorNodeActor* Candidate : Candidates) { Candidate->Destroy(); }
-		if (!Board->SetPlacementSurfacePresentationHidden(true, OutReason)) { return false; }
-		OutReason = INVTEXT("无法传送回主塔视角位置。");
-		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+		FText RestoreReason;
+		if (!Board->SetPlacementSurfacePresentationHidden(true, RestoreReason))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("空岛 %s 返塔回滚失败：%s"), *ActiveSkyIsland->GetPathName(), *RestoreReason.ToString());
+			OutReason = FText::Format(INVTEXT("{0} 建造面恢复失败：{1}"), OutReason, RestoreReason);
+		}
 		return false;
 	}
-	Pawn->GetMovementComponent()->StopMovementImmediately();
-	Controller->SetControlRotation(IslandReturnControlRotation);
 	Controller->GetShop()->CloseShop();
 	ActiveSkyIsland->Destroy();
 	ActiveSkyIsland = nullptr;
-	// 返塔成功才丢弃本次访问的锚点与临时商店领取状态。
-	IslandReturnTransform = FTransform::Identity;
-	IslandReturnControlRotation = FRotator::ZeroRotator;
+	// 返塔成功才清除本次岛屿的临时商店领取状态。
 	bIslandShopGranted = false;
-	++ClearedSteps;
-	Nodes = MoveTemp(Candidates);
-	// 所有离岛校验已完成。先恢复权限再广播编辑阶段，让界面读取同一份已提交状态。
-	bShopPermission = bShopPermissionBeforeIsland;
-	bShopPermissionBeforeIsland = false;
+	bCurrentIslandIsBonus = false;
+	if (!bReturningFromBonusIsland)
+	{
+		++ClearedSteps;
+		Nodes = MoveTemp(Candidates);
+	}
+	// 只有成功返塔后才切回编辑阶段，此时普通商店按常驻规则重新可用。
 	SetPhase(ECastleDirectorPhase::Editing);
-	for (ACastleDirectorNodeActor* Candidate : Nodes) { Candidate->ActivateNode(); }
-	ShowMessage(INVTEXT("已离开空岛，飞向节点进入下一步。"), false);
+	for (ACastleDirectorNodeActor* Candidate : Nodes)
+	{
+		// ActivateNode 先登记回到塔上的 Pawn，再为原节点恢复碰撞，避免落在节点内时自动选中。
+		Candidate->ActivateNode();
+		if (bReturningFromBonusIsland) { Candidate->SetActorEnableCollision(true); }
+	}
+	ShowMessage(bReturningFromBonusIsland ? INVTEXT("已返回主塔，可继续选择当前节点。")
+		: INVTEXT("已离开空岛，飞向节点进入下一步。"), false);
 	UE_LOG(LogMoving_Castle, Display, TEXT("导演离开空岛，已完成 %d 步。"), ClearedSteps);
+	return true;
+}
+
+bool UCastleDirectorSubsystem::PrepareTowerOverview(FTransform& OutView, FText& OutReason) const
+{
+	const AActor* TowerActor = IsValid(Tower) ? Tower->GetOwner() : nullptr;
+	const APawn* Pawn = IsValid(Controller) ? Controller->GetPawn() : nullptr;
+	const auto Reject = [&](const FText& Reason)
+	{
+		OutReason = Reason;
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s、主塔 %s、Pawn %s 无法准备塔顶俯瞰位：%s"),
+			*GetPathNameSafe(Board), *GetPathNameSafe(TowerActor), *GetPathNameSafe(Pawn), *Reason.ToString());
+		return false;
+	};
+	if (!IsValid(Board) || !IsValid(TowerActor) || !IsValid(Pawn) || !IsValid(Pawn->GetMovementComponent()))
+	{
+		return Reject(INVTEXT("棋盘、主塔或玩家移动组件无效。"));
+	}
+	const int32 Layers = Board->GetUnlockedLayerCount();
+	if (Layers <= 0 || !FMath::IsFinite(Board->LayerHeight) || Board->LayerHeight <= 0.0f)
+	{
+		return Reject(INVTEXT("主塔当前开放层数或层高无效。"));
+	}
+	// 棋盘正面朝向当前节点圆弧。高度须越过塔冠尖顶与主气球（檐口上方约 2500 cm），
+	// 并沿反方向水平退开 1800 cm，以 32 度俯角越过塔顶清晰俯瞰城堡与前方战场/节点。
+	const FRotator Facing(0.0, Board->GetActorRotation().Yaw, 0.0);
+	const FVector Location = TowerActor->GetActorLocation() - Facing.Vector() * 1800.0
+		+ FVector::UpVector * (Layers * Board->LayerHeight + 2500.0);
+	const FRotator View(-32.0, Facing.Yaw, 0.0);
+	if (Location.ContainsNaN() || View.ContainsNaN())
+	{
+		return Reject(INVTEXT("俯瞰坐标或朝向包含非有限值。"));
+	}
+	OutView = FTransform(View, Location);
+	return true;
+}
+
+bool UCastleDirectorSubsystem::TeleportPlayerToTowerOverview(const FTransform& View, FText& OutReason)
+{
+	APawn* Pawn = IsValid(Controller) ? Controller->GetPawn() : nullptr;
+	UPawnMovementComponent* Movement = IsValid(Pawn) ? Pawn->GetMovementComponent() : nullptr;
+	if (!IsValid(Movement) || !Pawn->TeleportTo(View.GetLocation(), View.Rotator(), false, true))
+	{
+		OutReason = INVTEXT("玩家无法传送至主塔塔顶俯瞰位。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("Pawn %s 传送至主塔 %s 的俯瞰位 %s 失败。"),
+			*GetPathNameSafe(Pawn), *GetPathNameSafe(Tower), *View.GetLocation().ToString());
+		return false;
+	}
+	Movement->StopMovementImmediately();
+	Pawn->ConsumeMovementInputVector();
+	Controller->SetControlRotation(View.Rotator());
 	return true;
 }
 
@@ -596,7 +731,49 @@ bool UCastleDirectorSubsystem::ValidateIslandAction(const ACastleSkyIslandBase* 
 	return true;
 }
 
-bool UCastleDirectorSubsystem::TryInteractWithSkyIsland(const FVector& Start, const FVector& End, FText& OutReason)
+bool UCastleDirectorSubsystem::TryEnterBonusSkyIslandFromPortal(ACastleBuildingBase* PortalRoom, FText& OutReason)
+{
+	const auto Reject = [&](const FText& Reason)
+	{
+		OutReason = Reason;
+		UE_LOG(LogMoving_Castle, Error, TEXT("房间 %s 无法进入额外空岛（配置 %s）：%s"),
+			*GetPathNameSafe(PortalRoom), *GetPathNameSafe(Config), *Reason.ToString());
+		return false;
+	};
+	if (!IsInGameThread() || !bRunning || Phase != ECastleDirectorPhase::Editing || !IsValid(Config)
+		|| !IsValid(Board) || PendingNode.IsValid() || Nodes.ContainsByPredicate([](const auto& Node) { return !IsValid(Node.Get()); }))
+	{
+		return Reject(INVTEXT("额外空岛需要正式编辑阶段、有效棋盘和配置，且当前节点没有待处理的选择。"));
+	}
+	if (!IsValid(PortalRoom) || PortalRoom->GetRoomTrait() != ECastleRoomTrait::SkyIslandPortal
+		|| !PortalRoom->CanReceiveBuildingTrigger() || ACastleBoard::FindBoardForBuilding(PortalRoom) != Board.Get()
+		|| !IsValid(PortalRoom->GetRoomTraitComponent()) || !PortalRoom->GetRoomTraitComponent()->IsPortalAvailable())
+	{
+		return Reject(INVTEXT("只有当前棋盘已建成、且尚有门体的传送门房间可以进入额外空岛。"));
+	}
+	static constexpr ECastleSkyIslandType Types[] = {
+		ECastleSkyIslandType::Shop, ECastleSkyIslandType::NPC, ECastleSkyIslandType::Gamble, ECastleSkyIslandType::Rest
+	};
+	for (const ECastleSkyIslandType Type : Types)
+	{
+		const UClass* Class = Config->SkyIslandClasses.FindRef(Type).Get();
+		if (!IsValid(Class) || Class->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists))
+		{
+			return Reject(FText::Format(INVTEXT("四种空岛必须全部配置具体玩法类，当前缺少有效的 {0}：{1}。"),
+				StaticEnum<ECastleSkyIslandType>()->GetDisplayNameTextByValue(static_cast<uint8>(Type)),
+				FText::FromString(GetPathNameSafe(Class))));
+		}
+	}
+	// 额外空岛使用自己的抽样序列，与正常节点随机和步数推进无关。失败时计数不会递增。
+	const uint32 Seed = static_cast<uint32>(Config->RunSeed) ^ (static_cast<uint32>(GetNextStep()) * 0x9e3779b9u)
+		^ ((BonusSkyIslandVisitCount + 1u) * 0x85ebca6bu);
+	FRandomStream Random(static_cast<int32>(Seed));
+	const ECastleSkyIslandType Type = Types[Random.RandRange(0, UE_ARRAY_COUNT(Types) - 1)];
+	return TryEnterConfiguredSkyIsland(*Config, Type, Random.GetCurrentSeed(), nullptr, OutReason, PortalRoom);
+}
+
+bool UCastleDirectorSubsystem::TryInteractWithSkyIsland(
+	const FVector& Start, const FVector& End, FText& OutReason, bool bShowMissPrompt)
 {
 	if (!ValidateIslandAction(ActiveSkyIsland, OutReason)) { return false; }
 	FHitResult Hit;
@@ -606,11 +783,14 @@ bool UCastleDirectorSubsystem::TryInteractWithSkyIsland(const FVector& Start, co
 	if (!Target) { Target = Cast<ICastleSkyIslandInteractable>(Hit.GetActor()); }
 	if (!Target)
 	{
-		OutReason = INVTEXT("请将中心准星对准可交互的空岛物件。");
+		// 活动岛校验成功时已清空原因，只在经典准星交互未命中时填入引导提示。
+		if (bShowMissPrompt) { OutReason = INVTEXT("请将中心准星对准可交互的空岛物件。"); }
 		return false;
 	}
 	const FCastleSkyIslandInteractContext Context{ActiveSkyIsland.Get(), Controller.Get(), Hit};
-	return Target->CanInteract(Context, OutReason) && Target->ExecuteInteract(Context, OutReason);
+	const bool bInteracted = Target->CanInteract(Context, OutReason) && Target->ExecuteInteract(Context, OutReason);
+	if (bInteracted) { UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Interact); }
+	return bInteracted;
 }
 
 bool UCastleDirectorSubsystem::RequestIslandRoomShop(ACastleSkyIslandBase* Island, FText& OutReason)
@@ -634,7 +814,7 @@ bool UCastleDirectorSubsystem::RequestIslandRoomReward(ACastleSkyIslandBase* Isl
 }
 
 bool UCastleDirectorSubsystem::RequestIslandBadgeReward(ACastleSkyIslandBase* Island,
-	const FCastleBadgeDefinition& Badge, FText& OutReason)
+	const UCastleBadgeDataAsset& Badge, FText& OutReason)
 {
 	if (!ValidateIslandAction(Island, OutReason)) { return false; }
 	auto* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
@@ -645,7 +825,8 @@ bool UCastleDirectorSubsystem::RequestIslandBadgeReward(ACastleSkyIslandBase* Is
 		return false;
 	}
 	bool bNeedsReplacement = false;
-	return Badges->TryAcquireBadge(Badge, bNeedsReplacement, OutReason);
+	// 由与调试发放相同的资产入口校验。本局 HUD 监听库存并接管第七枚的替换输入。
+	return UCastleItemGrantLibrary::TryGrantBadge(&Badge, Badges, bNeedsReplacement, OutReason);
 }
 
 #if !UE_BUILD_SHIPPING
@@ -689,60 +870,62 @@ bool UCastleDirectorSubsystem::TryEnterSkyIslandFixture(FText& OutReason)
 }
 #endif
 
-void UCastleDirectorSubsystem::HandleBattleCleared(const ECastleBattleKind Kind, const int32 Ordinal)
+void UCastleDirectorSubsystem::HandleBattleCleared(const ECastleBattleKind Kind, const int32 Stage)
 {
-	if (!bRunning || Phase != ECastleDirectorPhase::Battle || Kind != ActiveBattleKind || Ordinal != ActiveBattleOrdinal)
+	// 清场前当前关号保持稳定，只接受该关的战斗结果。
+	if (!bRunning || Phase != ECastleDirectorPhase::Battle || Stage != GetNextStep() || !IsValid(Config) || Config->EliteEveryNSteps < 2
+		|| Kind != CastleCombat::GetBattleKindForStage(Stage, Config->EliteEveryNSteps))
 	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("导演拒绝非法或重复清场通知：阶段 %d，收到类型 %d/序号 %d，预期 %d/%d。"),
-			static_cast<int32>(Phase), static_cast<int32>(Kind), Ordinal, static_cast<int32>(ActiveBattleKind), ActiveBattleOrdinal);
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演拒绝非法或重复清场通知：配置 %s，阶段 %d，收到类型 %d/关号 %d，当前关号 %d。"),
+			*GetPathNameSafe(Config), static_cast<int32>(Phase), static_cast<int32>(Kind), Stage, GetNextStep());
 		return;
 	}
 	FText Failure;
-	if (!RecallBattleNPCs(Failure)) { EnterGameOver(FText::FromString(TEXT("战斗系统出错：") + Failure.ToString())); return; }
-	// 战斗结束时立即恢复 1x 倍速与未暂停状态，避免奖励和编辑阶段沿用战斗倍速。
-	ResetBattleControls(true);
-	++ClearedSteps;
 	if (Kind == ECastleBattleKind::Elite)
 	{
-		// 解锁只随精英胜利次数推进，战斗开始和失败均不改变普通池。
-		const FName UnlockTag = Ordinal == 1 ? FName(TEXT("Unlock.MiasmaWelp")) :
-			Ordinal == 2 ? FName(TEXT("Unlock.LavaGoliath")) : NAME_None;
-		if ((!UnlockTag.IsNone() && !Combat->UnlockEnemyTag(UnlockTag)) || !TryCommitRewards(true, true, true, Failure))
-		{
-			EnterGameOver(FText::Format(INVTEXT("精英胜利奖励提交失败。{0}"), Failure));
-			return;
-		}
-		const FText AllGranted = INVTEXT("精英通关奖励已全部获得：经验、主塔回血、免费换批并开放商店");
+		// 精英的关号在三项奖励均可提交后才推进。金币预检失败时仍保持原战斗阶段。
+		if (!TryCommitRewards(true, true, true, Failure, Stage)) { return; }
+		UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Victory);
+		const FText AllGranted = INVTEXT("精英通关奖励已全部获得：金币、主塔回血、免费换批并开放商店");
 		ShowMessage(AllGranted, false);
 		UE_LOG(LogMoving_Castle, Display, TEXT("%s"), *AllGranted.ToString());
 		return;
 	}
+	if (!RecallBattleNPCs(Failure)) { EnterGameOver(FText::FromString(TEXT("战斗系统出错：") + Failure.ToString())); return; }
+	// 战斗结束时立即恢复 1x 倍速与未暂停状态，避免奖励和编辑阶段沿用战斗倍速。
+	ResetBattleControls(true);
+	ClearedSteps = Stage;
+	bSelfOrbitingRoundPending = true;
+	// 普通清场的道具事件属于本次胜利，结算一次后才进入三选一。
+	OnBattleClearedForItems.Broadcast(Kind, Stage);
 	SetPhase(ECastleDirectorPhase::Reward);
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Victory);
 	ShowMessage(FText::FromString(TEXT("通关奖励：请选择一项")), false);
 	UE_LOG(LogMoving_Castle, Display, TEXT("导演清场：已通过 %d 关，进入三选一，建造面保持隐藏。"), ClearedSteps);
 }
 
-void UCastleDirectorSubsystem::HandleBattleFailed(const ECastleBattleKind Kind, const int32 Ordinal, const FText& Reason)
+void UCastleDirectorSubsystem::HandleBattleFailed(const ECastleBattleKind Kind, const int32 BattleNumber, const FText& Reason)
 {
-	UE_LOG(LogMoving_Castle, Error, TEXT("导演收到战斗失败：配置 %s，类型 %d，序号 %d，%s"),
-		*GetPathNameSafe(Config), static_cast<int32>(Kind), Ordinal, *Reason.ToString());
+	UE_LOG(LogMoving_Castle, Error, TEXT("导演收到战斗失败：配置 %s，类型 %d，战斗编号 %d，%s"),
+		*GetPathNameSafe(Config), static_cast<int32>(Kind), BattleNumber, *Reason.ToString());
 	EnterGameOver(FText::FromString(TEXT("战斗系统出错：") + Reason.ToString()));
 }
 
 bool UCastleDirectorSubsystem::TryChooseReward(const ECastleDirectorReward Reward, FText& OutReason)
 {
 	if (Phase != ECastleDirectorPhase::Reward
-		|| (Reward != ECastleDirectorReward::Experience && Reward != ECastleDirectorReward::Healing && Reward != ECastleDirectorReward::Shop))
+		|| (Reward != ECastleDirectorReward::Gold && Reward != ECastleDirectorReward::Healing && Reward != ECastleDirectorReward::Shop))
 	{
 		OutReason = INVTEXT("当前阶段或奖励类型无效。");
 		UE_LOG(LogMoving_Castle, Error, TEXT("导演 %s 无法领取奖励：%s"), *GetPathName(), *OutReason.ToString());
 		return false;
 	}
-	return TryCommitRewards(Reward == ECastleDirectorReward::Experience, Reward == ECastleDirectorReward::Healing,
+	return TryCommitRewards(Reward == ECastleDirectorReward::Gold, Reward == ECastleDirectorReward::Healing,
 		Reward == ECastleDirectorReward::Shop, OutReason);
 }
 
-bool UCastleDirectorSubsystem::TryCommitRewards(const bool bExperience, const bool bHealing, const bool bShop, FText& OutReason)
+bool UCastleDirectorSubsystem::TryCommitRewards(const bool bGold, const bool bHealing, const bool bShop, FText& OutReason,
+	const int32 EliteClearedStage)
 {
 	OutReason = FText::GetEmpty();
 	const auto Reject = [this, &OutReason](const FText& Reason)
@@ -758,27 +941,190 @@ bool UCastleDirectorSubsystem::TryCommitRewards(const bool bExperience, const bo
 		return Reject(INVTEXT("奖励提交缺少有效配置、棋盘、控制器或存活主塔，或上一次升级领奖尚未结束。"));
 	}
 	TGuardValue<bool> Guard(bApplyingReward, true);
-	if (!Config->ValidateTowerLevels(OutReason) || Config->ExpPerLevel < 1 || Config->RewardExp < 1)
+	UCastleEconomyComponent* Economy = Controller->GetEconomy();
+	UCastleShopComponent* Shop = Controller->GetShop();
+	if (!IsValid(Economy) || !IsValid(Shop) || Config->RewardGold < 1)
 	{
-		return Reject(OutReason.IsEmpty() ? INVTEXT("经验配置必须为正数。") : OutReason);
+		return Reject(FText::Format(INVTEXT("金币账户或商店无效，或基础奖励 RewardGold（{0}）不是正数。"), Config->RewardGold));
 	}
-	const int64 TotalExp = static_cast<int64>(Experience) + (bExperience ? Config->RewardExp : 0);
-	const int32 NewLevel = static_cast<int32>(FMath::Min<int64>(Config->TowerLevels.Num(), Level + TotalExp / Config->ExpPerLevel));
-	const int32 NewExp = NewLevel == Config->TowerLevels.Num() ? 0 : TotalExp % Config->ExpPerLevel;
-	const auto& Target = Config->TowerLevels[NewLevel - 1];
-	const bool bLevelUp = NewLevel > Level;
+	// 回血、商品、下一批节点和清场状态都依赖本次奖励能完整提交，先验证含徽章的实际收入。
+	if (bGold && !Economy->CanAddGameplayGold(Config->RewardGold, OutReason)) { return Reject(OutReason); }
+	if (!Config->ValidateTowerLevels(OutReason)) { return Reject(OutReason); }
 	if (bHealing && (!FMath::IsFinite(Tower->MaxHealth) || Tower->MaxHealth <= 0.0f
-		|| !FMath::IsFinite(Tower->CurrentHealth) || !FMath::IsFinite(Config->HealFraction)
+		|| !FMath::IsFinite(Tower->CurrentHealth) || Tower->CurrentHealth > Tower->MaxHealth || !FMath::IsFinite(Config->HealFraction)
 		|| Config->HealFraction <= 0.0f || Config->HealFraction > 1.0f))
 	{
 		return Reject(INVTEXT("主塔生命或回血比例无效。"));
 	}
+	const bool bEliteClear = EliteClearedStage != INDEX_NONE;
+	const int32 RewardStage = bEliteClear ? EliteClearedStage : ClearedSteps;
+	TStrongObjectPtr<UCastleShopComponent> PreparedShop;
+	if (bShop)
+	{
+		PreparedShop.Reset(NewObject<UCastleShopComponent>());
+		if (!Shop->PrepareRewardShop(Economy, Board, GetCurrentMaxShopNumber(), *PreparedShop, OutReason))
+		{
+			return Reject(OutReason);
+		}
+	}
+	TArray<TObjectPtr<ACastleDirectorNodeActor>> Candidates;
+	if (!PrepareNodes(RewardStage + 1, Candidates, OutReason)) { return Reject(OutReason); }
+	const auto RejectWithNodes = [&](const FText& Reason)
+	{
+		for (ACastleDirectorNodeActor* Candidate : Candidates) { Candidate->Destroy(); }
+		return Reject(Reason);
+	};
+	UCastleBackpackComponent* Backpack = Board->PrototypeBackpack;
+	UCastleBackpackComponent::FPreparedSelfOrbitingRound OrbitingRound;
+	if (bSelfOrbitingRoundPending || bEliteClear)
+	{
+		if (!IsValid(Backpack)) { return RejectWithNodes(INVTEXT("棋盘缺少有效背包，无法结算自环绕炮塔。")); }
+		// 使用本局种子与已清场关号复现牌面；在奖励成功提交前重试不会改变本轮抽取。
+		const uint32 Seed = static_cast<uint32>(Config->RunSeed) ^ (static_cast<uint32>(RewardStage) * 0x27d4eb2du);
+		FRandomStream Random(static_cast<int32>(Seed));
+		if (!Backpack->TryPrepareSelfOrbitingRound(Board->BuildingDefinitions, Random, OrbitingRound, OutReason))
+		{
+			return RejectWithNodes(FText::Format(INVTEXT("背包 {0} 自环绕炮塔结算失败：{1}"),
+				FText::FromString(Backpack->GetPathName()), OutReason));
+		}
+	}
+	if (bEliteClear && !RecallBattleNPCs(OutReason)) { return RejectWithNodes(OutReason); }
+	const bool bSurfaceWasHidden = Board->IsPlacementSurfacePresentationHidden();
+	if (!Board->SetPlacementSurfacePresentationHidden(false, OutReason)) { return RejectWithNodes(OutReason); }
+	const auto RejectAfterShowingSurface = [&](FText Reason)
+	{
+		FText RestoreReason;
+		if (!Board->SetPlacementSurfacePresentationHidden(bSurfaceWasHidden, RestoreReason))
+		{
+			Reason = FText::Format(INVTEXT("{0} 建造面恢复失败。{1}"), Reason, RestoreReason);
+		}
+		return RejectWithNodes(Reason);
+	};
+	// 在最后一次余额核对后登记精英标签。这两步之间没有能改变余额或徽章的通知。
+	if (bGold && !Economy->CanAddGameplayGold(Config->RewardGold, OutReason)) { return RejectAfterShowingSurface(OutReason); }
+	if (bEliteClear)
+	{
+		const int32 EliteIndex = RewardStage / Config->EliteEveryNSteps;
+		const FName UnlockTag = EliteIndex == 1 ? FName(TEXT("Unlock.MiasmaWelp")) :
+			EliteIndex == 2 ? FName(TEXT("Unlock.LavaGoliath")) : NAME_None;
+		if (!UnlockTag.IsNone() && !Combat->UnlockEnemyTag(UnlockTag))
+		{
+			return RejectAfterShowingSurface(FText::Format(INVTEXT("无法解锁精英敌人标签 {0}。"), FText::FromName(UnlockTag)));
+		}
+	}
+	int32 GrantedGold = 0;
+	if (bGold && !Economy->TryAddGameplayGold(Config->RewardGold, OutReason, &GrantedGold))
+	{
+		return RejectAfterShowingSurface(OutReason);
+	}
+	if (bEliteClear)
+	{
+		ResetBattleControls(true);
+		ClearedSteps = RewardStage;
+		// 清场道具事件可能另行发金币，放在精英三项奖励的金币入账之后，避免预检后余额被抢占。
+		OnBattleClearedForItems.Broadcast(ECastleBattleKind::Elite, RewardStage);
+	}
+	// 资源和棋盘操作均已成功。更新主栏与溢出奖励后再发布本次返编辑事件。
+	bSelfOrbitingRoundPending = false;
+	if (!OrbitingRound.Rewards.IsEmpty())
+	{
+		Backpack->ApplyValidatedItemBatch(OrbitingRound.Rewards, &OrbitingRound.MainBarAfter, false);
+		UE_LOG(LogMoving_Castle, Display, TEXT("背包 %s 在第 %d 关返编辑时获得 %d 张自环绕炮塔奖励。"),
+			*Backpack->GetPathName(), ClearedSteps, OrbitingRound.Rewards.Num());
+	}
+	if (bHealing) { Tower->ApplyHealing(Tower->MaxHealth * Config->HealFraction); }
+	if (PreparedShop.IsValid()) { Shop->CommitRewardShop(*PreparedShop); }
+	Nodes = MoveTemp(Candidates);
+	// 三选一合模态时提示关闭，两类通关奖励只在事务成功后提示发放。
+	if (Phase == ECastleDirectorPhase::Reward) { UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::ClosePanel); }
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Reward);
+	SetPhase(ECastleDirectorPhase::Editing);
+	if (!OrbitingRound.Rewards.IsEmpty()) { Backpack->OnBackpackChanged.Broadcast(); }
+	for (ACastleDirectorNodeActor* Candidate : Nodes) { Candidate->ActivateNode(); }
+	StatusMessage = INVTEXT("飞向节点进入下一关");
+	UE_LOG(LogMoving_Castle, Display, TEXT("第 %d 关奖励已提交：实发金币 %d，主塔 %.2f/%.2f。"),
+		RewardStage, GrantedGold, Tower->CurrentHealth, Tower->MaxHealth);
+	return true;
+}
+
+int32 UCastleDirectorSubsystem::GetOwnedRoomCount() const
+{
+	int32 Cells = INDEX_NONE;
+	FText Reason;
+	if (!UCastleShopComponent::TryCountOwnedRoomCells(Board, Cells, Reason))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演配置 %s 无法读取房间总量：%s"), *GetPathNameSafe(Config), *Reason.ToString());
+	}
+	return Cells;
+}
+
+int32 UCastleDirectorSubsystem::GetCurrentRoomLimit() const
+{
+	if (!IsValid(Config) || !Config->TowerLevels.IsValidIndex(Level - 1) || Config->TowerLevels[Level - 1].RoomLimit < 1)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演配置 %s 缺少 Lv%d 的有效房间上限。"), *GetPathNameSafe(Config), Level);
+		return INDEX_NONE;
+	}
+	return Config->TowerLevels[Level - 1].RoomLimit;
+}
+
+bool UCastleDirectorSubsystem::TryCheckTowerUpgrade(FText& OutReason)
+{
+	OutReason = FText::GetEmpty();
+	// 只在无模态的编辑期尝试。离开这个状态后，可以在下一轮编辑期间重新尝试同一占格数。
+	if (!bRunning || Phase != ECastleDirectorPhase::Editing || bApplyingReward || !UpgradeRewards.IsEmpty() || WildcardPicker
+		|| (IsValid(Controller) && (Controller->IsModalInputActive() || Controller->GetBuildingDemolishMenu())))
+	{
+		FailedTowerUpgradeRoomCount.Reset();
+		return true;
+	}
+	int32 OwnedRooms = INDEX_NONE;
+	const bool bCountedRooms = UCastleShopComponent::TryCountOwnedRoomCells(Board, OwnedRooms, OutReason);
+	// 相同占格和阶段下重用已报告的失败；房间数变化后允许下一次尝试。
+	if (FailedTowerUpgradeRoomCount.IsSet() && FailedTowerUpgradeRoomCount.GetValue() == OwnedRooms)
+	{
+		OutReason = TowerUpgradeFailure;
+		return false;
+	}
+	FailedTowerUpgradeRoomCount.Reset();
+	const auto Reject = [this, &OutReason, OwnedRooms](const FText& Reason)
+	{
+		TowerUpgradeFailure = Reason;
+		OutReason = Reason;
+		FailedTowerUpgradeRoomCount = OwnedRooms;
+		ShowMessage(Reason, true);
+		UE_LOG(LogMoving_Castle, Error, TEXT("主塔升级失败，配置 %s，等级 %d，房间 %d 格：%s"),
+			*GetPathNameSafe(Config), Level, OwnedRooms, *Reason.ToString());
+		return false;
+	};
+	if (!bCountedRooms) { return Reject(OutReason); }
+	const int32 RoomLimit = GetCurrentRoomLimit();
+	if (RoomLimit == INDEX_NONE || Config->TowerLevels.Num() != 4)
+	{
+		return Reject(INVTEXT("缺少有效的四级成长表或本级房间上限。"));
+	}
+	if (Level == Config->TowerLevels.Num() || OwnedRooms < RoomLimit) { return true; }
+	if (!Config->ValidateTowerLevels(OutReason)) { return Reject(OutReason); }
+	if (!IsValid(Controller) || !IsValid(Controller->GetShop()) || !IsValid(Tower) || !Tower->IsAlive()
+		|| (!bAutomation && !IsValid(TowerUpgradeWidget)))
+	{
+		return Reject(FText::Format(INVTEXT("控制器、商店、存活主塔或升级面板 {0} 无效。"),
+			FText::FromString(GetPathNameSafe(Config->TowerUpgradeRewardWidgetClass.Get()))));
+	}
+	TGuardValue<bool> Guard(bApplyingReward, true);
+	const int32 PreviousLevel = Level;
+	int32 NewLevel = Level + 1;
+	while (NewLevel < Config->TowerLevels.Num() && OwnedRooms >= Config->TowerLevels[NewLevel - 1].RoomLimit)
+	{
+		++NewLevel;
+	}
+	const FCastleTowerLevelConfig Target = Config->TowerLevels[NewLevel - 1];
 	TArray<FCastleTowerUpgradeRewardEntry> PendingRows;
 	TArray<TStrongObjectPtr<UCastlePendingRoomReward>> PendingRooms;
-	// 跨级时逐级累积赠送，万能卡的数字使用最终已解锁范围。
-	for (int32 Tier = Level + 1; Tier <= NewLevel; ++Tier)
+	// 跨级时逐级累积奖励，所有万能卡均使用最终等级的商品数字范围。
+	for (int32 Tier = PreviousLevel + 1; Tier <= NewLevel; ++Tier)
 	{
-		const auto& Row = Config->TowerLevels[Tier - 1];
+		const FCastleTowerLevelConfig& Row = Config->TowerLevels[Tier - 1];
 		if (Row.PathPointReward > 0)
 		{
 			PendingRows.Add({ECastleTowerUpgradeReward::PathPoint, Row.PathPointReward});
@@ -803,62 +1149,23 @@ bool UCastleDirectorSubsystem::TryCommitRewards(const bool bExperience, const bo
 			PendingRooms.Emplace(Pending);
 		}
 	}
-	UCastleShopComponent* Shop = Controller->GetShop();
-	TStrongObjectPtr<UCastleShopComponent> PreparedShop;
-	if (bShop)
-	{
-		PreparedShop.Reset(NewObject<UCastleShopComponent>());
-		if (!Shop->PrepareRewardShop(Controller->GetEconomy(), Board, Target.MaxShopNumber, *PreparedShop, OutReason))
-		{
-			return Reject(OutReason);
-		}
-	}
-	TArray<TObjectPtr<ACastleDirectorNodeActor>> Candidates;
-	if (!PrepareNodes(GetNextStep(), Candidates, OutReason)) { return Reject(OutReason); }
-	const auto RejectWithNodes = [&](const FText& Reason)
-	{
-		for (ACastleDirectorNodeActor* Candidate : Candidates) { Candidate->Destroy(); }
-		return Reject(Reason);
-	};
-	if (!Board->SetPlacementSurfacePresentationHidden(false, OutReason)) { return RejectWithNodes(OutReason); }
-	// 气球表现预留完成后扩层，所有可能拒绝的资源操作必须发生在数值提交之前。
-	if (bLevelUp && (!Tower->PrepareTowerBalloonTier(Target.BalloonCount, Target.BaseMaxHealth, true, OutReason)
-		|| !Board->ExpandMainTowerLayers(Target.UnlockedLayers, OutReason)))
+	if (!Tower->PrepareTowerBalloonTier(Target.BalloonCount, Target.BaseMaxHealth, true, OutReason)
+		|| !Board->ExpandMainTowerLayers(Target.UnlockedLayers, OutReason))
 	{
 		Tower->DiscardPreparedBalloonTier();
-		const FText Failure = OutReason;
-		FText RestoreReason;
-		if (!Board->SetPlacementSurfacePresentationHidden(true, RestoreReason))
-		{
-			return RejectWithNodes(FText::Format(INVTEXT("{0} 建造面恢复失败。{1}"), Failure, RestoreReason));
-		}
-		return RejectWithNodes(Failure);
+		return Reject(OutReason);
 	}
+
+	// 扩层成功后只执行已验证的提交操作。生命事件的观察者能同时看到新等级、上限和待领列表。
 	Level = NewLevel;
-	Experience = NewExp;
-	if (bLevelUp)
-	{
-		// 成长配置和气球表现已经准备；提交时的同步通知读取新等级及新商品上限。
-		Shop->TrySetRoomLimit(Target.RoomLimit, OutReason);
-		Shop->TrySetOfferNumberRange(1, Target.MaxShopNumber, OutReason);
-		Tower->CommitPreparedBalloonTier(Target.BalloonCount, Target.BaseMaxHealth, true);
-	}
-	if (bHealing) { Tower->ApplyHealing(Tower->MaxHealth * Config->HealFraction); }
-	if (bExperience && Level == Config->TowerLevels.Num())
-	{
-		UE_LOG(LogMoving_Castle, Display, TEXT("主塔 Lv%d 已满级。"), Level);
-	}
+	Controller->GetShop()->CommitValidatedTowerGrowth(Target.RoomLimit, Target.MaxShopNumber);
 	UpgradeRewards = MoveTemp(PendingRows);
 	for (const auto& Pending : PendingRooms) { UpgradeRoomRewards.Add(Pending.Get()); }
+	Tower->CommitPreparedBalloonTier(Target.BalloonCount, Target.BaseMaxHealth, true);
 	if (TowerUpgradeWidget) { TowerUpgradeWidget->RefreshRewards(UpgradeRewards); }
-	bShopPermission = bShop;
-	if (PreparedShop.IsValid()) { Shop->CommitRewardShop(*PreparedShop); }
-	Nodes = MoveTemp(Candidates);
-	SetPhase(ECastleDirectorPhase::Editing);
-	for (ACastleDirectorNodeActor* Candidate : Nodes) { Candidate->ActivateNode(); }
-	StatusMessage = INVTEXT("飞向节点进入下一关");
-	UE_LOG(LogMoving_Castle, Display, TEXT("奖励已提交：Lv%d，经验 %d/%d，房间上限 %d，主塔 %.2f/%.2f。"),
-		Level, Experience, Config->ExpPerLevel, Shop->RoomLimit, Tower->CurrentHealth, Tower->MaxHealth);
+	UpdatePresentation();
+	UE_LOG(LogMoving_Castle, Display, TEXT("主塔升级：Lv%d → Lv%d，已拥有 %d 格，新房间上限 %d。"),
+		PreviousLevel, Level, OwnedRooms, Target.RoomLimit);
 	return true;
 }
 
@@ -952,6 +1259,7 @@ void UCastleDirectorSubsystem::HandleWildcardClosed(const bool bClaimed)
 void UCastleDirectorSubsystem::DiscardTowerUpgradeRewards()
 {
 	if (WildcardPicker || UpgradeRewards.IsEmpty()) { return; }
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::ClosePanel);
 	UE_LOG(LogMoving_Castle, Display, TEXT("主塔升级面板关闭，丢弃 %d 个未领取项。"), UpgradeRewards.Num());
 	UpgradeRewards.Reset();
 	UpgradeRoomRewards.Reset();
@@ -962,14 +1270,26 @@ void UCastleDirectorSubsystem::DiscardTowerUpgradeRewards()
 void UCastleDirectorSubsystem::SetPhase(const ECastleDirectorPhase NewPhase)
 {
 	// 观察者只在界面和输入已与新阶段同步后收到事件，不驱动第二套流程状态。
+	const bool bEnteredEditing = Phase != NewPhase && NewPhase == ECastleDirectorPhase::Editing;
 	if (NewPhase == ECastleDirectorPhase::Battle && Phase != NewPhase)
 	{
 		// 各场战斗独立触发，上一场伤害不会进入本场的射速计算。
 		bFirstTowerDamageInBattle = false;
 	}
 	Phase = NewPhase;
+	// 正式局沿同一条曲目复用编辑与领奖，空岛和战斗各切换独立音乐。
+	switch (Phase)
+	{
+	case ECastleDirectorPhase::Editing:
+	case ECastleDirectorPhase::Reward: UCastleAudioSubsystem::SetBGM(GetWorld(), ECastleBGMTrack::Build); break;
+	case ECastleDirectorPhase::Battle: UCastleAudioSubsystem::SetBGM(GetWorld(), ECastleBGMTrack::Battle); break;
+	case ECastleDirectorPhase::SkyIsland: UCastleAudioSubsystem::SetBGM(GetWorld(), ECastleBGMTrack::SkyIsland); break;
+	case ECastleDirectorPhase::GameOver: UCastleAudioSubsystem::SetBGM(GetWorld(), ECastleBGMTrack::None); break;
+	case ECastleDirectorPhase::Inactive: break;
+	}
 	UpdatePresentation();
 	OnDirectorPhaseChanged.Broadcast(Phase);
+	if (bEnteredEditing) { OnEditingPhaseEntered.Broadcast(); }
 }
 
 void UCastleDirectorSubsystem::HandleTowerHealthChanged(float PreviousHealth, float CurrentHealth, float Damage)
@@ -1009,6 +1329,7 @@ int32 UCastleDirectorSubsystem::GetCurrentMaxShopNumber() const
 void UCastleDirectorSubsystem::EnterGameOver(const FText& Failure)
 {
 	if (Phase == ECastleDirectorPhase::GameOver) { return; }
+	if (MenuRecorder) { MenuRecorder->Stop(); }
 	// 恢复 1x 全局时间缩放并清掉战斗暂停标志；游戏结束界面自身随后负责保持世界暂停。
 	ResetBattleControls(false);
 	GameOverFailure = Failure;
@@ -1024,10 +1345,9 @@ void UCastleDirectorSubsystem::EnterGameOver(const FText& Failure)
 	if (ActiveSkyIsland) { ActiveSkyIsland->Destroy(); ActiveSkyIsland = nullptr; }
 	bDepartureRequested = false;
 	Controller->GetShop()->CloseShop();
-	bShopPermission = false;
-	bShopPermissionBeforeIsland = false;
 	DestroyNodes();
 	SetPhase(ECastleDirectorPhase::GameOver);
+	if (IsValid(Tower) && !Tower->IsAlive()) { UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Defeat); }
 	if (!bAutomation && !Controller->SetPause(true))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("导演游戏结束：SetPause(true) 失败。"));
@@ -1046,7 +1366,6 @@ void UCastleDirectorSubsystem::RestartCurrentMap()
 		return;
 	}
 	ResetBattleControls(true);
-	bShopPermissionBeforeIsland = false;
 	UGameplayStatics::OpenLevel(GetWorld(), FName(*UGameplayStatics::GetCurrentLevelName(GetWorld(), true)));
 }
 
@@ -1183,9 +1502,9 @@ FText UCastleDirectorSubsystem::GetRewardLabel(const ECastleDirectorReward Rewar
 		UE_LOG(LogMoving_Castle, Error, TEXT("导演奖励标签读取失败：配置 %s 或主塔组件 %s 已失效。"), *GetPathNameSafe(Config), *GetPathNameSafe(Tower));
 		return FText::FromString(TEXT("奖励数据无效，详见错误日志。"));
 	}
-	if (Reward == ECastleDirectorReward::Experience)
+	if (Reward == ECastleDirectorReward::Gold)
 	{
-		return FText::FromString(FString::Printf(TEXT("经验 +%d（Lv%d %d/%d）"), Config->RewardExp, Level, Experience, Config->ExpPerLevel));
+		return FText::Format(INVTEXT("金币 +{0}"), Config->RewardGold);
 	}
 	if (Reward == ECastleDirectorReward::Healing)
 	{
@@ -1205,25 +1524,17 @@ FString UCastleDirectorSubsystem::GetHUDSummary() const
 			*GetPathNameSafe(Config), *GetPathNameSafe(Controller));
 		return TEXT("导演 HUD 数据无效，详见错误日志。");
 	}
-	if (!IsValid(Board) || !IsValid(Board->PrototypeBackpack))
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("导演 HUD 房间计数失败：棋盘 %s 或其背包失效。"), *GetPathNameSafe(Board));
-		return TEXT("导演 HUD 房间计数失败：棋盘或背包失效，详见日志。");
-	}
-	// 商店未打开时尚未绑定依赖；HUD 始终读取本局棋盘和背包的真实占用格数。
-	int32 OwnedRooms = Board->GetOccupiedRoomCellCount();
-	for (const FCastleBuildingDescriptor& Item : Board->PrototypeBackpack->GetItems())
-	{
-		OwnedRooms += ACastleBuildingBase::GetExpectedFootprintCellCount(Item.Level);
-	}
+	const int32 OwnedRooms = GetOwnedRoomCount();
+	const int32 RoomLimit = GetCurrentRoomLimit();
+	if (OwnedRooms == INDEX_NONE || RoomLimit == INDEX_NONE) { return TEXT("导演 HUD 房间统计失败，详见错误日志。"); }
 	const TCHAR* PhaseText = Phase == ECastleDirectorPhase::Editing ? TEXT("编辑中") : Phase == ECastleDirectorPhase::Battle
 		? TEXT("战斗中") : Phase == ECastleDirectorPhase::Reward ? TEXT("选择奖励")
 		: Phase == ECastleDirectorPhase::SkyIsland ? TEXT("空岛") : TEXT("游戏结束");
 	const int32 DisplayStep = Phase == ECastleDirectorPhase::Reward ? ClearedSteps : GetNextStep();
 	// 生命在独立的 WBP 行中与爱心图标对齐，不再混在摘要里。
-	FString Summary = FString::Printf(TEXT("%s · 第 %d 关 %s\n主塔 Lv%d · 经验 %d/%d · 房间 %d/%d"),
+	FString Summary = FString::Printf(TEXT("%s · 第 %d 关 %s\n主塔 Lv%d · 房间 %d/%d"),
 		PhaseText, DisplayStep, GetNodeKindForStep(*Config, DisplayStep) == ECastleDirectorNodeKind::Elite ? TEXT("精英") : TEXT("普通"),
-		Level, Experience, Config->ExpPerLevel, OwnedRooms, Controller->GetShop()->RoomLimit);
+		Level, OwnedRooms, RoomLimit);
 	if (Phase == ECastleDirectorPhase::Battle)
 	{
 		int32 Enemies = 0, PendingGroups = 0;
@@ -1248,11 +1559,11 @@ void UCastleDirectorSubsystem::UnbindCombatEvents()
 
 void UCastleDirectorSubsystem::OnWorldEndPlay(UWorld& InWorld)
 {
+	if (MenuRecorder) { MenuRecorder->Stop(); }
 	// 世界结束时 Mass 自己释放实体；不要在子系统析构顺序不确定时再次派发 Despawn。
 	ResetBattleControls(false);
 	UnbindCombatEvents();
 	PendingNode.Reset();
-	bShopPermissionBeforeIsland = false;
 	bRunning = false;
 	Super::OnWorldEndPlay(InWorld);
 }
@@ -1268,7 +1579,10 @@ void UCastleDirectorSubsystem::Deinitialize()
 	}
 	UnbindCombatEvents();
 	if (ActiveSkyIsland) { ActiveSkyIsland->Destroy(); ActiveSkyIsland = nullptr; }
-	bShopPermissionBeforeIsland = false;
+	// 场景结束时不再保留本局道具监听。
+	OnRunStarted.Clear();
+	OnEditingPhaseEntered.Clear();
+	OnBattleClearedForItems.Clear();
 	DestroyNodes();
 	for (UUserWidget* Widget : {HUDWidget.Get(), RewardWidget.Get(), GameOverWidget.Get(),
 		static_cast<UUserWidget*>(TowerUpgradeWidget.Get()), static_cast<UUserWidget*>(WildcardPicker.Get())})
@@ -1300,7 +1614,7 @@ bool UCastleDirectorSubsystem::SetPhaseForAutomation(const ECastleDirectorPhase 
 {
 	if (!bAutomation) { return false; }
 	if (NewPhase == ECastleDirectorPhase::Reward) { ++ClearedSteps; }
-	if (NewPhase == ECastleDirectorPhase::Battle) { bShopPermission = false; Controller->GetShop()->CloseShop(); DestroyNodes(); }
+	if (NewPhase == ECastleDirectorPhase::Battle) { Controller->GetShop()->CloseShop(); DestroyNodes(); }
 	if (NewPhase == ECastleDirectorPhase::GameOver) { EnterGameOver(FText::GetEmpty()); }
 	else { SetPhase(NewPhase); }
 	return true;

@@ -83,10 +83,12 @@ bool UCastleGambleSkyIslandDataAsset::Validate(FText& OutReason) const
 	}
 	for (const UCastleRoomGroupDataAsset* Group : RoomGroups)
 	{
-		if (!IsValid(Group) || Group->DisplayName.IsEmpty() || !StaticEnum<ECastleRoomGroupType>()->IsValidEnumValue(static_cast<int64>(Group->GroupType)))
+		// 房间组身份来自具名数据资产，发牌方式不再依赖房间组类别。
+		if (!IsValid(Group) || Group->DisplayName.IsEmpty())
 		{
-			return Reject(FText::Format(INVTEXT("房间组 {0} 缺失、没有名称或类型无效。"), FText::FromString(GetPathNameSafe(Group))));
+			return Reject(FText::Format(INVTEXT("房间组 {0} 缺失或没有名称。"), FText::FromString(GetPathNameSafe(Group))));
 		}
+		if (!Group->ValidateRarity(OutReason)) { return false; }
 	}
 	TSet<const UCastleBuildingDefinition*> SeenDefinitions;
 	for (const UCastleBuildingDefinition* Definition : RoomDefinitions)
@@ -102,7 +104,8 @@ bool UCastleGambleSkyIslandDataAsset::Validate(FText& OutReason) const
 	for (const UCastleBadgeDataAsset* Asset : Badges)
 	{
 		FText BadgeReason;
-		if (!IsValid(Asset) || !Asset->Badge.Validate(BadgeReason))
+		// 赌博与商店使用同一批徽章，奖品入槽需要同样完整的资源和交易配置。
+		if (!IsValid(Asset) || !Asset->ValidateReward(BadgeReason))
 		{
 			return Reject(FText::Format(INVTEXT("徽章 {0} 无效。{1}"), FText::FromString(GetPathNameSafe(Asset)), BadgeReason));
 		}

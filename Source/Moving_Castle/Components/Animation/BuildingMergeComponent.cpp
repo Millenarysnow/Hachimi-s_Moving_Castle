@@ -162,6 +162,8 @@ bool UBuildingMergeComponent::CreateVisual(FMergePart& Part, UStaticMeshComponen
 		Visual->SetMaterial(Index, Template->GetMaterial(Index));
 	}
 	Visual->SetCastShadow(Template->CastShadow);
+	// 合并和 PCG 局部动画的飞行件按目标模板的整套实例材质参数显示。
+	Visual->SetCustomPrimitiveDataFloatArray(0, Template->GetCustomPrimitiveData().Data);
 	Visual->SetReceivesDecals(Template->bReceivesDecals);
 	Visual->SetVisibility(false, false);
 	Visual->RegisterComponent();
@@ -220,7 +222,8 @@ bool UBuildingMergeComponent::BuildPlan(const TArray<FPartSnapshot>& Sources,
 			const bool bSamePose = FVector::Distance(StartCenter, Target.Center) <= KeepPositionTolerance
 				&& StartRotation.AngularDistance(Target.WorldTransform.GetRotation()) <= FMath::DegreesToRadians(0.2)
 				&& (Source->LocalSize * StartScale).Equals(Target.LocalSize * Target.WorldTransform.GetScale3D(), KeepPositionTolerance)
-				&& Source->ShapeIdentity == Target.ShapeIdentity && bSameMaterials;
+				&& Source->ShapeIdentity == Target.ShapeIdentity && bSameMaterials
+				&& Source->Mesh->GetCustomPrimitiveData().Data == Target.Mesh->GetCustomPrimitiveData().Data;
 			if (!Source->bIncoming && !Source->bPendingArrival && bSamePose)
 			{
 				Part.Motion = EPartMotion::Keep;
@@ -343,6 +346,8 @@ AActor* UBuildingMergeComponent::CreateVisualSnapshot(FString& Error) const
 		Copy->ComponentTags = Snapshot.Mesh->ComponentTags;
 		for (int32 Index = 0; Index < Snapshot.Mesh->GetNumMaterials(); ++Index) { Copy->SetMaterial(Index, Snapshot.Mesh->GetMaterial(Index)); }
 		Copy->SetCastShadow(Snapshot.Mesh->CastShadow);
+		// 旧 Actor 会在换代时销毁，快照要独立持有其颜色直到动画结束。
+		Copy->SetCustomPrimitiveDataFloatArray(0, Snapshot.Mesh->GetCustomPrimitiveData().Data);
 		Carrier->AddInstanceComponent(Copy);
 		Copy->RegisterComponent();
 		Copy->SetWorldTransform(Snapshot.WorldTransform);
@@ -360,6 +365,16 @@ AActor* UBuildingMergeComponent::CreateVisualSnapshot(FString& Error) const
 }
 
 bool UBuildingMergeComponent::StartChange(const TArray<AActor*>& Sources)
+{
+	return StartChangeInternal(Sources, true);
+}
+
+bool UBuildingMergeComponent::StartVisualChange(const TArray<AActor*>& Sources)
+{
+	return StartChangeInternal(Sources, false);
+}
+
+bool UBuildingMergeComponent::StartChangeInternal(const TArray<AActor*>& Sources, bool bObserveNavigation)
 {
 	ResetMerge();
 	LastError.Reset();
@@ -401,10 +416,13 @@ bool UBuildingMergeComponent::StartChange(const TArray<AActor*>& Sources)
 	const FVector Origin = bUseSharedChangeOrigin ? ChangeOrigin
 		: (IncomingSourceActor ? IncomingSourceActor->GetActorLocation() : Owner->GetActorLocation());
 	if (!BuildPlan(SourceParts, TargetParts, Origin, Error)) { return FailMerge(Error); }
-	// 新旧建筑在完整重组结束后才提交导航；不改变现有模型、碰撞或动画行为。
-	if (UCastleNavigationSubsystem* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>())
+	// 常规合并由导航观察到重组结束；PCG 的玩法几何已经由独立事务提交。
+	if (bObserveNavigation)
 	{
-		Navigation->ObserveMerge(this);
+		if (UCastleNavigationSubsystem* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>())
+		{
+			Navigation->ObserveMerge(this);
+		}
 	}
 
 	// 所有计划和副本就绪后才提交显隐。结果碰撞始终有效，不阻断相邻放置、回收或再次升级。

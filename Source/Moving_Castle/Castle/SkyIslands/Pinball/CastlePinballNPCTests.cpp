@@ -4,6 +4,7 @@
 #include "CastlePinballNPCSimulationComponent.h"
 #include "CastlePinballNPCSkyIsland.h"
 #include "CastlePinballNPCStatusWidget.h"
+#include "Castle/Automation/CastleTowerOverviewTestUtilities.h"
 #include "Castle/Components/CastleEconomyComponent.h"
 #include "Castle/Components/CastleMainTowerComponent.h"
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
@@ -11,6 +12,7 @@
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "CastleBoard.h"
 #include "CastlePlayerController.h"
+#include "Components/TextBlock.h"
 #include "Editor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -18,6 +20,9 @@
 #include "HAL/IConsoleManager.h"
 #include "InputKeyEventArgs.h"
 #include "Misc/AutomationTest.h"
+#include "Castle/Dialogue/CastleDialogueSubsystem.h"
+#include "Castle/Dialogue/CastleDialogueScriptDataAsset.h"
+#include "Engine/GameInstance.h"
 #include "Misc/PackageName.h"
 #include "PlayInEditorDataTypes.h"
 #include "Settings/LevelEditorPlaySettings.h"
@@ -43,12 +48,11 @@ namespace
 	bool PinballHasInteractionAim(ACastlePlayerController& Controller, const USceneComponent& Target)
 	{
 		// 离屏 PIE 的射线依赖相机缓存；等真实交互射线命中后才发送下一次按键。
-		FVector Start;
-		FRotator View;
-		Controller.GetPlayerViewPoint(Start, View);
+		FVector Start, Direction;
+		if (!Controller.TryGetAimWorldRay(Start, Direction)) { return false; }
 		FHitResult Hit;
 		const FCollisionQueryParams Query(SCENE_QUERY_STAT(PinballTestAim), false, Controller.GetPawn());
-		Controller.GetWorld()->LineTraceSingleByChannel(Hit, Start, Start + View.Vector() * 100000.0, ECC_Visibility, Query);
+		Controller.GetWorld()->LineTraceSingleByChannel(Hit, Start, Start + Direction * 100000.0, ECC_Visibility, Query);
 		return Hit.GetComponent() == &Target;
 	}
 
@@ -230,6 +234,8 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 		auto* Island = IslandIterator ? *IslandIterator : nullptr;
 		if (Stage == 0)
 		{
+			// 此用例瞄准离屏中心；锁定测试实例模式，避免鼠标光标位置影响射线。
+			Controller->SetControlMode(ECastleControlMode::Classic, false);
 			ReturnLocation = Controller->GetPawn()->GetActorLocation();
 			BeforeStep = Director->GetClearedSteps();
 			TestTrue(TEXT("控制台找到弹珠机验收命令"), IConsoleManager::Get().ProcessUserConsoleInput(
@@ -253,17 +259,19 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 			++Stage;
 			return false;
 		}
-		if (Stage == 2 || Stage == 4 || Stage == 7 || Stage == 10)
+		if (Stage == 2 || Stage == 5 || Stage == 8 || Stage == 11)
 		{
 			if (!TestNotNull(TEXT("当前步骤的弹珠机空岛"), Island)) { return true; }
 			const USceneComponent* Interactable = Island->Console.Get();
-			if (Stage == 4 || Stage == 10) { Interactable = Island->FindComponentByClass<UCastleSkyIslandDepartureComponent>(); }
+			if (Stage == 5 || Stage == 11) { Interactable = Island->FindComponentByClass<UCastleSkyIslandDepartureComponent>(); }
 			if (!TestNotNull(TEXT("当前步骤的交互组件"), Interactable)) { return true; }
-			if (Stage == 4 && !bAimedAtAcceptancePortal)
+			if (Stage == 5 && !bAimedAtAcceptancePortal)
 			{
 				// 退出瞄准后再设置传送门视角，给输入层和相机缓存各自完成更新的机会。
 				if (Island->StatusWidget && FPlatformTime::Seconds() - Started < 30.0) { return false; }
-				if (!TestFalse(TEXT("验收岛退出瞄准后移除状态面板"), Island->StatusWidget != nullptr)) { return true; }
+				if (!TestFalse(TEXT("设计模式 Tab 退出瞄准并移除状态面板"), Island->StatusWidget != nullptr)) { return true; }
+				// Tab 退出已在设计模式下完成，切回经典模式继续原有 E 离岛流程。
+				Controller->SetControlMode(ECastleControlMode::Classic, false);
 				PinballAimAt(*Controller, *Interactable);
 				bAimedAtAcceptancePortal = true;
 				return false;
@@ -281,12 +289,26 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 			{
 				return true;
 			}
-			// 用专用退出键移除瞄准层，传送门仍通过真实交互键验收。
+			// 在已由 E 进入瞄准态后切换设计模式，下一阶段验证 E 不能移除瞄准层。
+			Controller->SetControlMode(ECastleControlMode::Design, false);
+			PinballPressKey(*Controller, EKeys::E);
+			++Stage;
+			return false;
+		}
+		if (Stage == 4)
+		{
+			auto* Controls = Island && Island->StatusWidget
+				? Cast<UTextBlock>(Island->StatusWidget->GetWidgetFromName(TEXT("ControlsText"))) : nullptr;
+			TestTrue(TEXT("设计模式 E 不退出瞄准且提示仅保留 Tab / Esc"), Island && Island->StatusWidget && Controls
+				&& Controls->GetText().ToString().Contains(TEXT("鼠标左键 / 空格 投币"))
+				&& Controls->GetText().ToString().Contains(TEXT("Tab / Esc 退出"))
+				&& !Controls->GetText().ToString().Contains(TEXT("E / Tab")));
+			// 保持设计模式派发 Tab，下一阶段验证本模式确实释放瞄准层和状态面板。
 			PinballPressKey(*Controller, EKeys::Tab);
 			++Stage;
 			return false;
 		}
-		if (Stage == 5)
+		if (Stage == 6)
 		{
 			if (Island && FPlatformTime::Seconds() - Started < 30.0) { return false; }
 			if (!TestFalse(TEXT("命令离岛销毁验收岛"), IsValid(Island))) { return true; }
@@ -297,19 +319,25 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 			++Stage;
 			return false;
 		}
-		if (Stage == 6)
+		if (Stage == 7)
 		{
 			if (!Island && FPlatformTime::Seconds() - Started < 30.0) { return false; }
 			if (!TestNotNull(TEXT("真实导演生成 NPC 空岛"), Island)) { return true; }
 			TestEqual(TEXT("导演进入正式空岛阶段"), Director->GetPhase(), ECastleDirectorPhase::SkyIsland);
 			TestTrue(TEXT("正式导演传送玩家"), Controller->GetPawn()->GetActorLocation().Equals(
 				Island->GetPlayerArrivalTransform().GetLocation(), 5.0));
+			// 通过正式节点入岛会接到首访台词，读完后才尝试原有 E 键交互。
+			auto* Dialogue = World->GetGameInstance()->GetSubsystem<UCastleDialogueSubsystem>();
+			const auto* Script = Dialogue->GetCurrentScript();
+			if (!TestNotNull(TEXT("节点首次进入 NPC 岛播放剧本"), Script)) { return true; }
+			for (int32 Index = 0; Index < Script->Lines.Num(); ++Index) { Dialogue->AdvanceDialogueForAutomation(); }
+			if (!TestFalse(TEXT("首访剧本结束后恢复交互"), Dialogue->IsDialoguePlaying())) { return true; }
 			VisitedIsland = Island;
 			PinballAimAt(*Controller, *Island->Console);
 			++Stage;
 			return false;
 		}
-		if (Stage == 9)
+		if (Stage == 10)
 		{
 			TestFalse(TEXT("退出投币模式移除 HUD"), Island && Island->StatusWidget);
 			auto* Portal = Island ? Island->FindComponentByClass<UCastleSkyIslandDepartureComponent>() : nullptr;
@@ -318,7 +346,7 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 			++Stage;
 			return false;
 		}
-		if (Stage == 11)
+		if (Stage == 12)
 		{
 			if (VisitedIsland.IsValid() && FPlatformTime::Seconds() - Started < 30.0) { return false; }
 			TestFalse(TEXT("导演离岛后自动销毁空岛"), VisitedIsland.IsValid());
@@ -326,7 +354,11 @@ bool FCastlePinballIslandTest::RunTest(const FString&)
 			TestEqual(TEXT("导演离岛恢复编辑并提交一步"), Director->GetPhase(), ECastleDirectorPhase::Editing);
 			TestEqual(TEXT("导演离岛仅提交一步"), Director->GetClearedSteps(), BeforeStep + 1);
 			TestEqual(TEXT("离岛保留所有已招募的 NPC"), Director->GetRunNPCCount(), BeforeNPCCount);
-			TestTrue(TEXT("导演离岛返回入岛前位置"), Controller->GetPawn()->GetActorLocation().Equals(ReturnLocation, 5.0));
+			const TActorIterator<ACastleBoard> Board(World);
+			if (TestTrue(TEXT("正式导演返塔世界仍有主棋盘"), static_cast<bool>(Board)))
+			{
+				CastleTowerOverviewTests::Check(*this, **Board, *Controller);
+			}
 			TestTrue(TEXT("导演离岛恢复移动、观察并生成后续节点"),
 				!Controller->IsMoveInputIgnored() && !Controller->IsLookInputIgnored()
 				&& static_cast<bool>(TActorIterator<ACastleDirectorNodeActor>(World)));

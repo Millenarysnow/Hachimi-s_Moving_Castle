@@ -8,8 +8,9 @@
 
 class ACastleBoard;
 class UStaticMesh;
+class UStaticMeshComponent;
 
-/** 塔底两个门的占位标识、主塔一楼内部隐式导航地板和门内导航锚点。 */
+/** 塔底一体双门标识、主塔一楼内部隐式导航地板和门内导航锚点。 */
 UCLASS()
 class UCastleTowerDispatchDoors final : public UActorComponent
 {
@@ -23,7 +24,11 @@ public:
 	bool TryGetDoorWaypoints(FVector& OutExit, FVector& OutEntrance, FText& OutReason) const;
 
 private:
-	UPROPERTY() TObjectPtr<UStaticMesh> DoorMarkerMesh;
+	/** Cube 仍是两块隐式导航地板的原网格；门牌另用作者双面套件。 */
+	UPROPERTY() TObjectPtr<UStaticMesh> DoorFloorMesh;
+	UPROPERTY() TObjectPtr<UStaticMesh> DoorSignMesh;
+	UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> DoorSigns;
+	virtual void OnComponentDestroyed(bool bDestroyingHierarchy) override;
 	TWeakObjectPtr<UStaticMeshComponent> DoorFloors[2];
 	TWeakObjectPtr<const ACastleBoard> Board;
 };

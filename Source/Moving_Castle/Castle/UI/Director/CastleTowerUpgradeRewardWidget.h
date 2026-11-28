@@ -5,6 +5,7 @@
 #include "CastleTowerUpgradeRewardWidget.generated.h"
 
 class UButton;
+class UImage;
 class UPanelWidget;
 class UTextBlock;
 class UCastleDirectorSubsystem;
@@ -24,6 +25,10 @@ protected:
 	UPROPERTY(meta=(BindWidget)) TObjectPtr<UButton> ContinueButton;
 	UPROPERTY(meta=(BindWidget)) TObjectPtr<UButton> RewardButtonTemplate;
 	UPROPERTY(meta=(BindWidget)) TObjectPtr<UTextBlock> RewardTextTemplate;
+	/** 奖励行从 WBP 复制图标画刷，运行时只按实际奖励类型组装。 */
+	UPROPERTY(meta=(BindWidget)) TObjectPtr<UImage> PathRewardIcon;
+	UPROPERTY(meta=(BindWidget)) TObjectPtr<UImage> NPCRewardIcon;
+	UPROPERTY(meta=(BindWidget)) TObjectPtr<UImage> RoomRewardIcon;
 
 private:
 	TWeakObjectPtr<UCastleDirectorSubsystem> Director;

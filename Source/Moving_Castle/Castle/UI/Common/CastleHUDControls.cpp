@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleHUDControls.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Components/Button.h"
 #include "Components/Image.h"
@@ -209,6 +210,8 @@ void UCastleHUDIconButtonWidget::HandleClicked()
 	{
 		return;
 	}
+	// 共用图标按钮在动作派发前反馈，覆盖商店、出兵、图鉴和战斗控制等 HUD 入口。
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	OnButtonClicked.Broadcast();
 }
 

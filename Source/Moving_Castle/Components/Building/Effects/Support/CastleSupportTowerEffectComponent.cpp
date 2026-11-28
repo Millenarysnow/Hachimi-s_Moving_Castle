@@ -14,5 +14,5 @@ bool UCastleSupportTowerEffectComponent::ExecuteEffect(const FCastleBuildingTrig
 		UE_LOG(LogMoving_Castle, Error, TEXT("支援塔 %s 触发失败：建筑身份或世界支援子系统无效。"), *GetPathNameSafe(GetOwner()));
 		return false;
 	}
-	return Support->QueueLaunch(*Building);
+	return Support->QueueLaunch(*Building, Context.TriggerNumberBonus);
 }

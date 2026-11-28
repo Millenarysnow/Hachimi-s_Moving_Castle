@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
 #include "Animation/AnimSequenceTransformProviderData.h"
+#include "Castle/Automation/CastlePIEAutomation.h"
 #include "CastleMassFragments.h"
 #include "CastleMassSpawner.h"
 #include "CastleMassUnitSubsystem.h"
@@ -19,7 +20,7 @@
 
 namespace CastleMassTests
 {
-	/** 在独立 -game 示例关卡中验证真实自动调度、显示批次、动画轨道和销毁 Observer。 */
+	/** 在 Mass 示例关卡的 PIE 或独立游戏中验证真实调度、显示批次、动画轨道和销毁 Observer。 */
 	class FRuntimeRepresentationCommand : public IAutomationLatentCommand
 	{
 	public:
@@ -28,9 +29,18 @@ namespace CastleMassTests
 		{
 			if (Stage == 0)
 			{
-				for (const FWorldContext& Context : GEngine->GetWorldContexts())
+				// Editor 用例等待本次 PIE 创建游戏世界，独立游戏继续使用已运行的示例关卡。
+				if (GIsEditor)
 				{
-					if (Context.WorldType == EWorldType::Game) { World = Context.World(); break; }
+					World = GEditor->PlayWorld;
+					if (!World && FPlatformTime::Seconds() < PIEStartupDeadline) { return false; }
+				}
+				else
+				{
+					for (const FWorldContext& Context : GEngine->GetWorldContexts())
+					{
+						if (Context.WorldType == EWorldType::Game) { World = Context.World(); break; }
+					}
 				}
 				if (!Test->TestTrue(TEXT("在 Mass 示例游戏世界中运行"), World && World->GetMapName().EndsWith(TEXT("L_MassUnitsDemo")))) { return true; }
 				UCastleMassUnitSubsystem* Units = World->GetSubsystem<UCastleMassUnitSubsystem>();
@@ -78,6 +88,8 @@ namespace CastleMassTests
 				{
 					if (It->GetWorld() != World || It->GetInstanceCount() == 0) { continue; }
 					++Components;
+					// 正式 NPC 与敌人使用不同网格，每种角色仍应在一个批次中绘制。
+					Test->TestEqual(TEXT("单角色的 256 个实例合并为一个骨骼组件"), It->GetInstanceCount(), 256);
 					Instances += It->GetInstanceCount();
 					Test->TestNotNull(TEXT("骨骼批次已创建渲染代理"), It->GetSceneProxy());
 					auto* Provider = Cast<UAnimSequenceTransformProviderDataInstance>(It->GetTransformProvider());
@@ -92,7 +104,7 @@ namespace CastleMassTests
 						if (!SampleProvider) { SampleProvider = Provider; SampleTrack = Track; Position = Provider->GetPosition(Track, 0).TargetPosition; }
 					}
 				}
-				Test->TestEqual(TEXT("512 实体合并为一个骨骼实例组件"), Components, 1);
+				Test->TestEqual(TEXT("新正式 NPC 与原敌人各占一个骨骼实例组件"), Components, 2);
 				Test->TestEqual(TEXT("渲染批次包含全部人形"), Instances, 512);
 				Test->TestEqual(TEXT("独立待机轨道数"), IdleTracks, 256);
 				Test->TestEqual(TEXT("独立行走轨道数"), MovingTracks, 256);
@@ -128,17 +140,24 @@ namespace CastleMassTests
 		UAnimSequenceTransformProviderDataInstance* SampleProvider = nullptr;
 		int32 SampleTrack = INDEX_NONE;
 		int32 Stage = 0;
+		double PIEStartupDeadline = FPlatformTime::Seconds() + 45.0;
 		float Position = 0.0f;
 		double NextCheck = 0.0;
 	};
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleMassRuntimeRepresentationTest, "MovingCastle.MassDemo.RuntimeRepresentation",
-	EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 
 bool FCastleMassRuntimeRepresentationTest::RunTest(const FString& Parameters)
 {
+	// 受管 Editor 从磁盘载入独立游戏原先使用的同一张 Mass 演示地图。
+	if (GIsEditor && !CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Mass/L_MassUnitsDemo"))) { return false; }
 	ADD_LATENT_AUTOMATION_COMMAND(CastleMassTests::FRuntimeRepresentationCommand(this));
+	if (GIsEditor)
+	{
+		FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
+	}
 	return true;
 }
 

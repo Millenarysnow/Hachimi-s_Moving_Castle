@@ -10,10 +10,25 @@
 #include "CastleTowerDispatchConfigDataAsset.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
+#include "Interaction/CastlePatrolRoute.h"
+#include "Items/CastleBadgeRuntimeSubsystem.h"
 #include "Mass/CastleMassPatrolFragments.h"
 #include "MassEntityConfigAsset.h"
 #include "MassEntitySubsystem.h"
 #include "Moving_Castle.h"
+
+namespace
+{
+	bool UsesTutorialDispatchRoute(UWorld* World)
+	{
+		for (TActorIterator<ACastlePatrolRoute> It(World); It; ++It)
+		{
+			if (It->IsTutorialRoute()) { return true; }
+		}
+		return false;
+	}
+}
 
 bool UCastleTowerDispatchSubsystem::Reject(FText& OutReason, const FString& Detail, const bool bConfigurationError) const
 {
@@ -44,7 +59,7 @@ bool UCastleTowerDispatchSubsystem::Configure(UCastleTowerDispatchConfigDataAsse
 bool UCastleTowerDispatchSubsystem::StartBattleDispatchSession(UMassEntityConfigAsset* NPCConfig, const int32 InitialPoolCount, FText& OutReason)
 {
 	OutReason = FText::GetEmpty();
-	if (bSessionActive || !ActiveNPCs.IsEmpty() || !IsValid(Config) || !IsValid(NPCConfig)
+	if (bSessionActive || !ActiveNPCs.IsEmpty() || !TemporaryNPCs.IsEmpty() || !IsValid(Config) || !IsValid(NPCConfig)
 		|| !NPCConfig->FindTrait(UCastleMassNPCTrait::StaticClass()) || InitialPoolCount < 1)
 	{
 		return Reject(OutReason, FString::Printf(TEXT("无法开始会话：旧会话须已清理，且需要有效出兵配置、NPC 模板 %s 和正数待命池。"),
@@ -60,6 +75,7 @@ bool UCastleTowerDispatchSubsystem::StartBattleDispatchSession(UMassEntityConfig
 	ReserveCount = SessionTotalNPCs = InitialPoolCount;
 	bSessionActive = true;
 	bAutoDispatchEnabled = false;
+	bRequiresFirstManualDispatch = UsesTutorialDispatchRoute(GetWorld());
 	AutoDispatchElapsed = 0.0;
 	StopManualDispatch();
 	UE_LOG(LogMoving_Castle, Display, TEXT("主塔战斗出兵会话已开始，待命 %d 名 NPC。"), ReserveCount);
@@ -72,7 +88,7 @@ bool UCastleTowerDispatchSubsystem::EndBattleDispatchSession(FText& OutReason)
 	if (!bSessionActive) { return Reject(OutReason, TEXT("当前没有主塔出兵会话。"), false); }
 	const auto* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
 	// 正式导演可在后续关卡复用已提交开环，单独的出兵演示结束后恢复闭环。
-	if (!bEndingSession && !(Director && Director->IsRunning()))
+	if (!bEndingSession && !(Director && Director->IsRunning()) && !UsesTutorialDispatchRoute(GetWorld()))
 	{
 		auto* Navigation = GetWorld()->GetSubsystem<UCastleNavigationSubsystem>();
 		if (!Navigation) { return Reject(OutReason, TEXT("当前世界缺少巡逻导航子系统，无法恢复普通巡逻。"), true); }
@@ -98,11 +114,21 @@ bool UCastleTowerDispatchSubsystem::EndBattleDispatch()
 	return EndBattleDispatchSession(Reason);
 }
 
+bool UCastleTowerDispatchSubsystem::TryDispatchTemporarySingleLapNPC(FText& OutReason)
+{
+	return DispatchNPC(true, OutReason);
+}
+
 bool UCastleTowerDispatchSubsystem::TryDispatchSingleNPC(FText& OutReason)
+{
+	return DispatchNPC(false, OutReason);
+}
+
+bool UCastleTowerDispatchSubsystem::DispatchNPC(const bool bTemporaryOneLap, FText& OutReason)
 {
 	OutReason = FText::GetEmpty();
 	if (!bSessionActive || bEndingSession) { return Reject(OutReason, TEXT("当前没有进行中的主塔战斗出兵会话。"), false); }
-	if (ReserveCount == 0) { return Reject(OutReason, TEXT("主塔待命池已空。"), false); }
+	if (!bTemporaryOneLap && ReserveCount == 0) { return Reject(OutReason, TEXT("主塔待命池已空。"), false); }
 	const auto* Towers = GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>();
 	const auto* Tower = Towers ? Towers->GetRegisteredMainTower() : nullptr;
 	if (!Tower || !Tower->IsAlive())
@@ -134,17 +160,32 @@ bool UCastleTowerDispatchSubsystem::TryDispatchSingleNPC(FText& OutReason)
 	auto& Patrol = Mass->GetMutableEntityManager().GetFragmentDataChecked<FCastleMassPatrolFragment>(Spawned[0].Entity);
 	Patrol.bEnabled = true;
 	Patrol.bTowerDispatched = true;
+	Patrol.bTemporaryOneLap = bTemporaryOneLap;
 	Patrol.PathRevision = Path->PathRevision;
 	Patrol.RouteRevision = Path->RouteRevision;
+	if (bTemporaryOneLap)
+	{
+		TemporaryNPCs.Add({Spawned[0]});
+		UE_LOG(LogMoving_Castle, Display, TEXT("一圈调岗令：门 A 派出临时 NPC %d，抵达门 B 后销毁。"), Spawned[0].Entity.Index);
+		return true;
+	}
 	ActiveNPCs.Add({Spawned[0]});
 	--ReserveCount;
+	// 在成功提交实体后解除门控，让同一派出事件可以开启后续循环。
+	if (bStartingManualDispatch) { bRequiresFirstManualDispatch = false; }
 	check(ReserveCount + ActiveNPCs.Num() == SessionTotalNPCs);
 	UE_LOG(LogMoving_Castle, Display, TEXT("主塔门 A 派出 1 名 NPC，待命 %d，在场 %d。"), ReserveCount, ActiveNPCs.Num());
+	OnNPCDispatched.Broadcast(Spawned[0]);
 	return true;
 }
 
 bool UCastleTowerDispatchSubsystem::SetAutoDispatchEnabled(const bool bEnabled)
 {
+	if (bEnabled && bRequiresFirstManualDispatch)
+	{
+		ShowMessage(INVTEXT("请先点击主塔，手动派出城主。"), false);
+		return false;
+	}
 	if (!bSessionActive || bEndingSession)
 	{
 		FText Reason;
@@ -181,6 +222,7 @@ void UCastleTowerDispatchSubsystem::GetDispatchCounts(int32& OutReserveCount, in
 bool UCastleTowerDispatchSubsystem::BeginManualDispatch(FText& OutReason)
 {
 	StopManualDispatch();
+	const TGuardValue<bool> ManualRequest(bStartingManualDispatch, true);
 	bManualDispatchHeld = TryDispatchSingleNPC(OutReason);
 	return bManualDispatchHeld;
 }
@@ -197,29 +239,41 @@ void UCastleTowerDispatchSubsystem::ReclaimFinishedNPCs()
 	auto* Units = GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>();
 	if (!Mass || !Units || Mass->GetMutableEntityManager().IsProcessing()) { return; }
 	auto& Manager = Mass->GetMutableEntityManager();
-	for (int32 Index = ActiveNPCs.Num() - 1; Index >= 0; --Index)
+	const auto Reclaim = [&](TArray<FActiveNPC>& NPCs, const bool bTemporary)
 	{
-		FActiveNPC& NPC = ActiveNPCs[Index];
-		if (!Manager.IsEntityActive(NPC.Handle.Entity))
+		for (int32 Index = NPCs.Num() - 1; Index >= 0; --Index)
 		{
-			// 只有实际销毁后才增加待命，从而保证生成、到门和回池时的数量守恒。
-			ActiveNPCs.RemoveAtSwap(Index);
-			++ReserveCount;
-			UE_LOG(LogMoving_Castle, Display, TEXT("主塔回收 1 名 NPC，待命 %d，在场 %d。"), ReserveCount, ActiveNPCs.Num());
-			continue;
-		}
-		const auto& Patrol = Manager.GetFragmentDataChecked<FCastleMassPatrolFragment>(NPC.Handle.Entity);
-		if (!NPC.bDespawnRequested && (bEndingSession || Patrol.bReachedDispatchEntrance))
-		{
-			NPC.bDespawnRequested = Units->DespawnUnits({NPC.Handle});
-			if (!NPC.bDespawnRequested)
+			FActiveNPC& NPC = NPCs[Index];
+			if (!Manager.IsEntityActive(NPC.Handle.Entity))
 			{
-				UE_LOG(LogMoving_Castle, Error, TEXT("主塔 NPC %d 的 Mass 销毁提交失败。"), NPC.Handle.Entity.Index);
+				NPCs.RemoveAtSwap(Index);
+				if (bTemporary)
+				{
+					UE_LOG(LogMoving_Castle, Display, TEXT("一圈调岗令：临时 NPC 已销毁。"));
+				}
+				else
+				{
+					// 只有实际销毁的正式兵才返还待命，活跃计数与池保持守恒。
+					++ReserveCount;
+					UE_LOG(LogMoving_Castle, Display, TEXT("主塔回收 1 名 NPC，待命 %d，在场 %d。"), ReserveCount, ActiveNPCs.Num());
+				}
+				continue;
+			}
+			const auto& Patrol = Manager.GetFragmentDataChecked<FCastleMassPatrolFragment>(NPC.Handle.Entity);
+			if (!NPC.bDespawnRequested && (bEndingSession || Patrol.bReachedDispatchEntrance))
+			{
+				NPC.bDespawnRequested = Units->DespawnUnits({NPC.Handle});
+				if (!NPC.bDespawnRequested)
+				{
+					UE_LOG(LogMoving_Castle, Error, TEXT("主塔 NPC %d 的 Mass 销毁提交失败。"), NPC.Handle.Entity.Index);
+				}
 			}
 		}
-	}
+	};
+	Reclaim(ActiveNPCs, false);
+	Reclaim(TemporaryNPCs, true);
 	check(ReserveCount + ActiveNPCs.Num() == SessionTotalNPCs);
-	if (bEndingSession && ActiveNPCs.IsEmpty())
+	if (bEndingSession && ActiveNPCs.IsEmpty() && TemporaryNPCs.IsEmpty())
 	{
 		ReserveCount = SessionTotalNPCs = 0;
 		SessionNPCConfig = nullptr;
@@ -232,6 +286,13 @@ void UCastleTowerDispatchSubsystem::Tick(const float DeltaSeconds)
 {
 	ReclaimFinishedNPCs();
 	if (!bSessionActive || bEndingSession) { return; }
+	auto* Runtime = GetWorld()->GetSubsystem<UCastleBadgeRuntimeSubsystem>();
+	if (!Runtime)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("主塔出兵资产 %s 缺少本局徽章子系统。"), *GetPathNameSafe(Config.Get()));
+		return;
+	}
+	if (!Runtime->TryDispatchEarnedTemporaryNPCs(*this)) { return; }
 	// 一个实际周期只产生一次请求；非法路线的自动重试仍受配置频率限制。
 	if (bAutoDispatchEnabled && ReserveCount > 0)
 	{

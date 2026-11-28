@@ -6,7 +6,7 @@
 
 **目标是将主游戏 HUD 统一收敛为与美术三张草图一致的极简 WBP 架构，并保持 C++ 单一状态源。** 建造页面、路径编辑界面（按 `P` 进入）与战斗界面共享顶部常驻主塔血条和左下通用按钮，底部居中与右下动作栏随真实游戏状态即时切换。
 
-**非目标包括不改动默认隐藏鼠标的中心准星输入模式，不导入草图未使用的图标，也不在蓝图图表中编写任何业务逻辑。** 攻略、设置、主菜单、建造撤回/重做与路径重做的后端玩法逻辑均不在本期范围内，仅完成对应 WBP 表现与禁用/按压切图。
+**非目标包括不导入草图未使用的冗余图标，也不在蓝图图表中编写任何业务逻辑。** 主菜单、建造撤回/重做与路径重做的后端玩法逻辑不在本 HUD 文档范围内；左下角攻略（`?`）与设置（齿轮）按钮的业务面板分别见 [对话与新手教程](技术文档-对话与新手教程.md) 与 [操作模式与建筑拆除菜单](技术文档-操作模式与建筑拆除菜单.md)。
 
 ## 核心方案
 
@@ -14,6 +14,7 @@
 
 ## 结构与依赖边界
 
+- **堡垒主题用于独立弹窗。** `CastleFortressUIPublisher` 在编辑器离线生成设置、三套领奖、结算及其他模态资产。共用的 UI 切图存放于 `UI/FortressKit`，保留源图透明留边。固定画布使用等比布局，可变长底框采用九宫格，避免边角变形。玩法层读取 WBP 绑定和按钮状态，导演继续管理领奖及结算时机。
 - **公共控件基类位于 `Source/Moving_Castle/Castle/UI/Common/CastleHUDControls.h/.cpp`，对应资产位于 `Content/MovingCastle/UI/Common/`。** `UCastleIconBarSlotWidget` 与 `UCastleIconBarWidget` 承载 20 格离散图标进度条（`WBP_HeartBar`、`WBP_SkullBar`）；`UCastleHUDIconButtonWidget` 承载标准按压、含灰态禁用和双态切换三类按钮（`WBP_Btn_*`）。
 - **主界面逻辑位于 `UCastleDirectorHUDWidget`（`WBP_DirectorHUD`），只读导演、战斗、主塔与巡逻入口状态。** `WBP_BuildBar`（`UCastleBuildBarWidget`）和 `WBP_EconomyHUD`（`UCastleEconomyHUDWidget`）仍由 `ACastleHUD` 独立挂载，前者订阅同一导演与路径编辑状态控制自身显隐。
 - **红线：缺失必需 `BindWidget` 或贴图资源/绘制尺寸为零时，必须报错并拒绝启动或挂载。** 禁止在 C++ 中动态拼树、回退默认笔刷或静默跳过缺失槽位，否则美术资源损坏会被伪装成正常界面运行。
@@ -45,16 +46,16 @@
 
 **`WBP_DirectorHUD` 在游玩阶段使用 `SelfHitTestInvisible`，在奖励与游戏结束模态阶段切为 `HitTestInvisible`。** 如果根节点使用 `HitTestInvisible`，鼠标可见时将无法点击任何 HUD 按钮；使用 `SelfHitTestInvisible` 则既不拦截中心准星的空白区域点击，又能在鼠标出现时响应按钮事件。
 
-**键盘快捷键与 UI 按钮共用同一业务入口，且不改变隐藏鼠标的准星模式。** 建造商店沿用 `B`，路径撤回/清空沿用 `Backspace` / `Delete`（`ACastlePatrolRoute::UndoDraftPoint` / `ClearPatrolRoute`）；战斗期新增 `T`（暂停/继续）、`F`（1x/2x 倍速）和 `R`（战斗重试），均在 `ACastlePlayerController` 上开启 `bExecuteWhenPaused = true`，确保战斗暂停期间仍可按 `T` 恢复或操作。
+**键盘快捷键与 UI 按钮共用同一业务入口，光标模式由控制器的操作模式统一仲裁。** 正式 MainMap 的普通商店从单局开始即解锁，在主塔编辑阶段可通过 HUD 按钮或 `B` 随时开关；导演仍会在战斗、领奖、空岛及结束阶段拒绝打开。路径撤回/清空沿用 `Backspace` / `Delete`（`ACastlePatrolRoute::UndoDraftPoint` / `ClearPatrolRoute`）；战斗期 `T`（暂停/继续）、`F`（1x/2x 倍速）和 `R`（战斗重试）均在 `ACastlePlayerController` 上开启 `bExecuteWhenPaused = true`，确保战斗暂停期间仍可按键恢复或操作。
 
 ## 被否决的方案
 
 - **按真实生命值或敌人数 1:1 动态生成图标。** 主塔最大生命当前为 1000、单场敌人可达数十只且含分裂子体，1:1 排布会撑爆屏幕并带来频繁的控件树重建，因此固定 20 格比例展示。
 - **保留左上角导演多行摘要和金币栏快捷键文字。** 与美术三张极简草图冲突，且长提示条在 1280×720 下会直接压住顶部居中 20 心血条。
-- **在战斗暂停时强制弹出鼠标或改写 `RefreshModalInput`。** 本期明确维持原有隐藏鼠标的中心准星体验，不把战斗暂停与奖励/结算模态混为一谈。
+- **在战斗暂停时强制改写 `RefreshModalInput`。** 战斗暂停保持当前操作模式的常态鼠标体验，不与奖励/结算模态混为一谈。
 
 ## 未实现的部分与扩展准入
 
-**未实现的按钮后端包括：左下角查看攻略、设置、主菜单，建造页面撤回与重做，以及路径编辑重做。** 这些按钮目前仅完成 WBP 切图与按压/禁用态表现，点击只输出日志提示。
+**未实现的按钮后端包括：左下角主菜单、建造页面撤回与重做，以及路径编辑重做。** 这些按钮目前仅完成 WBP 切图与按压/禁用态表现，点击只输出日志提示；攻略（`?`）与设置（齿轮）已分别接入图文百科与操作模式切换面板。
 
 **后续接入撤回/重做或菜单系统的准入条件：** 业务栈与页面状态必须建立在独立 C++ 子系统或控制器组件中，禁止把历史栈或弹窗状态写进 `WBP_DirectorHUD` 蓝图图表；重做按钮在对应历史栈非空时才调用 `SetActionEnabled(true)`，清空后必须切回禁用态以保持 `T_UI_Redo_Disabled` 视觉语义准确。

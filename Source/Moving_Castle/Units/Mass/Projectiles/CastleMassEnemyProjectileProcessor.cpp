@@ -90,7 +90,14 @@ void UCastleMassEnemyProjectileProcessor::Execute(FMassEntityManager& EntityMana
 			else if (Launch.TargetTower.IsValid() && Launch.TargetTower->IsAlive()
 				&& Main->GetRegisteredMainTower() == Launch.TargetTower.Get())
 			{
-				TargetLocation = Launch.TargetTower->GetTargetLocation();
+				if (!Launch.bHasTargetLocation || Launch.TargetLocation.ContainsNaN())
+				{
+					UE_LOG(LogMoving_Castle, Error, TEXT("敌方追踪弹 %d 的主塔表面命中点无效，拒绝改用塔心目标。"), Chunk.GetEntity(It).Index);
+					Units[It].Health = 0.0f;
+					Velocities[It].Value = FVector::ZeroVector;
+					continue;
+				}
+				TargetLocation = Launch.TargetLocation;
 			}
 			else
 			{
@@ -122,7 +129,7 @@ void UCastleMassEnemyProjectileProcessor::Execute(FMassEntityManager& EntityMana
 				int64 Remaining = 0;
 				const bool bApplied = Launch.BalloonId != 0 ? Support->DamageBalloon(Launch.BalloonId, Projectile.Damage)
 					: (Launch.ShieldId != 0 ? Shields->ApplyAttackToShield(Launch.ShieldId, Launch.Attacker, Remaining)
-						: Main->ApplyMainTowerDamage(Projectile.Damage));
+						: Main->ApplyEnemyMainTowerDamage(Projectile.Damage));
 				if (!bApplied)
 				{
 					UE_LOG(LogMoving_Castle, Error, TEXT("敌方追踪弹 %d 命中结算失败，气球 %llu，护盾 %llu，主塔 %s。"),

@@ -11,19 +11,31 @@ class UCastleBuildingDefinition;
 /**
  * 地面和房间共用的颜色枚举。
  *
- * 灰色仅保留为旧资产颜色序号的占位，不参与地面、卡牌或商店生成。
- * 普通房间与功能建筑统一使用红、蓝、绿、黄、紫及 1～9 数字。
+ * 普通房间、功能建筑和可放置格统一使用红、黄、蓝、绿及 1～9 数字。
+ * 枚举显式保留既有资产的序号。灰色仅表示未初始化，在编辑器选单中隐藏。
  */
 UENUM(BlueprintType)
 enum class ECastleTileColor : uint8
 {
-	Gray UMETA(DisplayName = "灰色"),
-	Red UMETA(DisplayName = "红色"),
-	Blue UMETA(DisplayName = "蓝色"),
-	Green UMETA(DisplayName = "绿色"),
-	Yellow UMETA(DisplayName = "黄色"),
-	Purple UMETA(DisplayName = "紫色")
+	Gray = 0 UMETA(Hidden),
+	Red = 1 UMETA(DisplayName = "红色"),
+	Blue = 2 UMETA(DisplayName = "蓝色"),
+	Green = 3 UMETA(DisplayName = "绿色"),
+	Yellow = 4 UMETA(DisplayName = "黄色")
 };
+
+namespace CastleTileColors
+{
+	/** 随机发牌、初始建造面和工坊选项使用同一份玩法色集合，顺序独立于资产序号。 */
+	MOVING_CASTLE_API TConstArrayView<ECastleTileColor> GetPlayable();
+
+	/** 校验房间与格子的颜色，拒绝未初始化值和已移除的颜色序号。 */
+	MOVING_CASTLE_API bool IsPlayable(ECastleTileColor Color);
+
+	/** 地面和塔身格共用材质色值。 */
+	MOVING_CASTLE_API bool TryGetGridTint(ECastleTileColor Color, FLinearColor& OutTint);
+}
+
 /**
  * 当前阶段实现的建筑类别。
  *
@@ -39,8 +51,29 @@ enum class ECastleBuildingType : uint8
 	Farm UMETA(DisplayName = "农田"),
 	ShieldTower UMETA(DisplayName = "盾塔"),
 	BeeHive UMETA(DisplayName = "蜂巢塔"),
-	BalloonTower UMETA(DisplayName = "气球空投塔"),
-	SpeedRoom UMETA(DisplayName = "加速房间")
+	BalloonTower UMETA(DisplayName = "气球空投塔")
+};
+
+/** 房间组和徽章共用的商品稀有度；未配置不属于正式五档。 */
+UENUM(BlueprintType)
+enum class ECastleItemRarity : uint8
+{
+	None = 0 UMETA(DisplayName = "未配置"),
+	Common UMETA(DisplayName = "普通"),
+	Uncommon UMETA(DisplayName = "优秀"),
+	Rare UMETA(DisplayName = "稀有"),
+	Epic UMETA(DisplayName = "史诗"),
+	Legendary UMETA(DisplayName = "传说")
+};
+
+/** 在原建筑定义上附加的特质；同一建筑卡在背包、棋盘和拆回时共用这份身份。 */
+UENUM(BlueprintType)
+enum class ECastleRoomTrait : uint8
+{
+	None = 0 UMETA(DisplayName = "无"),
+	Highway UMETA(DisplayName = "高速公路"),
+	SkyIslandPortal UMETA(DisplayName = "传送门房间"),
+	SelfOrbiting UMETA(DisplayName = "自环绕炮塔")
 };
 
 /**
@@ -105,11 +138,11 @@ struct MOVING_CASTLE_API FCastleGridCursorTarget
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")
 	ECastleGridCursorSurface Surface = ECastleGridCursorSurface::Building;
 
-	/** 指示平面在世界中的法线方向。 */
+	/** 当前命中建造面的世界法线方向，供全息盒标出来源贴面。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")
 	FVector WorldNormal = FVector::UpVector;
 
-	/** 指示平面的完整世界变换，包含位置、朝向和尺寸。 */
+	/** 目标单格全息盒的完整世界变换，包含格心、朝向和三维尺寸。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "网格指针")
 	FTransform IndicatorTransform = FTransform::Identity;
 
@@ -218,7 +251,7 @@ struct MOVING_CASTLE_API FCastleBuildingDescriptor
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑")
 	TObjectPtr<UCastleBuildingDefinition> Definition;
 
-	/** 建筑颜色。所有类别均要求五色之一，灰色只表示未初始化。 */
+	/** 建筑颜色。所有类别均要求使用红、黄、蓝、绿之一，灰色只表示未初始化。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑")
 	ECastleTileColor Color = ECastleTileColor::Gray;
 
@@ -229,6 +262,14 @@ struct MOVING_CASTLE_API FCastleBuildingDescriptor
 	/** 当前卡牌等级。普通房间固定为 1，升级读取同一资产的下一级配置。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑")
 	int32 Level = 1;
+
+	/** 配置在原房间或炮塔定义上的特质，普通牌使用 None。 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑|特质")
+	ECastleRoomTrait RoomTrait = ECastleRoomTrait::None;
+
+	/** 仅自环绕炮塔在主栏结算时消耗此计数；无计数的特质存 0。 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "建筑|特质")
+	int32 TraitRemainingRounds = 0;
 
 	/** 判断资产和对应等级是否存在，供空槽位和卡片显示快速查询。 */
 	bool HasDefinition() const;

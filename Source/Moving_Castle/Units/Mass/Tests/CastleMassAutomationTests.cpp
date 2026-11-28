@@ -65,7 +65,8 @@ bool FCastleMassBatchMovementTest::RunTest(const FString& Parameters)
 	Trait->Movement.Acceleration = 0.0f;
 	Trait->Movement.AcceptanceRadius = 0.0f;
 	TArray<FTransform> Transforms;
-	for (int32 Index = 0; Index < 1024; ++Index) { Transforms.Emplace(FVector(0.0, Index * 150.0, 50.0)); }
+	// 测试实体位于塔外并彼此超过 Boids 感知距离，隔离批量移动入口的速度与位置语义。
+	for (int32 Index = 0; Index < 1024; ++Index) { Transforms.Emplace(FVector(-600.0, Index * 500.0, 50.0)); }
 	TArray<FCastleMassUnitHandle> Handles;
 	FText Failure;
 	if (!TestTrue(TEXT("一次生成 1024 个实体"), Scope.Units().SpawnUnits(Config, Transforms, Handles, Failure))) { return false; }
@@ -76,17 +77,18 @@ bool FCastleMassBatchMovementTest::RunTest(const FString& Parameters)
 	{
 		FCastleMassUnitSnapshot Snapshot;
 		TestTrue(TEXT("跨 Chunk 实体仍可查询"), Scope.Units().GetUnitSnapshot(Handles[Index], Snapshot));
-		TestTrue(TEXT("整批按相同速度移动，保持各自位置"), Snapshot.Transform.GetLocation().Equals(FVector(50.0, Index * 150.0, 50.0)));
+		TestTrue(TEXT("整批按相同速度移动，保持各自位置"), Snapshot.Transform.GetLocation().Equals(FVector(-550.0, Index * 500.0, 50.0)));
 		TestNull(TEXT("单位没有附带逐实体 Actor"), Scope.Manager().GetFragmentDataChecked<FMassActorFragment>(Handles[Index].Entity).Get());
 	}
 	Scope.Units().StopUnits(Handles);
 	Step<UCastleMassMovementProcessor>(Scope, 1.0f);
 	TestTrue(TEXT("停止命令清空速度"), Scope.Manager().GetFragmentDataChecked<FMassVelocityFragment>(Handles[0].Entity).Value.IsZero());
-	Scope.Units().MoveUnitsTo({Handles[0]}, FVector(60.0, 0.0, 150.0));
+	// 将目标放在塔身外，单独验证三维大时间步到达钳制。
+	Scope.Units().MoveUnitsTo({Handles[0]}, FVector(-550.0, 0.0, 150.0));
 	Step<UCastleMassMovementProcessor>(Scope, 20.0f);
 	FCastleMassUnitSnapshot Snapshot;
 	Scope.Units().GetUnitSnapshot(Handles[0], Snapshot);
-	TestTrue(TEXT("支持三维目标且大时间步不穿过目标"), Snapshot.Transform.GetLocation().Equals(FVector(60.0, 0.0, 150.0)));
+	TestTrue(TEXT("支持三维目标且大时间步不穿过目标"), Snapshot.Transform.GetLocation().Equals(FVector(-550.0, 0.0, 150.0)));
 	TestFalse(TEXT("到达后清除目标"), Snapshot.bHasMoveTarget);
 	return true;
 }
@@ -162,8 +164,9 @@ bool FCastleMassHumanoidAnimationTest::RunTest(const FString& Parameters)
 		if (!TestNotNull(TEXT("可加载已配置的基础人形资产"), Config)) { return false; }
 		TArray<FCastleMassUnitHandle> Handles;
 		FText Failure;
+		// 两个实例放在塔外且分处 Boids 邻域外，验证静止实体不会被无关邻居误判为移动。
 		if (!TestTrue(TEXT("真实人形配置通过模板验证并批量生成"), Scope.Units().SpawnUnits(Config,
-			{FTransform::Identity, FTransform(FVector(0.0, 150.0, 0.0))}, Handles, Failure)))
+			{FTransform(FVector(-600.0, 0.0, 50.0)), FTransform(FVector(-1200.0, 0.0, 50.0))}, Handles, Failure)))
 		{
 			AddError(Failure.ToString());
 			return false;

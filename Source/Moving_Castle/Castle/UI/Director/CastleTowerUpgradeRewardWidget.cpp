@@ -1,15 +1,21 @@
 #include "CastleTowerUpgradeRewardWidget.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/UI/Items/CastleWildcardRoomPickerWidget.h"
 #include "Components/Button.h"
+#include "Components/ButtonSlot.h"
+#include "Components/HorizontalBox.h"
+#include "Components/HorizontalBoxSlot.h"
+#include "Components/Image.h"
 #include "Components/PanelWidget.h"
 #include "Components/TextBlock.h"
 #include "Moving_Castle.h"
 
 bool UCastleTowerUpgradeRewardWidget::BindDirector(UCastleDirectorSubsystem& InDirector)
 {
-	if (!RewardRows || !ContinueButton || !RewardButtonTemplate || !RewardTextTemplate)
+	if (!RewardRows || !ContinueButton || !RewardButtonTemplate || !RewardTextTemplate
+		|| !PathRewardIcon || !NPCRewardIcon || !RoomRewardIcon)
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("升级领奖 %s 缺少列表、继续按钮或 WBP 样式模板。"), *GetPathName());
 		return false;
@@ -32,13 +38,37 @@ void UCastleTowerUpgradeRewardWidget::RefreshRewards(const TConstArrayView<FCast
 		Button->SetStyle(RewardButtonTemplate->GetStyle());
 		Caption->SetFont(RewardTextTemplate->GetFont());
 		Caption->SetColorAndOpacity(RewardTextTemplate->GetColorAndOpacity());
+		const UImage* IconSource = nullptr;
 		switch (Entry.Kind)
 		{
-		case ECastleTowerUpgradeReward::PathPoint: Caption->SetText(FText::Format(INVTEXT("+{0} 路径点"), Entry.Count)); break;
-		case ECastleTowerUpgradeReward::NPC: Caption->SetText(FText::Format(INVTEXT("+{0} 普通 NPC"), Entry.Count)); break;
-		case ECastleTowerUpgradeReward::CustomRoom: Caption->SetText(INVTEXT("领取完全自定义房间")); break;
+		case ECastleTowerUpgradeReward::PathPoint:
+			Caption->SetText(FText::Format(INVTEXT("+{0} 路径点"), Entry.Count));
+			IconSource = PathRewardIcon;
+			break;
+		case ECastleTowerUpgradeReward::NPC:
+			Caption->SetText(FText::Format(INVTEXT("+{0} 普通 NPC"), Entry.Count));
+			IconSource = NPCRewardIcon;
+			break;
+		case ECastleTowerUpgradeReward::CustomRoom:
+			Caption->SetText(INVTEXT("领取完全自定义房间"));
+			IconSource = RoomRewardIcon;
+			break;
 		}
-		Button->SetContent(Caption);
+		if (!IconSource)
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("升级领奖 %s 的第 %d 行奖励类型无对应图标。"), *GetPathName(), Index);
+			RewardRows->ClearChildren();
+			return;
+		}
+		auto* Content = NewObject<UHorizontalBox>(Button);
+		auto* Icon = NewObject<UImage>(Content);
+		Icon->SetBrush(IconSource->GetBrush());
+		Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
+		Content->AddChildToHorizontalBox(Icon)->SetVerticalAlignment(VAlign_Center);
+		auto* LabelSlot = Content->AddChildToHorizontalBox(Caption);
+		LabelSlot->SetVerticalAlignment(VAlign_Center);
+		LabelSlot->SetPadding(FMargin(14, 0, 0, 0));
+		CastChecked<UButtonSlot>(Button->AddChild(Content))->SetHorizontalAlignment(HAlign_Fill);
 		Button->BindChoice(FSimpleDelegate::CreateWeakLambda(this, [this, Index]
 		{
 			if (UCastleDirectorSubsystem* Source = Director.Get()) { Source->ClaimTowerUpgradeReward(Index); }
@@ -49,5 +79,6 @@ void UCastleTowerUpgradeRewardWidget::RefreshRewards(const TConstArrayView<FCast
 
 void UCastleTowerUpgradeRewardWidget::Continue()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (UCastleDirectorSubsystem* Source = Director.Get()) { Source->DiscardTowerUpgradeRewards(); }
 }

@@ -3,6 +3,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "NiagaraSystem.h"
 #include "CastleTowerDispatchConfigDataAsset.h"
 #include "Castle/UI/Director/CastleTowerUpgradeRewardWidget.h"
 #include "Castle/UI/Items/CastleWildcardRoomPickerWidget.h"
@@ -100,12 +101,16 @@ bool FCastleShopTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("出售释放背包容量"), Board->PrototypeBackpack->GetItemCount(), 0);
 	TestFalse(TEXT("无效槽位不能重复卖"), Shop->TrySellBackpackItem(0, Reason));
 
-	// 二级合成卡按两个格子计入全局额度，不能因为只占一个背包槽而多买。
+	// 全局房间额度和背包槽位容量是两套限制，两张一级卡可先占满测试设定的房间额度。
 	int32 AddedIndex = INDEX_NONE;
 	Board->PrototypeBackpack->TrySetCapacity(10, Reason);
-	Board->PrototypeBackpack->TryAddBuilding(Board->FindBuildingDefinition(ECastleBuildingType::ArcherTower), 2, ECastleTileColor::Red, 3, AddedIndex, Reason);
+	for (int32 Index = 0; Index < 2; ++Index)
+	{
+		TestTrue(TEXT("向建筑栏添加一张一级卡"), Board->PrototypeBackpack->TryAddBuilding(
+			Board->FindBuildingDefinition(ECastleBuildingType::ArcherTower), 1, ECastleTileColor::Red, 3, AddedIndex, Reason));
+	}
 	Shop->RoomLimit = 2;
-	TestEqual(TEXT("合成卡按实际格数计入总量"), Shop->GetOwnedRoomCount(), 2);
+	TestEqual(TEXT("库存两张一级卡计入全局房间总量"), Shop->GetOwnedRoomCount(), 2);
 	TestFalse(TEXT("全局上限拒绝新购买"), Shop->TryBuyOffer(1, Reason));
 	Shop->RoomLimit = 30;
 	const int32 GoldBeforeRefresh = Economy->GetGold();
@@ -115,14 +120,14 @@ bool FCastleShopTest::RunTest(const FString& Parameters)
 	{
 		TestFalse(TEXT("刷新后全部可购买"), Offer.bSold);
 		TestTrue(TEXT("所有商品使用一级类"), Offer.Descriptor.Level == 1);
-		TestTrue(TEXT("所有房间均为五色 1～9 数字"), Offer.Descriptor.Color >= ECastleTileColor::Red
-			&& Offer.Descriptor.Color <= ECastleTileColor::Purple && Offer.Descriptor.Number >= 1 && Offer.Descriptor.Number <= 9);
+		TestTrue(TEXT("所有房间均为合法颜色与 1～9 数字"), CastleTileColors::IsPlayable(Offer.Descriptor.Color)
+			&& Offer.Descriptor.Number >= 1 && Offer.Descriptor.Number <= 9);
 		TestEqual(TEXT("所有一级房间使用统一买价"), Offer.Price, 5 + Offer.Descriptor.Number * 2);
 	}
 	// 即使卖出能释放容量，也必须先保证收款不会溢出，不能先删除卡牌再发现无法入账。
 	Economy->TryAddGold(MAX_int32 - Economy->GetGold(), Reason);
 	TestFalse(TEXT("金币已满时出售失败"), Shop->TrySellBackpackItem(0, Reason));
-	TestEqual(TEXT("出售失败保留卡牌"), Board->PrototypeBackpack->GetItemCount(), 1);
+	TestEqual(TEXT("出售失败保留所有卡牌"), Board->PrototypeBackpack->GetItemCount(), 2);
 	TestEqual(TEXT("出售失败保留余额"), Economy->GetGold(), MAX_int32);
 	return true;
 }
@@ -260,7 +265,7 @@ bool FCastleDirectorFoundationTest::RunTest(const FString& Parameters)
 {
 	AddExpectedError(TEXT("房间上限设置失败：收到无效值"), EAutomationExpectedErrorFlags::Contains, 1);
 	AddExpectedError(TEXT("主塔回血失败"), EAutomationExpectedErrorFlags::Contains, 2);
-	AddExpectedError(TEXT("字段 NodeMesh 值 None 无效"), EAutomationExpectedErrorFlags::Contains, 1);
+	AddExpectedError(TEXT("字段 NodePortalSystem 值 None 无效"), EAutomationExpectedErrorFlags::Contains, 1);
 	AddExpectedError(TEXT("字段 NodeCountMin/NodeCountMax"), EAutomationExpectedErrorFlags::Contains, 1);
 	AddExpectedError(TEXT("字段 NodeLabelWidgetClass 值 None 无效"), EAutomationExpectedErrorFlags::Contains, 1);
 	AddExpectedError(TEXT("奖励换批失败"), EAutomationExpectedErrorFlags::Contains, 1);
@@ -321,7 +326,9 @@ bool FCastleDirectorFoundationTest::RunTest(const FString& Parameters)
 
 	UCastleDirectorConfigDataAsset* Config = NewObject<UCastleDirectorConfigDataAsset>();
 	TestFalse(TEXT("缺失资产和界面配置拒绝启动"), Config->ValidateConfig(Reason));
-	Config->NodeMesh = GetMutableDefault<UStaticMesh>();
+	// 后续校验使用真实的 Niagara 圆环，保证用户参数也经过导演配置校验。
+	Config->NodePortalSystem = LoadObject<UNiagaraSystem>(nullptr,
+		TEXT("/Game/Portals_VFXPack/Particles/P_Light_SpherePortal.P_Light_SpherePortal"));
 	Config->NPCConfiguration = GetMutableDefault<UMassEntityConfigAsset>();
 	Config->HUDWidgetClass = UCastleDirectorHUDWidget::StaticClass();
 	Config->RewardWidgetClass = UCastleRewardChoiceWidget::StaticClass();
@@ -345,9 +352,9 @@ bool FCastleDirectorFoundationTest::RunTest(const FString& Parameters)
 	Config->NodeHeightOffset = std::numeric_limits<float>::infinity();
 	TestFalse(TEXT("无限高度拒绝"), Config->ValidateConfig(Reason));
 	Config->NodeHeightOffset = 1200.0f;
-	Config->NodeMeshScale = 0.0f;
-	TestFalse(TEXT("零网格缩放拒绝"), Config->ValidateConfig(Reason));
-	Config->NodeMeshScale = 4.0f;
+	Config->NodePortalScale = 0.0f;
+	TestFalse(TEXT("零传送门缩放拒绝"), Config->ValidateConfig(Reason));
+	Config->NodePortalScale = 2.5f;
 	Config->InitialNPCCount = 0;
 	AddExpectedError(TEXT("成长表必须含连续四级"), EAutomationExpectedErrorFlags::Contains, 2);
 	TestFalse(TEXT("非正初始NPC数量拒绝"), Config->ValidateConfig(Reason));
@@ -361,12 +368,12 @@ bool FCastleDirectorFoundationTest::RunTest(const FString& Parameters)
 	Config->HealFraction = 1.1f;
 	TestFalse(TEXT("超出回血比例拒绝"), Config->ValidateConfig(Reason));
 	Config->HealFraction = 0.3f;
-	Config->ExpPerLevel = 0;
-	TestFalse(TEXT("零升级经验拒绝"), Config->ValidateConfig(Reason));
-	Config->ExpPerLevel = 100;
+	Config->RewardGold = 0;
+	TestFalse(TEXT("零基础金币奖励拒绝"), Config->ValidateConfig(Reason));
+	Config->RewardGold = 60;
 	Config->TowerLevels[1].RoomLimit = -1;
 	TestFalse(TEXT("负房间上限拒绝"), Config->ValidateConfig(Reason));
-	Config->TowerLevels[1].RoomLimit = 250;
+	Config->TowerLevels[1].RoomLimit = 80;
 	UCastleShopComponent* RewardShop = NewObject<UCastleShopComponent>();
 	Board->BuildingDefinitions.Reset();
 	TestFalse(TEXT("首个商店奖励初始化失败明确拒绝"), RewardShop->TryOpenForReward(Economy, Board, Reason));

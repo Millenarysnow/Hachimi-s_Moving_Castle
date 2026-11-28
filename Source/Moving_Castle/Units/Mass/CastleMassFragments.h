@@ -62,6 +62,39 @@ struct MOVING_CASTLE_API FCastleMassMoveTargetFragment : public FMassFragment
 	bool bHasTarget = false;
 };
 
+/**
+ * 攻击处理器交给唯一移动处理器的塔面意图。
+ *
+ * 攻击处理器只更新索敌状态和朝向，移动处理器根据当前塔身几何积分法向贴靠、
+ * 三维软分离与塔面切向滑移，不在攻击处理器中清零速度或写入位置。
+ */
+USTRUCT()
+struct MOVING_CASTLE_API FCastleMassFlightIntentFragment : public FMassFragment
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	bool bTrackingMainTower = false;
+
+	UPROPERTY()
+	bool bInAttackRange = false;
+
+	UPROPERTY()
+	bool bStopMovement = false;
+
+	UPROPERTY()
+	float AttackRange = 0.0f;
+
+	UPROPERTY()
+	float IdealStandOff = 0.0f;
+
+	UPROPERTY()
+	FVector TowerSurfacePoint = FVector::ZeroVector;
+
+	UPROPERTY()
+	FVector TowerSurfaceNormal = FVector::ZeroVector;
+};
+
 /** NPC 农田增益的实体值状态；所有 NPC 默认装配，建筑只通过单位子系统读写。 */
 USTRUCT()
 struct MOVING_CASTLE_API FCastleMassNPCFarmBuffFragment : public FMassFragment
@@ -108,6 +141,16 @@ struct MOVING_CASTLE_API FCastleMassAnimationParameters : public FMassConstShare
 
 	UPROPERTY()
 	int32 MoveSequence = 1;
+
+	/** 未配置跑步的模板沿用原有移动判定和固定倍率。 */
+	UPROPERTY()
+	int32 RunSequence = INDEX_NONE;
+
+	UPROPERTY()
+	float RunSpeedThreshold = 250.0f;
+
+	UPROPERTY()
+	float RunLength = 0.0f;
 
 	UPROPERTY()
 	float IdleLength = 1.0f;

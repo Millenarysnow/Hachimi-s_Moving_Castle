@@ -7,12 +7,12 @@
 #include "CastleDirectorNodeActor.generated.h"
 
 class USphereComponent;
-class UStaticMeshComponent;
+class UNiagaraComponent;
 class UWidgetComponent;
 class UCastleDirectorNodeLabelWidget;
 class UCastleDirectorConfigDataAsset;
 
-/** 浮空节点只处理碰撞及标签，不持有关数、奖励或战斗流程。 */
+/** 浮空节点拥有正式门户表现、触发球及标签，不执行奖励或战斗流程。 */
 UCLASS()
 class MOVING_CASTLE_API ACastleDirectorNodeActor : public AActor
 {
@@ -31,9 +31,11 @@ protected:
 	virtual void BeginPlay() override;
 
 private:
-	/** 节点碰撞、三维网格和屏幕空间 UMG 标签均由 C++ 组件拥有。 */
+	/** 节点只通过此触发球接收 Pawn 重叠。 */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USphereComponent> Trigger;
-	UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> Mesh;
+	/** 圆形 Niagara 仅提供表现，与交互和导航无关。 */
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UNiagaraComponent> Portal;
+	/** 标签独立于世界空间的门户表现，以屏幕空间显示中文关号和节点类型。 */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UWidgetComponent> Label;
 	/** 从正式配置读取的标签 WBP 类，用于诊断实例化和绑定失败。 */
 	TSubclassOf<UCastleDirectorNodeLabelWidget> LabelWidgetClass;

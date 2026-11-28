@@ -7,6 +7,8 @@
 #include "CastleMassUnitSubsystem.h"
 #include "CastleMassFragments.h"
 #include "CastleMainTowerComponent.h"
+#include "Castle/PCG/CastlePCGSemantics.h"
+#include "Components/Building/BuildingGameplayRootComponent.h"
 #include "Components/Building/Effects/Attack/CastleCannonTowerAttackEffectComponent.h"
 #include "Components/Building/Effects/Shield/CastleShieldTowerEffectComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -97,8 +99,34 @@ namespace CastleBuildingLevelTests
 				Test->AddError(Reason.ToString());
 				return nullptr;
 			}
+			// 原生夹具不经过建筑蓝图，每次放置显式提供与旧版 PCG 契约相同的功能楼板。
+			auto* FloorMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+			if (!Test->TestNotNull(TEXT("功能楼板夹具使用的引擎 Cube 网格"), FloorMesh)) { return nullptr; }
 			ACastleBuildingBase* Result = Board->PlaceBuilding(Cell, Card, false, Reason);
-			if (!Result || !CastleBuildingTests::CompletePlacement(Result))
+			if (Result)
+			{
+				// 飞入完成时棋盘同步发布布局，届时切梯井所需的每格楼板必须已经注册。
+				constexpr double CubeSize = 100.0;
+				constexpr double FloorThickness = 5.0;
+				for (const FIntVector& OccupiedCell : Result->GetOccupiedCoordinates())
+				{
+					const FName Name(*FString::Printf(TEXT("GameplayFloor_%d_%d_%d"), OccupiedCell.X, OccupiedCell.Y, OccupiedCell.Z));
+					auto* Floor = NewObject<UStaticMeshComponent>(Result, Name);
+					Floor->SetupAttachment(Result->GameplayRoot);
+					Floor->SetStaticMesh(FloorMesh);
+					Floor->SetVisibility(false);
+					Floor->SetCollisionProfileName(TEXT("BlockAll"));
+					Floor->SetCanEverAffectNavigation(true);
+					// 用格底坐标系使立方体顶面与站立标高齐平，每格恰好匹配一块楼板。
+					const FTransform Frame = CastlePCGSemantics::CellFrame(*Board, OccupiedCell);
+					const FTransform Slab(FQuat::Identity, FVector(0.0, 0.0, -FloorThickness * 0.5),
+						FVector(Board->CellSize / CubeSize, Board->CellSize / CubeSize, FloorThickness / CubeSize));
+					Floor->SetRelativeTransform((Slab * Frame).GetRelativeTransform(Result->GameplayRoot->GetComponentTransform()));
+					Result->AddInstanceComponent(Floor);
+					Floor->RegisterComponent();
+				}
+			}
+			if (!CastleBuildingTests::CompletePlacement(Result))
 			{
 				Test->AddError(FString::Printf(TEXT("测试放置失败：类型=%d 等级=%d 格=%s，%s"), static_cast<int32>(Type), Level, *Cell.ToString(), *Reason.ToString()));
 				return nullptr;
@@ -360,7 +388,7 @@ bool FCastleBuildingConcreteCombatTest::RunTest(const FString& Parameters)
 	auto* Shield = Cast<ACastleShieldTowerBuilding>(Scope.Place(ECastleBuildingType::ShieldTower, 3, 9, FIntVector(3, 3, 0)));
 	if (!Shield) { return false; }
 	const FVector Center = Shield->GetActorLocation();
-	MainActor->SetActorLocation(Center);
+	MainActor->SetActorLocation(Center - FVector(350.0f, 0.0f, 0.0f));
 	FText Reason;
 	const auto Spawn = [&](const TCHAR* Name, FVector Location, int32 Count, TArray<FCastleMassUnitHandle>& Out)
 	{
@@ -411,10 +439,12 @@ bool FCastleBuildingConcreteCombatTest::RunTest(const FString& Parameters)
 	Shields->DeactivateShield(RangedShield);
 	// 六只幼骸由前段真实分裂得到；先在其位置之外设置群虫护盾，避免它们消费本段次数。
 	auto* SwarmShield = Cast<ACastleShieldTowerBuilding>(Scope.Place(ECastleBuildingType::ShieldTower, 1, 1, FIntVector(8, 7, 0)));
-	if (!SwarmShield || !SwarmShield->TriggerBuildingEffect(FCastleBuildingTriggerContext())) { return false; }
-	MainActor->SetActorLocation(SwarmShield->GetActorLocation());
+	if (!SwarmShield) { return false; }
+	const FVector SwarmAttackLocation = Center;
+	SwarmShield->SetActorLocation(SwarmAttackLocation);
+	if (!SwarmShield->TriggerBuildingEffect(FCastleBuildingTriggerContext())) { return false; }
 	TArray<FCastleMassUnitHandle> Swarm;
-	if (!Spawn(TEXT("ShadowSwarm"), SwarmShield->GetActorLocation(), 6, Swarm)) { return false; }
+	if (!Spawn(TEXT("ShadowSwarm"), SwarmAttackLocation, 6, Swarm)) { return false; }
 	Step<UCastleMassMeleeAttackProcessor>(Scope.World, 0);
 	int64 Blocks = 0;
 	TestFalse(TEXT("真实群虫围攻耗尽最后一次护盾"), Shields->GetShieldRemainingBlocks(SwarmShield, Blocks));

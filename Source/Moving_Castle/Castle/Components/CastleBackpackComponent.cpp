@@ -2,7 +2,9 @@
 
 #include "CastleBackpackComponent.h"
 
+#include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
+#include "Items/CastleItemTypes.h"
 #include "Moving_Castle.h"
 
 UCastleBackpackComponent::UCastleBackpackComponent()
@@ -31,6 +33,35 @@ bool UCastleBackpackComponent::HasFreeSlots(int32 RequiredSlots) const
 	return Items.Num() + RequiredSlots <= Capacity;
 }
 
+bool UCastleBackpackComponent::TryCountStoredRoomCells(int32& OutCells, FText& OutReason) const
+{
+	OutCells = INDEX_NONE;
+	OutReason = FText::GetEmpty();
+	// 临时栏只是延后摆放的已拥有牌。补位搬动卡牌时，两栏合计占格保持不变。
+	int64 Count = 0;
+	for (const TArray<FCastleBuildingDescriptor>* Bar : {&Items, &TempItems})
+	{
+		for (const FCastleBuildingDescriptor& Item : *Bar)
+		{
+			const int32 Cells = ACastleBuildingBase::GetExpectedFootprintCellCount(Item.Level);
+			if (Cells <= 0)
+			{
+				OutReason = FText::FromString(FString::Printf(TEXT("背包 %s 的房间卡 %s 等级 %d 无有效占格数。"),
+					*GetPathName(), *GetPathNameSafe(Item.Definition.Get()), Item.Level));
+				return false;
+			}
+			Count += Cells;
+		}
+	}
+	if (Count > MAX_int32)
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("背包 %s 的房间总格数超过整数上限。"), *GetPathName()));
+		return false;
+	}
+	OutCells = static_cast<int32>(Count);
+	return true;
+}
+
 bool UCastleBackpackComponent::TryGetItemAt(int32 Index, FCastleBuildingDescriptor& OutDescriptor) const
 {
 	if (!Items.IsValidIndex(Index))
@@ -47,6 +78,11 @@ bool UCastleBackpackComponent::TryAddItem(const FCastleBuildingDescriptor& Descr
 	OutIndex = INDEX_NONE;
 	OutFailureReason = FText::GetEmpty();
 
+	if (!ValidateDescriptorForStorage(Descriptor, OutFailureReason))
+	{
+		return false;
+	}
+
 	if (Capacity < 1)
 	{
 		OutFailureReason = FText::FromString(TEXT("背包容量必须大于 0。"));
@@ -58,11 +94,6 @@ bool UCastleBackpackComponent::TryAddItem(const FCastleBuildingDescriptor& Descr
 		OutFailureReason = FText::FromString(TEXT("背包已满，无法加入建筑卡牌。"));
 		UE_LOG(LogMoving_Castle, Warning, TEXT("背包 %s 建筑栏已满，拒绝通过普通入口加入资产 %s。"),
 			*GetPathName(), *GetPathNameSafe(Descriptor.Definition.Get()));
-		return false;
-	}
-
-	if (!ValidateDescriptorForStorage(Descriptor, OutFailureReason))
-	{
 		return false;
 	}
 
@@ -88,24 +119,54 @@ bool UCastleBackpackComponent::TryAddItemAllowOverflow(const FCastleBuildingDesc
 bool UCastleBackpackComponent::TryAddItemsAllowOverflow(const TConstArrayView<FCastleBuildingDescriptor> Descriptors,
 	FText& OutFailureReason)
 {
+	if (!CanApplyItemBatch(Descriptors, nullptr, false, OutFailureReason)) { return false; }
+	ApplyValidatedItemBatch(Descriptors, nullptr, false);
+	OnBackpackChanged.Broadcast();
+	return true;
+}
+
+bool UCastleBackpackComponent::CanApplyItemBatch(const TConstArrayView<FCastleBuildingDescriptor> Descriptors,
+	const TArray<FCastleBuildingDescriptor>* MainBarAfter, const bool bRefill, FText& OutFailureReason) const
+{
 	OutFailureReason = FText::GetEmpty();
-	if (!IsInGameThread() || Capacity < 1 || Descriptors.IsEmpty())
+	if (!IsInGameThread() || Capacity < 1 || Items.Num() > Capacity
+		|| (MainBarAfter ? MainBarAfter->Num() > Capacity : Descriptors.IsEmpty()))
 	{
 		OutFailureReason = INVTEXT("建筑卡牌必须在游戏线程发放，且背包容量有效、卡牌批次非空。");
 		UE_LOG(LogMoving_Castle, Error, TEXT("背包 %s 发放失败：容量 %d，批次张数 %d。%s"),
 			*GetPathName(), Capacity, Descriptors.Num(), *OutFailureReason.ToString());
 		return false;
 	}
-	for (const FCastleBuildingDescriptor& Descriptor : Descriptors)
+	const auto ValidateBatch = [this, &OutFailureReason](const TConstArrayView<FCastleBuildingDescriptor> Batch)
 	{
-		if (!ValidateDescriptorForStorage(Descriptor, OutFailureReason))
+		for (const FCastleBuildingDescriptor& Descriptor : Batch)
 		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("背包 %s 拒绝整批建筑卡牌：资产 %s，%s"),
-				*GetPathName(), *GetPathNameSafe(Descriptor.Definition.Get()), *OutFailureReason.ToString());
+			if (ValidateDescriptorForStorage(Descriptor, OutFailureReason)) { continue; }
+			if (Descriptor.Level == 1)
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("背包 %s 拒绝整批建筑卡牌：资产 %s，%s"),
+					*GetPathName(), *GetPathNameSafe(Descriptor.Definition.Get()), *OutFailureReason.ToString());
+			}
 			return false;
 		}
+		return true;
+	};
+	if (MainBarAfter && !ValidateBatch(*MainBarAfter)) { return false; }
+	if (bRefill)
+	{
+		const int32 FreeSlots = Capacity - (MainBarAfter ? MainBarAfter->Num() : Items.Num());
+		const int32 RefillCount = FMath::Min(FreeSlots, TempItems.Num());
+		if (!ValidateBatch(MakeArrayView(TempItems.GetData(), RefillCount))) { return false; }
 	}
+	return ValidateBatch(Descriptors);
+}
 
+void UCastleBackpackComponent::ApplyValidatedItemBatch(const TConstArrayView<FCastleBuildingDescriptor> Descriptors,
+	const TArray<FCastleBuildingDescriptor>* MainBarAfter, const bool bRefill)
+{
+	// 本段没有可失败回调。主栏变换、补位与临时栏追加结束后由事务入口统一广播。
+	if (MainBarAfter) { Items = *MainBarAfter; }
+	if (bRefill) { RefillFromTempBar(); }
 	const int32 PreviousTempCount = TempItems.Num();
 	for (const FCastleBuildingDescriptor& Descriptor : Descriptors)
 	{
@@ -116,8 +177,6 @@ bool UCastleBackpackComponent::TryAddItemsAllowOverflow(const TConstArrayView<FC
 		UE_LOG(LogMoving_Castle, Display, TEXT("背包 %s 有 %d 张新卡进入临时建筑栏，当前共 %d 张。"),
 			*GetPathName(), TempItems.Num() - PreviousTempCount, TempItems.Num());
 	}
-	OnBackpackChanged.Broadcast();
-	return true;
 }
 
 void UCastleBackpackComponent::AppendValidatedItem(const FCastleBuildingDescriptor& Descriptor)
@@ -126,9 +185,53 @@ void UCastleBackpackComponent::AppendValidatedItem(const FCastleBuildingDescript
 	Destination.Add(Descriptor);
 }
 
+bool UCastleBackpackComponent::TryPrepareSelfOrbitingRound(
+	const TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> DefinitionPool, FRandomStream& Random,
+	FPreparedSelfOrbitingRound& OutRound, FText& OutReason) const
+{
+	OutRound = {};
+	OutReason = FText::GetEmpty();
+	// 本轮资格取决于已有主栏。此处不访问临时栏或棋盘 Actor，奖励牌也不会加入本轮遍历。
+	if (!Items.ContainsByPredicate([](const FCastleBuildingDescriptor& Card)
+		{ return Card.RoomTrait == ECastleRoomTrait::SelfOrbiting; })) { return true; }
+
+	CastleRoomCards::FDefinitionPool Pool;
+	TArray<TObjectPtr<UCastleBuildingDefinition>> Functions;
+	if (!Pool.TryInitialize(DefinitionPool, OutReason) || !Pool.TryCollect(false, Functions, OutReason)) { return false; }
+
+	FRandomStream CandidateRandom = Random;
+	FPreparedSelfOrbitingRound Candidate;
+	Candidate.MainBarAfter = Items;
+	const auto Colors = CastleTileColors::GetPlayable();
+	for (FCastleBuildingDescriptor& Card : Candidate.MainBarAfter)
+	{
+		if (Card.RoomTrait != ECastleRoomTrait::SelfOrbiting) { continue; }
+		if (!ValidateDescriptorForStorage(Card, OutReason)) { return false; }
+		const UCastleBuildingDefinition* Function = Functions[CandidateRandom.RandRange(0, Functions.Num() - 1)];
+		const ECastleTileColor Color = Colors[CandidateRandom.RandRange(0, Colors.Num() - 1)];
+		FCastleBuildingDescriptor Reward;
+		if (!Function->CreateDescriptor(1, Color, 6, Reward, OutReason)) { return false; }
+		Candidate.Rewards.Add(MoveTemp(Reward));
+		if (--Card.TraitRemainingRounds == 0)
+		{
+			// 六次发完后退回同一张普通炮塔卡，保持定义、颜色和号码。
+			Card.RoomTrait = ECastleRoomTrait::None;
+		}
+	}
+	if (!CanApplyItemBatch(Candidate.Rewards, &Candidate.MainBarAfter, false, OutReason)) { return false; }
+	OutRound = MoveTemp(Candidate);
+	Random = CandidateRandom;
+	return true;
+}
+
 bool UCastleBackpackComponent::TryInsertItemAt(int32 Index, const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason)
 {
 	OutFailureReason = FText::GetEmpty();
+
+	if (!ValidateDescriptorForStorage(Descriptor, OutFailureReason))
+	{
+		return false;
+	}
 
 	if (Capacity < 1)
 	{
@@ -148,11 +251,6 @@ bool UCastleBackpackComponent::TryInsertItemAt(int32 Index, const FCastleBuildin
 		return false;
 	}
 
-	if (!ValidateDescriptorForStorage(Descriptor, OutFailureReason))
-	{
-		return false;
-	}
-
 	Items.Insert(Descriptor, Index);
 	return true;
 }
@@ -160,6 +258,14 @@ bool UCastleBackpackComponent::TryInsertItemAt(int32 Index, const FCastleBuildin
 bool UCastleBackpackComponent::TryAddBuilding(UCastleBuildingDefinition* Definition, int32 Level, ECastleTileColor Color, int32 Number, int32& OutIndex, FText& OutFailureReason)
 {
 	OutIndex = INDEX_NONE;
+	if (Level != 1)
+	{
+		// 在定义资产创建描述前拒绝等级，连超出资产等级表的值也留下同一错误。
+		FCastleBuildingDescriptor Rejected;
+		Rejected.Definition = Definition;
+		Rejected.Level = Level;
+		return ValidateDescriptorForStorage(Rejected, OutFailureReason);
+	}
 	if (!IsValid(Definition))
 	{
 		OutFailureReason = FText::FromString(TEXT("没有指定要加入背包的建筑 Data Asset。"));
@@ -196,6 +302,14 @@ int32 UCastleBackpackComponent::CommitAutoRefillFromTempBar()
 		return 0;
 	}
 
+	const int32 Count = RefillFromTempBar();
+	// 调用方已完成本次移除事务，即使临时栏为空也要发布主栏的最终变化。
+	OnBackpackChanged.Broadcast();
+	return Count;
+}
+
+int32 UCastleBackpackComponent::RefillFromTempBar()
+{
 	const int32 Count = FMath::Min(Capacity - Items.Num(), TempItems.Num());
 	if (Count > 0)
 	{
@@ -205,8 +319,6 @@ int32 UCastleBackpackComponent::CommitAutoRefillFromTempBar()
 		UE_LOG(LogMoving_Castle, Display, TEXT("背包 %s 自动补入 %d 张建筑卡牌，临时栏剩余 %d 张。"),
 			*GetPathName(), Count, TempItems.Num());
 	}
-	// 调用方已完成本次移除事务，即使临时栏为空也要发布主栏的最终变化。
-	OnBackpackChanged.Broadcast();
 	return Count;
 }
 
@@ -251,6 +363,13 @@ bool UCastleBackpackComponent::TrySetCapacity(int32 NewCapacity, FText& OutFailu
 
 bool UCastleBackpackComponent::ValidateDescriptorForStorage(const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason) const
 {
-	// 与放置、预览和定价共用描述校验，不按类名重新推断建筑身份。
-	return Descriptor.Validate(OutFailureReason);
+	// 主栏、临时栏和指定索引写入共用等级约束，防止固定朝向的多格卡进入建造栏。
+	if (Descriptor.Level != 1)
+	{
+		OutFailureReason = INVTEXT("建筑栏仅允许一级单格建筑卡。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("背包 %s 拒绝存入资产 %s（Lv%d）：%s"),
+			*GetPathName(), *GetPathNameSafe(Descriptor.Definition.Get()), Descriptor.Level, *OutFailureReason.ToString());
+		return false;
+	}
+	return Descriptor.Validate(OutFailureReason) && CastleRoomCards::ValidateTrait(Descriptor, OutFailureReason);
 }

@@ -14,7 +14,8 @@ struct FInputActionValue;
  * 移动城堡的自有飞行玩家 Pawn。
  *
  * 这是独立于第三人称模板的控制对象。玩家始终处于飞行移动模式，WASD 在
- * 相机水平朝向上移动，空格/左 Ctrl 控制升降，鼠标用于旋转视角。
+ * 相机水平朝向上移动。经典模式以空格/左 Ctrl 升降，设计模式以 Q/E 升降，
+ * 鼠标用于旋转视角。
  */
 UCLASS()
 class MOVING_CASTLE_API ACastleFlightPawn : public ACharacter
@@ -84,6 +85,8 @@ protected:
 	void AscendReleased();
 	void DescendPressed();
 	void DescendReleased();
+	void DesignAscendPressed();
+	void DesignDescendPressed();
 
 	/** 鼠标轴回调，输入值来自锁定在屏幕中心的系统鼠标。 */
 	void HandleMouseYaw(float AxisValue);
@@ -100,18 +103,6 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "组件", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCameraComponent> FollowCamera;
 
-	/** 飞行最大速度。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "飞行控制", meta = (ClampMin = "1.0"))
-	float FlightSpeed = 900.0f;
-
-	/** 飞行加速度。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "飞行控制", meta = (ClampMin = "1.0"))
-	float FlightAcceleration = 5000.0f;
-
-	/** 松开按键后的飞行减速度。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "飞行控制", meta = (ClampMin = "1.0"))
-	float FlightBrakingDeceleration = 5000.0f;
-
 	/** 鼠标旋转倍率；引擎已在输入配置中设置 MouseX/MouseY 灵敏度，默认不再额外压低轴值。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "飞行控制", meta = (ClampMin = "0.001"))
 	float MouseSensitivity = 1.0f;
@@ -123,4 +114,16 @@ protected:
 	bool bMoveLeft = false;
 	bool bAscend = false;
 	bool bDescend = false;
+
+private:
+	/** 每个 Pawn 从标准档开始，两个操作模式使用同一套速度表。 */
+	int32 FlightSpeedTierIndex = 3;
+
+	/** 胶囊只查询门户重叠，不作为世界或其他 Pawn 的阻挡体。 */
+	void ConfigureObserverCollision();
+	/** 加速、制动与速度上限一起应用，维持各档相近的加减速时间。 */
+	void ApplyFlightSpeedTier();
+	void DecreaseFlightSpeed();
+	void IncreaseFlightSpeed();
+	void StepFlightSpeed(int32 Direction);
 };

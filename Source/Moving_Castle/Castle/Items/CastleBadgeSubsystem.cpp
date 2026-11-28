@@ -1,4 +1,5 @@
 #include "Items/CastleBadgeSubsystem.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Moving_Castle.h"
 #include "Engine/GameInstance.h"
@@ -53,6 +54,7 @@ bool UCastleBadgeSubsystem::TryAcquireBadge(const FCastleBadgeDefinition& Badge,
 	else
 	{
 		Badges.Add(Badge);
+		UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Reward);
 		UE_LOG(LogMoving_Castle, Display, TEXT("已领取徽章 %s，占用 %d/%d 槽。"),
 			*Badge.GetDisplayName().ToString(), Badges.Num(), MaxBadges);
 	}
@@ -79,6 +81,8 @@ bool UCastleBadgeSubsystem::TryReplaceBadgeAt(const int32 ReplaceSlotIndex, cons
 
 	Badges[ReplaceSlotIndex] = PendingBadge.GetValue();
 	PendingBadge.Reset();
+	// 槽满时只有确认替换才是实际领取，候选弹窗本身不播放奖励音。
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Reward);
 	UE_LOG(LogMoving_Castle, Display, TEXT("徽章槽 %d 已替换为 %s。"),
 		ReplaceSlotIndex, *Badges[ReplaceSlotIndex].GetDisplayName().ToString());
 	OnBadgesChanged.Broadcast();
@@ -138,34 +142,39 @@ bool UCastleBadgeSubsystem::HasBadge(const ECastleBadgeType Type) const
 	return Badges.ContainsByPredicate([Type](const FCastleBadgeDefinition& Badge) { return Badge.Type == Type; });
 }
 
-double UCastleBadgeSubsystem::GetGambleLuckBonus() const
+int32 UCastleBadgeSubsystem::CountBadges(const ECastleBadgeType Type) const
 {
-	return SumMagnitude(ECastleBadgeType::GambleLuck);
+	int32 Count = 0;
+	for (const FCastleBadgeDefinition& Badge : Badges)
+	{
+		if (Badge.Type == Type) { ++Count; }
+	}
+	return Count;
 }
 
 int64 UCastleBadgeSubsystem::GetBlueRoomNumberBonus() const
 {
-	return static_cast<int64>(SumMagnitude(ECastleBadgeType::BlueRoomNumber));
+	return static_cast<int64>(SumMagnitude(ECastleBadgeType::BlueAbacus));
 }
 
 int64 UCastleBadgeSubsystem::GetUpgradeBonusRoomCards() const
 {
-	return static_cast<int64>(SumMagnitude(ECastleBadgeType::UpgradeRoomCards));
+	return static_cast<int64>(SumMagnitude(ECastleBadgeType::WorkshopRefund));
 }
 
 double UCastleBadgeSubsystem::GetMainTowerHealthMultiplier() const
 {
-	return 1.0 + SumMagnitude(ECastleBadgeType::MainTowerHealth);
+	return 1.0 + SumMagnitude(ECastleBadgeType::BalloonRack);
 }
 
 double UCastleBadgeSubsystem::GetArcherFireRateMultiplier() const
 {
-	return 1.0 + SumMagnitude(ECastleBadgeType::ArcherFireRate);
+	return 1.0 + SumMagnitude(ECastleBadgeType::QuickstringPass);
 }
 
 float UCastleBadgeSubsystem::GetGlobalTowerFireRateMultiplier(const bool bFirstDamageTriggered) const
 {
-	return bFirstDamageTriggered && HasBadge(ECastleBadgeType::FirstMainTowerDamage) ? 2.0f : 1.0f;
+	return bFirstDamageTriggered && HasBadge(ECastleBadgeType::BurstAlarm) ? 2.0f : 1.0f;
 }
 
 float UCastleBadgeSubsystem::GetSummonSpeedMultiplier(const bool bFirstDamageTriggered) const
@@ -176,5 +185,87 @@ float UCastleBadgeSubsystem::GetSummonSpeedMultiplier(const bool bFirstDamageTri
 
 float UCastleBadgeSubsystem::GetEnemyAttackSpeedMultiplier(const float CurrentHealthFraction) const
 {
-	return CurrentHealthFraction <= 0.20f && HasBadge(ECastleBadgeType::LowMainTowerHealth) ? 0.5f : 1.0f;
+	return CurrentHealthFraction <= 0.20f && HasBadge(ECastleBadgeType::EmergencyBallast) ? 0.5f : 1.0f;
+}
+
+double UCastleBadgeSubsystem::GetFriendlyDamageMultiplier() const
+{
+	return 1.0 + SumMagnitude(ECastleBadgeType::FirepowerCard);
+}
+
+int32 UCastleBadgeSubsystem::GetCoinPurseTenths() const
+{
+	return CountBadges(ECastleBadgeType::CoinPurse);
+}
+
+int64 UCastleBadgeSubsystem::GetStartingFundsGold() const
+{
+	return static_cast<int64>(SumMagnitude(ECastleBadgeType::StartingFunds));
+}
+
+int64 UCastleBadgeSubsystem::GetDoubleDoorPassGold() const
+{
+	return static_cast<int64>(SumMagnitude(ECastleBadgeType::DoubleDoorPass));
+}
+
+int64 UCastleBadgeSubsystem::GetSpareBowstringBonus() const
+{
+	return static_cast<int64>(SumMagnitude(ECastleBadgeType::SpareBowstring));
+}
+
+int32 UCastleBadgeSubsystem::GetDiscountedShopBuyPrice(const int32 BasePrice) const
+{
+	check(BasePrice >= 0);
+	if (BasePrice == 0) { return 0; }
+
+	// 0.85 = 17/20。同一件商品只在全部折扣累乘后截去小数；六槽上限保证乘积在 int64 内。
+	const int32 Count = CountBadges(ECastleBadgeType::ShopDiscount);
+	int64 Numerator = BasePrice;
+	int64 Denominator = 1;
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		Numerator *= 17;
+		Denominator *= 20;
+	}
+	return FMath::Max(1, static_cast<int32>(Numerator / Denominator));
+}
+
+int64 UCastleBadgeSubsystem::GetShopRebateCards() const
+{
+	return static_cast<int64>(SumMagnitude(ECastleBadgeType::ShopRebate));
+}
+
+float UCastleBadgeSubsystem::GetShiftWhistleSpeedMultiplier() const
+{
+	return static_cast<float>(1.0 + SumMagnitude(ECastleBadgeType::ShiftWhistle));
+}
+
+double UCastleBadgeSubsystem::GetStringGloveExtraCells() const
+{
+	return SumMagnitude(ECastleBadgeType::StringGlove);
+}
+
+float UCastleBadgeSubsystem::GetQuickLadderSpeedMultiplier() const
+{
+	return static_cast<float>(1.0 + SumMagnitude(ECastleBadgeType::QuickLadder));
+}
+
+float UCastleBadgeSubsystem::CalculateLateAdvantageSpeedMultiplier(const int64 CompletedLaps)
+{
+	return CompletedLaps == 0 ? 0.5f : static_cast<float>(1.0 + 0.2 * CompletedLaps);
+}
+
+float UCastleBadgeSubsystem::GetSiphonArrowFraction() const
+{
+	return static_cast<float>(SumMagnitude(ECastleBadgeType::SiphonArrow));
+}
+
+float UCastleBadgeSubsystem::GetRapidMarchSpeedMultiplier(const int32 BuildingLevel) const
+{
+	return static_cast<float>(1.0 + BuildingLevel * SumMagnitude(ECastleBadgeType::RapidMarch));
+}
+
+int64 UCastleBadgeSubsystem::GetBerserkBeeGold() const
+{
+	return static_cast<int64>(SumMagnitude(ECastleBadgeType::BerserkBee));
 }

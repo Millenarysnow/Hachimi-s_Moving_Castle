@@ -2,6 +2,7 @@
 #include "Castle/Actors/CastleBoard.h"
 #include "Castle/Actors/CastleBuildingBase.h"
 #include "Castle/Actors/CastleGroundTileActor.h"
+#include "Castle/Automation/CastlePIEAutomation.h"
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Components/CastleBackpackComponent.h"
 #include "Castle/Data/CastleBuildingDefinition.h"
@@ -31,6 +32,7 @@ namespace CastleCannonPlayerInputTests
 		{
 			if (FPlatformTime::Seconds()>Deadline)
 			{ Test->AddError(FString::Printf(TEXT("玩家取点扩大复现超时：Family=%d Scenario=%d Stage=%d"),Family,Scenario,Stage)); Cleanup(); return true; }
+			if (GFrameCounter < NextInputCheckFrame) { return false; }
 			if (!Board) { return Initialize(); }
 			if (!Nav->IsNavigationReady()) { return false; }
 			if (Stage==0) { return Prepare(); }
@@ -44,13 +46,14 @@ namespace CastleCannonPlayerInputTests
 			if (Stage==2 || Stage==5)
 			{
 				if (!Test->TestEqual(TEXT("数字键选中真实背包首槽"),Controller->GetSelectedBackpackIndex(),0)) { Cleanup(); return true; }
-				Press(EKeys::LeftMouseButton); ++Stage; return false;
+				// 炮塔放置和后续合成均走玩家当前预设的世界主交互键。
+				Press(Controller->GetPrimaryPlaceInteractKey()); ++Stage; return false;
 			}
 			if (Stage==3 || Stage==6)
 			{
 				const int32 Count=Stage==3?1:2;
 				const auto Buildings=Board->GetPlacedBuildings();
-				if (!Test->TestEqual(TEXT("左键通过正式光标入口放置建筑"),Buildings.Num(),Count)) { Cleanup(); return true; }
+				if (!Test->TestEqual(TEXT("主交互键通过正式光标入口放置建筑"),Buildings.Num(),Count)) { Cleanup(); return true; }
 				for (auto* B:Buildings) { if (!B->bHasCompletedPlacement||B->BuildingMerge->bIsPlaying) { return false; } }
 				if (Stage==3) { AimGround(Center+FIntVector(1,0,0)); Stage=4; return false; }
 				for (auto* B:Buildings) { if (B->GetOccupiedCoordinates().Contains(Center)) { Cannon=B; } else { Neighbor=B; } }
@@ -65,13 +68,13 @@ namespace CastleCannonPlayerInputTests
 			if (Stage==11)
 			{
 				if (!Test->TestTrue(TEXT("P键实际进入巡逻草稿"),Route->IsEditing())) { Cleanup(); return true; }
-				Press(EKeys::LeftMouseButton); Stage=12; return false;
+				Press(Controller->GetPrimaryPlaceInteractKey()); Stage=12; return false;
 			}
 			if (Stage==12) { AimBuilding(Neighbor,Scenario==2); Stage=13; return false; }
 			if (Stage==13)
 			{
 				if (!Capture(Neighbor,SecondHit,SecondExpected,SecondProjected)) { Cleanup(); return true; }
-				Press(EKeys::LeftMouseButton); Stage=14; return false;
+				Press(Controller->GetPrimaryPlaceInteractKey()); Stage=14; return false;
 			}
 			if (Stage==14)
 			{
@@ -79,6 +82,8 @@ namespace CastleCannonPlayerInputTests
 			}
 			if (Stage==15)
 			{
+				// 模拟 Enter 由下一次 PlayerInput 派发。先等待路线退出编辑态，再核对真实提交结果。
+				if (Route->IsEditing()) { return false; }
 				const auto& Points=Nav->GetRequestedWaypoints();
 				if (!Test->TestEqual(TEXT("Enter经真实路径编辑提交两个点"),Points.Num(),2)) { Cleanup(); return true; }
 				// 期望值由同一次原生射线与棋盘格坐标独立计算，不调用被测取点函数伪造预期。
@@ -107,14 +112,11 @@ namespace CastleCannonPlayerInputTests
 	private:
 		bool Initialize()
 		{
-			for (const auto& Context:GEngine->GetWorldContexts())
+			// 测试显式拥有 TestMap1 的 PIE，不能从其他 Game 上下文借棋盘。
+			World = GEditor->PlayWorld;
+			if (World && World->HasBegunPlay())
 			{
-				if (Context.WorldType==EWorldType::PIE||Context.WorldType==EWorldType::Game)
-				{
-					World=Context.World();
-					for (TActorIterator<ACastleBoard> It(World);It;++It) { Board=*It; break; }
-					if (Board) { break; }
-				}
+				for (TActorIterator<ACastleBoard> It(World); It; ++It) { Board = *It; break; }
 			}
 			// TestMap1 允许流送初始化；给原生加载流程时间，不将首帧未出现误判为资产缺失。
 			// 超过明确的初始化等待时间仍不存在时失败，绝不补建棋盘或切换地图。
@@ -149,6 +151,8 @@ namespace CastleCannonPlayerInputTests
 			// 与项目现有巡逻输入测试采用相同的键鼠事件入口，保留引擎设备过滤和输入栈。
 			Controller->InputKey(FInputKeyEventArgs(nullptr,INPUTDEVICEID_NONE,Key,IE_Pressed,FPlatformTime::Cycles64()));
 			Controller->InputKey(FInputKeyEventArgs(nullptr,INPUTDEVICEID_NONE,Key,IE_Released,FPlatformTime::Cycles64()));
+			// Editor 的潜伏命令可能早于 PIE 的 PlayerInput。留出完整一帧派发事件，才检查状态或移动相机。
+			NextInputCheckFrame = GFrameCounter + 2;
 		}
 		void AimGround(FIntVector Cell)
 		{
@@ -272,6 +276,7 @@ namespace CastleCannonPlayerInputTests
 		int32 Family=0,Scenario=0,Stage=0;
 		double Deadline=FPlatformTime::Seconds()+120.0;
 		double InitializationDeadline=FPlatformTime::Seconds()+20.0;
+		uint64 NextInputCheckFrame=0;
 		const TCHAR* Families[4]={TEXT("ArcherTower"),TEXT("Farm"),TEXT("ShieldTower"),TEXT("NormalRoom")};
 		const TCHAR* Scenarios[3]={TEXT("CannonRoof_NeighborInside"),TEXT("BothInside"),TEXT("CannonInside_NeighborRoof")};
 	};
@@ -281,17 +286,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleCannonPlayerInputTest,"MovingCastle.Cast
 	EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FCastleCannonPlayerInputTest::RunTest(const FString& Parameters)
 {
-	// 编辑器单独运行时显式加载TestMap1并启动PIE；已有Game/PIE世界时使用调用者加载的地图。
-	// TestMap1 提供本测试所需的正式棋盘及导航输入；FCommand仍明确拒绝缺失的棋盘或视口。
-	bool bHasGameWorld=false;
-	for (const auto& Context:GEngine->GetWorldContexts())
-	{
-		bHasGameWorld |= Context.WorldType==EWorldType::Game || Context.WorldType==EWorldType::PIE;
-	}
-	if (GIsEditor&&!bHasGameWorld&&!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/Test/TestMap1"),true))
-	{
-		AddError(TEXT("无法为真实输入测试加载TestMap1 PIE。")); return false;
-	}
-	ADD_LATENT_AUTOMATION_COMMAND(CastleCannonPlayerInputTests::FCommand(this)); return true;
+	// TestMap1 提供正式棋盘和导航输入，由本用例独立启动并收尾。
+	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/Test/TestMap1"))) { return false; }
+	ADD_LATENT_AUTOMATION_COMMAND(CastleCannonPlayerInputTests::FCommand(this));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
+	return true;
 }
 #endif

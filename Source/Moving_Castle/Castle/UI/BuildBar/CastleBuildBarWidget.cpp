@@ -4,6 +4,7 @@
 
 #include "Blueprint/WidgetTree.h"
 #include "Castle/Combat/CastleCombatSubsystem.h"
+#include "Castle/Dialogue/CastleDialogueSubsystem.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
@@ -13,6 +14,7 @@
 #include "CastleShopComponent.h"
 #include "Components/Image.h"
 #include "Components/TextBlock.h"
+#include "Engine/GameInstance.h"
 #include "Kismet/GameplayStatics.h"
 #include "Moving_Castle.h"
 #include "Units/Navigation/Interaction/CastlePatrolRoute.h"
@@ -45,6 +47,16 @@ void UCastleBuildBarWidget::NativeConstruct()
 	Backpack = Board->PrototypeBackpack;
 	DisplayedCapacity = INDEX_NONE;
 	bReady = ValidatePresentation() && SyncBackpack();
+	if (bReady)
+	{
+		// 卡槽只报告索引，选牌提交仍由控制器校验背包和模态状态。
+		const auto Slots = GetSlots();
+		for (int32 Index = 0; Index < Slots.Num(); ++Index)
+		{
+			Slots[Index]->SetSlotIndex(Index);
+			Slots[Index]->OnSlotClicked.AddUObject(this, &UCastleBuildBarWidget::HandleBuildBarSlotClicked);
+		}
+	}
 	EnsureModeBindings();
 	RefreshScreenVisibility();
 }
@@ -67,6 +79,10 @@ void UCastleBuildBarWidget::NativeTick(const FGeometry& MyGeometry, float InDelt
 
 void UCastleBuildBarWidget::NativeDestruct()
 {
+	for (UCastleBuildBarSlotWidget* BuildBarSlot : GetSlots())
+	{
+		if (IsValid(BuildBarSlot)) { BuildBarSlot->OnSlotClicked.RemoveAll(this); }
+	}
 	if (UCastleDirectorSubsystem* Director = BoundDirector.Get())
 	{
 		Director->OnDirectorPhaseChanged.Remove(DirectorPhaseHandle);
@@ -81,6 +97,11 @@ void UCastleBuildBarWidget::NativeDestruct()
 	{
 		Shop->OnShopChanged.RemoveDynamic(this, &UCastleBuildBarWidget::HandleShopChanged);
 		BoundShop.Reset();
+	}
+	if (UCastleDialogueSubsystem* Dialogue = BoundDialogue.Get())
+	{
+		Dialogue->OnDialogueActivityChanged.Remove(DialogueActivityHandle);
+		BoundDialogue.Reset();
 	}
 	Super::NativeDestruct();
 }
@@ -113,10 +134,28 @@ void UCastleBuildBarWidget::EnsureModeBindings()
 		BoundShop = Controller->GetShop();
 		BoundShop->OnShopChanged.AddUniqueDynamic(this, &UCastleBuildBarWidget::HandleShopChanged);
 	}
+	if (!BoundDialogue.IsValid())
+	{
+		// 折叠的 UMG 控件可能停止 Tick，显隐由对话开始、结束和取消事件直接驱动。
+		if (UGameInstance* GameInstance = World->GetGameInstance())
+		{
+			if (auto* Dialogue = GameInstance->GetSubsystem<UCastleDialogueSubsystem>())
+			{
+				BoundDialogue = Dialogue;
+				DialogueActivityHandle = Dialogue->OnDialogueActivityChanged.AddUObject(
+					this, &UCastleBuildBarWidget::RefreshScreenVisibility);
+			}
+		}
+	}
 }
 
 bool UCastleBuildBarWidget::ShouldDisplayInCurrentScreen() const
 {
+	// 对话与建造栏共用视口底部。对话结束时仍检查商店、路径和战斗状态。
+	if (BoundDialogue.IsValid() && BoundDialogue->IsDialoguePlaying())
+	{
+		return false;
+	}
 	// 透景房间商店打开时自带 10 格备战席，此时隐藏建造栏避免底部重影。
 	if (BoundShop.IsValid() && BoundShop->IsShopOpen())
 	{
@@ -141,7 +180,8 @@ bool UCastleBuildBarWidget::ShouldDisplayInCurrentScreen() const
 
 void UCastleBuildBarWidget::RefreshScreenVisibility()
 {
-	SetVisibility((bReady && ShouldDisplayInCurrentScreen()) ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	// 根容器保留自身鼠标命中穿透，让内层卡槽可以接收点击选择。
+	SetVisibility((bReady && ShouldDisplayInCurrentScreen()) ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
 }
 
 void UCastleBuildBarWidget::HandleDirectorPhaseChanged(const ECastleDirectorPhase NewPhase)
@@ -152,6 +192,17 @@ void UCastleBuildBarWidget::HandleDirectorPhaseChanged(const ECastleDirectorPhas
 void UCastleBuildBarWidget::HandlePatrolEditingChanged(const bool bIsEditing)
 {
 	RefreshScreenVisibility();
+}
+
+void UCastleBuildBarWidget::HandleBuildBarSlotClicked(const int32 SlotIndex)
+{
+	if (!Controller.IsValid())
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("建造栏 WBP %s 点击卡槽 %d 失败：玩家控制器已失效。"),
+			*GetClass()->GetPathName(), SlotIndex + 1);
+		return;
+	}
+	Controller->SelectBackpackSlotFromBuildBar(SlotIndex);
 }
 
 void UCastleBuildBarWidget::HandleShopChanged()

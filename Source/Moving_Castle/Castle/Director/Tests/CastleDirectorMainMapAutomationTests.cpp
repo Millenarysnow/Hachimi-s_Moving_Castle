@@ -1,7 +1,9 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
-#if WITH_DEV_AUTOMATION_TESTS
+#if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 #include "Misc/AutomationTest.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
+#include "Castle/Automation/CastlePIEAutomation.h"
+#include "Castle/Director/CastleDirectorConfigDataAsset.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/SkyIslands/Rest/CastleRestSkyIsland.h"
@@ -20,17 +22,20 @@
 #include "Components/Button.h"
 #include "Components/TextBlock.h"
 #include "Components/StaticMeshComponent.h"
-#include "Components/TextRenderComponent.h"
 #include "Components/WidgetSwitcher.h"
 #include "CastleShopComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerStart.h"
 #include "HAL/IConsoleManager.h"
 #include "InputKeyEventArgs.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/OutputDeviceNull.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Tests/AutomationCommon.h"
+#include "NiagaraComponent.h"
 #include "Units/Navigation/Interaction/CastlePatrolRoute.h"
 
 
@@ -67,12 +72,10 @@ namespace
   explicit FCheckDirectorMainMap(FAutomationTestBase* InTest) : Test(InTest) {}
   virtual bool Update() override
   {
-	UWorld* World = nullptr;
-	for (const FWorldContext& Context : GEngine->GetWorldContexts())
-	{
-		if (Context.WorldType == EWorldType::PIE && Context.World()) { World = Context.World(); break; }
-	}
-	if (!Test->TestNotNull(TEXT("独立游戏世界存在"), World)) { return true; }
+	UWorld* World = GEditor->PlayWorld;
+	// 正式地图的 BeginPlay 完成后才检查导演、HUD 和视口输入。
+	if (FPlatformTime::Seconds() < StartupDeadline && (!World || !World->HasBegunPlay())) { return false; }
+	if (!Test->TestTrue(TEXT("独立 MainMap PIE 已开始游戏"), World && World->HasBegunPlay())) { return true; }
 	UCastleDirectorSubsystem* Director = World->GetSubsystem<UCastleDirectorSubsystem>();
 	ACastlePlayerController* Controller = Cast<ACastlePlayerController>(World->GetFirstPlayerController());
 	if (!Test->TestNotNull(TEXT("本地控制器类型正确"), Controller)) { return true; }
@@ -83,15 +86,30 @@ namespace
 		if (!Test->TestTrue(TEXT("真实MainMap导演已自动启动"), Director && Director->IsRunning())) { return true; }
 		Test->TestEqual(TEXT("真实开局为编辑阶段"), Director->GetPhase(), ECastleDirectorPhase::Editing);
 		Test->TestEqual(TEXT("开局等级为1"), Director->GetLevel(), 1);
-		Test->TestEqual(TEXT("开局经验为0"), Director->GetExperience(), 0);
+		Test->TestEqual(TEXT("开局 Lv1 房间上限30"), Director->GetCurrentRoomLimit(), 30);
 		int32 NodeCount = 0;
-		for (TActorIterator<ACastleDirectorNodeActor> It(World); It; ++It) { ++NodeCount; }
+		for (TActorIterator<ACastleDirectorNodeActor> It(World); It; ++It)
+		{
+			++NodeCount;
+			const auto* Portal = It->FindComponentByClass<UNiagaraComponent>();
+			Test->TestTrue(TEXT("已激活浮空节点播放正式 Niagara 圆环，同时保有屏幕标签"),
+				Portal && Portal->GetAsset() == Director->GetConfig()->NodePortalSystem && It->IsLabelReady());
+			Test->TestTrue(TEXT("门户特效自身不参与碰撞或导航"), Portal
+				&& Portal->GetCollisionEnabled() == ECollisionEnabled::NoCollision && !Portal->CanEverAffectNavigation());
+		}
 		Test->TestTrue(TEXT("真实世界中生成2至3个节点"), NodeCount >= 2 && NodeCount <= 3);
+		const TActorIterator<APlayerStart> Start(World);
+		Test->TestTrue(TEXT("正式 PIE 从主塔正门前的新起点出生"), Start && Controller->GetPawn()
+			&& Controller->GetPawn()->GetActorLocation().Equals(Start->GetActorLocation(), 1.0)
+			&& Start->GetActorLocation().Equals(FVector(2680, 580, 1882), 1.0));
 		FText Reason;
-		Test->TestFalse(TEXT("开局没有商店权限"), Director->IsShopAccessAllowed(Reason));
+		// 真实 MainMap 开局通过控制器的统一开关入口打开商店，再关闭后继续验证 HUD。
+		Test->TestTrue(TEXT("正式开局即可使用普通商店"), Director->IsShopAccessAllowed(Reason));
 		Controller->ToggleShop();
-		Test->TestFalse(TEXT("真实B键入口拒绝开店"), Controller->GetShop()->IsShopOpen());
-		Test->TestTrue(TEXT("真实HUD房间计数是10/15"), Director->GetHUDSummary().Contains(TEXT("房间 10/15")));
+		Test->TestTrue(TEXT("正式开局的B键入口可打开商店"), Controller->GetShop()->IsShopOpen());
+		Controller->ToggleShop();
+		Test->TestFalse(TEXT("关闭后商店界面收起"), Controller->GetShop()->IsShopOpen());
+		Test->TestTrue(TEXT("真实HUD显示开局房间计数5/30"), Director->GetHUDSummary().Contains(TEXT("房间 5/30")));
 		if (UCastleEconomyHUDWidget* Balance = FindMainMapWidget<UCastleEconomyHUDWidget>(*Test, World))
 		{
 			// 真实账户事件应该在同一帧更新 WBP，HUD 不应参与中心指针的命中测试。
@@ -145,7 +163,8 @@ namespace
 				CheckActionIconStates(*Test, const_cast<UCastleHUDIconButtonWidget*>(GuideBtn), TEXT("ActionButton"), TEXT("IconStates"));
 				if (BuildBar)
 				{
-					Test->TestEqual(TEXT("建造页显示建造栏"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+					Test->TestEqual(TEXT("建造页显示且仅卡槽接收鼠标的建造栏"),
+						BuildBar->GetVisibility(), ESlateVisibility::SelfHitTestInvisible);
 				}
 
 				Test->TestTrue(TEXT("非致死伤害走原生命入口"), IConsoleManager::Get().ProcessUserConsoleInput(TEXT("CastleDamageMainTower 25"), Output, World));
@@ -200,7 +219,8 @@ namespace
 		}
 		if (BuildBar)
 		{
-			Test->TestEqual(TEXT("回到建造页恢复建造栏显示"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+			Test->TestEqual(TEXT("回到建造页恢复建造栏及卡槽命中穿透"),
+				BuildBar->GetVisibility(), ESlateVisibility::SelfHitTestInvisible);
 		}
 	}
 
@@ -218,10 +238,11 @@ namespace
   }
  private:
   FAutomationTestBase* Test;
+  const double StartupDeadline = FPlatformTime::Seconds() + 20.0;
   int32 Stage = 0;
  };
 #if !UE_BUILD_SHIPPING
- /** 在正式 MainMap 领取商店奖励，通过休息岛交互验证权限及建造栏。 */
+	/** 在正式 MainMap 领取商店奖励，通过休息岛交互验证常驻商店及建造栏。 */
  class FCheckIslandShopAndBuildBar final : public IAutomationLatentCommand
  {
  public:
@@ -229,7 +250,7 @@ namespace
 
   bool Update() override
   {
-	UWorld* World = AutomationCommon::GetAnyGameWorld();
+	UWorld* World = GEditor->PlayWorld;
 	auto* Director = World ? World->GetSubsystem<UCastleDirectorSubsystem>() : nullptr;
 	if (!Director || !Director->IsRunning()) { return WaitForDirector(TEXT("MainMap 导演未就绪")); }
 	auto* Controller = Cast<ACastlePlayerController>(World->GetFirstPlayerController());
@@ -276,7 +297,7 @@ namespace
 		TActorIterator<ACastleRestSkyIsland> Island(World);
 		if (!BuildBar || !Test.TestTrue(TEXT("正式休息岛已生成"), static_cast<bool>(Island))) { return true; }
 		ACastleRestSkyIsland* RestIsland = *Island;
-		Test.TestEqual(TEXT("入岛后建造栏可见"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		Test.TestEqual(TEXT("入岛后建造栏可见"), BuildBar->GetVisibility(), ESlateVisibility::SelfHitTestInvisible);
 		Test.TestFalse(TEXT("岛内主塔商店权限不可用"), Director->IsShopAccessAllowed(Reason));
 		Controller->ToggleShop();
 		Test.TestFalse(TEXT("岛内 B 键入口无法打开主塔商店"), Controller->GetShop()->IsShopOpen());
@@ -285,7 +306,7 @@ namespace
 		Test.TestTrue(TEXT("空岛商店已打开"), Controller->GetShop()->IsShopOpen());
 		Test.TestEqual(TEXT("空岛商店打开时折叠建造栏"), BuildBar->GetVisibility(), ESlateVisibility::Collapsed);
 		Controller->GetShop()->CloseShop();
-		Test.TestEqual(TEXT("空岛商店关闭后恢复建造栏"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		Test.TestEqual(TEXT("空岛商店关闭后恢复建造栏"), BuildBar->GetVisibility(), ESlateVisibility::SelfHitTestInvisible);
 		if (!Interact(*Director, RestIsland->FindComponentByClass<UCastleSkyIslandDepartureComponent>(), TEXT("离开传送门")))
 		{
 			return true;
@@ -296,7 +317,7 @@ namespace
 	case EStage::Returned:
 		if (Director->GetPhase() == ECastleDirectorPhase::SkyIsland) { return WaitForDirector(TEXT("未完成离岛")); }
 		Test.TestEqual(TEXT("返塔进入编辑阶段"), Director->GetPhase(), ECastleDirectorPhase::Editing);
-		Test.TestTrue(TEXT("返塔恢复进岛前的商店权限"), Director->IsShopAccessAllowed(Reason));
+		Test.TestTrue(TEXT("返塔后普通商店仍可用"), Director->IsShopAccessAllowed(Reason));
 		Controller->ToggleShop();
 		Test.TestTrue(TEXT("返塔后 B 键入口可打开主塔商店"), Controller->GetShop()->IsShopOpen());
 		Controller->GetShop()->CloseShop();
@@ -340,7 +361,7 @@ namespace
   explicit FCheckMainTowerSidePlacement(FAutomationTestBase* InTest) : Test(InTest) {}
   bool Update() override
   {
-   UWorld* World = AutomationCommon::GetAnyGameWorld();
+   UWorld* World = GEditor->PlayWorld;
    if (!World || !World->HasBegunPlay())
    {
     if (FPlatformTime::Seconds() <= Deadline) { return false; }
@@ -386,15 +407,24 @@ namespace
          && Target.Face == Faces[Side] && Target.Cell == Cell && Target.AdjacentCell == Cell + Offsets[Side])) { return true; }
      const FCastleTowerSideCell* Data = Board->FindTowerSideCell(Cell, Target.Face);
      if (!Test->TestNotNull(TEXT("按塔身坐标及方向取得格子数据"), Data)) { return true; }
-     Test->TestTrue(TEXT("合法五色色号与 1～9 数字"), Data->Color >= ECastleTileColor::Red
-         && Data->Color <= ECastleTileColor::Purple && Data->Number >= 1 && Data->Number <= 9);
+     Test->TestTrue(TEXT("合法玩法色与 1～9 数字"), CastleTileColors::IsPlayable(Data->Color)
+         && Data->Number >= 1 && Data->Number <= 9);
      // 高层同样能直接起建，不要求在塔脚先造一根支撑柱。
      Probe.Color = Data->Color;
      Probe.Number = Data->Number;
      Test->TestTrue(TEXT("实际命中的每个侧格都可摆放匹配房间"), Board->CanPlaceBuildingAtCursor(Target, Probe, Reason));
-     Test->TestTrue(TEXT("面板及数字可见，不占实体碰撞或导航"), Data->Panel->IsVisible() && Data->Label->IsVisible()
-         && Data->Panel->GetCollisionEnabled() == ECollisionEnabled::QueryOnly && !Data->Panel->CanEverAffectNavigation()
-         && !Data->Label->CanEverAffectNavigation() && Data->Label->Text.ToString() == FString::FromInt(Data->Number));
+     UMaterialInstanceDynamic* PanelMaterial = Cast<UMaterialInstanceDynamic>(Data->Panel->GetMaterial(0));
+     FLinearColor ExpectedTint;
+     Test->TestTrue(TEXT("纹理面板可见且仅参与可见性查询，不占实体碰撞或导航"), Data->Panel->IsVisible()
+         && Data->Panel->GetCollisionEnabled() == ECollisionEnabled::QueryOnly
+         && !Data->Panel->CanEverAffectNavigation() && PanelMaterial != nullptr);
+     if (PanelMaterial)
+     {
+         Test->TestTrue(TEXT("棋盘贴图数字帧与格子数字一致"), FMath::IsNearlyEqual(
+             PanelMaterial->K2_GetScalarParameterValue(TEXT("Frame (S)")), static_cast<float>(Data->Number - 1)));
+         Test->TestTrue(TEXT("棋盘贴图颜色与格子颜色一致"), CastleTileColors::TryGetGridTint(Data->Color, ExpectedTint)
+             && PanelMaterial->K2_GetVectorParameterValue(TEXT("BackgroundColor")).Equals(ExpectedTint, 0.001f));
+     }
     }
    }
 
@@ -403,12 +433,18 @@ namespace
    const FVector TowerBottom = Board->MainTowerActor->GetActorLocation();
    Test->TestFalse(TEXT("塔顶不提供放置格"), Board->TryResolveGridCursorTarget(
        TowerBottom + FVector(0, 0, 7000), TowerBottom + FVector(0, 0, 5000), Other));
-   FCastleBuildingDescriptor Starter;
-   if (!Test->TestTrue(TEXT("起始背包槽位 1 有可放卡"), Board->PrototypeBackpack->TryGetItemAt(0, Starter))) { return true; }
-   Test->TestTrue(TEXT("实际开局卡匹配首层 -X"), Board->CanPlaceBuildingAtCursor(BottomTarget, Starter, Reason));
+   // 正式手牌已打乱。按实际落点找到能匹配后门的任一张牌，再从同一槽用生产入口放置。
+   const auto Hand = Board->PrototypeBackpack->GetItems();
+   const int32 StarterIndex = Hand.IndexOfByPredicate([&](const FCastleBuildingDescriptor& Card)
+   {
+    return Board->CanPlaceBuildingAtCursor(BottomTarget, Card, Reason);
+   });
+   if (!Test->TestTrue(TEXT("五张实际开局牌中至少一张匹配首层 -X"), Hand.Num() == 5 && StarterIndex != INDEX_NONE)) { return true; }
+   const FCastleBuildingDescriptor& Starter = Hand[StarterIndex];
    const FCastleTowerSideCell* BottomCell = Board->FindTowerSideCell(Base, Faces[0]);
    FCastleBuildingDescriptor OffColor = Starter;
    OffColor.Color = BottomCell->Color == ECastleTileColor::Red ? ECastleTileColor::Blue : ECastleTileColor::Red;
+   OffColor.Number = BottomCell->Number;
    Test->TestTrue(TEXT("不同色同数字可放"), Board->CanPlaceBuildingAtCursor(BottomTarget, OffColor, Reason));
    OffColor.Number = BottomCell->Number % 9 + 1;
    Test->TestFalse(TEXT("颜色和数字都不同拒绝"), Board->CanPlaceBuildingAtCursor(BottomTarget, OffColor, Reason));
@@ -431,7 +467,7 @@ namespace
        && Board->FindTowerSideCell(Base, Faces[0]) == BottomCell && Board->CanPlaceBuildingAtCursor(Other, Starter, Reason));
 
    const int32 Before = Board->PrototypeBackpack->GetItemCount();
-   ACastleBuildingBase* Room = Board->PlaceBackpackBuildingAtCursor(BottomTarget, 0, Reason);
+   ACastleBuildingBase* Room = Board->PlaceBackpackBuildingAtCursor(BottomTarget, StarterIndex, Reason);
    if (!Test->TestTrue(TEXT("沿正式背包入口放置并完成飞入"), CastleBuildingTests::CompletePlacement(Room)))
    {
     Test->AddError(Reason.ToString());
@@ -449,32 +485,6 @@ namespace
   double Deadline = FPlatformTime::Seconds() + 20.0;
  };
 
- /** 只停止本测试启动的PIE，等待世界销毁后才把控制权交回自动化队列。 */
- class FStopDirectorMainMap final : public IAutomationLatentCommand
- {
- public:
-  explicit FStopDirectorMainMap(FAutomationTestBase* InTest) : Test(InTest) {}
-  virtual bool Update() override
-  {
-   if (!AutomationCommon::GetAnyGameWorld()) { return true; }
-   if (!bRequested)
-   {
-    UClass* ToolClass = FindObject<UClass>(nullptr, TEXT("/Script/EditorToolset.EditorAppToolset"));
-    UFunction* Stop = ToolClass ? ToolClass->FindFunctionByName(TEXT("StopPIE")) : nullptr;
-    if (!Stop) { Test->AddError(TEXT("官方StopPIE工具不可用，无法结束本测试PIE。")); return true; }
-    struct FStopParams { UObject* ReturnValue = nullptr; } Params;
-    ToolClass->GetDefaultObject()->ProcessEvent(Stop, &Params);
-    bRequested = true;
-    StartedAt = FPlatformTime::Seconds();
-   }
-   if (FPlatformTime::Seconds() - StartedAt > 15.0) { Test->AddError(TEXT("PIE结束等待超时。")); return true; }
-   return false;
-  }
- private:
-  FAutomationTestBase* Test;
-  bool bRequested = false;
-  double StartedAt = 0.0;
- };
 }
 
 /** 真实MainMap通过编辑器加载和PIE验证，避免未烘焙-game进程缺失外部Actor的差异。 */
@@ -482,10 +492,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDirectorMainMapTest, "MovingCastle.Direc
  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FCastleDirectorMainMapTest::RunTest(const FString& Parameters)
 {
- if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/MainMap"), true)) { return false; }
+ if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
  ADD_LATENT_AUTOMATION_COMMAND(FEngineWaitLatentCommand(0.1f));
  ADD_LATENT_AUTOMATION_COMMAND(FCheckDirectorMainMap(this));
- ADD_LATENT_AUTOMATION_COMMAND(FStopDirectorMainMap(this));
+ // 游戏结束场景会暂停世界，仍由编辑器统一结束本用例的 PIE。
+ FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
  return true;
 }
 #if !UE_BUILD_SHIPPING
@@ -493,10 +504,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDirectorIslandShopAndBuildBarTest, "Movi
  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FCastleDirectorIslandShopAndBuildBarTest::RunTest(const FString& Parameters)
 {
- if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/MainMap"), true)) { return false; }
+ if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
  ADD_LATENT_AUTOMATION_COMMAND(FEngineWaitLatentCommand(0.1f));
  ADD_LATENT_AUTOMATION_COMMAND(FCheckIslandShopAndBuildBar(*this));
- ADD_LATENT_AUTOMATION_COMMAND(FStopDirectorMainMap(this));
+ FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
  return true;
 }
 #endif
@@ -504,10 +515,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleTowerSideMainMapTest, "MovingCastle.Plac
  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FCastleTowerSideMainMapTest::RunTest(const FString& Parameters)
 {
- if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/MainMap"), true)) { return false; }
+ if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
  ADD_LATENT_AUTOMATION_COMMAND(FEngineWaitLatentCommand(0.1f));
  ADD_LATENT_AUTOMATION_COMMAND(FCheckMainTowerSidePlacement(this));
- ADD_LATENT_AUTOMATION_COMMAND(FStopDirectorMainMap(this));
+ FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
  return true;
 }
 

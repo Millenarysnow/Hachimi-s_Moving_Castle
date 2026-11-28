@@ -21,7 +21,7 @@ public:
 
 	/** 校验曲线自身结构；名册交叉引用由战斗配置统一校验。失败原因含资产及数组下标。 */
 	bool ValidateConfiguration(FText& OutFailureReason) const;
-	/** 复制关内所有波次并完成表外外推，成功后才输出。 */
-	bool BuildBattlePlan(ECastleBattleKind Kind, int32 KindOrdinal,
+	/** 按从 1 起的表项序号复制所有波次及执行表外外推，成功后才输出。 */
+	bool BuildBattlePlan(ECastleBattleKind Kind, int32 TableOrdinal,
 		TArray<FCastleCombatWaveDefinition>& OutWaves, FText& OutFailureReason) const;
 };

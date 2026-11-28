@@ -9,6 +9,7 @@
 
 class ACastleBoard;
 class UCastleBackpackComponent;
+class UCastleBadgeRuntimeSubsystem;
 class UCastleEconomyComponent;
 
 /** 商品保存完整卡牌和生成时的报价，售罄后仍保留卡面，直到主动刷新。 */
@@ -21,7 +22,7 @@ struct MOVING_CASTLE_API FCastleShopOffer
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "商店")
 	FCastleBuildingDescriptor Descriptor;
 
-	/** 当前这张商品的确定购买价，UI 和实际扣费共用此值。 */
+	/** 内部货架保存定价策略的原价；公开的货架副本包含本次实际买牌价。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "商店")
 	int32 Price = 0;
 
@@ -82,13 +83,19 @@ public:
 	/** 奖励专用免费整批换牌；失败时商品和正式随机流均保持不变。 */
 	bool TryRefreshOffersForReward(FText& OutFailureReason);
 
+	/** 闭店时配置教学货架及下一次刷新。空货架明确表示缺货，仍允许付费刷新。 */
+	bool SetScriptedOffers(TConstArrayView<FCastleBuildingDescriptor> Current,
+		TConstArrayView<FCastleBuildingDescriptor> OnRefresh, FText& OutReason);
+	/** 固定货架允许零至六张商品，普通货架仍完整填满。 */
+	bool UsesScriptedOffers() const { return bScriptedStock; }
+
 	/** 奖励事务：在临时状态中初始化（如需）、免费换批并打开，全部成功后才提交。 */
 	bool TryOpenForReward(UCastleEconomyComponent* InEconomy, ACastleBoard* InBoard, FText& OutFailureReason);
 
-	/** 导演在提交升级之前预生成免费商品，候选组件独立保存随机流和新商品。 */
+	/** 导演在提交过关奖励前预生成免费商品，候选组件独立保存随机流和新商品。 */
 	bool PrepareRewardShop(UCastleEconomyComponent* InEconomy, ACastleBoard* InBoard, int32 CandidateMaxNumber,
 		UCastleShopComponent& Candidate, FText& OutFailureReason);
-	/** 只发布已成功准备的候选，供包含成长、回血与商店的联合奖励提交。 */
+	/** 只发布已成功准备的候选，供包含金币、回血与商店的联合奖励提交。 */
 	void CommitRewardShop(UCastleShopComponent& Candidate);
 
 	/** 修改房间总上限；非正数配置拒绝并保留原值。 */
@@ -121,7 +128,7 @@ public:
 	const ACastleBoard* GetBoundBoard() const { return Board.Get(); }
 
 	UFUNCTION(BlueprintPure, Category = "移动城堡|商店")
-	TArray<FCastleShopOffer> GetOffers() const { return Offers; }
+	TArray<FCastleShopOffer> GetOffers() const;
 
 	/** 返回待出售背包卡牌的副本，面板可展示类型、颜色和数字后让玩家选择。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|商店")
@@ -131,19 +138,33 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|商店")
 	int32 GetOwnedRoomCount() const;
 
+	/** 商店与导演共用占格统计，失败原因交给业务入口报告。 */
+	static bool TryCountOwnedRoomCells(const ACastleBoard* InBoard, int32& OutCells, FText& OutReason);
+
 	/** 表现层订阅此事件，避免商品操作依赖某一种 Widget。 */
 	UPROPERTY(BlueprintAssignable, Category = "移动城堡|商店")
 	FCastleShopChanged OnShopChanged;
 
 private:
+	friend class UCastleDirectorSubsystem;
+	/** 导演通过整张成长表校验并成功扩层后，一次写入已验证的新商店上限。 */
+	void CommitValidatedTowerGrowth(int32 NewRoomLimit, int32 NewMaxNumber);
+
 	/** 共用交易前置校验，防止余额事件重入交易或绕过商店开关。 */
 	bool ValidateTrade(FText& OutFailureReason) const;
+	/** 游戏世界的普通交易需要本局徽章状态；离线商店输入无世界状态可记账。 */
+	bool TryResolveTradeBadgeRuntime(UCastleBadgeRuntimeSubsystem*& OutRuntime, FText& OutFailureReason) const;
 
 	/** 在临时随机流中完整生成六张商品，调用失败不影响已展示的数据。 */
-	bool GenerateOffers(FRandomStream& Stream, TArray<FCastleShopOffer>& OutOffers, FText& OutFailureReason) const;
+	bool GenerateOffers(FRandomStream& Stream, TArray<FCastleShopOffer>& OutOffers, FText& OutFailureReason,
+		TOptional<int32> FirstNumber = {}) const;
+	/** 每张标准房独立抽建筑和四色；明确传入数字区间用于区分普通商品与返利卡。 */
+	bool GenerateRandomRoom(FRandomStream& Stream, int32 MinNumber, int32 MaxNumber, TOptional<int32> ForcedNumber,
+		FCastleBuildingDescriptor& OutCard, FText& OutFailureReason) const;
+	int32 GetBuyPrice(const FCastleShopOffer& Offer) const;
 
 	/** 付费刷新和奖励刷新共用候选生成及提交事务。 */
-	bool RefreshOffersInternal(bool bFree, FText& OutFailureReason);
+	bool RefreshOffersInternal(bool bRewardRefresh, FText& OutFailureReason);
 
 	/** 定价接口唯一调用边界，额外拒绝策略返回的负价。 */
 	bool CalculatePrice(const FCastleBuildingDescriptor& Descriptor, bool bSelling, int32& OutPrice, FText& OutFailureReason) const;
@@ -163,6 +184,10 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<FCastleShopOffer> Offers;
+	/** 教学货架与随机货架互斥，重复打开时保留售罄状态。 */
+	UPROPERTY(Transient) TArray<FCastleShopOffer> ScriptedRefreshOffers;
+	bool bScriptedStock = false;
+	bool bScriptedRefreshPending = false;
 
 	/** 临时生成成功后才推进此流，失败重试不会消耗随机结果。 */
 	FRandomStream RandomStream;

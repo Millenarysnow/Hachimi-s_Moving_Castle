@@ -68,9 +68,9 @@ UCastleCardPortrait* UCastleCardPortraitSubsystem::RequestPortrait(const FCastle
 		OutFailureReason = FText::FromString(FString::Printf(TEXT("棋盘 %s 无法提供有效的建筑取景尺寸。"), *GetNameSafe(Board)));
 		return nullptr;
 	}
-	// 正式材质不读取玩法色号，箔光也只属于卡面；不为这些值重复建立摄影缓存。
-	const FString Key = FString::Printf(TEXT("%s:%d:%.9g:%.9g"), *Descriptor.Definition->GetPathName(),
-		Descriptor.Level, Board->CellSize, Board->LayerHeight);
+	// 屋面与柱身会读本张卡的色号。数字和箔光由卡面合成，仍可共享同一张模型照片。
+	const FString Key = FString::Printf(TEXT("%s:%d:%d:%.9g:%.9g"), *Descriptor.Definition->GetPathName(),
+		Descriptor.Level, static_cast<int32>(Descriptor.Color), Board->CellSize, Board->LayerHeight);
 	if (const TObjectPtr<UCastleCardPortrait>* Found = Portraits.Find(Key))
 	{
 		return Found->Get();
@@ -94,8 +94,25 @@ void UCastleCardPortraitSubsystem::SetShopVisible(UObject* Shop, bool bVisible)
 	else if (VisibleShop.Get() == Shop)
 	{
 		VisibleShop.Reset();
-		ResetDynamicView();
+		if (!VisibleStandalonePortraits.Contains(DynamicConsumer)) { ResetDynamicView(); }
 	}
+}
+
+void UCastleCardPortraitSubsystem::SetStandalonePortraitVisible(UObject* Consumer, UCastleCardPortrait* Portrait, bool bVisible)
+{
+	if (!bVisible)
+	{
+		VisibleStandalonePortraits.Remove(Consumer);
+		ClearDynamicView(Consumer);
+		return;
+	}
+	if (!IsValid(Consumer) || !IsValid(Portrait))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("无法登记独立卡牌摄影：卡牌 %s 或摄影请求 %s 已失效。"),
+			*GetPathNameSafe(Consumer), *GetPathNameSafe(Portrait));
+		return;
+	}
+	VisibleStandalonePortraits.Add(Consumer, Portrait);
 }
 
 void UCastleCardPortraitSubsystem::SetDynamicView(UObject* Consumer, UCastleCardPortrait* Portrait, const FVector2D& Tilt)
@@ -235,31 +252,6 @@ bool UCastleCardPortraitSubsystem::StagePortrait(UCastleCardPortrait* Portrait, 
 		DropStage();
 		return false;
 	}
-	TArray<UMeshComponent*> Meshes;
-	StagedModel->GetComponents<UMeshComponent>(Meshes);
-	TSet<UMaterialInterface*> PreparedMaterials;
-	for (UMeshComponent* Mesh : Meshes)
-	{
-		// 按需着色器编译时，主动准备此模型会实际绘制的材质，不能把首次灰模渲进缓存。
-		if (Mesh->IsVisible())
-		{
-			for (UMaterialInterface* Material : Mesh->GetMaterials())
-			{
-				if (!IsValid(Material))
-				{
-					OutFailureReason = FText::FromString(FString::Printf(TEXT("美术组件 %s 的材质槽未配置。"), *Mesh->GetPathName()));
-					DropStage();
-					return false;
-				}
-				if (!PreparedMaterials.Contains(Material))
-				{
-					Material->EnsureIsComplete();
-					PreparedMaterials.Add(Material);
-				}
-			}
-		}
-	}
-
 	StageCenter = Bounds.GetCenter();
 	// 预留卡窗圆角和悬停余量；同一个模型切换视角时保持距离，避免呼吸式缩放。
 	StageDistance = Bounds.GetExtent().Size() / FMath::Sin(FMath::DegreesToRadians(PortraitFov * 0.5f)) * 1.08f;
@@ -289,12 +281,14 @@ void UCastleCardPortraitSubsystem::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 	const double Now = FPlatformTime::Seconds();
-	if (Now < NextCaptureAt || !VisibleShop.IsValid())
+	if (Now < NextCaptureAt)
 	{
 		return;
 	}
-	const bool bIdleCapture = !PendingPortraits.IsEmpty();
-	UCastleCardPortrait* Portrait = bIdleCapture ? PendingPortraits[0].Get() : DynamicPortrait.Get();
+	const int32 PendingIndex = FindPendingCaptureIndex();
+	const bool bIdleCapture = PendingIndex != INDEX_NONE;
+	UCastleCardPortrait* Portrait = bIdleCapture ? PendingPortraits[PendingIndex].Get()
+		: (HasDynamicCaptureRequest() ? DynamicPortrait.Get() : nullptr);
 	if (Portrait == nullptr)
 	{
 		return;
@@ -304,30 +298,18 @@ void UCastleCardPortraitSubsystem::Tick(float DeltaTime)
 	bool bCanCapture = StagePortrait(Portrait, Reason);
 	if (bCanCapture)
 	{
-		// 网格异步建好后才能拍一张可长期复用的图；等待有明示状态与超时，不提交空图。
-		TArray<UStaticMeshComponent*> Meshes;
-		StagedModel->GetComponents<UStaticMeshComponent>(Meshes);
-		for (const UStaticMeshComponent* Component : Meshes)
+		// 轮询网格与材质的异步编译。超时前保留明确的排队状态，终止后由卡牌呈现失败。
+		bCanCapture = StagedModel->ArePreviewRenderResourcesReady(Reason);
+		if (!bCanCapture && Reason.IsEmpty())
 		{
-			const UStaticMesh* Mesh = Component->GetStaticMesh();
-			if (Component->IsVisible() && (!IsValid(Mesh) || Mesh->IsCompiling()
-				|| Mesh->HasPendingRenderResourceInitialization() || !Component->IsRenderStateCreated()))
-			{
-				if (IsValid(Mesh) && Now - GeometryWaitStartedAt < GeometryWaitSeconds)
-				{
-					return;
-				}
-				Reason = FText::FromString(FString::Printf(TEXT("网格 %s（组件 %s）缺失或渲染资源未在时限内就绪。"),
-					*GetNameSafe(Mesh), *Component->GetPathName()));
-				bCanCapture = false;
-				break;
-			}
+			if (Now - GeometryWaitStartedAt < GeometryWaitSeconds) { return; }
+			Reason = INVTEXT("预览网格或材质在 30 秒内未就绪。");
 		}
 	}
 
 	if (bIdleCapture)
 	{
-		PendingPortraits.RemoveAt(0, EAllowShrinking::No);
+		PendingPortraits.RemoveAt(PendingIndex, EAllowShrinking::No);
 		if (bCanCapture)
 		{
 			Portrait->Texture = NewPortraitTarget(this);
@@ -367,9 +349,28 @@ void UCastleCardPortraitSubsystem::Tick(float DeltaTime)
 
 bool UCastleCardPortraitSubsystem::IsTickable() const
 {
-	return Super::IsTickable() && VisibleShop.IsValid() && (!PendingPortraits.IsEmpty()
-		|| (bDynamicNeedsCapture && DynamicFailure.IsEmpty() && DynamicConsumer.IsValid() && IsValid(DynamicPortrait)
-			&& DynamicPortrait->State == ECastleCardPortraitState::Ready));
+	return Super::IsTickable() && (FindPendingCaptureIndex() != INDEX_NONE || HasDynamicCaptureRequest());
+}
+
+int32 UCastleCardPortraitSubsystem::FindPendingCaptureIndex() const
+{
+	// 拆除菜单优先用自己的待拍牌；只有商店可见时才继续拍摄其货架批次。
+	return PendingPortraits.IndexOfByPredicate([this](const TObjectPtr<UCastleCardPortrait>& Pending)
+	{
+		if (VisibleShop.IsValid()) { return true; }
+		for (const auto& Pair : VisibleStandalonePortraits)
+		{
+			if (Pair.Key.IsValid() && Pair.Value.Get() == Pending.Get()) { return true; }
+		}
+		return false;
+	});
+}
+
+bool UCastleCardPortraitSubsystem::HasDynamicCaptureRequest() const
+{
+	return bDynamicNeedsCapture && DynamicFailure.IsEmpty() && DynamicConsumer.IsValid()
+		&& (VisibleShop.IsValid() || VisibleStandalonePortraits.Contains(DynamicConsumer))
+		&& IsValid(DynamicPortrait) && DynamicPortrait->State == ECastleCardPortraitState::Ready;
 }
 
 TStatId UCastleCardPortraitSubsystem::GetStatId() const
@@ -404,6 +405,7 @@ void UCastleCardPortraitSubsystem::Deinitialize()
 {
 	// 镜头先断开纹理和入镜物体，再销毁摄影场景，防止结束 PIE 时残留世界上下文。
 	VisibleShop.Reset();
+	VisibleStandalonePortraits.Reset();
 	ResetDynamicView();
 	DropStage();
 	Camera = nullptr;

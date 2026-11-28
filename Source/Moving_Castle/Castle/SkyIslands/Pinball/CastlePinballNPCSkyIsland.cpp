@@ -11,36 +11,14 @@
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/PawnMovementComponent.h"
-#include "Materials/MaterialInstanceDynamic.h"
 #include "Moving_Castle.h"
 #include "UObject/ConstructorHelpers.h"
 
-namespace
-{
-	const FLinearColor BoardColor(0.035f, 0.12f, 0.18f);
-	const FLinearColor RailColor(0.15f, 0.57f, 0.70f);
-	const FLinearColor PegColor(0.70f, 0.19f, 0.40f);
-	const FLinearColor MultiplyColor(0.22f, 0.68f, 0.35f);
-	const FLinearColor AddColor(0.21f, 0.40f, 0.89f);
-	const FLinearColor NPCColor(0.80f, 0.39f, 0.16f);
-	const FLinearColor GoldColor(0.95f, 0.68f, 0.08f);
-
-	// 模板网格的三个尺寸都是 100 厘米，且枢轴位于包围盒中心。
-	void SetShape(UStaticMeshComponent& Component, UStaticMesh* Mesh, UMaterialInterface* Material,
-		const FVector& Position, const FVector& Size, const FLinearColor& Color)
-	{
-		Component.SetStaticMesh(Mesh);
-		Component.SetRelativeLocation(Position);
-		Component.SetRelativeScale3D(Size / 100.0);
-		Component.SetGenerateOverlapEvents(false);
-		UMaterialInstanceDynamic* Tint = UMaterialInstanceDynamic::Create(Material, &Component);
-		Tint->SetVectorParameterValue(TEXT("Color"), Color);
-		Component.SetMaterial(0, Tint);
-	}
-}
-
 ACastlePinballNPCSkyIsland::ACastlePinballNPCSkyIsland()
 {
+	// 绑定该玩法的岛体，位置沿用作者对齐的岛面中心。
+	SetIslandArtMesh(TEXT("SM_SkyIsland_PinballNPC"));
+	SetDepartureArtMesh(TEXT("SM_SkyIsland_Departure_PinballNPC"));
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = false;
 	Playfield = CreateDefaultSubobject<USceneComponent>(TEXT("PinballPlayfield"));
@@ -51,14 +29,22 @@ ACastlePinballNPCSkyIsland::ACastlePinballNPCSkyIsland()
 	Console = CreateDefaultSubobject<UCastlePinballNPCConsoleComponent>(TEXT("PinballConsole"));
 	Console->SetupAttachment(Playfield);
 
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cylinder(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> Sphere(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-	CubeMesh = Cube.Object;
-	CylinderMesh = Cylinder.Object;
-	SphereMesh = Sphere.Object;
-	ShapeMaterial = Material.Object;
+	// 投币台独立网格的坐标相对原盘面组件原点保存，和盘面共用倾斜坐标系。
+	Console->SetStaticMesh(LoadIslandArt(TEXT("SM_Pinball_Console")));
+	Console->SetRelativeLocation(FVector(CastlePinball::HalfLength + 65.0, 0.0, 39.0));
+	Console->SetRelativeScale3D(FVector::OneVector);
+	Console->SetCanEverAffectNavigation(false);
+	Console->SetVisibility(true);
+	BoardMesh = LoadIslandArt(TEXT("SM_Pinball_Board"));
+	PegMesh = LoadIslandArt(TEXT("SM_Pinball_Peg"));
+	GateMesh = LoadIslandArt(TEXT("SM_Pinball_Gate"));
+	CarriageMesh = LoadIslandArt(TEXT("SM_Pinball_Carriage"));
+	GuideMesh = LoadIslandArt(TEXT("SM_Pinball_Guide"));
+	CoinMesh = LoadIslandArt(TEXT("SM_Pinball_Coin"));
+	for (int32 Style = 1; Style <= 6; ++Style)
+	{
+		RecruitMeshes.Add(LoadIslandArt(*FString::Printf(TEXT("SM_Pinball_Recruit%d"), Style)));
+	}
 	IslandConfig = TSoftObjectPtr<UCastlePinballNPCSkyIslandDataAsset>(
 		FSoftObjectPath(TEXT("/Game/MovingCastle/Data/SkyIslands/DA_PinballNPCSkyIsland.DA_PinballNPCSkyIsland")));
 	StatusWidgetClass = TSoftClassPtr<UCastlePinballNPCStatusWidget>(
@@ -69,9 +55,9 @@ bool ACastlePinballNPCSkyIsland::OnInitializeIsland(const FCastleSkyIslandContex
 {
 	using namespace CastlePinball;
 	Config = IslandConfig.LoadSynchronous();
-	if (!Config || !CubeMesh || !CylinderMesh || !SphereMesh || !ShapeMaterial)
+	if (!Config || !Console->GetStaticMesh())
 	{
-		OutFailureReason = INVTEXT("弹珠机缺少配置资产、基础网格或颜色材质。");
+		OutFailureReason = INVTEXT("弹珠机缺少配置资产或独立投币台网格。");
 		UE_LOG(LogMoving_Castle, Error, TEXT("空岛 %s，配置 %s：%s"), *GetPathName(),
 			*IslandConfig.ToSoftObjectPath().ToString(), *OutFailureReason.ToString());
 		return false;
@@ -89,13 +75,8 @@ bool ACastlePinballNPCSkyIsland::OnInitializeIsland(const FCastleSkyIslandContex
 
 	// 局部 +X 仍向下；翻转偏航把低端和盘面法线转向岛内 -X 的玩家到达点。
 	Playfield->SetRelativeRotation(FRotator(-Config->TiltAngleDegrees, 180.0, 0.0));
-	AddShape(CubeMesh, {0.0, 0.0, -10.0}, {2.0 * HalfLength, 2.0 * HalfWidth, 20.0}, BoardColor);
-	for (double Side : {-1.0, 1.0})
-	{
-		AddShape(CubeMesh, {0.0, Side * (HalfWidth + 6.0), 25.0}, {2.0 * HalfLength, 12.0, 50.0}, RailColor);
-	}
-	AddShape(CubeMesh, {-HalfLength - 6.0, 0.0, 25.0}, {12.0, 2.0 * HalfWidth, 50.0}, RailColor);
-	SetShape(*Console, CubeMesh, ShapeMaterial, {HalfLength + 65.0, 0.0, 39.0}, {90.0, 140.0, 78.0}, GoldColor);
+	// 木板、护栏与投币台整体随配置倾斜，不能烘入水平的岛体。
+	AddPlayfieldMesh(BoardMesh, FVector::ZeroVector);
 	Console->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	Console->SetCollisionResponseToAllChannels(ECR_Ignore);
 	Console->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
@@ -109,34 +90,28 @@ bool ACastlePinballNPCSkyIsland::OnInitializeIsland(const FCastleSkyIslandContex
 	ArrivalView.Pitch -= FMath::RadiansToDegrees(FMath::Asin(64.0 / ToConsole.Size()));
 	Arrival->SetRelativeLocationAndRotation(ArrivalLocation, ArrivalView);
 	AddLabel({HalfLength + 65.0, 0.0, 88.0}, INVTEXT("PINBALL  |  E"), 28.0f);
-	AddShape(CubeMesh, {LaunchX, 0.0, 52.0}, {12.0, 2.0 * HalfWidth, 10.0}, RailColor);
-	LauncherCarriage = AddShape(CubeMesh, {LaunchX, 0.0, 52.0}, {35.0, 35.0, 20.0}, GoldColor);
-	LauncherBarrel = AddShape(CylinderMesh, {LaunchX, 0.0, 30.0}, {16.0, 16.0, 53.0}, GoldColor);
+	// 滑车横移，导向套以同一枢轴偏航，预装的展示金币随套筒移动。
+	LauncherCarriage = AddPlayfieldMesh(CarriageMesh, {LaunchX, 0.0, 52.0});
+	LauncherBarrel = AddPlayfieldMesh(GuideMesh, {LaunchX, 0.0, 52.0});
 	LauncherAngle = (Config->LauncherMinAngle + Config->LauncherMaxAngle) * 0.5;
 	UpdateLauncher(0.0f);
-	AddShape(CubeMesh, {HalfLength - 12.0, 0.0, 1.0}, {24.0, 2.0 * HalfWidth, 2.0}, RailColor);
 	AddLabel({HalfLength, 0.0, 28.0}, INVTEXT("COLLECTOR"), 23.0f);
 	for (const FCastlePinballPeg& Peg : Config->Pegs)
 	{
-		AddShape(CylinderMesh, {Peg.Center.X, Peg.Center.Y, 27.0}, {2.0 * Peg.Radius, 2.0 * Peg.Radius, 54.0}, PegColor);
+		// 原作挡钉半径为 19 厘米，水平缩放后与本次模拟的圆形反弹区对齐。
+		AddPlayfieldMesh(PegMesh, {Peg.Center.X, Peg.Center.Y, 0}, {Peg.Radius / 19.0, Peg.Radius / 19.0, 1.0});
 	}
 	for (const FCastlePinballGate& Gate : Config->MultiplierGates)
 	{
 		const bool bMultiply = Gate.Mode == ECastlePinballGateMode::Multiply;
-		const FLinearColor& Color = bMultiply ? MultiplyColor : AddColor;
-		AddShape(CubeMesh, {Gate.Center.X, Gate.Center.Y, 1.5}, {7.0, Gate.Width, 3.0}, Color);
-		AddShape(CubeMesh, {Gate.Center.X, Gate.Center.Y, 68.0}, {10.0, Gate.Width, 8.0}, Color);
-		for (double Side : {-1.0, 1.0})
-		{
-			AddShape(CubeMesh, {Gate.Center.X, Gate.Center.Y + Side * Gate.Width * 0.5, 33.0},
-				{10.0, 10.0, 66.0}, Color);
-		}
-		AddLabel({Gate.Center.X, Gate.Center.Y, 78.0},
+		// 以原作 150 厘米门宽为基准，顶部数字由当前配置生成。
+		AddPlayfieldMesh(GateMesh, {Gate.Center.X, Gate.Center.Y, 0}, {1.0, Gate.Width / 150.0, 1.0});
+		AddLabel({Gate.Center.X + 9.0, Gate.Center.Y, 74.0},
 			FText::FromString(FString::Printf(TEXT("%s%d"), bMultiply ? TEXT("x") : TEXT("+"), Gate.Value)), 24.0f);
 	}
 	for (int32 Index = 0; Index < Simulation->GetNPCs().Num(); ++Index)
 	{
-		NPCBodies.Add(AddShape(CylinderMesh, FVector::ZeroVector, {2.0 * NPCRadius, 2.0 * NPCRadius, 68.0}, NPCColor));
+		NPCBodies.Add(AddPlayfieldMesh(RecruitMeshes[Index % RecruitMeshes.Num()], FVector::ZeroVector));
 		NPCLabels.Add(AddLabel(FVector::ZeroVector, FText::GetEmpty(), 26.0f));
 	}
 	SyncScene();
@@ -188,15 +163,28 @@ bool ACastlePinballNPCSkyIsland::EnterAimMode(ACastlePlayerController& Controlle
 	// 高优先级输入只在瞄准期间存在。按住方向键由 Tick 读取，阻止下层飞行输入响应。
 	AimInput = NewObject<UInputComponent>(this);
 	AimInput->bBlockInput = true;
-	for (const FKey& Key : {EKeys::LeftMouseButton, EKeys::SpaceBar})
+	AimInput->BindKey(EKeys::SpaceBar, IE_Pressed, this, &ACastlePinballNPCSkyIsland::LaunchFromInput);
+	// 此输入组件高于控制器；通过同一映射分流，不让发射同时触发棋盘放置。
+	for (const FKey& Key : CastleControlInput::GetPointerKeys())
 	{
-		AimInput->BindKey(Key, IE_Pressed, this, &ACastlePinballNPCSkyIsland::LaunchFromInput);
+		FInputKeyBinding Binding(FInputChord(Key), IE_Pressed);
+		Binding.KeyDelegate.GetDelegateWithKeyForManualSet().BindWeakLambda(this, [this](FKey Pressed)
+		{
+			if (const auto* Player = AimController.Get(); Player && Pressed == Player->GetPrimaryPlaceInteractKey())
+			{
+				LaunchFromInput();
+			}
+		});
+		AimInput->KeyBindings.Add(MoveTemp(Binding));
 	}
-	for (const FKey& Key : {EKeys::E, EKeys::Tab, EKeys::Escape})
+	// Tab / Esc 在两种模式均退出；E 的回调按当前模式门控，避免瞄准期间切换模式后仍错误退出。
+	for (const FKey& Key : {EKeys::Tab, EKeys::Escape})
 	{
 		AimInput->BindKey(Key, IE_Pressed, this, &ACastlePinballNPCSkyIsland::ExitAimMode);
 	}
+	AimInput->BindKey(EKeys::E, IE_Pressed, this, &ACastlePinballNPCSkyIsland::ExitAimModeFromE);
 	AimController = &Controller;
+	Controller.OnControlModeChanged.AddUObject(this, &ACastlePinballNPCSkyIsland::HandleAimControlModeChanged);
 	Controller.GetPawn()->GetMovementComponent()->StopMovementImmediately();
 	Controller.SetIgnoreMoveInput(true);
 	Controller.SetIgnoreLookInput(true);
@@ -205,6 +193,7 @@ bool ACastlePinballNPCSkyIsland::EnterAimMode(ACastlePlayerController& Controlle
 	Controller.GetPlayerViewPoint(ViewLocation, ViewRotation);
 	Controller.SetControlRotation((Playfield->GetComponentLocation() - ViewLocation).Rotation());
 	Controller.PushInputComponent(AimInput);
+	Controller.ClearHoverHighlight();
 	StatusWidget->SetFeedback(FText::GetEmpty());
 	RefreshStatus();
 	UE_LOG(LogMoving_Castle, Display, TEXT("弹珠机 %s 已接管投币输入。"), *GetPathName());
@@ -216,6 +205,7 @@ void ACastlePinballNPCSkyIsland::ExitAimMode()
 	if (!AimInput) { return; }
 	if (ACastlePlayerController* Controller = AimController.Get())
 	{
+		Controller->OnControlModeChanged.RemoveAll(this);
 		// 只归还本岛加上的一份忽略计数，保留控制器其他模态输入的计数。
 		Controller->PopInputComponent(AimInput);
 		Controller->SetIgnoreMoveInput(false);
@@ -229,6 +219,24 @@ void ACastlePinballNPCSkyIsland::ExitAimMode()
 		StatusWidget = nullptr;
 	}
 	UE_LOG(LogMoving_Castle, Display, TEXT("弹珠机 %s 已归还投币输入。"), *GetPathName());
+}
+
+void ACastlePinballNPCSkyIsland::ExitAimModeFromE()
+{
+	// E 仅保留经典模式的旧退出语义；设计模式的瞄准输入层继续阻挡该键，不让它触发飞行或交互。
+	const ACastlePlayerController* Controller = AimController.Get();
+	if (!IsValid(Controller))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("弹珠机 %s 无法处理瞄准态 E 键：瞄准玩家控制器已失效。"), *GetPathName());
+		return;
+	}
+	if (Controller->GetControlMode() == ECastleControlMode::Classic) { ExitAimMode(); }
+}
+
+void ACastlePinballNPCSkyIsland::HandleAimControlModeChanged(ECastleControlMode /*NewMode*/)
+{
+	// 模式切换已经提交给控制器，立即让面板读取当前生效的投币与退出键。
+	RefreshStatus();
 }
 
 void ACastlePinballNPCSkyIsland::UpdateLauncher(float DeltaSeconds)
@@ -245,7 +253,7 @@ void ACastlePinballNPCSkyIsland::UpdateLauncher(float DeltaSeconds)
 			static_cast<double>(Config->LauncherMinAngle), static_cast<double>(Config->LauncherMaxAngle));
 	}
 	LauncherCarriage->SetRelativeLocation(FVector(LaunchX, LauncherPosition, 52.0));
-	LauncherBarrel->SetRelativeLocationAndRotation(FVector(LaunchX, LauncherPosition, 33.0), FRotator(90.0, LauncherAngle, 0.0));
+	LauncherBarrel->SetRelativeLocationAndRotation(FVector(LaunchX, LauncherPosition, 52.0), FRotator(0.0, LauncherAngle, 0.0));
 }
 
 bool ACastlePinballNPCSkyIsland::TryLaunchCoin(FText& OutReason)
@@ -282,7 +290,8 @@ void ACastlePinballNPCSkyIsland::RefreshStatus()
 	if (StatusWidget && AimController.IsValid())
 	{
 		StatusWidget->RefreshStatus(AimController->GetEconomy()->GetGold(), Config->CoinLaunchCost,
-			Simulation->GetRecruitedCount(), Config->InitialNPCCount, LauncherPosition, LauncherAngle);
+			Simulation->GetRecruitedCount(), Config->InitialNPCCount, LauncherPosition, LauncherAngle,
+			AimController->GetControlMode());
 	}
 }
 
@@ -315,7 +324,7 @@ void ACastlePinballNPCSkyIsland::SyncScene()
 		Label->SetVisibility(!NPC.bRecruited);
 		if (NPC.bRecruited) { continue; }
 
-		Body->SetRelativeLocation(FVector(NPC.Position.X, NPC.Position.Y, 34.0));
+		Body->SetRelativeLocation(FVector(NPC.Position.X, NPC.Position.Y, 0.0));
 		Label->SetRelativeLocation(FVector(NPC.Position.X, NPC.Position.Y, 76.0));
 		Label->SetText(FText::FromString(FString::Printf(TEXT("%d/%d"), NPC.Hits, Config->CoinsRequiredPerNPC)));
 	}
@@ -326,8 +335,8 @@ void ACastlePinballNPCSkyIsland::SyncScene()
 		TObjectPtr<UStaticMeshComponent>& Body = CoinBodies.FindOrAdd(Coin.Id);
 		if (!Body)
 		{
-			Body = AddShape(SphereMesh, FVector::ZeroVector,
-				{2.0 * CoinRadius, 2.0 * CoinRadius, 2.0 * CoinRadius}, GoldColor);
+			// 金币网格以币心为轴，半径与模拟相同，可以直接使用模拟姿态。
+			Body = AddPlayfieldMesh(CoinMesh, FVector::ZeroVector);
 		}
 		Body->SetRelativeLocationAndRotation(FVector(Coin.Position.X, Coin.Position.Y, CoinRadius), Coin.Rotation);
 	}
@@ -341,14 +350,16 @@ void ACastlePinballNPCSkyIsland::SyncScene()
 	}
 }
 
-UStaticMeshComponent* ACastlePinballNPCSkyIsland::AddShape(
-	UStaticMesh* Mesh, const FVector& Position, const FVector& Size, const FLinearColor& Color)
+UStaticMeshComponent* ACastlePinballNPCSkyIsland::AddPlayfieldMesh(
+	UStaticMesh* Mesh, const FVector& Position, const FVector& Scale)
 {
 	UStaticMeshComponent* Shape = NewObject<UStaticMeshComponent>(this);
 	Shape->SetupAttachment(Playfield);
 	Shape->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	Shape->SetCanEverAffectNavigation(false);
-	SetShape(*Shape, Mesh, ShapeMaterial, Position, Size, Color);
+	Shape->SetStaticMesh(Mesh);
+	Shape->SetRelativeLocation(Position);
+	Shape->SetRelativeScale3D(Scale);
 	AddInstanceComponent(Shape);
 	Shape->RegisterComponent();
 	return Shape;

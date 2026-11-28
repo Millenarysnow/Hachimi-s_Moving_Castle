@@ -2,6 +2,8 @@
 #include "CastleMassEnemyLaserAttackProcessor.h"
 
 #include "CastleMassDeathSplitFragments.h"
+#include "CastleMainTowerComponent.h"
+#include "CastleMassTraits.h"
 #include "CastleMassFragments.h"
 #include "CastleMassMeleeAttackProcessor.h"
 #include "CastleMassEnemyRangedAttackProcessor.h"
@@ -36,21 +38,42 @@ void UCastleMassDeathSplitProcessor::ConfigureQueries(const TSharedRef<FMassEnti
 	Query.AddTagRequirement<FCastleMassEnemyTag>(EMassFragmentPresence::All);
 	Query.AddRequirement<FCastleMassUnitFragment>(EMassFragmentAccess::ReadOnly);
 	Query.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
+	Query.AddRequirement<FAgentRadiusFragment>(EMassFragmentAccess::ReadOnly);
 	Query.AddRequirement<FCastleMassDeathSplitFragment>(EMassFragmentAccess::ReadWrite);
 }
 
 void UCastleMassDeathSplitProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
-	Query.ForEachEntityChunk(Context, [this](FMassExecutionContext& Chunk)
+	UWorld* World = GetWorld();
+	UCastleMainTowerSubsystem* TowerSubsystem = World ? World->GetSubsystem<UCastleMainTowerSubsystem>() : nullptr;
+	if (!TowerSubsystem)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("死亡分裂失败：世界 %s 缺少主塔表面子系统。"), *GetPathNameSafe(World));
+		return;
+	}
+	FCastleTowerPrism TowerPrism;
+	const UCastleMainTowerComponent* TowerComponent = TowerSubsystem->GetRegisteredMainTower();
+	const bool bHasLivingTower = IsValid(TowerComponent) && TowerComponent->IsAlive();
+	const FCastleTowerPrism* TowerGeometry = nullptr;
+	if (bHasLivingTower)
+	{
+		if (!TowerSubsystem->GetMainTowerPrism(TowerPrism)) { return; }
+		TowerGeometry = &TowerPrism;
+	}
+
+	Query.ForEachEntityChunk(Context, [this, World, TowerGeometry](FMassExecutionContext& Chunk)
 	{
 		const auto Units = Chunk.GetFragmentView<FCastleMassUnitFragment>();
 		const auto Transforms = Chunk.GetFragmentView<FTransformFragment>();
+		const auto Radii = Chunk.GetFragmentView<FAgentRadiusFragment>();
 		const auto Splits = Chunk.GetMutableFragmentView<FCastleMassDeathSplitFragment>();
 		for (FMassExecutionContext::FEntityIterator It = Chunk.CreateEntityIterator(); It; ++It)
 		{
 			auto& Split = Splits[It];
 			if (Units[It].Health > 0.0f || Split.bHasSplit) { continue; }
-			if (!Split.ChildConfiguration.IsValid() || Split.SpawnCount < 1 || Split.SpawnCount > 64
+			const UCastleMassEnemyTrait* ChildTrait = Split.ChildConfiguration.IsValid()
+				? Cast<UCastleMassEnemyTrait>(Split.ChildConfiguration->FindTrait(UCastleMassEnemyTrait::StaticClass())) : nullptr;
+			if (!IsValid(ChildTrait) || Split.SpawnCount < 1 || Split.SpawnCount > 64
 				|| !FMath::IsFinite(Split.SpawnSpreadRadius) || Split.SpawnSpreadRadius <= 0.0f || Split.SpawnSpreadRadius > 5000.0f
 				|| !FMath::IsFinite(Split.BurstDuration) || Split.BurstDuration <= 0.0f || Split.BurstDuration > 5.0f
 				|| !FMath::IsFinite(Split.BurstArcHeight) || Split.BurstArcHeight < 0.0f || Split.BurstArcHeight > 1000.0f)
@@ -58,33 +81,95 @@ void UCastleMassDeathSplitProcessor::Execute(FMassEntityManager& EntityManager, 
 				UE_LOG(LogMoving_Castle, Error, TEXT("敌人 %d 死亡分裂失败：子配置 %s、数量或散布半径无效。"), Chunk.GetEntity(It).Index, *GetPathNameSafe(Split.ChildConfiguration.Get()));
 				continue;
 			}
-			Split.bHasSplit = true;
+			if (!FMath::IsFinite(Radii[It].Radius) || Radii[It].Radius < 0.0f
+				|| !FMath::IsFinite(ChildTrait->Radius) || ChildTrait->Radius < 0.0f)
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("敌人 %d 死亡分裂失败：母体半径或子配置 %s 的子体半径无效。"),
+					Chunk.GetEntity(It).Index, *GetPathNameSafe(Split.ChildConfiguration.Get()));
+				continue;
+			}
 			TArray<FTransform> Spawns;
-			const FVector Center = Transforms[It].GetTransform().GetLocation();
+			const FTransform& MotherTransform = Transforms[It].GetTransform();
+			const FVector TowerUp = TowerGeometry ? TowerGeometry->GetUpVector() : FVector::UpVector;
+			// 幼骸继承母体实例缩放，起点和塔面校验必须使用各自的缩放后逻辑半径。
+			const FVector MotherScale = MotherTransform.GetScale3D();
+			const float MaximumScaleMultiplier = MotherScale.GetAbsMax();
+			const float MotherRadius = Radii[It].Radius * MaximumScaleMultiplier;
+			const float ChildRadius = ChildTrait->Radius * MaximumScaleMultiplier;
+			const FVector MotherRoot = MotherTransform.GetLocation();
+			const FVector MotherCenter = MotherRoot + TowerUp * MotherRadius;
+			if (!FMath::IsFinite(MotherRadius) || !FMath::IsFinite(ChildRadius)
+				|| MotherRoot.ContainsNaN() || MotherCenter.ContainsNaN())
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("敌人 %d 死亡分裂失败：子配置 %s 的缩放半径或起点无效；母体缩放 %s、母体半径 %.3f cm、子体半径 %.3f cm、母体根节点 %s、球心 %s。"),
+					Chunk.GetEntity(It).Index, *GetPathNameSafe(Split.ChildConfiguration.Get()), *MotherScale.ToString(),
+					MotherRadius, ChildRadius, *MotherRoot.ToString(), *MotherCenter.ToString());
+				continue;
+			}
+			FVector BurstStartRoot = MotherRoot;
+			FVector BurstArcDirection = FVector::UpVector;
+			FVector RadialAxisX = FVector::ForwardVector;
+			FVector RadialAxisY = FVector::RightVector;
+			if (TowerGeometry)
+			{
+				FVector SurfacePoint;
+				FVector SurfaceNormal;
+				float SurfaceDistance = 0.0f;
+				if (!TowerGeometry->QuerySurface(MotherCenter, SurfacePoint, SurfaceNormal, SurfaceDistance))
+				{
+					UE_LOG(LogMoving_Castle, Error, TEXT("敌人 %d 死亡分裂失败：无法查询主塔表面，子配置 %s。"),
+						Chunk.GetEntity(It).Index, *Split.ChildConfiguration->GetPathName());
+					continue;
+				}
+				if (SurfaceDistance < Split.SpawnSpreadRadius + Split.BurstArcHeight + ChildRadius)
+				{
+					BurstArcDirection = SurfaceNormal;
+					FVector SphereStart = MotherCenter;
+					const float RequiredDistance = ChildRadius + 2.0f;
+					if (SurfaceDistance < RequiredDistance)
+					{
+						SphereStart = SurfacePoint + SurfaceNormal * RequiredDistance;
+					}
+					BurstStartRoot = SphereStart - TowerUp * ChildRadius;
+					const FVector ReferenceAxis = FMath::Abs(FVector::DotProduct(SurfaceNormal, TowerUp)) < 0.95f
+						? TowerUp : TowerGeometry->Rotation.GetAxisX();
+					RadialAxisX = FVector::CrossProduct(SurfaceNormal, ReferenceAxis).GetSafeNormal();
+					RadialAxisY = FVector::CrossProduct(SurfaceNormal, RadialAxisX).GetSafeNormal();
+					if (RadialAxisX.IsNearlyZero() || RadialAxisY.IsNearlyZero())
+					{
+						UE_LOG(LogMoving_Castle, Error, TEXT("敌人 %d 死亡分裂失败：主塔外法线无法构造爆散切平面。"), Chunk.GetEntity(It).Index);
+						continue;
+					}
+				}
+			}
 			for (int32 Index = 0; Index < Split.SpawnCount; ++Index)
 			{
 				const double Angle = UE_TWO_PI * Index / Split.SpawnCount;
-				FTransform Transform = Transforms[It].GetTransform();
-				Transform.SetLocation(Center);
-				Transform.SetRotation(FVector(FMath::Cos(Angle), FMath::Sin(Angle), 0.0).Rotation().Quaternion());
+				FTransform Transform = MotherTransform;
+				Transform.SetLocation(BurstStartRoot);
+				const FVector RadialDirection = RadialAxisX * FMath::Cos(Angle) + RadialAxisY * FMath::Sin(Angle);
+				Transform.SetRotation(RadialDirection.Rotation().Quaternion());
 				Spawns.Add(Transform);
 			}
 			const float BurstDuration = Split.BurstDuration;
 			const float BurstArcHeight = Split.BurstArcHeight;
 			const float SpreadRadius = Split.SpawnSpreadRadius;
-			TWeakObjectPtr<UWorld> World = GetWorld();
+			TWeakObjectPtr<UWorld> WeakWorld = World;
 			UMassEntityConfigAsset* Configuration = Split.ChildConfiguration.Get();
 			// 分裂标记先落地，生成在安全边界执行；同帧重复查询也不能生成第二批。
-			Chunk.Defer().PushCommand<FMassDeferredCreateCommand>([World, Configuration, Spawns = MoveTemp(Spawns), Center, BurstDuration, BurstArcHeight, SpreadRadius](FMassEntityManager& Manager)
+			Split.bHasSplit = true;
+			Chunk.Defer().PushCommand<FMassDeferredCreateCommand>([WeakWorld, Configuration, Spawns = MoveTemp(Spawns),
+				BurstStartRoot, BurstDuration, BurstArcHeight, SpreadRadius, BurstArcDirection,
+				RadialAxisX, RadialAxisY](FMassEntityManager& Manager)
 			{
-				if (!World.IsValid())
+				if (!WeakWorld.IsValid())
 				{
 					UE_LOG(LogMoving_Castle, Error, TEXT("死亡分裂失败：世界已失效，子配置 %s。"), *GetPathNameSafe(Configuration));
 					return;
 				}
 				TArray<FCastleMassUnitHandle> Children;
 				FText Reason;
-				if (!World->GetSubsystem<UCastleMassUnitSubsystem>()->SpawnUnits(Configuration, Spawns, Children, Reason))
+				if (!WeakWorld->GetSubsystem<UCastleMassUnitSubsystem>()->SpawnUnits(Configuration, Spawns, Children, Reason))
 				{
 					UE_LOG(LogMoving_Castle, Error, TEXT("死亡分裂失败：子配置 %s：%s。"), *GetPathNameSafe(Configuration), *Reason.ToString());
 					return;
@@ -105,8 +190,10 @@ void UCastleMassDeathSplitProcessor::Execute(FMassEntityManager& EntityManager, 
 						return;
 					}
 					const double Angle = UE_TWO_PI * Index / Children.Num();
-					Burst->Start = Center;
-					Burst->Target = Center + FVector(FMath::Cos(Angle), FMath::Sin(Angle), 0.0) * SpreadRadius;
+					const FVector RadialDirection = RadialAxisX * FMath::Cos(Angle) + RadialAxisY * FMath::Sin(Angle);
+					Burst->Start = BurstStartRoot;
+					Burst->Target = BurstStartRoot + RadialDirection * SpreadRadius;
+					Burst->ArcDirection = BurstArcDirection;
 					Burst->Elapsed = 0.0f;
 					Burst->Duration = BurstDuration;
 					Burst->ArcHeight = BurstArcHeight;
@@ -133,26 +220,47 @@ void UCastleMassSpawnBurstProcessor::ConfigureQueries(const TSharedRef<FMassEnti
 	Query.AddRequirement<FCastleMassUnitFragment>(EMassFragmentAccess::ReadOnly);
 	Query.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FMassVelocityFragment>(EMassFragmentAccess::ReadWrite);
+	Query.AddRequirement<FAgentRadiusFragment>(EMassFragmentAccess::ReadOnly);
 	Query.AddRequirement<FCastleMassMoveTargetFragment>(EMassFragmentAccess::ReadWrite);
 	Query.AddRequirement<FCastleMassSpawnBurstFragment>(EMassFragmentAccess::ReadWrite);
 }
 
 void UCastleMassSpawnBurstProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
-	Query.ForEachEntityChunk(Context, [](FMassExecutionContext& Chunk)
+	UWorld* World = GetWorld();
+	UCastleMainTowerSubsystem* TowerSubsystem = World ? World->GetSubsystem<UCastleMainTowerSubsystem>() : nullptr;
+	if (!TowerSubsystem)
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("幼骸爆散失败：世界 %s 缺少主塔表面子系统。"), *GetPathNameSafe(World));
+		return;
+	}
+	FCastleTowerPrism TowerPrism;
+	const UCastleMainTowerComponent* TowerComponent = TowerSubsystem->GetRegisteredMainTower();
+	const bool bHasLivingTower = IsValid(TowerComponent) && TowerComponent->IsAlive();
+	const FCastleTowerPrism* TowerGeometry = nullptr;
+	if (bHasLivingTower)
+	{
+		if (!TowerSubsystem->GetMainTowerPrism(TowerPrism)) { return; }
+		TowerGeometry = &TowerPrism;
+	}
+
+	Query.ForEachEntityChunk(Context, [TowerGeometry](FMassExecutionContext& Chunk)
 	{
 		const float DeltaTime = FMath::Max(0.0f, Chunk.GetDeltaTimeSeconds());
 		const auto Units = Chunk.GetFragmentView<FCastleMassUnitFragment>();
 		const auto Transforms = Chunk.GetMutableFragmentView<FTransformFragment>();
 		const auto Velocities = Chunk.GetMutableFragmentView<FMassVelocityFragment>();
+		const auto Radii = Chunk.GetFragmentView<FAgentRadiusFragment>();
 		const auto Targets = Chunk.GetMutableFragmentView<FCastleMassMoveTargetFragment>();
 		const auto Bursts = Chunk.GetMutableFragmentView<FCastleMassSpawnBurstFragment>();
 		for (FMassExecutionContext::FEntityIterator It = Chunk.CreateEntityIterator(); It; ++It)
 		{
 			if (Units[It].Health <= 0.0f) { continue; }
 			FCastleMassSpawnBurstFragment& Burst = Bursts[It];
-			if (Burst.Start.ContainsNaN() || Burst.Target.ContainsNaN() || !FMath::IsFinite(Burst.Duration)
-				|| Burst.Duration <= 0.0f || !FMath::IsFinite(Burst.ArcHeight) || Burst.ArcHeight < 0.0f)
+			if (Burst.Start.ContainsNaN() || Burst.Target.ContainsNaN() || Burst.ArcDirection.ContainsNaN()
+				|| Burst.ArcDirection.IsNearlyZero() || !FMath::IsFinite(Burst.Duration)
+				|| Burst.Duration <= 0.0f || !FMath::IsFinite(Burst.ArcHeight) || Burst.ArcHeight < 0.0f
+				|| !FMath::IsFinite(Radii[It].Radius) || Radii[It].Radius < 0.0f)
 			{
 				UE_LOG(LogMoving_Castle, Error, TEXT("幼骸爆散状态无效：实体 %d 的起止点、时长或弧高非法。"), Chunk.GetEntity(It).Index);
 				continue;
@@ -162,11 +270,36 @@ void UCastleMassSpawnBurstProcessor::Execute(FMassEntityManager& EntityManager, 
 			const float Alpha = Burst.Elapsed / Burst.Duration;
 			const float Arc = 4.0f * Burst.ArcHeight * Alpha * (1.0f - Alpha);
 			FTransform& Transform = Transforms[It].GetMutableTransform();
-			Transform.SetLocation(FMath::Lerp(Burst.Start, Burst.Target, Alpha) + FVector(0.0f, 0.0f, Arc));
+			FVector Location = FMath::Lerp(Burst.Start, Burst.Target, Alpha) + Burst.ArcDirection.GetSafeNormal() * Arc;
+			if (TowerGeometry)
+			{
+				const float Radius = Radii[It].Radius * Transform.GetScale3D().GetAbsMax();
+				if (!FMath::IsFinite(Radius) || Radius < 0.0f)
+				{
+					UE_LOG(LogMoving_Castle, Error, TEXT("幼骸爆散失败：实体 %d 的逻辑半径无效。"), Chunk.GetEntity(It).Index);
+					continue;
+				}
+				FVector SphereCenter = Location + TowerGeometry->GetUpVector() * Radius;
+				FVector NoVelocity = FVector::ZeroVector;
+				if (!TowerGeometry->ProjectSphereOutside(SphereCenter, Radius, NoVelocity))
+				{
+					UE_LOG(LogMoving_Castle, Error, TEXT("幼骸爆散失败：实体 %d 的主塔表面投影失败。"), Chunk.GetEntity(It).Index);
+					continue;
+				}
+				Location = SphereCenter - TowerGeometry->GetUpVector() * Radius;
+				FVector Local = TowerGeometry->ToLocalPoint(Location);
+				if (Local.Z < 0.0f)
+				{
+					Local.Z = 0.0f;
+					Location = TowerGeometry->BottomCenter + TowerGeometry->Rotation.RotateVector(Local);
+				}
+			}
+			Transform.SetLocation(Location);
 			Velocities[It].Value = FVector::ZeroVector;
 			Targets[It] = FCastleMassMoveTargetFragment();
 			if (Alpha >= 1.0f)
 			{
+				Burst.Target = Location;
 				Transform.SetLocation(Burst.Target);
 				Chunk.Defer().RemoveFragment<FCastleMassSpawnBurstFragment>(Chunk.GetEntity(It));
 			}

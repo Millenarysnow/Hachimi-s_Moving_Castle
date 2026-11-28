@@ -30,6 +30,8 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** 本次正常进塔的临时数字也用于该发炮击的弹药库匹配，外部只读查询使用原有效数字。 */
+	bool GetAmmunitionBuildingsForTrigger(int64 NumberBonus, TArray<ACastleBuildingBase*>& OutBuildings) const;
 	/** 自身触发才由棋盘广播；库联动直接调用组件，不再次走建筑广播入口。 */
 	void HandleBoardBuildingTriggered(ACastleBuildingBase* Source, const FCastleBuildingTriggerContext& Context);
 	/** 委托保存弱引用，注销与销毁时解除，不让被回收的炮塔继续监听旧棋盘。 */

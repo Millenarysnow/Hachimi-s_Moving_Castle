@@ -24,6 +24,13 @@ public:
 	/** 允许本地玩家用 P 进入编辑，左键放点，Backspace 撤回，Enter 提交，Delete 清空。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="共享巡逻")
 	bool bAllowPlayerEditing = true;
+	/** 教程关卡允许使用同一个 P 键进入与提交，正式局继续使用既有按键。 */
+	UPROPERTY(EditAnywhere, Category="共享巡逻")
+	bool bSubmitDraftOnToggle = false;
+
+	/** 教学导演明确启用双门寻路，并在讲解弹窗期间保留正在编辑的草稿。 */
+	void ConfigureTutorialRoute() { bTutorialRoute = true; }
+	bool IsTutorialRoute() const { return bTutorialRoute; }
 
 	/** 只控制路点圆圈、悬浮编号和编辑状态提示；正式巡逻线由当前世界的可视化子系统控制。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="共享巡逻")
@@ -44,8 +51,17 @@ public:
 	UFUNCTION(BlueprintPure, Category="移动城堡|NPC导航")
 	int32 GetMaxPlayerWaypoints() const { return MaxPlayerWaypoints; }
 
+	/** 只计玩家草稿，不包括双门自动附加的两个端点。 */
+	int32 GetUsedWaypointCount() const { return DraftWaypoints.Num(); }
+
+	/** 上限减去已用草稿点；预设或下调上限超量时保留实际差值，方便界面明确反馈。 */
+	int32 GetRemainingWaypointCount() const { return MaxPlayerWaypoints - GetUsedWaypointCount(); }
+
 	virtual void Tick(float DeltaSeconds) override;
 	bool IsEditing() const { return bEditing; }
+
+	/** 控制器的主交互入口只在路径编辑独占世界点击时调用。 */
+	void AddPointAtAim();
 
 	/** 供路径编辑 UI 按钮与 Backspace 快捷键共用同一撤回入口，不重复维护草稿逻辑。 */
 	void UndoDraftPoint();
@@ -55,6 +71,9 @@ public:
 
 	/** 路径编辑进入或退出时广播，界面只订阅唯一编辑状态。 */
 	FCastlePatrolEditingChanged OnEditingStateChanged;
+
+	/** 草稿或上限发生变化时发送，监听者读取本次提交后的已用与剩余点数。 */
+	FSimpleMulticastDelegate OnWaypointDraftChanged;
 
 	/** 开战只取消草稿和输入占用，不提交、不清除正式路线。 */
 	void CancelEditingDraft();
@@ -89,8 +108,8 @@ private:
 	TArray<FVector> DraftWaypoints;
 	bool bEditing = false;
 	bool bOwnsRoute = false;
+	bool bTutorialRoute = false;
 	void ToggleEditing();
-	void AddPointAtViewCenter();
 	bool CheckDraftWaypointCapacity(FText& OutReason) const;
 	bool TryAppendDraftWaypoint(FVector Point, FText& OutReason);
 	void UndoPoint();
@@ -101,4 +120,8 @@ private:
 	void ShowMessage(const FString& Message, bool bSuccess) const;
 
 	friend class FCastleMainTowerWaypointLimitTest;
+	/** HUD 测试走 P 键和视线解析后的放点入口，覆盖实际草稿通知。 */
+	friend class FCastlePathEditWaypointHUDTest;
+	/** 教学 PIE 验收将确定的格心送进实际路径草稿，用 P 入口提交。 */
+	friend class FCastleTutorialPIEDriver;
 };

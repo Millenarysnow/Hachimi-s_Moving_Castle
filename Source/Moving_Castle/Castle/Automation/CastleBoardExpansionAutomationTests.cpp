@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "CastleGroundGenerator.h"
 #include "CastleBoard.h"
+#include "Castle/PCG/CastlePCGSemanticTestRules.h"
 #include "CastleBuildingTestUtilities.h"
 #include "CastleBackpackComponent.h"
 #include "Castle/PCG/CastleBuildingPCGRule.h"
@@ -51,10 +52,10 @@ bool FCastleGroundCoordinateStableTest::RunTest(const FString& Parameters)
  Small.Origin = FIntVector(-4,7,2);
  Small.Seed = -718;
  const auto Original = Generator->GenerateGround(Small);
- // 固定样本锁定稳定哈希契约；每次独立进程执行均须得到相同的紫色 4 号格。
+ // 四色池的固定样本为绿色 4 号，跨进程维持同一采样结果。
  FCastleGroundCell Golden;
  if (!TestTrue(TEXT("固定样本存在"), Original.FindCell(Small.Origin, Golden))) { return false; }
- TestTrue(TEXT("跨进程固定颜色"), Golden.Color==ECastleTileColor::Purple);
+ TestTrue(TEXT("跨进程固定颜色"), Golden.Color == ECastleTileColor::Green);
  TestEqual(TEXT("跨进程固定数字"), Golden.Number, 4);
  FCastleGroundGenerationRequest Large = Small;
  Large.GridSize = FIntVector(7,7,8);
@@ -174,9 +175,7 @@ bool FCastleBoardOverhangTest::RunTest(const FString& Parameters)
  ACastleBoard* Board = World->SpawnActor<ACastleBoard>();
  Board->GridSize = FIntVector(5,5,8);
  CastleBuildingTests::ConfigureBoard(Board);
- // 本组验证棋盘边界，不构建梯子：显式复制正式资产配置，仅选用平面规则。
- Board->PCGRuleSet = DuplicateObject<UCastlePCGRuleSetDataAsset>(Board->PCGRuleSet, Board);
- Board->PCGRuleSet->Rules = { NewObject<UCastlePCGPlanarRule>(Board->PCGRuleSet) };
+ if (!CastlePCGTests::ConfigurePlacementOnlyPCG(*Board, *this)) { return false; }
  FText Reason;
  if (!TestTrue(TEXT("生成地面"), Board->GenerateGround(Reason))) { return false; }
  FCastleGroundCell Ground;

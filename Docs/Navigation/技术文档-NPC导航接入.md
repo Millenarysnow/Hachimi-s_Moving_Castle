@@ -28,7 +28,7 @@
 
 **路线所有者被主动销毁或流送移除时清除全局路线。** 否则界面入口消失后 NPC 仍沿无人管理的请求运行。状态文字只消费快照，不能反向触发求解。
 
-**正式巡逻线独立于路点编辑，按世界开启。** `UCastlePatrolPathVisualizationSubsystem` 沿 Mass 实际消费的 `PatrolPoints` 绘制，复用 Path Tracer Toolkit 的 `Overview / PathTracer_08` 动态黄虚线材质与圆柱网格。虚线沿整条路线累计距离设置相位，因此各段的运动相位连续。只有已发布且含路段的有效巡逻轨迹才画线，失效即清旧线。显隐不改导航请求、地面圆圈或编号。只在开启时加载线条资产，替换资源时须维护 `PAL_CastlePatrolLine` 的打包依赖。
+**正式巡逻线独立于路点编辑，在 Game/PIE 世界开始播放时自动开启。** 专用服务器不启动绘制。`UCastlePatrolPathVisualizationSubsystem` 沿 Mass 实际消费的 `PatrolPoints` 绘制，复用 Path Tracer Toolkit 的 `Overview / PathTracer_08` 动态黄虚线材质与圆柱网格。虚线沿整条路线累计距离设置相位，因此各段的运动相位连续。只有已发布且含路段的有效巡逻轨迹才画线，失效即清旧线。`Castle.ShowPatrolPath 0` / `1` 保留为当前世界的临时调试开关。显隐不改导航请求、地面圆圈或编号。只在开启时加载线条资产，替换资源时须维护 `PAL_CastlePatrolLine` 的打包依赖。
 
 **重叠折返段用两条显示线，而不是两套虚线叠在同一根圆柱轴线上。** 反向滚动的遮罩重叠会让同一个缺口看起来只在原地开合，改动画速率不能解决。只在反向中心线相距不足一条线宽的位置把去程和返程向两侧分开，邻段接续；不改原材质、不丢弃返程，也不把显示偏移写回导航快照。
 

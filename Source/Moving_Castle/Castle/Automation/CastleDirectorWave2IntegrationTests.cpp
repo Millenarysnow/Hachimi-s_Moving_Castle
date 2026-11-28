@@ -2,13 +2,18 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 #include "Tests/AutomationCommon.h"
+#include "Castle/Automation/CastlePIEAutomation.h"
+#include "Castle/Automation/CastleTowerOverviewTestUtilities.h"
 #include "Castle/Combat/CastleCombatSubsystem.h"
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
+#include "Castle/Items/CastleBadgeDataAsset.h"
 #include "Castle/Items/CastleBadgeSubsystem.h"
+#include "Castle/Items/CastleItemGrantLibrary.h"
 #include "Castle/Items/CastlePendingRoomReward.h"
 #include "Castle/SkyIslands/CastleSkyIslandTestFixture.h"
+#include "Castle/SkyIslands/Shop/CastleShopSkyIslandDataAsset.h"
 #include "Castle/Support/CastleSupportTowerSubsystem.h"
 #include "Castle/Support/CastleSupportFlightActors.h"
 #include "Castle/Placement/CastleTowerSideGridComponent.h"
@@ -19,6 +24,7 @@
 #include "CastleBuildingBase.h"
 #include "CastleBuildingDefinition.h"
 #include "CastleBuildingTestUtilities.h"
+#include "CastleEconomyComponent.h"
 #include "CastleMainTowerComponent.h"
 #include "CastleMassUnitSubsystem.h"
 #include "CastleMassTraits.h"
@@ -27,7 +33,6 @@
 #include "CastleShopComponent.h"
 #include "Interaction/CastlePatrolRoute.h"
 #include "Engine/Engine.h"
-#include "Editor.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Components/PanelWidget.h"
@@ -59,7 +64,8 @@ public:
 			Test.TestEqual(TEXT("离开只推进一步"), Director->ClearedSteps, BeforeIsland + 1);
 			Test.TestFalse(TEXT("离开恢复主塔建造面"), Director->Board->IsPlacementSurfacePresentationHidden());
 			Test.TestTrue(TEXT("离开准备并激活下一批节点"), Director->Nodes.Num() >= 2);
-			Test.TestTrue(TEXT("玩家返回入岛前的主塔视角位置"), Director->Controller->GetPawn()->GetActorLocation().Equals(ReturnLocation, 5.0f));
+			// 本用例先升到九层，核对返塔高度随已开放层变化。
+			CastleTowerOverviewTests::Check(Test, *Director->Board, *Director->Controller);
 			Test.TestFalse(TEXT("测试空岛已销毁"), static_cast<bool>(TActorIterator<ACastleSkyIslandTestFixture>(World)));
 			return true;
 		}
@@ -75,52 +81,82 @@ private:
 		Test.TestEqual(TEXT("开局可标两个路径点"), Director.PatrolRoute->GetMaxPlayerWaypoints(), 2);
 		const int32 Balloons[] = {5, 10, 20, 40};
 		const int32 Rooms[] = {0, 2, 5, 10};
+		const int32 Limits[] = {30, 80, 150, 500};
+		const int32 NPCs[] = {0, 2, 3, 5};
 		const float Health[] = {1000.0f, 2000.0f, 4000.0f, 8000.0f};
 		Director.Config = DuplicateObject(Director.Config.Get(), Director.GetWorld());
-		Director.Config->RewardExp = Director.Config->ExpPerLevel;
+		FCastleBuildingDescriptor Card;
+		const auto* Definition = Director.Board->FindBuildingDefinition(ECastleBuildingType::NormalRoom);
+		if (!Test.TestTrue(TEXT("成长测试使用正式普通房牌面"), Definition && Definition->CreateDescriptor(
+			1, ECastleTileColor::Red, 1, Card, Reason))) { return; }
+		int32 ExpectedNPCs = 8;
 		for (int32 Level = 1; Level <= 4; ++Level)
 		{
 			if (Level > 1)
 			{
 				Director.Tower->ApplyDamage(25.0f);
-				Director.DestroyNodes();
-				Director.SetPhase(ECastleDirectorPhase::Reward);
-				if (!Test.TestTrue(TEXT("经验奖励成功提交"), Director.TryChooseReward(ECastleDirectorReward::Experience, Reason)))
+				// 达到当前等级阈值，补发的房间允许溢出到临时栏，和局内房间组走相同入口。
+				TArray<FCastleBuildingDescriptor> Cards;
+				Cards.Init(Card, Limits[Level - 2] - Director.GetOwnedRoomCount());
+				if (!Test.TestTrue(TEXT("批量补足升级所需占格"), Director.Board->PrototypeBackpack->TryAddItemsAllowOverflow(Cards, Reason))
+					|| !Test.TestTrue(TEXT("达标触发升级"), Director.TryCheckTowerUpgrade(Reason)))
 				{
 					Test.AddError(Reason.ToString());
 					return;
 				}
-				Test.TestEqual(TEXT("各级待领房间、路径点和 NPC 分行"), Director.UpgradeRewards.Num(), Rooms[Level - 1] + 1 + (Level == 4 ? 1 : 0));
+				if (!Test.TestEqual(TEXT("各级待领房间、路径点和 NPC 分行"), Director.UpgradeRewards.Num(), Rooms[Level - 1] + 2)) { return; }
 				Director.ClaimTowerUpgradeReward(0);
 				Test.TestEqual(TEXT("逐次领取路径点"), Director.PatrolRoute->GetMaxPlayerWaypoints(), Level + 1);
+				Test.TestEqual(TEXT("本次待领普通NPC数量"), Director.UpgradeRewards[0].Count, NPCs[Level - 1]);
+				Director.ClaimTowerUpgradeReward(0);
+				ExpectedNPCs += NPCs[Level - 1];
+				Test.TestEqual(TEXT("领取后单局池增加对应普通NPC"), Director.RunNPCCount, ExpectedNPCs);
 				if (Level == 2) { VerifyWildcardPicker(Director); }
-				if (Level == 4) { Director.ClaimTowerUpgradeReward(0); }
 				Director.DiscardTowerUpgradeRewards();
 				Test.TestTrue(TEXT("关闭丢弃全部未领取卡"), Director.UpgradeRewards.IsEmpty() && Director.UpgradeRoomRewards.IsEmpty());
 			}
 			Test.TestEqual(TEXT("主塔等级"), Director.Level, Level);
 			Test.TestEqual(TEXT("开放层数"), Director.Board->GetUnlockedLayerCount(), Level * 2 + 1);
-			Test.TestEqual(TEXT("房间上限"), Shop->RoomLimit, Level * 100 + 50);
+			Test.TestEqual(TEXT("房间上限"), Shop->RoomLimit, Limits[Level - 1]);
 			Test.TestEqual(TEXT("商店数字上限"), Director.GetCurrentMaxShopNumber(), Level + 2);
 			Test.TestEqual(TEXT("气球容量"), Director.Tower->MaxBalloons, Balloons[Level - 1]);
 			Test.TestEqual(TEXT("最大生命"), Director.Tower->MaxHealth, Health[Level - 1]);
 			Test.TestEqual(TEXT("升级补满生命"), Director.Tower->CurrentHealth, Health[Level - 1]);
 		}
-		Test.TestEqual(TEXT("Lv4 领取后有 13 名 NPC"), Director.RunNPCCount, 13);
-		for (int32 Ordinal = 1; Ordinal <= 2; ++Ordinal)
+		Test.TestEqual(TEXT("Lv4 领完三次普通NPC后有18名"), Director.RunNPCCount, 18);
+		// 按正式精英关号注入两次清场，覆盖前两个精英关的解锁与奖励。
+		for (int32 EliteStage = 1; EliteStage <= 2; ++EliteStage)
 		{
+			const int32 StageNumber = EliteStage * Director.Config->EliteEveryNSteps;
 			Director.DestroyNodes();
-			Director.ActiveBattleKind = ECastleBattleKind::Elite;
-			Director.ActiveBattleOrdinal = Ordinal;
+			Director.ClearedSteps = StageNumber - 1;
 			Director.SetPhase(ECastleDirectorPhase::Battle);
 			Director.Tower->ApplyDamage(100.0f);
-			Director.HandleBattleCleared(ECastleBattleKind::Elite, Ordinal);
+			UCastleEconomyComponent* Economy = Director.Controller->GetEconomy();
+			const int32 BeforeGold = Economy->GetGold();
+			if (EliteStage == 1)
+			{
+				// 精英前三项共享预检。以无法入账的余额证明其余效果及关号也都保留。
+				const int32 TopUp = MAX_int32 - BeforeGold;
+				if (!Test.TestTrue(TEXT("构造精英奖励溢出"), Economy->TryAddGold(TopUp, Reason))) { return; }
+				Test.AddExpectedError(TEXT("导演奖励失败"), EAutomationExpectedErrorFlags::Contains, 1);
+				Director.HandleBattleCleared(ECastleBattleKind::Elite, StageNumber);
+				Test.TestEqual(TEXT("金币溢出保留精英原阶段"), Director.GetPhase(), ECastleDirectorPhase::Battle);
+				Test.TestEqual(TEXT("金币溢出保留关号"), Director.GetNextStep(), StageNumber);
+				Test.TestEqual(TEXT("金币溢出保留原余额"), Economy->GetGold(), MAX_int32);
+				Test.TestEqual(TEXT("金币溢出不回血"), Director.Tower->CurrentHealth, 7900.0f);
+				Test.TestFalse(TEXT("金币溢出不打开商店"), Shop->IsShopOpen());
+				Test.TestFalse(TEXT("金币溢出不发布首次精英解锁"), Director.Combat->HasUnlockedEnemyTag(TEXT("Unlock.MiasmaWelp")));
+				if (!Test.TestTrue(TEXT("释放余额空间后重新提交"), Economy->TrySpendGold(TopUp, Reason))) { return; }
+			}
+			Director.HandleBattleCleared(ECastleBattleKind::Elite, StageNumber);
 			Test.TestEqual(TEXT("精英自动提交后回编辑"), Director.Phase, ECastleDirectorPhase::Editing);
-			Test.TestEqual(TEXT("满级经验不会越界"), Director.Level, 4);
+			Test.TestEqual(TEXT("精英同一笔奖励增加60金币"), Director.Controller->GetEconomy()->GetGold() - BeforeGold, 60);
+			Test.TestEqual(TEXT("精英通关后主塔仍为满级"), Director.Level, 4);
 			Test.TestEqual(TEXT("精英同一笔奖励补血"), Director.Tower->CurrentHealth, 8000.0f);
 			Test.TestTrue(TEXT("精英同一笔奖励免费换批打开"), Shop->IsShopOpen() && Shop->GetOffers().Num() == 6);
 			Test.TestTrue(TEXT("精英解锁标签写入战斗池"), Director.Combat->HasUnlockedEnemyTag(
-				Ordinal == 1 ? FName(TEXT("Unlock.MiasmaWelp")) : FName(TEXT("Unlock.LavaGoliath"))));
+				EliteStage == 1 ? FName(TEXT("Unlock.MiasmaWelp")) : FName(TEXT("Unlock.LavaGoliath"))));
 			Shop->CloseShop();
 		}
 		VerifyBadgesAndSale(Director);
@@ -141,7 +177,6 @@ private:
 		Test.TestEqual(TEXT("拒绝后仍可选择其他节点"), Director.Phase, ECastleDirectorPhase::Editing);
 		Director.Config->SkyIslandClasses.Add(ECastleSkyIslandType::Rest, ACastleSkyIslandTestFixture::StaticClass());
 		BeforeIsland = Director.ClearedSteps;
-		ReturnLocation = Director.Controller->GetPawn()->GetActorLocation();
 		Director.HandleNodeTouched(IslandNode);
 		Director.Tick(0.0f);
 		if (!Test.TestNotNull(TEXT("节点生成配置夹具"), Director.ActiveSkyIsland.Get())) { return; }
@@ -189,7 +224,7 @@ private:
 		auto* Confirm = Cast<UButton>(Picker->GetWidgetFromName(TEXT("ConfirmButton")));
 		if (Test.TestNotNull(TEXT("绑定确认按钮"), Confirm)
 			&& Select(TEXT("DefinitionChoices"), 0, Director.Board->BuildingDefinitions.Num())
-			&& Select(TEXT("ColorChoices"), 1, 5) && Select(TEXT("NumberChoices"), 3, 4))
+			&& Select(TEXT("ColorChoices"), 2, 4) && Select(TEXT("NumberChoices"), 3, 4))
 		{
 			Confirm->OnClicked.Broadcast();
 			Test.TestTrue(TEXT("只移除已确认的自定义房"), !Director.WildcardPicker && Director.UpgradeRewards.Num() == 1);
@@ -207,18 +242,29 @@ private:
 	void VerifyBadgesAndSale(UCastleDirectorSubsystem& Director)
 	{
 		auto* Badges = UCastleBadgeSubsystem::GetForWorld(Director.GetWorld());
-		if (!Test.TestNotNull(TEXT("正式 GameInstance 徽章组件"), Badges)) { return; }
+		const auto* ShopCatalog = LoadObject<UCastleShopSkyIslandDataAsset>(nullptr,
+			TEXT("/Game/MovingCastle/Data/SkyIslands/DA_ShopSkyIsland.DA_ShopSkyIsland"));
+		if (!Test.TestNotNull(TEXT("正式 GameInstance 徽章组件"), Badges)
+			|| !Test.TestNotNull(TEXT("正式徽章资产目录"), ShopCatalog)) { return; }
+		// 主地图 HUD 已订阅徽章库存。使用带真实 PNG 的同一资产发放入口，触发界面与导演更新。
+		const auto FindBadge = [ShopCatalog](const ECastleBadgeType Type) -> const UCastleBadgeDataAsset*
+		{
+			const auto* Found = ShopCatalog->BadgePool.FindByPredicate([Type](const UCastleBadgeDataAsset* Asset)
+			{
+				return IsValid(Asset) && Asset->Badge.Type == Type;
+			});
+			return Found ? Found->Get() : nullptr;
+		};
 		FText Reason;
 		bool bReplace = false;
-		for (const ECastleBadgeType Type : {ECastleBadgeType::MainTowerHealth, ECastleBadgeType::ArcherFireRate,
-			ECastleBadgeType::BlueRoomNumber, ECastleBadgeType::GambleLuck,
-			ECastleBadgeType::FirstMainTowerDamage, ECastleBadgeType::LowMainTowerHealth})
+		for (const ECastleBadgeType Type : {ECastleBadgeType::BalloonRack, ECastleBadgeType::QuickstringPass,
+			ECastleBadgeType::BlueAbacus, ECastleBadgeType::FirepowerCard,
+			ECastleBadgeType::BurstAlarm, ECastleBadgeType::EmergencyBallast})
 		{
-			FCastleBadgeDefinition Badge;
-			if (FCastleBadgeDefinition::TryMakeStandard(Type, Badge)) { Test.TestTrue(TEXT("正式徽章入口发放"), Badges->TryAcquireBadge(Badge, bReplace, Reason)); }
+			const auto* Asset = FindBadge(Type);
+			if (!Test.TestTrue(TEXT("正式徽章入口发放"), UCastleItemGrantLibrary::TryGrantBadge(Asset, Badges, bReplace, Reason))) { return; }
 		}
 		Test.TestTrue(TEXT("主塔同步 +20% 生命"), FMath::IsNearlyEqual(Director.Tower->MaxHealth, 9600.0f));
-		Test.TestTrue(TEXT("赌博幸运供空岛查询"), Badges->GetGambleLuckBonus() > 0.0);
 		auto* Mass = Director.GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>();
 		Director.SetPhase(ECastleDirectorPhase::Battle);
 		Director.Tower->ApplyDamage(0.0f);
@@ -230,11 +276,11 @@ private:
 		Test.TestEqual(TEXT("恢复生命后解除低血压制"), Mass->GetGlobalEnemyAttackSpeedMultiplier(), 1.0f);
 		Director.SetPhase(ECastleDirectorPhase::Editing);
 		Test.TestFalse(TEXT("战斗结束时关闭首次受击增益"), Director.IsFirstTowerDamageTriggeredInBattle());
-		FCastleBadgeDefinition UpgradeBadge;
-		FCastleBadgeDefinition::TryMakeStandard(ECastleBadgeType::UpgradeRoomCards, UpgradeBadge);
-		Test.TestTrue(TEXT("第七枚徽章使用正式替换入口"), Badges->TryAcquireBadge(UpgradeBadge, bReplace, Reason));
+		const auto* UpgradeBadge = FindBadge(ECastleBadgeType::WorkshopRefund);
+		if (!Test.TestTrue(TEXT("第七枚徽章使用正式替换入口"),
+			UCastleItemGrantLibrary::TryGrantBadge(UpgradeBadge, Badges, bReplace, Reason))) { return; }
 		Test.TestTrue(TEXT("第七枚徽章等待确认替换"), bReplace);
-		Test.TestTrue(TEXT("替换一枚后合成徽章生效"), Badges->TryReplaceBadgeAt(3, UpgradeBadge, Reason));
+		Test.TestTrue(TEXT("替换一枚后合成徽章生效"), Badges->TryReplaceBadgeAt(3, UpgradeBadge->Badge, Reason));
 		Test.TestEqual(TEXT("升级徽章赠两张牌"), Badges->GetUpgradeBonusRoomCards(), int64{2});
 		auto* Shop = Director.Controller->GetShop();
 		if (!Test.TestTrue(TEXT("打开商店验证真实出售"), Shop->TryOpenShop(Reason))) { return; }
@@ -381,7 +427,6 @@ private:
 	double Started = FPlatformTime::Seconds();
 	int32 Stage = 0;
 	int32 BeforeIsland = 0;
-	FVector ReturnLocation = FVector::ZeroVector;
 };
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDirectorWave2IntegrationTest, "MovingCastle.Director.Wave2Integration",
@@ -389,20 +434,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDirectorWave2IntegrationTest, "MovingCas
 
 bool FCastleDirectorWave2IntegrationTest::RunTest(const FString&)
 {
-	if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/MainMap"), true)) { return false; }
+	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
 	ADD_LATENT_AUTOMATION_COMMAND(FEngineWaitLatentCommand(0.2f));
 	ADD_LATENT_AUTOMATION_COMMAND(FCastleDirectorWave2Scenario(*this));
 	// 下一项地图测试开跑前必须等待本次 PIE 世界完全退出。
-	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([bRequested = false]() mutable
-	{
-		if (!GEditor->PlayWorld) { return true; }
-		if (!bRequested)
-		{
-			GEditor->RequestEndPlayMap();
-			bRequested = true;
-		}
-		return false;
-	}));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
 	return true;
 }
 #endif

@@ -48,6 +48,8 @@ public:
 	UCastleMassEnemyTrait();
 
 protected:
+	/** 敌人模板显式增加 Boids 攻击意图状态，供唯一移动处理器积分。 */
+	virtual void BuildTemplate(FMassEntityTemplateBuildContext& BuildContext, const UWorld& World) const override;
 	virtual ECastleMassUnitKind GetKind() const override { return ECastleMassUnitKind::Enemy; }
 };
 
@@ -107,6 +109,14 @@ public:
 
 	UPROPERTY(EditAnywhere, Category="人形动画", meta=(ClampMin="0"))
 	int32 MoveSequence = 1;
+
+	/** 仅配置跑步的单位按水平移速区分走和跑。 */
+	UPROPERTY(EditAnywhere, Category="人形动画")
+	int32 RunSequence = INDEX_NONE;
+
+	/** 实时水平移速严格大于本阈值才切入跑步。 */
+	UPROPERTY(EditAnywhere, Category="人形动画", meta=(Units="cm/s"))
+	float RunSpeedThreshold = 250.0f;
 
 	/** 可选攻击序列；INDEX_NONE 表示该单位没有攻击动作。 */
 	UPROPERTY(EditAnywhere, Category="人形动画", meta=(ClampMin="-1"))

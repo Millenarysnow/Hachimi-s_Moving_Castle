@@ -1,8 +1,10 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #include "CastleDirectorWidgets.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Castle/Combat/CastleCombatSubsystem.h"
 #include "Castle/Controllers/CastlePlayerController.h"
+#include "Castle/Guide/CastleGuideSubsystem.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/UI/Common/CastleHUDControls.h"
 #include "CastleMainTowerComponent.h"
@@ -11,6 +13,7 @@
 #include "Components/Image.h"
 #include "Components/TextBlock.h"
 #include "Components/WidgetSwitcher.h"
+#include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
 #include "Moving_Castle.h"
@@ -167,6 +170,8 @@ void UCastleDirectorHUDWidget::NativeOnInitialized()
 	// 初始化时战斗进度条先置空并隐藏，等待进入战斗后显示。
 	BattleProgressBar->SetFilledCount(0);
 	BattleProgressBar->SetVisibility(ESlateVisibility::Collapsed);
+	// 路点文案在进入路径页并读取到实际数据后才显示。
+	RemainingWaypointText->SetVisibility(ESlateVisibility::Collapsed);
 	RightActionSwitcher->SetActiveWidgetIndex(static_cast<int32>(ECastleHUDScreenMode::Build));
 }
 
@@ -240,12 +245,15 @@ void UCastleDirectorHUDWidget::EnsurePatrolRouteBinding()
 	{
 		BoundPatrolRoute = Route;
 		PatrolEditingHandle = Route->OnEditingStateChanged.AddUObject(this, &UCastleDirectorHUDWidget::HandlePatrolEditingChanged);
+		WaypointDraftHandle = Route->OnWaypointDraftChanged.AddUObject(this, &UCastleDirectorHUDWidget::SyncPathWaypointCount);
+		// 原路线销毁后若在同一帧绑定了已编辑的新路线，界面模式可能保持不变。
+		SyncPathWaypointCount();
 	}
 }
 
 void UCastleDirectorHUDWidget::SyncScreenMode()
 {
-	if (!IsValid(RightActionSwitcher) || !IsValid(BattleProgressBar))
+	if (!IsValid(RightActionSwitcher) || !IsValid(BattleProgressBar) || !IsValid(RemainingWaypointText))
 	{
 		return;
 	}
@@ -264,8 +272,14 @@ void UCastleDirectorHUDWidget::SyncScreenMode()
 		TargetMode = ECastleHUDScreenMode::PathEdit;
 	}
 
+	const bool bModeChanged = CurrentScreenMode != TargetMode;
 	CurrentScreenMode = TargetMode;
 	RightActionSwitcher->SetActiveWidgetIndex(static_cast<int32>(CurrentScreenMode));
+	if (bModeChanged)
+	{
+		// 模式切换立即显示或折叠，草稿变化由委托更新文案，无需逐帧格式化。
+		SyncPathWaypointCount();
+	}
 
 	const bool bShowBattleBar = (CurrentScreenMode == ECastleHUDScreenMode::Battle);
 	BattleProgressBar->SetVisibility(bShowBattleBar ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
@@ -277,6 +291,32 @@ void UCastleDirectorHUDWidget::SyncScreenMode()
 	{
 		BattleProgressBar->SetFilledCount(0);
 	}
+}
+
+void UCastleDirectorHUDWidget::SyncPathWaypointCount()
+{
+	if (!IsValid(RemainingWaypointText))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("主界面 HUD %s 缺少 RemainingWaypointText，无法同步路径点。"), *GetClass()->GetPathName());
+		return;
+	}
+	if (CurrentScreenMode != ECastleHUDScreenMode::PathEdit)
+	{
+		RemainingWaypointText->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+
+	const ACastlePatrolRoute* Route = BoundPatrolRoute.Get();
+	if (!IsValid(Route))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("主界面 HUD %s 的路径编辑入口失效，无法读取剩余路径点。"), *GetClass()->GetPathName());
+		RemainingWaypointText->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+	// 直接使用草稿的已用量与上限差值，保留预设路线超限时的真实计数。
+	RemainingWaypointText->SetText(FText::Format(NSLOCTEXT("CastleDirectorHUD", "RemainingWaypoints", "剩余路径点：{0} / {1}"),
+		FText::AsNumber(Route->GetRemainingWaypointCount()), FText::AsNumber(Route->GetMaxPlayerWaypoints())));
+	RemainingWaypointText->SetVisibility(ESlateVisibility::HitTestInvisible);
 }
 
 void UCastleDirectorHUDWidget::SyncBattleControlButtons()
@@ -370,12 +410,21 @@ void UCastleDirectorHUDWidget::HandlePatrolEditingChanged(const bool bIsEditing)
 
 void UCastleDirectorHUDWidget::HandleGuideClicked()
 {
-	UE_LOG(LogMoving_Castle, Display, TEXT("主界面 HUD：点击查看攻略按钮（后端界面暂未实现）。"));
+	UCastleGuideSubsystem* Guide = GetWorld() && GetWorld()->GetGameInstance()
+		? GetWorld()->GetGameInstance()->GetSubsystem<UCastleGuideSubsystem>() : nullptr;
+	ACastlePlayerController* Controller = Cast<ACastlePlayerController>(GetOwningPlayer());
+	FText Failure;
+	if (!Guide || !Guide->ShowGuideBook(Controller, Failure))
+	{
+		if (Failure.IsEmpty()) { Failure = INVTEXT("主界面 HUD 无法取得图文百科子系统或玩家控制器。"); }
+		UE_LOG(LogMoving_Castle, Error, TEXT("主界面 HUD %s 打开图文百科失败：%s"), *GetClass()->GetPathName(), *Failure.ToString());
+	}
 }
 
 void UCastleDirectorHUDWidget::HandleSettingsClicked()
 {
-	UE_LOG(LogMoving_Castle, Display, TEXT("主界面 HUD：点击设置按钮（后端界面暂未实现）。"));
+	// 设置按钮和世界快捷键都交给控制器仲裁输入状态。
+	if (auto* Controller = GetOwningPlayer<ACastlePlayerController>()) { Controller->ToggleControlSettings(); }
 }
 
 void UCastleDirectorHUDWidget::HandleMainMenuClicked()
@@ -399,6 +448,11 @@ void UCastleDirectorHUDWidget::HandleBuildShopClicked()
 	{
 		Controller->ToggleShop();
 	}
+}
+
+void UCastleDirectorHUDWidget::SetTutorialShopButtonEnabled(const bool bEnabled)
+{
+	BuildShopButton->SetActionEnabled(bEnabled);
 }
 
 void UCastleDirectorHUDWidget::HandlePathUndoClicked()
@@ -464,6 +518,7 @@ void UCastleDirectorHUDWidget::NativeDestruct()
 	if (ACastlePatrolRoute* Route = BoundPatrolRoute.Get())
 	{
 		Route->OnEditingStateChanged.Remove(PatrolEditingHandle);
+		Route->OnWaypointDraftChanged.Remove(WaypointDraftHandle);
 		BoundPatrolRoute.Reset();
 	}
 	if (UCastleShopComponent* Shop = BoundShop.Get())
@@ -484,6 +539,11 @@ bool UCastleDirectorHUDWidget::HasRequiredBindings() const
 	if (!IsValid(BattleProgressBar) || !BattleProgressBar->ValidatePresentation())
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("主界面 HUD %s 缺少有效的底部 20 格战斗骷髅进度条 BattleProgressBar。"), *GetClass()->GetPathName());
+		return false;
+	}
+	if (!IsValid(RemainingWaypointText))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("主界面 HUD %s 缺少必需控件 RemainingWaypointText。"), *GetClass()->GetPathName());
 		return false;
 	}
 	if (!IsValid(RightActionSwitcher) || RightActionSwitcher->GetNumWidgets() != 3)
@@ -534,7 +594,7 @@ void UCastleRewardChoiceWidget::NativeOnInitialized()
 		UE_LOG(LogMoving_Castle, Error, TEXT("奖励 WBP %s 的必需控件、回血图标或商店普通/按下笔刷无效，请检查资源与显示尺寸。"), *GetClass()->GetPathName());
 		return;
 	}
-	ExperienceButton->OnClicked.AddDynamic(this, &UCastleRewardChoiceWidget::ChooseExperience);
+	GoldButton->OnClicked.AddDynamic(this, &UCastleRewardChoiceWidget::ChooseGold);
 	HealingButton->OnClicked.AddDynamic(this, &UCastleRewardChoiceWidget::ChooseHealing);
 	ShopButton->OnClicked.AddDynamic(this, &UCastleRewardChoiceWidget::ChooseShop);
 	// 图标只是按钮内容，按下/释放只切换图像；点击仍走原有奖励事务。
@@ -556,27 +616,31 @@ void UCastleRewardChoiceWidget::NativeTick(const FGeometry& Geometry, const floa
 {
 	Super::NativeTick(Geometry, DeltaTime);
 	UCastleDirectorSubsystem* Director = GetWorld()->GetSubsystem<UCastleDirectorSubsystem>();
-	if (Director && ExperienceLabel && HealingLabel && ShopLabel && FailureText)
+	if (Director && GoldLabel && HealingLabel && ShopLabel && FailureText)
 	{
-		ExperienceLabel->SetText(Director->GetRewardLabel(ECastleDirectorReward::Experience));
+		// 面板展示基础奖励，实际含徽章到账由导演提交后记录。
+		GoldLabel->SetText(Director->GetRewardLabel(ECastleDirectorReward::Gold));
 		HealingLabel->SetText(Director->GetRewardLabel(ECastleDirectorReward::Healing));
 		ShopLabel->SetText(Director->GetRewardLabel(ECastleDirectorReward::Shop));
 		FailureText->SetText(Director->GetStatusMessage());
 	}
 }
 
-void UCastleRewardChoiceWidget::ChooseExperience()
+void UCastleRewardChoiceWidget::ChooseGold()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	FText Reason;
-	GetWorld()->GetSubsystem<UCastleDirectorSubsystem>()->TryChooseReward(ECastleDirectorReward::Experience, Reason);
+	GetWorld()->GetSubsystem<UCastleDirectorSubsystem>()->TryChooseReward(ECastleDirectorReward::Gold, Reason);
 }
 void UCastleRewardChoiceWidget::ChooseHealing()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	FText Reason;
 	GetWorld()->GetSubsystem<UCastleDirectorSubsystem>()->TryChooseReward(ECastleDirectorReward::Healing, Reason);
 }
 void UCastleRewardChoiceWidget::ChooseShop()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	FText Reason;
 	GetWorld()->GetSubsystem<UCastleDirectorSubsystem>()->TryChooseReward(ECastleDirectorReward::Shop, Reason);
 }
@@ -619,12 +683,13 @@ void UCastleGameOverWidget::NativeTick(const FGeometry& Geometry, const float De
 
 void UCastleGameOverWidget::Restart()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	GetWorld()->GetSubsystem<UCastleDirectorSubsystem>()->RestartCurrentMap();
 }
 
 bool UCastleRewardChoiceWidget::HasRequiredBindings() const
 {
-	return ExperienceButton && HealingButton && ShopButton && ExperienceLabel && HealingLabel && ShopLabel && FailureText
+	return GoldButton && HealingButton && ShopButton && GoldLabel && HealingLabel && ShopLabel && FailureText
 		&& CastleHUDControls::HasValidTextureBrush(HealingIcon) && HasDirectorActionIconBrushes(ShopIconStates);
 }
 

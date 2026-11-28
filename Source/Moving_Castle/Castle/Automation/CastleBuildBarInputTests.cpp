@@ -4,10 +4,14 @@
 
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Castle/UI/BuildBar/CastleBuildBarWidget.h"
+#include "Castle/UI/BuildBar/CastleBuildBarSlotWidget.h"
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
 #include "CastlePlayerController.h"
 #include "CastleShopComponent.h"
+#include "Components/Image.h"
+#include "Components/SizeBox.h"
+#include "Components/TextBlock.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
 #include "Input/Events.h"
@@ -45,13 +49,22 @@ namespace
 			}
 			UCastleBackpackComponent& Backpack = *Board->PrototypeBackpack;
 			UCastleShopComponent& Shop = *Controller->GetShop();
-			if (NextStep == 0 && !Test.TestEqual(TEXT("MainMap 开局有满 10 张牌"), Backpack.GetItemCount(), 10))
+			if (NextStep == 0)
 			{
-				return true;
+				if (!Test.TestEqual(TEXT("MainMap 开局有五张牌"), Backpack.GetItemCount(), 5)) { return true; }
+				// 临时补满以继续覆盖数字键 0、满栏尾槽和滚轮边界，PIE 结束自动销毁这些样本。
+				auto Cards = Backpack.GetItems();
+				FText Reason;
+				if (!Test.TestTrue(TEXT("临时补满十槽以验证满栏"), Backpack.TryAddItemsAllowOverflow(Cards, Reason)))
+				{
+					Test.AddError(Reason.ToString());
+					return true;
+				}
 			}
 			const FStep& Previous = Steps[NextStep];
 			if (!Test.TestEqual(Previous.Description, Controller->GetSelectedBackpackIndex(), Previous.ExpectedSlot)
-				|| !CheckHighlight(*World, Previous))
+				|| !CheckPresentation(*World, Backpack.GetItems(), Previous)
+				|| !Test.TestTrue(TEXT("输入步骤期间保持指定操作模式"), Controller->GetControlMode() == ExpectedMode))
 			{
 				Finish(Backpack, Shop);
 				return true;
@@ -75,6 +88,30 @@ namespace
 				const float Delta = Step.Action == EAction::Up ? 1.0f : -1.0f;
 				const FPointerEvent Event(0u, 0u, Position, Position, TSet<FKey>(), FKey(), Delta, FModifierKeysState());
 				Viewport->OnMouseWheel(Geometry, Event);
+				break;
+			}
+			case EAction::EnterDesignMode:
+				ExpectedMode = ECastleControlMode::Design;
+				Controller->SetControlMode(ExpectedMode, false);
+				break;
+			case EAction::EnterClassicMode:
+				ExpectedMode = ECastleControlMode::Classic;
+				Controller->SetControlMode(ExpectedMode, false);
+				break;
+			case EAction::ClickFirstSlot:
+			case EAction::ClickSecondSlot:
+			{
+				TArray<UUserWidget*> Bars;
+				UWidgetBlueprintLibrary::GetAllWidgetsOfClass(World, Bars, UCastleBuildBarWidget::StaticClass(), true);
+				auto* Slot = Bars.Num() == 1
+					? Cast<UCastleBuildBarSlotWidget>(Bars[0]->GetWidgetFromName(
+						Step.Action == EAction::ClickFirstSlot ? TEXT("Slot01") : TEXT("Slot02"))) : nullptr;
+				if (!Test.TestNotNull(TEXT("真实建造栏点击卡槽"), Slot)) { bActionSucceeded = false; break; }
+				const FGeometry& Geometry = Slot->GetCachedGeometry();
+				const FVector2D Position = Geometry.LocalToAbsolute(FVector2D(Geometry.GetLocalSize()) * 0.5);
+				const FPointerEvent Click(0u, 0u, Position, Position, TSet<FKey>{EKeys::LeftMouseButton},
+					EKeys::LeftMouseButton, 0.0f, FModifierKeysState());
+				bActionSucceeded = Slot->NativeOnMouseButtonDown(Geometry, Click).IsEventHandled();
 				break;
 			}
 			case EAction::Zero:
@@ -124,7 +161,8 @@ namespace
 		}
 
 	private:
-		enum class EAction { Initial, Up, Down, Zero, One, ReduceCards, RestoreCards, OpenShop, CloseShop };
+		enum class EAction { Initial, Up, Down, EnterDesignMode, EnterClassicMode, ClickFirstSlot, ClickSecondSlot,
+			Zero, One, ReduceCards, RestoreCards, OpenShop, CloseShop };
 		struct FStep
 		{
 			EAction Action;
@@ -135,6 +173,10 @@ namespace
 		/** 每一项先提交输入，再核对该帧处理后的控制器索引和 WBP 金环。 */
 		static constexpr FStep Steps[] = {
 			{EAction::Initial, 0, TEXT("开局选中第一槽")},
+			{EAction::EnterDesignMode, 0, TEXT("设计模式操作下保持选牌状态")},
+			{EAction::ClickSecondSlot, 1, TEXT("设计模式点击第二张卡牌后选中状态切换")},
+			{EAction::EnterClassicMode, 1, TEXT("返回经典模式后保持选牌状态")},
+			{EAction::ClickFirstSlot, 0, TEXT("经典模式点击第一张卡牌后选中状态切换")},
 			{EAction::Up, 0, TEXT("满包首槽向上保持选中，不穿透到尾槽")},
 			{EAction::Down, 1, TEXT("首槽向下只向右移动一格")},
 			{EAction::Up, 0, TEXT("滚轮向上只向左移动一格")},
@@ -159,12 +201,22 @@ namespace
 			{EAction::One, 0, TEXT("数字键 1 仍直选首槽")}
 		};
 
-		/** 用 WBP 的可见金环验证同步；空包必须没有任何槽位仍保留选中视觉。 */
-		bool CheckHighlight(UWorld& World, const FStep& Step) const
+		/** 通过正式 WBP 同时检查选中金环、独立功能图标和数字等级。 */
+		bool CheckPresentation(UWorld& World, const TArray<FCastleBuildingDescriptor>& Cards, const FStep& Step) const
 		{
 			TArray<UUserWidget*> Bars;
 			UWidgetBlueprintLibrary::GetAllWidgetsOfClass(&World, Bars, UCastleBuildBarWidget::StaticClass(), true);
 			if (!Test.TestEqual(TEXT("唯一的运行时建造栏"), Bars.Num(), 1)) { return false; }
+			// 与贴花交付表独立核对，不复用被测生产映射，防止两端同时发生同一个编号错误。
+			const TMap<ECastleBuildingType, FString> ExpectedTextures = {
+				{ECastleBuildingType::NormalRoom, TEXT("T_BuildBarIcon_0_NormalRoom")},
+				{ECastleBuildingType::Farm, TEXT("T_BuildBarIcon_1_Farm")},
+				{ECastleBuildingType::CannonTower, TEXT("T_BuildBarIcon_2_CannonTower")},
+				{ECastleBuildingType::ArcherTower, TEXT("T_BuildBarIcon_3_ArcherTower")},
+				{ECastleBuildingType::ShieldTower, TEXT("T_BuildBarIcon_4_ShieldTower")},
+				{ECastleBuildingType::BalloonTower, TEXT("T_BuildBarIcon_5_BalloonTower")},
+				{ECastleBuildingType::BeeHive, TEXT("T_BuildBarIcon_6_BeeHive")}
+			};
 			for (int32 Index = 0; Index < 10; ++Index)
 			{
 				const UUserWidget* Slot = Cast<UUserWidget>(Bars[0]->GetWidgetFromName(FName(*FString::Printf(TEXT("Slot%02d"), Index + 1))));
@@ -174,6 +226,27 @@ namespace
 				{
 					return false;
 				}
+				const auto* Area = Cast<USizeBox>(Slot->GetWidgetFromName(TEXT("PreviewArea")));
+				const auto* Stats = Cast<UTextBlock>(Slot->GetWidgetFromName(TEXT("CardStats")));
+				if (!Test.TestNotNull(TEXT("正式槽位已绑定图标区"), Area)
+					|| !Test.TestNotNull(TEXT("正式槽位已绑定卡牌数字和等级"), Stats)) { return false; }
+				const auto* Icon = Cast<UImage>(Area->GetContent());
+				if (!Cards.IsValidIndex(Index))
+				{
+					Test.TestTrue(TEXT("空槽隐藏图标区与文字并释放旧图片"), !Area->IsVisible() && !Stats->IsVisible()
+						&& (!Icon || !Icon->GetBrush().GetResourceObject()));
+					continue;
+				}
+				if (!Test.TestNotNull(TEXT("有牌的槽位使用 UImage"), Icon)) { return false; }
+				const FCastleBuildingDescriptor& Card = Cards[Index];
+				const FString* ExpectedName = ExpectedTextures.Find(Card.GetBuildingType());
+				if (!Test.TestNotNull(TEXT("当前牌类别有已声明的独立图标"), ExpectedName)) { return false; }
+				Test.TestEqual(TEXT("实际刷子纹理匹配卡牌类型"), GetNameSafe(Icon->GetBrush().GetResourceObject()), *ExpectedName);
+				FLinearColor Tint;
+				Test.TestTrue(TEXT("图标使用真实卡牌色"), CastleTileColors::TryGetGridTint(Card.Color, Tint)
+					&& Icon->GetColorAndOpacity().Equals(Tint, 0.001f));
+				Test.TestTrue(TEXT("数字与等级保持可见且与卡牌一致"), Area->IsVisible() && Stats->IsVisible()
+					&& Stats->GetText().EqualTo(FText::Format(NSLOCTEXT("CastleBuildBar", "CardStats", "{0} · Lv{1}"), Card.Number, Card.Level)));
 			}
 			return true;
 		}
@@ -203,6 +276,7 @@ namespace
 
 		FAutomationTestBase& Test;
 		TArray<FCastleBuildingDescriptor> RemovedCards;
+		ECastleControlMode ExpectedMode = ECastleControlMode::Classic;
 		int32 NextStep = 0;
 	};
 }

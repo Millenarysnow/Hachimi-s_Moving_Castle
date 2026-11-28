@@ -2,6 +2,7 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Castle/PCG/CastlePCGSemanticTestRules.h"
 #include "Misc/AutomationTest.h"
 
 #include "CastleBuildingTestUtilities.h"
@@ -132,11 +133,7 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("创建测试棋盘"), Board)) { return false; }
 	Board->GridSize = FIntVector(3, 3, 3);
 	CastleBuildingTests::ConfigureBoard(Board);
-	// 本组只验证定向放置，独立世界明确关闭导航；沿用边界测试的平面 PCG 输入，
-	// 避免新增上层场景请求本夹具未配置的 Recast 梯子连接，正式棋盘规则资产保持原样。
-	if (!TestNotNull(TEXT("放置测试显式复制的 PCG 规则资产"), Board->PCGRuleSet.Get())) { return false; }
-	Board->PCGRuleSet = DuplicateObject<UCastlePCGRuleSetDataAsset>(Board->PCGRuleSet, Board);
-	Board->PCGRuleSet->Rules = { NewObject<UCastlePCGPlanarRule>(Board->PCGRuleSet) };
+	if (!CastlePCGTests::ConfigurePlacementOnlyPCG(*Board, *this)) { return false; }
 	UCastleBuildingDefinition* Definition = Board->BuildingDefinitions[1];
 	UCastleBuildingDefinition* NormalRoomDefinition = Board->BuildingDefinitions[0];
 	FText Reason;
@@ -184,6 +181,21 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("左侧高亮面向 +X"), LeftTarget.Face, ECastleGridFace::PositiveX);
 	TestEqual(TEXT("右侧高亮面向 -X"), RightTarget.Face, ECastleGridFace::NegativeX);
 	TestEqual(TEXT("两侧指向同一个落点"), LeftTarget.AdjacentCell, RightTarget.AdjacentCell);
+	// 准星中心和边长只由最终业务落点格决定，不再依赖表面命中点或实体地块边长。
+	const auto VerifyHoloBox = [this, Board](const FCastleGridCursorTarget& Target,
+		const FIntVector& PlacementCell, const TCHAR* Description)
+	{
+		const FVector ExpectedCenter = Board->GetGridWorldLocation(PlacementCell);
+		const FVector ExpectedSize(Board->CellSize * 0.98f, Board->CellSize * 0.98f, Board->LayerHeight * 0.98f);
+		const FVector ActualSize = Target.IndicatorTransform.GetScale3D() * 100.0f;
+		TestTrue(FString::Printf(TEXT("%s全息盒中心对齐最终落点格心"), Description),
+			Target.IndicatorTransform.GetLocation().Equals(ExpectedCenter, 1.0f));
+		TestTrue(FString::Printf(TEXT("%s全息盒尺寸为 98%% 单格体积"), Description),
+			ActualSize.Equals(ExpectedSize * Board->GetActorScale3D(), 1.0f));
+	};
+	VerifyHoloBox(FloorTarget, FloorTarget.Cell, TEXT("旧地面模式"));
+	VerifyHoloBox(LeftTarget, LeftTarget.AdjacentCell, TEXT("建筑 +X 面"));
+	VerifyHoloBox(RightTarget, RightTarget.AdjacentCell, TEXT("建筑 -X 面"));
 	TestFalse(TEXT("高亮蓝 5 地面不能借用红 3 邻地块或红色邻建筑匹配"), Board->CanPlaceBuildingAtCursor(FloorTarget, RedCard, Reason));
 	TestFalse(TEXT("坐标接口也不能扫描周围邻格放宽匹配"), Board->CanPlaceBuilding(Destination, RedCard, Reason));
 	TestFalse(TEXT("高亮黄 7 建筑不能借用另一侧红色建筑匹配"), Board->CanPlaceBuildingAtCursor(RightTarget, RedCard, Reason));
@@ -229,9 +241,9 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	if (!Definition->CreateDescriptor(2, ECastleTileColor::Red, 3, WideCard, Reason)) { return false; }
 	TestTrue(TEXT("有匹配面允许双格建筑部分悬空"), Board->CanPlaceBuildingAtCursor(TopTarget, WideCard, Reason));
 	TestTrue(TEXT("坐标入口只需锚点下方匹配，不要求完整底面支撑"), Board->CanPlaceBuilding(TopTarget.AdjacentCell, WideCard, Reason));
-	if (!Board->PrototypeBackpack->TryAddItem(WideCard, CardIndex, Reason)) { return false; }
-	ACastleBuildingBase* FloatingWide = Board->PlaceBackpackBuildingAtCursor(TopTarget, CardIndex, Reason);
-	if (!TestNotNull(TEXT("背包实际放置部分悬空的双格建筑"), FloatingWide)) { AddError(Reason.ToString()); return false; }
+	// 多格描述仍可按光标高亮面直接生成。本用例验证该几何行为，背包只接收一级。
+	ACastleBuildingBase* FloatingWide = Board->PlaceBuildingAtCursor(TopTarget, WideCard, false, Reason);
+	if (!TestNotNull(TEXT("直接生成部分悬空的双格建筑"), FloatingWide)) { AddError(Reason.ToString()); return false; }
 	if (!CastleBuildingTests::CompletePlacement(FloatingWide)) { return false; }
 	// 从公开建筑列表检查实际三维占格，不为测试开放棋盘内部的受保护索引查询。
 	const auto HasPlacedCell = [Board](const FIntVector& Cell)
@@ -244,7 +256,7 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("悬空部分保留实际占格"), FloatingWide->GetOccupiedCoordinates().Contains(FIntVector(1, 1, 1)));
 	TestEqual(TEXT("双格建筑正确登记两格占用"), Board->GetOccupiedRoomCellCount(), 4);
 	TestFalse(TEXT("双格建筑第二格正下方确实为空"), HasPlacedCell(Destination));
-	TestEqual(TEXT("悬空放置成功正常扣牌"), Board->PrototypeBackpack->GetItemCount(), 0);
+	TestEqual(TEXT("直接生成不变更背包库存"), Board->PrototypeBackpack->GetItemCount(), 0);
 
 	// 从已完成的上层建筑真实侧面解析光标，再走背包入口生成下方完全没有建筑的普通房间。
 	FCastleGridCursorTarget FloatingSide;
@@ -252,6 +264,30 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("真实射线选中上层建筑侧面"), Board->TryResolveGridCursorTarget(
 		WideCenter + FVector(0, Board->CellSize, 0), WideCenter, FloatingSide))) { return false; }
 	TestEqual(TEXT("射线选中朝 +Y 的建筑面"), FloatingSide.Face, ECastleGridFace::PositiveY);
+	VerifyHoloBox(FloatingSide, FloatingSide.AdjacentCell, TEXT("建筑 +Y 面"));
+	// 上层模型四周留空，可用短射线独立命中反向侧面、顶面和悬空底面。
+	const struct
+	{
+		FIntVector Offset;
+		ECastleGridFace Face;
+		const TCHAR* Description;
+	} OtherFaces[] = {
+		{ FIntVector(0, -1, 0), ECastleGridFace::NegativeY, TEXT("建筑 -Y 面") },
+		{ FIntVector(0, 0, 1), ECastleGridFace::Up, TEXT("建筑顶面") },
+		{ FIntVector(0, 0, -1), ECastleGridFace::Down, TEXT("建筑悬空底面") },
+	};
+	for (const auto& Face : OtherFaces)
+	{
+		FCastleGridCursorTarget SurfaceTarget;
+		const FVector RayStart = WideCenter + FVector(Face.Offset) * (Board->CellSize * 0.25f);
+		if (!TestTrue(FString::Printf(TEXT("射线命中%s"), Face.Description),
+			Board->TryResolveGridCursorTarget(RayStart, WideCenter, SurfaceTarget))) { return false; }
+		TestEqual(FString::Printf(TEXT("%s保留建筑来源"), Face.Description), SurfaceTarget.Surface, ECastleGridCursorSurface::Building);
+		TestEqual(FString::Printf(TEXT("%s保留朝向"), Face.Description), SurfaceTarget.Face, Face.Face);
+		const FIntVector Adjacent = SurfaceTarget.Cell + Face.Offset;
+		TestEqual(FString::Printf(TEXT("%s命中外侧邻格"), Face.Description), SurfaceTarget.AdjacentCell, Adjacent);
+		VerifyHoloBox(SurfaceTarget, Adjacent, Face.Description);
+	}
 	TestEqual(TEXT("侧面落点仍在第二层"), FloatingSide.AdjacentCell.Z, 1);
 	TestFalse(TEXT("侧面落点正下方没有建筑"), HasPlacedCell(FloatingSide.AdjacentCell - FIntVector(0, 0, 1)));
 	TestTrue(TEXT("同色普通房间允许侧向悬空"), Board->CanPlaceBuildingAtCursor(FloatingSide, NormalRoomCard, Reason));
@@ -271,7 +307,7 @@ bool FCastleDirectedPlacementTest::RunTest(const FString& Parameters)
 
 	// 功能建筑与普通房间双向使用同色或同数字匹配，不再存在类别隔离。
 	ACastleBuildingBase* NormalRoom = Board->PlaceBuilding(FIntVector(0, 0, 0), NormalRoomCard, false, Reason);
-	if (!TestNotNull(TEXT("在五色地面放置普通房间"), NormalRoom)) { return false; }
+	if (!TestNotNull(TEXT("在有效色号地面放置普通房间"), NormalRoom)) { return false; }
 	if (!CastleBuildingTests::CompletePlacement(NormalRoom)) { return false; }
 	FCastleGridCursorTarget NormalRoomTarget;
 	NormalRoomTarget.bValid = true;

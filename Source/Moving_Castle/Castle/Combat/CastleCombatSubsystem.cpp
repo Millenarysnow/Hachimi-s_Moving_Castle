@@ -128,13 +128,13 @@ bool UCastleCombatSubsystem::InitializeCombat(UCastleCombatConfigDataAsset* Conf
 	return false;
 }
 
-bool UCastleCombatSubsystem::BuildScheduledWaves(const ECastleBattleKind Kind, const int32 KindOrdinal,
+bool UCastleCombatSubsystem::BuildScheduledWaves(const ECastleBattleKind Kind, const int32 TableOrdinal,
 	const int64 FirstGlobalWaveIndex, const int32 ExistingEnemies, TArray<FCastleCombatScheduledWave>& OutWaves,
 	int32& OutEstimatedEnemies, int32& OutPendingBatches, FText& OutFailureReason)
 {
 	TArray<FCastleCombatWaveDefinition> Waves;
 	const auto* Curve = CombatConfig->DifficultyCurve.Get();
-	if (!Curve->BuildBattlePlan(Kind, KindOrdinal, Waves, OutFailureReason)) { return false; }
+	if (!Curve->BuildBattlePlan(Kind, TableOrdinal, Waves, OutFailureReason)) { return false; }
 	if (FirstGlobalWaveIndex > MAX_int64 - (Waves.Num() - 1))
 	{
 		OutFailureReason = FText::FromString(FString::Printf(TEXT("难度曲线 %s：连续波次序号超出 int64。"), *Curve->GetPathName()));
@@ -142,7 +142,7 @@ bool UCastleCombatSubsystem::BuildScheduledWaves(const ECastleBattleKind Kind, c
 	}
 	const bool bNormal = Kind == ECastleBattleKind::Normal;
 	const auto& Table = bNormal ? Curve->NormalBattles : Curve->EliteBattles;
-	const int32 SourceIndex = FMath::Min(KindOrdinal, Table.Num()) - 1;
+	const int32 SourceIndex = FMath::Min(TableOrdinal, Table.Num()) - 1;
 	const FString RowPath = FString::Printf(TEXT("%s.%s[%d]"), *Curve->GetPathName(),
 		bNormal ? TEXT("NormalBattles") : TEXT("EliteBattles"), SourceIndex);
 	// 整关解析在同一个游戏线程调用内完成。后续波次只读此时确定的条目集合。
@@ -167,7 +167,7 @@ bool UCastleCombatSubsystem::BuildScheduledWaves(const ECastleBattleKind Kind, c
 		{
 			// 原始条目下标和波次参与种子，解锁过滤不会改变其他条目的位置随机流。
 			const int32 Seed = CastleCombat::MakeSeed({static_cast<uint32>(CombatConfig->SpawnSeed), static_cast<uint32>(Kind),
-				static_cast<uint32>(KindOrdinal), static_cast<uint32>(WaveIndex), static_cast<uint32>(RaidIndex)});
+				static_cast<uint32>(TableOrdinal), static_cast<uint32>(WaveIndex), static_cast<uint32>(RaidIndex)});
 			return CastleCombat::PrepareScheduledEntry(*GetWorld(), *CombatConfig, CheckedTemplates,
 				EnemyId, Points, BatchSize, Delay, Interval, Attributes, FieldPath, Seed, Wave,
 				MaxEnemyBudget, EstimatedEnemies, OutFailureReason);
@@ -210,13 +210,13 @@ bool UCastleCombatSubsystem::BuildScheduledWaves(const ECastleBattleKind Kind, c
 	return true;
 }
 
-int64 UCastleCombatSubsystem::ResolveFirstGlobalWaveIndex(const ECastleBattleKind Kind, const int32 KindOrdinal) const
+int64 UCastleCombatSubsystem::ResolveFirstGlobalWaveIndex(const ECastleBattleKind Kind, const int32 TableOrdinal) const
 {
 	const auto& Curve = *CombatConfig->DifficultyCurve;
 	const auto& Table = Kind == ECastleBattleKind::Normal ? Curve.NormalBattles : Curve.EliteBattles;
-	const int32 PriorBattles = KindOrdinal - 1;
+	const int32 PriorBattles = TableOrdinal - 1;
 	const int32 InTable = FMath::Min(PriorBattles, Table.Num());
-	// 跳号和重开按同一张静态表累计；超过末场后，每场沿用末场波数。
+	// 空岛占用的表项也参与静态累计；超过末项后，每关沿用末项波数。
 	int64 Index = 1 + static_cast<int64>(PriorBattles - InTable) * Table.Last().Waves.Num();
 	for (int32 Battle = 0; Battle < InTable; ++Battle) { Index += Table[Battle].Waves.Num(); }
 	return Index;
@@ -229,7 +229,30 @@ bool UCastleCombatSubsystem::CanAdvanceCurrentWave(const double WaveElapsed, con
 	return Wave.PendingBatches == 0 && (Wave.bAdvanceOnClear ? EnemyCount == 0 : WaveElapsed >= Wave.Duration);
 }
 
-bool UCastleCombatSubsystem::StartBattle(const ECastleBattleKind Kind, const int32 KindOrdinal, FText& OutFailureReason)
+bool UCastleCombatSubsystem::StartStageBattle(const ECastleBattleKind Kind, const int32 Stage,
+	const int32 EliteInterval, FText& OutFailureReason)
+{
+	if (Stage < 1 || EliteInterval < 2 || Kind != CastleCombat::GetBattleKindForStage(Stage, EliteInterval))
+	{
+		OutFailureReason = FText::FromString(FString::Printf(TEXT("战斗配置 %s：关号 %d、节点战斗类型 %d 或精英关间隔 %d 无效。"),
+			*GetPathNameSafe(CombatConfig), Stage, static_cast<int32>(Kind), EliteInterval));
+		UE_LOG(LogMoving_Castle, Error, TEXT("StartStageBattle：%s"), *OutFailureReason.ToString());
+		return false;
+	}
+	// 普通表按关号扣除精英关。空岛占用所在的普通关位置，同一关号始终取同一表项。
+	const int32 EliteStages = Stage / EliteInterval;
+	const int32 TableOrdinal = Kind == ECastleBattleKind::Elite ? EliteStages : Stage - EliteStages;
+	return StartConfiguredBattle(Kind, TableOrdinal, Stage, OutFailureReason);
+}
+
+bool UCastleCombatSubsystem::StartBattle(const ECastleBattleKind Kind, const int32 TableOrdinal, FText& OutFailureReason)
+{
+	// 独立战斗以调用方指定的表项为编号，使用同一套波次计划与清场事务。
+	return StartConfiguredBattle(Kind, TableOrdinal, TableOrdinal, OutFailureReason);
+}
+
+bool UCastleCombatSubsystem::StartConfiguredBattle(const ECastleBattleKind Kind, const int32 TableOrdinal,
+	const int32 BattleNumber, FText& OutFailureReason)
 {
 	OutFailureReason = FText::GetEmpty();
 	const auto Reject = [this, &OutFailureReason](const FString& Reason)
@@ -241,9 +264,9 @@ bool UCastleCombatSubsystem::StartBattle(const ECastleBattleKind Kind, const int
 	if (!IsInGameThread() || bWorldEnding) { return Reject(TEXT("只能在游戏线程且世界未结束时开战。")); }
 	if (!IsValid(CombatConfig)) { return Reject(TEXT("战斗系统未初始化。")); }
 	if (bBattleActive) { return Reject(TEXT("已在战斗中，拒绝重复开战。")); }
-	if ((Kind != ECastleBattleKind::Normal && Kind != ECastleBattleKind::Elite) || KindOrdinal < 1)
+	if ((Kind != ECastleBattleKind::Normal && Kind != ECastleBattleKind::Elite) || TableOrdinal < 1)
 	{
-		return Reject(TEXT("Kind 无效或 KindOrdinal 小于 1。"));
+		return Reject(TEXT("战斗类型无效或表项序号小于 1。"));
 	}
 	auto* Mass = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
 	if (!Mass || Mass->GetEntityManager().IsProcessing()) { return Reject(TEXT("Mass 不可用或正在处理，不能开战。")); }
@@ -258,10 +281,10 @@ bool UCastleCombatSubsystem::StartBattle(const ECastleBattleKind Kind, const int
 	const auto* Units = GetWorld()->GetSubsystem<UCastleMassUnitSubsystem>();
 	int32 InitialAliveEnemies = 0;
 	if (!Units->CountEnemyEntities(InitialAliveEnemies)) { return Reject(TEXT("开战前统计敌人数失败。")); }
-	const int64 FirstGlobalWaveIndex = ResolveFirstGlobalWaveIndex(Kind, KindOrdinal);
+	const int64 FirstGlobalWaveIndex = ResolveFirstGlobalWaveIndex(Kind, TableOrdinal);
 	TArray<FCastleCombatScheduledWave> NewPlan;
 	int32 NewEstimatedEnemies = 0, NewPendingBatches = 0;
-	if (!BuildScheduledWaves(Kind, KindOrdinal, FirstGlobalWaveIndex, InitialAliveEnemies, NewPlan,
+	if (!BuildScheduledWaves(Kind, TableOrdinal, FirstGlobalWaveIndex, InitialAliveEnemies, NewPlan,
 		NewEstimatedEnemies, NewPendingBatches, Failure)) { return Reject(Failure.ToString()); }
 
 	const int32 FirstNewSpawner = ManagedSpawners.Num();
@@ -270,7 +293,7 @@ bool UCastleCombatSubsystem::StartBattle(const ECastleBattleKind Kind, const int
 	BattleOuterRadius = CombatConfig->SpawnOuterRadius;
 	BattleHeightOffset = CombatConfig->SpawnHeightOffset;
 	ActiveKind = Kind;
-	ActiveOrdinal = KindOrdinal;
+	ActiveBattleNumber = BattleNumber;
 	PendingBatches = NewPendingBatches;
 	PendingEstimatedEnemies = NewEstimatedEnemies;
 	BattleTotalEnemyBudget = static_cast<int64>(InitialAliveEnemies) + PendingEstimatedEnemies;
@@ -290,9 +313,11 @@ bool UCastleCombatSubsystem::StartBattle(const ECastleBattleKind Kind, const int
 	}
 	// 首批按真实数量计入，其他批次按估算计入；开战时进度为零。
 	BattleTotalEnemyBudget = static_cast<int64>(InitialAliveEnemies) + PendingEstimatedEnemies;
-	const FString Message = FString::Printf(TEXT("开战：第 %d 场%s战斗，共 %d 波。"), ActiveOrdinal, CastleCombat::KindName(ActiveKind), Plan.Num());
+	const FString Message = FString::Printf(TEXT("开战：%s战斗（编号 %d），共 %d 波。"), CastleCombat::KindName(ActiveKind), ActiveBattleNumber, Plan.Num());
 	UE_LOG(LogMoving_Castle, Display, TEXT("%s"), *Message);
 	CastleCombat::Screen(Message, true);
+	// 首批生成与完整开战校验通过后才发布；回滚的开战不占用徽章的波次状态。
+	OnWaveStarted.Broadcast(ActiveWaveIndex + 1, Plan.Num());
 	return true;
 }
 
@@ -300,8 +325,8 @@ void UCastleCombatSubsystem::BeginWave(const int32 WaveIndex, const double GameT
 {
 	ActiveWaveIndex = WaveIndex;
 	WaveStartGameTime = GameTime;
-	const FString Message = FString::Printf(TEXT("第 %d 场%s战斗：第 %d/%d 波启动，连续波次 %lld。"),
-		ActiveOrdinal, CastleCombat::KindName(ActiveKind), ActiveWaveIndex + 1, Plan.Num(), Plan[WaveIndex].GlobalIndex);
+	const FString Message = FString::Printf(TEXT("%s战斗（编号 %d）：第 %d/%d 波启动，连续波次 %lld。"),
+		CastleCombat::KindName(ActiveKind), ActiveBattleNumber, ActiveWaveIndex + 1, Plan.Num(), Plan[WaveIndex].GlobalIndex);
 	UE_LOG(LogMoving_Castle, Display, TEXT("%s"), *Message);
 	CastleCombat::Screen(Message, true);
 }
@@ -366,8 +391,8 @@ bool UCastleCombatSubsystem::SpawnScheduledBatch(FCastleCombatScheduledEntry& En
 	++Entry.SpawnedBatches;
 	const auto& Manager = GetWorld()->GetSubsystem<UMassEntitySubsystem>()->GetEntityManager();
 	const float Health = Manager.GetFragmentDataChecked<FCastleMassUnitFragment>(Spawner->SpawnedUnits[0].Entity).Health;
-	UE_LOG(LogMoving_Castle, Display, TEXT("第 %d 场%s战斗，第 %d 波：%s 第 %d 批 %s × %d 点，实体 %d 只，首只血量 %g（覆写倍率 %g）。"),
-		ActiveOrdinal, CastleCombat::KindName(ActiveKind), ActiveWaveIndex + 1, *Entry.FieldPath, Entry.SpawnedBatches,
+	UE_LOG(LogMoving_Castle, Display, TEXT("%s战斗（编号 %d），第 %d 波：%s 第 %d 批 %s × %d 点，实体 %d 只，首只血量 %g（覆写倍率 %g）。"),
+		CastleCombat::KindName(ActiveKind), ActiveBattleNumber, ActiveWaveIndex + 1, *Entry.FieldPath, Entry.SpawnedBatches,
 		*Entry.Enemy.EnemyId.ToString(), Points, Spawner->SpawnedUnits.Num(), Health, Entry.AttributeOverrides.HealthMultiplier);
 	return true;
 }
@@ -488,7 +513,9 @@ void UCastleCombatSubsystem::Tick(float DeltaTime)
 		if (CanAdvanceCurrentWave(Elapsed, Count))
 		{
 			BeginWave(ActiveWaveIndex + 1, Now);
-			if (!SpawnDueBatches(0.0, Failure)) { FailBattle(Failure); }
+			if (!SpawnDueBatches(0.0, Failure)) { FailBattle(Failure); return; }
+			// 只有成功进入下一波，监听者才重置本波的计数。
+			OnWaveStarted.Broadcast(ActiveWaveIndex + 1, Plan.Num());
 		}
 		return;
 	}
@@ -496,12 +523,12 @@ void UCastleCombatSubsystem::Tick(float DeltaTime)
 	{
 		// 先结束旧状态再通知，委托中允许立即初始化或开始下一场，且不会被旧 Tick 再清理。
 		const auto Kind = ActiveKind;
-		const int32 Ordinal = ActiveOrdinal;
+		const int32 BattleNumber = ActiveBattleNumber;
 		ResetBattlePlan();
-		const FString Message = FString::Printf(TEXT("清场：第 %d 场%s战斗。"), Ordinal, CastleCombat::KindName(Kind));
+		const FString Message = FString::Printf(TEXT("清场：%s战斗（编号 %d）。"), CastleCombat::KindName(Kind), BattleNumber);
 		UE_LOG(LogMoving_Castle, Display, TEXT("%s"), *Message);
 		CastleCombat::Screen(Message, true);
-		OnBattleCleared.Broadcast(Kind, Ordinal);
+		OnBattleCleared.Broadcast(Kind, BattleNumber);
 	}
 }
 
@@ -530,13 +557,13 @@ bool UCastleCombatSubsystem::DestroyClearedSpawners()
 void UCastleCombatSubsystem::FailBattle(const FText& Reason)
 {
 	const auto Kind = ActiveKind;
-	const int32 Ordinal = ActiveOrdinal;
+	const int32 BattleNumber = ActiveBattleNumber;
 	ResetBattlePlan();
-	UE_LOG(LogMoving_Castle, Error, TEXT("战斗失败：配置 %s，第 %d 场%s战斗：%s"),
-		*GetPathNameSafe(CombatConfig), Ordinal, CastleCombat::KindName(Kind), *Reason.ToString());
+	UE_LOG(LogMoving_Castle, Error, TEXT("战斗失败：配置 %s，%s战斗（编号 %d）：%s"),
+		*GetPathNameSafe(CombatConfig), CastleCombat::KindName(Kind), BattleNumber, *Reason.ToString());
 	CastleCombat::Screen(FString::Printf(TEXT("战斗失败：%s"), *Reason.ToString()), false);
 	// 已出场敌人保留；ManagedSpawners 在空闲 Tick 中继续管理直到全部回收，绝不接着广播清场。
-	OnBattleFailed.Broadcast(Kind, Ordinal, Reason);
+	OnBattleFailed.Broadcast(Kind, BattleNumber, Reason);
 }
 
 void UCastleCombatSubsystem::CancelForWorldEnd()
@@ -569,5 +596,6 @@ void UCastleCombatSubsystem::Deinitialize()
 	CancelForWorldEnd();
 	OnBattleCleared.Clear();
 	OnBattleFailed.Clear();
+	OnWaveStarted.Clear();
 	Super::Deinitialize();
 }

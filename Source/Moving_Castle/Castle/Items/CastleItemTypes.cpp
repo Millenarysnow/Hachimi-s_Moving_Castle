@@ -5,13 +5,104 @@
 
 #define LOCTEXT_NAMESPACE "CastleItemTypes"
 
-TConstArrayView<ECastleTileColor> FCastleWildcardRoomSpec::GetLegalColors()
+TConstArrayView<ECastleBuildingType> CastleRoomCards::GetFunctionTypes()
 {
-	static constexpr ECastleTileColor LegalColors[] = {
-		ECastleTileColor::Red, ECastleTileColor::Blue, ECastleTileColor::Green,
-		ECastleTileColor::Yellow, ECastleTileColor::Purple
+	static constexpr ECastleBuildingType Types[] = {
+		ECastleBuildingType::ArcherTower, ECastleBuildingType::CannonTower, ECastleBuildingType::Farm,
+		ECastleBuildingType::ShieldTower, ECastleBuildingType::BeeHive, ECastleBuildingType::BalloonTower
 	};
-	return MakeArrayView(LegalColors);
+	return MakeArrayView(Types);
+}
+
+bool CastleRoomCards::FDefinitionPool::TryInitialize(
+	const TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> Definitions, FText& OutReason)
+{
+	for (UCastleBuildingDefinition* Definition : Definitions)
+	{
+		if (!IsValid(Definition))
+		{
+			OutReason = LOCTEXT("MissingDefinition", "建筑定义池含有空引用或已失效的建筑定义。");
+			return false;
+		}
+		const ECastleBuildingType Type = Definition->BuildingType;
+		if ((Type != ECastleBuildingType::NormalRoom && !GetFunctionTypes().Contains(Type)) || ByType.Contains(Type))
+		{
+			OutReason = FText::Format(LOCTEXT("AmbiguousDefinition", "建筑定义 {0} 的类别 {1} 非标准房间，或该类别存在多个定义。"),
+				FText::FromString(Definition->GetPathName()), FText::AsNumber(static_cast<uint8>(Type)));
+			return false;
+		}
+		if (!Definition->ValidateConfiguration(OutReason))
+		{
+			OutReason = FText::Format(LOCTEXT("InvalidDefinition", "建筑定义 {0} 校验失败：{1}"),
+				FText::FromString(Definition->GetPathName()), OutReason);
+			return false;
+		}
+		ByType.Add(Type, Definition);
+	}
+	return true;
+}
+
+UCastleBuildingDefinition* CastleRoomCards::FDefinitionPool::Find(const ECastleBuildingType Type) const
+{
+	return ByType.FindRef(Type);
+}
+
+bool CastleRoomCards::FDefinitionPool::TryCollect(const bool bIncludeNormalRoom,
+	TArray<TObjectPtr<UCastleBuildingDefinition>>& OutDefinitions, FText& OutReason) const
+{
+	OutDefinitions.Reset();
+	TArray<ECastleBuildingType, TInlineAllocator<7>> Types;
+	if (bIncludeNormalRoom) { Types.Add(ECastleBuildingType::NormalRoom); }
+	Types.Append(GetFunctionTypes());
+	for (const ECastleBuildingType Type : Types)
+	{
+		UCastleBuildingDefinition* Definition = Find(Type);
+		if (!Definition)
+		{
+			OutReason = FText::Format(LOCTEXT("IncompleteDrawPool", "抽取池缺少建筑类别 {0} 的定义。"),
+				StaticEnum<ECastleBuildingType>()->GetDisplayNameTextByValue(static_cast<uint8>(Type)));
+			return false;
+		}
+		OutDefinitions.Add(Definition);
+	}
+	return true;
+}
+
+bool CastleRoomCards::ValidateTrait(const FCastleBuildingDescriptor& Card, FText& OutReason)
+{
+	// 带特质的卡随回收保留原字段，因而所有存入入口及 Actor 初始化都使用相同的约束。
+	switch (Card.RoomTrait)
+	{
+	case ECastleRoomTrait::None:
+		if (Card.TraitRemainingRounds == 0) { return true; }
+		break;
+	case ECastleRoomTrait::Highway:
+	case ECastleRoomTrait::SkyIslandPortal:
+		if (Card.GetBuildingType() == ECastleBuildingType::NormalRoom && Card.Level == 1 && Card.TraitRemainingRounds == 0)
+		{
+			return true;
+		}
+		break;
+	case ECastleRoomTrait::SelfOrbiting:
+		if (Card.GetBuildingType() == ECastleBuildingType::CannonTower && Card.Level == 1 && Card.Number == 6
+			&& Card.TraitRemainingRounds >= 1 && Card.TraitRemainingRounds <= 6)
+		{
+			return true;
+		}
+		break;
+	default:
+		break;
+	}
+	OutReason = FText::Format(LOCTEXT("InvalidRoomTrait", "建筑定义 {0} 的牌面不支持特质 {1} 或剩余轮数 {2}。"),
+		FText::FromString(GetPathNameSafe(Card.Definition.Get())), FText::AsNumber(static_cast<uint8>(Card.RoomTrait)),
+		FText::AsNumber(Card.TraitRemainingRounds));
+	return false;
+}
+
+bool CastleRoomCards::HaveSameIdentity(const FCastleBuildingDescriptor& A, const FCastleBuildingDescriptor& B)
+{
+	return A.Definition == B.Definition && A.Color == B.Color && A.Number == B.Number && A.Level == B.Level
+		&& A.RoomTrait == B.RoomTrait && A.TraitRemainingRounds == B.TraitRemainingRounds;
 }
 
 bool FCastleWildcardRoomSpec::TryResolveOptions(
@@ -54,7 +145,8 @@ bool FCastleWildcardRoomSpec::TryResolveOptions(
 		Candidate.Definitions.Add(Definition);
 	}
 
-	const TConstArrayView<ECastleTileColor> LegalColors = GetLegalColors();
+	// 默认选项顺序来自共享玩法色集合，显式配置的顺序由房间组资产决定。
+	const TConstArrayView<ECastleTileColor> LegalColors = CastleTileColors::GetPlayable();
 	const TConstArrayView<ECastleTileColor> Colors = AllowedColors.IsEmpty() ? LegalColors : MakeArrayView(AllowedColors);
 	for (const ECastleTileColor Color : Colors)
 	{

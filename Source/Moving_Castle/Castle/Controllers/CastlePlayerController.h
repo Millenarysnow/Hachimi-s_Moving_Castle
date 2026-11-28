@@ -5,9 +5,11 @@
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
 #include "CastleGameplayTypes.h"
+#include "Castle/Input/CastleControlMode.h"
 #include "CastlePlayerController.generated.h"
 
 class ACastleBoard;
+class ACastleBuildingBase;
 class ACastleGridCursor;
 class ACastleSkyIslandBase;
 class UCastleEconomyComponent;
@@ -17,12 +19,18 @@ class ACastleMassEnemySpawner;
 class UUserWidget;
 class UCastleBackpackComponent;
 class UCastleBadgeReplaceModalWidget;
+class UCastleControlSettingsWidget;
+class UCastleBuildingDemolishMenuWidget;
+
+/** 提供给准星、设置界面及教程的即时模式变更事件。 */
+DECLARE_MULTICAST_DELEGATE_OneParam(FCastleControlModeChanged, ECastleControlMode);
+/** 回收成功后使用事务提交前的描述通知教程，原建筑 Actor 已被棋盘销毁。 */
+DECLARE_MULTICAST_DELEGATE_OneParam(FCastleBuildingDemolished, const FCastleBuildingDescriptor&);
 
 /**
  * 移动城堡的自有玩家控制器。
  *
- * 控制器隐藏系统鼠标并把视口中心作为唯一指针位置，每帧将中心射线交给
- * 棋盘解析，再驱动浅蓝色网格面指示器。建筑放置输入会在此基础上继续扩展。
+ * 控制器统一仲裁鼠标、模态输入和世界瞄准。棋盘、空岛和路线编辑共享当前瞄准源。
  */
 UCLASS()
 class MOVING_CASTLE_API ACastlePlayerController : public APlayerController
@@ -33,6 +41,27 @@ public:
 	/** 初始化中心指针和游戏输入模式。 */
 	ACastlePlayerController();
 
+	ECastleControlMode GetControlMode() const { return ControlMode; }
+	/** 设置界面保存本地偏好；自动化可显式指定模式且不写入配置。 */
+	void SetControlMode(ECastleControlMode NewMode, bool bSaveConfig = true);
+	FKey GetPrimaryPlaceInteractKey() const;
+	FKey GetDemolishKey() const;
+	FText GetPrimaryPlaceInteractKeyDisplayText() const;
+	FText GetDemolishKeyDisplayText() const;
+	bool TryGetAimScreenPosition(float& OutScreenX, float& OutScreenY) const;
+	bool TryGetAimWorldRay(FVector& OutOrigin, FVector& OutDirection) const;
+	bool CanRotateCameraFromMouse() const;
+	bool IsModalInputActive() const { return bModalInputActive; }
+	bool ShouldDrawCenterCrosshair() const;
+	FCastleControlModeChanged OnControlModeChanged;
+	FCastleBuildingDemolished OnBuildingDemolishedToBackpack;
+
+	/** 齿轮和弹窗共用控制器实例，保持一份设置与拆除状态。 */
+	void ToggleControlSettings();
+	void CloseBuildingDemolishMenu();
+	void ConfirmBuildingDemolish(const UCastleBuildingDemolishMenuWidget& Menu);
+	const UCastleBuildingDemolishMenuWidget* GetBuildingDemolishMenu() const { return BuildingDemolishMenu; }
+
 	/** 返回当前帧的网格目标副本，供 HUD 和后续放置系统读取。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|网格指针")
 	FCastleGridCursorTarget GetCurrentGridCursorTarget() const
@@ -40,10 +69,10 @@ public:
 		return CurrentGridCursorTarget;
 	}
 
-	/** 左键先处理准星命中的气球，未命中才按当前网格目标处理建筑放置。 */
+	/** 主交互优先处理路径、空岛和气球，再按点击瞬间的瞄准目标放置。 */
 	void PlacePrototypeBuildingAtCursor();
 
-	/** 执行左键射线的气球分支；命中即消费此次点击，返回值单独表示是否成功投放。 */
+	/** 执行主交互射线的气球分支；命中即消费点击，返回值单独表示是否成功投放。 */
 	bool TryPopBalloonFromRay(const FVector& Start, const FVector& End, bool& bOutConsumed);
 
 	/** 当前玩家的独立金币账户，奖励和资源建筑可通过此入口接入收支。 */
@@ -58,14 +87,26 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|背包")
 	int32 GetSelectedBackpackIndex() const { return SelectedBackpackIndex; }
 
+	/** 建造栏卡槽通过此入口提交点击选择，和数字键、滚轮共用控制器唯一选中状态。 */
+	void SelectBackpackSlotFromBuildBar(int32 SlotIndex);
+
 	/** B 键切换商店；首次打开初始化商品，关闭后恢复中心指针建造。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|商店")
 	void ToggleShop();
+	/** 只由教学导演设置，普通关卡继续采用原访问权限。 */
+	/** 教学对话期间暂停现有商店控件的输入，保留货架和本次商店会话。 */
+	void SetTutorialShopAccess(bool bAllowed);
 
 	/** 导演界面与商店共用单一输入状态，避免 IgnoreInput 计数叠加或遗漏恢复。 */
 	void SetDirectorModalState(bool bRewardOpen, bool bGameOverOpen, UUserWidget* FocusWidget);
+	/** 对话、图文弹窗与教程奖励使用同一模态输入锁，关闭后按当前操作模式恢复。 */
+	void SetPresentationModalState(bool bOpen, UUserWidget* FocusWidget);
+	/** 已挂载的商店为上层教学模态关闭后的焦点接收者。 */
+	void RegisterShopFocusWidget(UUserWidget& Widget);
+	void UnregisterShopFocusWidget(const UUserWidget& Widget);
 	/** 正式导演启动时挂接道具 HUD；三个 WBP 全部绑定成功才加入视口。 */
-	bool MountDirectorItemHUD(UCastleBackpackComponent* Backpack, FText& OutReason);
+	/** 临时建筑栏总是挂载，徽章栏与替换弹窗由调用方按关卡显式选择。 */
+	bool MountDirectorItemHUD(UCastleBackpackComponent* Backpack, bool bIncludeBadges, FText& OutReason);
 	/** 资产配置的交互键在导演完成启动校验时绑定。 */
 	bool BindSkyIslandInput(const FKey& Key, FText& OutReason);
 	/** 空岛完成初始化才接管当前岛引用，销毁时按实例注销。 */
@@ -74,9 +115,13 @@ public:
 	/** 查询可接收建造输入的已登记空岛，供控制器与 HUD 共用。 */
 	ACastleSkyIslandBase* GetInteractiveSkyIsland() const;
 	UFUNCTION(Exec) void CastleTestSkyIsland();
+	/** 清除当前游戏实例的 Shop、NPC 与 Gamble 首次登岛剧情记录。 */
+	UFUNCTION(Exec) void CastleResetSkyIslandDialogues();
 
 	/** 开战事务准备时立即清除高亮，避免等下一帧控制器 Tick 才撤下旧建造目标。 */
 	void HideDirectorEditingPresentation();
+	/** 在弹窗或玩法状态切换时同步恢复当前高亮组件。 */
+	void ClearHoverHighlight();
 
 	/** 查询导演编辑权限；未运行导演的世界保持原有行为。 */
 	bool IsDirectorEditingAllowed(FText& OutReason) const;
@@ -122,11 +167,19 @@ public:
 	void CastleEndTowerDispatch();
 
 protected:
+	/** 教学 PIE 验收通过正式拆除菜单确认并观察回收事务。 */
+	friend class FCastleTutorialPIEDriver;
+
 	/** 隐藏鼠标、锁定输入并创建指示器。 */
 	virtual void BeginPlay() override;
 
 	/** 每帧用屏幕中心射线更新网格目标。 */
 	virtual void Tick(float DeltaSeconds) override;
+
+	/** 用双模式瞄准射线更新当前唯一的可交互悬停目标。 */
+	void UpdateHoverHighlight();
+	/** 执行路径编辑、模态界面和弹珠机锁定态的悬停门控。 */
+	bool IsHoverHighlightSuppressed() const;
 
 	/** 保留父类生命周期入口，但不再添加第三人称模板的 Input Mapping Context。 */
 	virtual void SetupInputComponent() override;
@@ -143,6 +196,22 @@ protected:
 	/** 执行屏幕中心反投影和棋盘吸附。 */
 	void UpdateGridCursor(ACastleSkyIslandBase* Island = nullptr);
 	void RetractIslandPlacement();
+	void HandleWorldPointerPressed(FKey Key);
+	void HandleWorldPointerReleased(FKey Key);
+	void HandleClosePopup();
+	void BeginTemporaryHUDPointer();
+	void EndTemporaryHUDPointer();
+	bool CanUseBuildingDemolishMenu(FText& OutReason) const;
+	bool IsDemolishableBuilding(const ACastleBuildingBase* Building) const;
+	/** 从实际射线命中解析建筑与占格，菜单和确认操作共用这一明确的目标。 */
+	ACastleBuildingBase* FindDemolishTargetAt(FVector2D ScreenPosition, FIntVector& OutCell) const;
+	bool OpenBuildingDemolishMenu(ACastleBuildingBase& Building, const FIntVector& TargetCell, FVector2D ScreenPosition);
+	void HandleDemolishOutsideClick(FKey Key, FVector2D ScreenPosition);
+	void InitializePopupClasses();
+	void RemoveBuildingDemolishWidget();
+	void RemoveControlSettingsWidget();
+	/** 地图切换清理 GameInstance 子系统持有的旧世界面板。 */
+	void CloseDialogueAndGuideForWorldEnd();
 
 	/** 数字键按当前背包顺序选牌，1 至 9、0 对应十个实际槽位。 */
 	void SelectPrototypeSlot1();
@@ -183,11 +252,19 @@ protected:
 
 	/** 从商店和导演界面最终状态计算鼠标、输入模式及忽略计数。 */
 	void RefreshModalInput(bool bForceRefresh = false);
+	TWeakObjectPtr<UUserWidget> ShopFocusWidget;
 
 	/** 徽章弹窗监听者在 WBP 刷新可见性后更新控制器的唯一输入锁。 */
 	UFUNCTION()
 	void HandleItemBadgeChanged();
 	void InteractWithSkyIsland();
+	/** 经典模式的 E 输入沿准星访问门体；设计模式的主点击也复用同一条精确门体射线。 */
+	void InteractWithRoomPortal();
+	/** 按传入射线访问房间内置门体；命中标志用于区分门体业务拒绝与普通表面未命中。 */
+	bool TryInteractWithRoomPortalFromRay(const FVector& Start, const FVector& End, FText& OutReason, bool* bOutHitPortal = nullptr);
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FCastlePortalRoomTraitTest;
+#endif
 
 	/** 统一把收支、选牌和商店失败原因写入日志及屏幕，保证无资源时也有反馈。 */
 	void ShowGameplayMessage(const FString& Message, bool bSuccess) const;
@@ -208,8 +285,19 @@ protected:
 	bool bModalInputActive = false;
 	bool bRewardInputActive = false;
 	bool bGameOverInputActive = false;
+	TOptional<bool> TutorialShopAccess;
+	/** 左 Alt 仅在经典模式临时释放 HUD 指针，模态结束后按真实按住状态恢复。 */
+	bool bHoldingTemporaryHUDPointer = false;
+	ECastleControlMode ControlMode = ECastleControlMode::Classic;
+	/** 硬类引用使两个正式 WBP 与控制器一起进入烹煮产物。 */
+	UPROPERTY() TSubclassOf<UCastleControlSettingsWidget> ControlSettingsClass;
+	UPROPERTY() TSubclassOf<UCastleBuildingDemolishMenuWidget> BuildingDemolishMenuClass;
+	UPROPERTY(Transient) TObjectPtr<UCastleControlSettingsWidget> ControlSettings;
+	UPROPERTY(Transient) TObjectPtr<UCastleBuildingDemolishMenuWidget> BuildingDemolishMenu;
 	UPROPERTY(Transient)
 	TObjectPtr<UUserWidget> DirectorFocusWidget;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UUserWidget>> PresentationModals;
 	UPROPERTY(Transient) TArray<TObjectPtr<UUserWidget>> DirectorItemWidgets;
 	UPROPERTY(Transient) TObjectPtr<UCastleBadgeReplaceModalWidget> BadgeReplaceWidget;
 

@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleTowerAttackEffectComponent.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Castle/Actors/CastleBuildingBase.h"
 #include "Castle/Data/CastleBuildingDefinition.h"
@@ -11,6 +12,7 @@
 #include "Engine/World.h"
 #include "MassEntitySubsystem.h"
 #include "Moving_Castle.h"
+#include "Units/Mass/Projectiles/CastleMassHomingProjectileFragments.h"
 
 UCastleTowerAttackEffectComponent::UCastleTowerAttackEffectComponent()
 {
@@ -41,7 +43,7 @@ bool UCastleTowerAttackEffectComponent::ExecuteEffect(const FCastleBuildingTrigg
 	const FCastleTowerAttackLevelData* LevelData = nullptr;
 	if (!ResolveAttackConfiguration(Data, LevelData)) { return false; }
 	const int32 Level = Building->GetBuildingLevel();
-	int64 NumberSum = Building->GetEffectiveBuildingNumber();
+	int64 NumberSum = GetTriggeredBuildingNumber(Context);
 	if (Level < 1 || Level > 5 || NumberSum <= 0)
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("箭塔 %s 装填失败：等级或自身数字无效，定义=%s。"), *Building->GetPathName(), *GetPathNameSafe(Building->GetBuildingDefinition()));
@@ -336,6 +338,20 @@ bool UCastleTowerAttackEffectComponent::FireProjectile(const UCastleTowerAttackD
 		UE_LOG(LogMoving_Castle, Error, TEXT("攻击塔 %s 生成追踪子弹失败，攻击资产=%s，原因=%s；待射数量保留。"),
 			*Building->GetName(), *DataAsset.GetPathName(), *FailureReason.ToString());
 		return false;
+	}
+	// 唯有箭塔正式箭矢标注吸血身份；炮塔和空投塔的联动弹仍使用原模板且不会吸血。
+	if (Building->GetBuildingType() == ECastleBuildingType::ArcherTower)
+	{
+		check(SpawnedProjectiles.Num() == 1);
+		MassEntities->GetMutableEntityManager().GetFragmentDataChecked<FCastleMassHomingProjectileFragment>(
+			SpawnedProjectiles[0].Entity).bArcherTowerArrow = true;
+		// 两个独立录音分别反馈拉弓和已成功发出的追踪箭。
+		UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::BowShot);
+		UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::ArrowFlight);
+	}
+	else if (Building->GetBuildingType() == ECastleBuildingType::CannonTower)
+	{
+		UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::CannonFire);
 	}
 	return true;
 }

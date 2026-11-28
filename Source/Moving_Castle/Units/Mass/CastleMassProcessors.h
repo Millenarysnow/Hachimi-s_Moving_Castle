@@ -14,6 +14,8 @@ protected:
 	virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
 	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
 	FMassEntityQuery Query;
+	/** 敌人查询包含爆散中的幼骸，只读取其位置作为邻居，不夺取其位移所有权。 */
+	FMassEntityQuery EnemyQuery;
 };
 
 UCLASS()

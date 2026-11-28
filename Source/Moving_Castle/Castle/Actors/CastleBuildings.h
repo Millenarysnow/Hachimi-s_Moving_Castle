@@ -6,7 +6,7 @@
 #include "CastleBuildingBase.h"
 #include "CastleBuildings.generated.h"
 
-/** 普通房间使用五色与 1～9 数字，固定一级、不合成且没有自身收益。 */
+/** 普通房间使用红、黄、蓝、绿及 1～9 数字，固定一级、不合成且没有自身收益。 */
 UCLASS(Blueprintable)
 class MOVING_CASTLE_API ACastleNormalRoomBuilding : public ACastleBuildingBase
 {

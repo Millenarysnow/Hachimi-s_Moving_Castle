@@ -1,6 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleBoard.h"
+#include "Algo/RandomShuffle.h"
+#include "Audio/CastleAudioSubsystem.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/Items/CastleBadgeSubsystem.h"
 #include "Castle/Placement/CastleTowerSideGridComponent.h"
@@ -34,8 +36,8 @@
 
 namespace
 {
-	// 主塔原件每段的美术高度独立于棋盘逻辑层高；开局布置和扩层共用这个段高。
-	constexpr double SourceSectionHeight = 500.0;
+	// L05 随套件加载校验，正式棋盘只开放到 L04 的九层。
+	constexpr int32 MaxPlayableTowerLayers = 9;
 
 	/** 将局部空间法线转换成六面枚举，优先使用绝对值最大的轴。 */
 	ECastleGridFace GetGridFaceFromNormal(const FVector& LocalNormal)
@@ -141,10 +143,19 @@ void ACastleBoard::BeginPlay()
 		}
 		if (UsesProgressiveTowerLayers())
 		{
-			if (InitialUnlockedLayers < 1 || MaxTowerLayers < InitialUnlockedLayers || MaxTowerLayers > 9 || GridSize.Z < MaxTowerLayers)
+			// 棋盘层数须对应正式可玩套件，最大层数同时受玩法上限和棋盘容量约束。
+			if (UCastleMainTowerBalloonComponent::FindTierIndex(InitialUnlockedLayers) == INDEX_NONE
+				|| UCastleMainTowerBalloonComponent::FindTierIndex(MaxTowerLayers) == INDEX_NONE
+				|| MaxTowerLayers < InitialUnlockedLayers || MaxTowerLayers > MaxPlayableTowerLayers || GridSize.Z < MaxTowerLayers)
 			{
-				UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 的主塔层数配置无效：初始 %d，最大 %d，棋盘容量 %d；最大层数不得超过 9 和棋盘容量。"),
+				UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 的主塔层数配置无效：初始 %d，最大 %d，棋盘容量 %d；棋盘只开放 3、5、7、9 层。"),
 					*GetPathName(), InitialUnlockedLayers, MaxTowerLayers, GridSize.Z);
+				return;
+			}
+			if (!FMath::IsNearlyEqual(LayerHeight, 560.0f))
+			{
+				UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 的层高 %.2f cm 与主塔套件的 560 cm 不一致。"),
+					*GetPathName(), LayerHeight);
 				return;
 			}
 			CurrentUnlockedLayers = InitialUnlockedLayers;
@@ -166,7 +177,7 @@ void ACastleBoard::BeginPlay()
 
 	if (PlacementSurfaceMode == ECastlePlacementSurfaceMode::GroundBoard && !GeneratedGroundCells.IsEmpty())
 	{
-		InitializePrototypeDeck();
+		if (bDealPrototypeDeckOnBeginPlay) { InitializePrototypeDeck(); }
 	}
 
 	if (bSpawnMainTowerOnBeginPlay)
@@ -180,7 +191,7 @@ void ACastleBoard::BeginPlay()
 		}
 	}
 
-	if (PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides)
+	if (bDealPrototypeDeckOnBeginPlay && PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides)
 	{
 		InitializePrototypeDeck();
 	}
@@ -281,6 +292,16 @@ bool ACastleBoard::SpawnMainTower(FText& OutFailureReason)
 		TowerComponent->MaxHealth = TowerHealthPerBalloon * TowerComponent->MaxBalloons;
 	}
 	TowerComponent->TargetHeightOffset = CombatData->MainTowerTargetHeightOffset;
+	const int32 TowerLayerCount = UsesProgressiveTowerLayers() ? InitialUnlockedLayers : 3;
+	const float TowerShaftHeight = static_cast<float>(TowerLayerCount) * LayerHeight;
+	FString TowerGeometryFailure;
+	if (!TowerComponent->SetTowerShaftDimensions(FCastleTowerPrism::DefaultShaftWidth,
+		TowerShaftHeight, TowerGeometryFailure))
+	{
+		TowerActor->Destroy();
+		OutFailureReason = FText::FromString(FString::Printf(TEXT("主塔战斗塔身几何初始化失败：%s"), *TowerGeometryFailure));
+		return false;
+	}
 	if (!TowerComponent->InitializeHealth())
 	{
 		TowerActor->Destroy();
@@ -309,8 +330,8 @@ bool ACastleBoard::SpawnMainTower(FText& OutFailureReason)
 		UCastleTowerSideGridComponent* Grid = NewObject<UCastleTowerSideGridComponent>(TowerActor, TEXT("TowerSideGrid"));
 		TowerActor->AddInstanceComponent(Grid);
 		Grid->RegisterComponent();
-		const int32 RunSeed = static_cast<int32>(GetTypeHash(FGuid::NewGuid()));
-		if (!Grid->Initialize(GetBoardCenterCoordinate(), GetUnlockedLayerCount(), GroundTileSize, LayerHeight,
+		const int32 RunSeed = bUseFixedTowerSideSeed ? FixedTowerSideSeed : static_cast<int32>(GetTypeHash(FGuid::NewGuid()));
+		if (!Grid->Initialize(GetBoardCenterCoordinate(), GetUnlockedLayerCount(), GroundTileSize, CellSize, LayerHeight,
 			TowerSideSurfaceOffset, RunSeed, OutFailureReason))
 		{
 			TowerActor->Destroy();
@@ -341,115 +362,44 @@ bool ACastleBoard::SpawnMainTower(FText& OutFailureReason)
 
 bool ACastleBoard::InitializeProgressiveTowerPresentation(AActor& Tower, UCastleMainTowerComponent& Health, FText& OutReason)
 {
-	const auto Reject = [&](const FString& Detail)
+	USceneComponent* Root = Tower.GetRootComponent();
+	const TInlineComponentArray<UStaticMeshComponent*> Meshes(&Tower);
+	if (!IsValid(Root) || Meshes.Num() != 1 || Meshes[0]->GetFName() != TEXT("TowerBodyMesh")
+		|| Meshes[0]->GetStaticMesh() == nullptr)
 	{
-		OutReason = FText::FromString(FString::Printf(TEXT("棋盘 %s 的主塔 %s 无法布置塔尖和气球：%s。"),
-			*GetPathName(), *Tower.GetPathName(), *Detail));
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 必须配置塔根和唯一含默认网格的 TowerBodyMesh。"), *Tower.GetPathName()));
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
-	};
-	// 正式美术源由十段 500 cm 塔身和独立塔冠组成。用塔根局部包围盒下沿分段，
-	// 跨过段尾的接缝件仍归原段。严格核对资产结构，避免换资产后错误隐藏碰撞或塔冠。
-	constexpr int32 SourceSectionCount = 10;
-	constexpr int32 PartsPerSection = 42;
-	constexpr int32 CrownPartCount = 54;
-	constexpr double SourceCrownBase = SourceSectionCount * SourceSectionHeight;
-	USceneComponent* Root = Tower.GetRootComponent();
-	if (!IsValid(Root)) { return Reject(TEXT("塔根缺失")); }
-	TInlineComponentArray<UStaticMeshComponent*> Meshes(&Tower);
-	TArray<UStaticMeshComponent*> Crown;
-	TowerBodySections.SetNum(SourceSectionCount);
-	double CrownTop = SourceCrownBase;
-	const FTransform& TowerTransform = Tower.GetActorTransform();
-	for (UStaticMeshComponent* Part : Meshes)
-	{
-		if (!IsValid(Part->GetStaticMesh()) || !Part->GetAttachParent()
-			|| Part->GetAttachParent()->GetFName() != TEXT("BuildingMeshGroup"))
-		{
-			return Reject(FString::Printf(TEXT("分件 %s 的网格或 BuildingMeshGroup 挂接无效"), *Part->GetName()));
-		}
-		const FTransform Relative = Part->GetComponentTransform().GetRelativeTransform(TowerTransform);
-		const FBox Bounds = Part->GetStaticMesh()->GetBoundingBox().TransformBy(Relative);
-		if (!Bounds.IsValid || Bounds.Min.ContainsNaN() || Bounds.Max.ContainsNaN() || Bounds.Min.Z < -0.01)
-		{
-			return Reject(FString::Printf(TEXT("分件 %s 的塔根空间包围盒无效"), *Part->GetName()));
-		}
-		// 0.01 cm 只用于抵消世界变换往返误差，确保位于段界的原始分件稳定归组。
-		const double Base = Bounds.Min.Z + 0.01;
-		// 主塔美术分件如同普通建筑视觉根，只保留 Visibility 射线查询与遮挡，不阻挡 Pawn 也不参与导航。
-		const ECollisionEnabled::Type VisualCollision = Part->GetCollisionEnabled() != ECollisionEnabled::NoCollision
-			? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision;
-		Part->SetCollisionEnabled(VisualCollision);
-		Part->SetCollisionResponseToAllChannels(ECR_Ignore);
-		Part->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
-		Part->SetCanEverAffectNavigation(false);
-		if (Base >= SourceCrownBase)
-		{
-			Crown.Add(Part);
-			CrownTop = FMath::Max(CrownTop, Bounds.Max.Z);
-		}
-		else
-		{
-			const int32 Section = FMath::FloorToInt(Base / SourceSectionHeight);
-			TowerBodySections[Section].Add({Part, VisualCollision, false});
-		}
 	}
-	if (Crown.Num() != CrownPartCount || TowerBodySections.ContainsByPredicate([](const auto& Section)
-		{ return Section.Num() != PartsPerSection; }))
+	// 只配置美术网格。双门组件稍后创建自己的 ECC_Pawn 地板，并保留中央断开。
+	UStaticMeshComponent* Body = Meshes[0];
+	Body->SetMobility(EComponentMobility::Movable);
+	Body->SetCanEverAffectNavigation(false);
+	Body->SetGenerateOverlapEvents(false);
+	Body->SetCollisionResponseToAllChannels(ECR_Ignore);
+	Body->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+	Body->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+
+	USceneComponent* Crown = NewObject<USceneComponent>(&Tower, TEXT("TowerCrownAnchor"));
+	USceneComponent* Lift = NewObject<USceneComponent>(&Tower, TEXT("TowerBalloonAnchor"));
+	for (USceneComponent* Anchor : {Crown, Lift})
 	{
-		return Reject(TEXT("预期十段塔身各 42 件、塔冠 54 件"));
+		Anchor->SetupAttachment(Root);
+		Tower.AddInstanceComponent(Anchor);
+		Anchor->RegisterComponent();
+	}
+	auto* Presentation = NewObject<UCastleMainTowerBalloonComponent>(&Tower, TEXT("TowerBalloons"));
+	Tower.AddInstanceComponent(Presentation);
+	Presentation->RegisterComponent();
+	if (!Presentation->Initialize(Body, Crown, Lift, OutReason)
+		|| !Presentation->PrepareTier(CurrentUnlockedLayers, OutReason))
+	{
+		return false;
 	}
 
-	USceneComponent* BodyAnchor = NewObject<USceneComponent>(&Tower, TEXT("TowerBodyAnchor"));
-	USceneComponent* Anchor = NewObject<USceneComponent>(&Tower, TEXT("TowerCrownAnchor"));
-	for (USceneComponent* Group : {BodyAnchor, Anchor})
-	{
-		Group->SetupAttachment(Root);
-		Tower.AddInstanceComponent(Group);
-		Group->RegisterComponent();
-		if (!Group->IsRegistered()) { return Reject(TEXT("运行时塔身或塔冠锚点未注册")); }
-	}
-	// 按原始变换挂接塔身，保留每个分件的原始比例。
-	for (int32 Layer = 0; Layer < TowerBodySections.Num(); ++Layer)
-	{
-		for (const FTowerBodyPart& Entry : TowerBodySections[Layer])
-		{
-			UStaticMeshComponent* Part = Entry.Mesh.Get();
-			Part->SetMobility(EComponentMobility::Movable);
-			if (!Part->AttachToComponent(BodyAnchor, FAttachmentTransformRules::KeepWorldTransform))
-			{
-				return Reject(FString::Printf(TEXT("无法挂载塔身分件 %s"), *Part->GetName()));
-			}
-			if (Layer >= CurrentUnlockedLayers)
-			{
-				// 隐藏的美术也退出射线、物理和寻路，避免未开放层继续阻挡搭建与通行。
-				Part->SetVisibility(false);
-				Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-				Part->SetCanEverAffectNavigation(false);
-			}
-		}
-	}
-	for (UStaticMeshComponent* Part : Crown)
-	{
-		Part->SetMobility(EComponentMobility::Movable);
-		if (!Part->AttachToComponent(Anchor, FAttachmentTransformRules::KeepWorldTransform))
-		{
-			return Reject(FString::Printf(TEXT("无法挂载塔尖分件 %s"), *Part->GetName()));
-		}
-	}
-	// 用最高可见塔身段的顶面减去塔冠原始底面，得到塔冠和下挂气球的初始偏移。
-	Anchor->SetRelativeLocation(FVector(0, 0, CurrentUnlockedLayers * SourceSectionHeight - SourceCrownBase));
-
-	USceneComponent* BalloonAnchor = NewObject<USceneComponent>(&Tower, TEXT("TowerBalloonAnchor"));
-	BalloonAnchor->SetupAttachment(Anchor);
-	BalloonAnchor->SetRelativeLocation(FVector(0, 0, CrownTop + 10.0));
-	Tower.AddInstanceComponent(BalloonAnchor);
-	BalloonAnchor->RegisterComponent();
-	UCastleMainTowerBalloonComponent* Balloons = NewObject<UCastleMainTowerBalloonComponent>(&Tower, TEXT("TowerBalloons"));
-	Tower.AddInstanceComponent(Balloons);
-	Balloons->RegisterComponent();
-	if (!Balloons->Initialize(BalloonAnchor, OutReason) || !Health.AttachBalloonPresentation(Balloons, OutReason)) { return false; }
-	TowerCrownAnchor = Anchor;
+	Presentation->CommitPreparedTier(Health.CurrentHealth, Health.MaxHealth);
+	if (!Health.AttachBalloonPresentation(Presentation, OutReason)) { return false; }
+	TowerPresentation = Presentation;
 	return true;
 }
 
@@ -463,40 +413,46 @@ bool ACastleBoard::ExpandMainTowerLayers(const int32 TargetLayerCount, FText& Ou
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
 	};
-	if (!UsesProgressiveTowerLayers() || !IsValid(MainTowerActor) || !IsValid(TowerSideGrid) || !IsValid(TowerCrownAnchor)
-		|| TowerBodySections.Num() <= MaxTowerLayers)
+	if (!UsesProgressiveTowerLayers() || !IsValid(MainTowerActor) || !IsValid(TowerSideGrid) || !IsValid(TowerPresentation))
 	{
-		return Reject(TEXT("当前地图未启用扩层，或塔身、塔尖、侧格组件未就绪"));
+		return Reject(TEXT("当前地图未启用扩层，或整塔表现、侧格未就绪"));
+	}
+	if (TargetLayerCount > MaxPlayableTowerLayers || UCastleMainTowerBalloonComponent::FindTierIndex(TargetLayerCount) == INDEX_NONE)
+	{
+		return Reject(TEXT("主塔棋盘只开放 3、5、7、9 层"));
 	}
 	if (TargetLayerCount <= CurrentUnlockedLayers || TargetLayerCount > MaxTowerLayers)
 	{
 		return Reject(TEXT("目标层数必须严格大于当前开放层数且不得超过最大主塔层数"));
 	}
-	for (int32 Layer = CurrentUnlockedLayers; Layer < TargetLayerCount; ++Layer)
+	UCastleMainTowerComponent* Health = MainTowerActor->FindComponentByClass<UCastleMainTowerComponent>();
+	if (!IsValid(Health)) { return Reject(TEXT("主塔生命组件缺失")); }
+	const float NewShaftHeight = static_cast<float>(TargetLayerCount) * LayerHeight;
+	FCastleTowerPrism ValidatedPrism;
+	FString GeometryFailure;
+	if (!FCastleTowerPrism::Build(MainTowerActor->GetActorTransform(),
+		FCastleTowerPrism::DefaultShaftWidth, NewShaftHeight, ValidatedPrism, GeometryFailure))
 	{
-		for (const FTowerBodyPart& Part : TowerBodySections[Layer])
-		{
-			if (!Part.Mesh.IsValid() || !Part.Mesh->IsRegistered()) { return Reject(TEXT("新增层的塔身网格已失效")); }
-		}
+		return Reject(*FString::Printf(TEXT("目标塔身几何无效：%s"), *GeometryFailure));
 	}
-	if (!TowerSideGrid->ExpandToLayerCount(TargetLayerCount, OutReason)) { return false; }
 
-	// 确认侧格整批生成后再显出既有分件，同时保持旧层的网格变换与房间索引不动。
+	// 先注册隐藏吊挂，再追加侧格。任一步失败都保留原等级网格、吊挂及旧房间索引。
+	if (!TowerPresentation->PrepareTier(TargetLayerCount, OutReason)) { return false; }
+	if (!TowerSideGrid->ExpandToLayerCount(TargetLayerCount, OutReason))
+	{
+		TowerPresentation->DiscardPreparedTier();
+		return false;
+	}
+	if (!Health->SetTowerShaftDimensions(FCastleTowerPrism::DefaultShaftWidth, NewShaftHeight, GeometryFailure))
+	{
+		TowerPresentation->DiscardPreparedTier();
+		return Reject(*FString::Printf(TEXT("提交主塔战斗塔身几何失败：%s"), *GeometryFailure));
+	}
+
 	FScopedCastleNavigationChange GeometryChange(GetWorld(), this);
-	for (int32 Layer = CurrentUnlockedLayers; Layer < TargetLayerCount; ++Layer)
-	{
-		for (const FTowerBodyPart& Part : TowerBodySections[Layer])
-		{
-			Part.Mesh->SetVisibility(true);
-			Part.Mesh->SetCollisionEnabled(Part.Collision);
-			Part.Mesh->SetCanEverAffectNavigation(Part.bAffectsNavigation);
-		}
-	}
-
-	// 塔冠和气球一起上移新增塔身的美术高度，跟随最高可见段的顶面。
-	TowerCrownAnchor->AddRelativeLocation(FVector(0, 0, (TargetLayerCount - CurrentUnlockedLayers) * SourceSectionHeight));
+	TowerPresentation->CommitPreparedTier(Health->CurrentHealth, Health->MaxHealth);
 	CurrentUnlockedLayers = TargetLayerCount;
-	UE_LOG(LogMoving_Castle, Display, TEXT("棋盘 %s 的主塔已扩展到 %d 层。"), *GetPathName(), CurrentUnlockedLayers);
+	UE_LOG(LogMoving_Castle, Display, TEXT("棋盘 %s 的主塔已切换为 %d 层整塔与配套吊挂。"), *GetPathName(), CurrentUnlockedLayers);
 	return true;
 }
 
@@ -670,9 +626,9 @@ bool ACastleBoard::ValidateGroundResult(const FCastleGroundGenerationResult& Res
 		}
 		UniqueCoordinates.Add(Cell.Coordinate);
 
-		if (Cell.Number < 1 || Cell.Number > 9 || Cell.Color < ECastleTileColor::Red || Cell.Color > ECastleTileColor::Purple)
+		if (Cell.Number < 1 || Cell.Number > 9 || !CastleTileColors::IsPlayable(Cell.Color))
 		{
-			OutFailureReason = FText::FromString(FString::Printf(TEXT("地面坐标 (%d, %d, %d) 必须使用五色之一与 1 至 9 数字，实际颜色=%d，数字=%d。"),
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("地面坐标 (%d, %d, %d) 必须使用红、黄、蓝、绿之一与 1 至 9 数字，实际颜色=%d，数字=%d。"),
 				Cell.Coordinate.X, Cell.Coordinate.Y, Cell.Coordinate.Z, static_cast<int32>(Cell.Color), Cell.Number));
 			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 拒绝非法地面：%s"), *GetName(), *OutFailureReason.ToString());
 			return false;
@@ -934,6 +890,7 @@ ACastleBuildingBase* ACastleBoard::PlaceBuildingInternal(const FIntVector& Coord
 	}
 
 	// 编辑器世界只支持摆放/规则编辑，不执行游戏动画；实际游戏入口始终走上述完成事件。
+	NewBuilding->SetPlacementComplete(true);
 	if (!bTryMerge)
 	{
 		return NewBuilding;
@@ -964,6 +921,8 @@ void ACastleBoard::HandlePlacementFinished(UAssemblyFlightComponent* Flight, con
 		return;
 	}
 	Building->SetPlacementComplete(true);
+	// 飞入并提交有效占格后才反馈建造成功。
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Build);
 	UE_LOG(LogMoving_Castle, Display, TEXT("放置飞入完成，开始检查合并 [%s]。"), *Building->GetName());
 	if (Request.bTryMerge) { ReadyMergeRequests.Add(Building, Request.Origin); }
 	ResolveReadyMerges();
@@ -1028,7 +987,11 @@ void ACastleBoard::HandleBuildingDestroyed(AActor* Actor)
 	bool bRemovedOccupancy = false;
 	for (const FIntVector& Coordinate : Building->GetOccupiedCoordinates())
 	{
-		if (GetBuildingAt(Coordinate) == Building) { BuildingByCoordinate.Remove(Coordinate); bRemovedOccupancy = true; }
+		if (GetBuildingAt(Coordinate) == Building)
+		{
+			BuildingByCoordinate.Remove(Coordinate);
+			bRemovedOccupancy = true;
+		}
 	}
 	if (bRemovedOccupancy && !IsActorBeingDestroyed() && !GetWorld()->bIsTearingDown) { OnLayoutCommitted.Broadcast(this, Building->GetActorLocation()); }
 }
@@ -1077,6 +1040,13 @@ ACastleBuildingBase* ACastleBoard::PlaceBuildingFromBackpackInternal(const FIntV
 	if (!Backpack->TryGetItemAt(BackpackIndex, Descriptor))
 	{
 		OutFailureReason = FText::FromString(TEXT("指定的背包槽位不存在。"));
+		return nullptr;
+	}
+	if (Descriptor.Level != 1)
+	{
+		OutFailureReason = INVTEXT("只能从建筑栏放置一级单格建筑卡。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 拒绝从背包放置资产 %s（Lv%d）：%s"),
+			*GetPathName(), *GetPathNameSafe(Descriptor.Definition.Get()), Descriptor.Level, *OutFailureReason.ToString());
 		return nullptr;
 	}
 
@@ -1138,43 +1108,6 @@ bool ACastleBoard::RemoveBuilding(ACastleBuildingBase* Building, FText& OutFailu
 	return true;
 }
 
-bool ACastleBoard::RemoveBuildingToBackpack(ACastleBuildingBase* Building, UCastleBackpackComponent* Backpack, FText& OutFailureReason)
-{
-	OutFailureReason = FText::GetEmpty();
-
-	if (Building == nullptr || Backpack == nullptr)
-	{
-		OutFailureReason = FText::FromString(TEXT("移除建筑并放回背包时缺少建筑或背包。"));
-		return false;
-	}
-
-	const FCastleBuildingDescriptor Descriptor = Building->GetBuildingDescriptor();
-	int32 AddedIndex = INDEX_NONE;
-	FText AddReason;
-	if (!Backpack->TryAddItem(Descriptor, AddedIndex, AddReason))
-	{
-		OutFailureReason = AddReason;
-		return false;
-	}
-
-	FText RemoveReason;
-	if (RemoveBuilding(Building, RemoveReason))
-	{
-		return true;
-	}
-
-	// 棋盘移除失败时回滚刚加入的卡牌，避免出现 Actor 和背包状态不一致。
-	FCastleBuildingDescriptor RolledBackDescriptor;
-	FText RollbackReason;
-	if (!Backpack->TryRemoveItemAt(AddedIndex, RolledBackDescriptor, RollbackReason))
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("移除建筑回滚背包失败：%s"), *RollbackReason.ToString());
-	}
-
-	OutFailureReason = RemoveReason;
-	return false;
-}
-
 int32 ACastleBoard::GetPlacedBuildingCount() const
 {
 	TSet<ACastleBuildingBase*> UniqueBuildings;
@@ -1208,6 +1141,24 @@ TArray<ACastleBuildingBase*> ACastleBoard::GetPlacedBuildings() const
 	}
 
 	return Result;
+}
+
+bool ACastleBoard::IsHighwayCellActive(const FIntVector& Coordinate) const
+{
+	const ACastleBuildingBase* Building = GetBuildingAt(Coordinate);
+	return IsValid(Building) && Building->GetRoomTrait() == ECastleRoomTrait::Highway
+		&& Building->CanReceiveBuildingTrigger() && GetBuildingAt(Coordinate + FIntVector(0, 0, 1)) == nullptr;
+}
+
+TArray<FIntVector> ACastleBoard::GetActiveHighwayCells() const
+{
+	// 只在导航编译时读取占用。施工中的上层建筑已占格，因此能立即遮盖下层道路。
+	TArray<FIntVector> Cells;
+	for (const auto& Entry : BuildingByCoordinate)
+	{
+		if (IsHighwayCellActive(Entry.Key)) { Cells.Add(Entry.Key); }
+	}
+	return Cells;
 }
 
 ACastleBoard* ACastleBoard::FindBoardForBuilding(const ACastleBuildingBase* Building)
@@ -1468,7 +1419,6 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 	}
 
 	const FTransform BoardTransform = GetActorTransform();
-	const FVector LocalImpactPoint = BoardTransform.InverseTransformPosition(HitResult.ImpactPoint);
 	const FVector LocalNormal = BoardTransform.InverseTransformVectorNoScale(HitResult.ImpactNormal).GetSafeNormal();
 	if (LocalNormal.IsNearlyZero())
 	{
@@ -1480,64 +1430,39 @@ bool ACastleBoard::TryResolveGridCursorTarget(const FVector& RayStart, const FVe
 		return false;
 	}
 
-	BuildGridCursorTarget(HitCell, LocalImpactPoint, LocalNormal, OutTarget);
+	BuildGridCursorTarget(HitCell, LocalNormal, bHitGroundTile, OutTarget);
 	OutTarget.Surface = bHitGroundTile ? ECastleGridCursorSurface::Ground : ECastleGridCursorSurface::Building;
 	return OutTarget.bValid;
 }
 
-void ACastleBoard::BuildGridCursorTarget(const FIntVector& Cell, const FVector& LocalImpactPoint, const FVector& LocalNormal, FCastleGridCursorTarget& OutTarget) const
+void ACastleBoard::BuildGridCursorTarget(const FIntVector& Cell, const FVector& LocalNormal,
+	const bool bGroundTarget, FCastleGridCursorTarget& OutTarget) const
 {
 	if (!IsCoordinateWithinBoard(Cell) && !IsValid(GetBuildingAt(Cell)))
 	{
 		return;
 	}
 
-	const FIntVector RelativeCoordinate = Cell - GridOrigin;
-	const FVector LocalCellCenter(
-		static_cast<float>(RelativeCoordinate.X) * CellSize,
-		static_cast<float>(RelativeCoordinate.Y) * CellSize,
-		WorldBaseHeight + static_cast<float>(RelativeCoordinate.Z) * LayerHeight);
-
 	const ECastleGridFace Face = GetGridFaceFromNormal(LocalNormal);
-	FVector LocalPlaneCenter = LocalCellCenter;
-	FVector LocalPlaneScale(
-		GroundTileSize / 100.0f,
-		GroundTileSize / 100.0f,
-		2.0f / 100.0f);
-
-	// 指示器使用薄立方体模拟平面；根据命中面切换薄轴，并把其他轴吸附到当前格中心。
-	switch (Face)
-	{
-	case ECastleGridFace::Up:
-	case ECastleGridFace::Down:
-		LocalPlaneCenter.Z = LocalImpactPoint.Z;
-		break;
-	case ECastleGridFace::PositiveX:
-	case ECastleGridFace::NegativeX:
-		LocalPlaneCenter.X = LocalImpactPoint.X;
-		LocalPlaneScale = FVector(2.0f / 100.0f, GroundTileSize / 100.0f, LayerHeight * 0.94f / 100.0f);
-		break;
-	case ECastleGridFace::PositiveY:
-	case ECastleGridFace::NegativeY:
-		LocalPlaneCenter.Y = LocalImpactPoint.Y;
-		LocalPlaneScale = FVector(GroundTileSize / 100.0f, 2.0f / 100.0f, LayerHeight * 0.94f / 100.0f);
-		break;
-	default:
-		return;
-	}
-
-	// 轻微离开实际表面，避免薄片与地面或建筑产生深度冲突。
-	LocalPlaneCenter += LocalNormal * 1.5f;
+	const FIntVector AdjacentCell = Cell + GetGridFaceOffset(Face);
+	const FIntVector PlacementCoordinate = bGroundTarget ? Cell : AdjacentCell;
+	const FIntVector RelativePlacementCoordinate = PlacementCoordinate - GridOrigin;
+	const FVector LocalBoxCenter(
+		static_cast<float>(RelativePlacementCoordinate.X) * CellSize,
+		static_cast<float>(RelativePlacementCoordinate.Y) * CellSize,
+		WorldBaseHeight + static_cast<float>(RelativePlacementCoordinate.Z) * LayerHeight);
+	// 三维盒略小于完整格距，避免与地面、相邻建筑或主塔墙面共面闪烁。
+	const FVector LocalBoxSize(CellSize * 0.98f, CellSize * 0.98f, LayerHeight * 0.98f);
 
 	const FTransform BoardTransform = GetActorTransform();
 	OutTarget.Cell = Cell;
 	OutTarget.Face = Face;
-	OutTarget.AdjacentCell = Cell + GetGridFaceOffset(Face);
+	OutTarget.AdjacentCell = AdjacentCell;
 	OutTarget.WorldNormal = BoardTransform.TransformVectorNoScale(LocalNormal).GetSafeNormal();
 	OutTarget.IndicatorTransform = FTransform(
 		BoardTransform.GetRotation(),
-		BoardTransform.TransformPosition(LocalPlaneCenter),
-		LocalPlaneScale * BoardTransform.GetScale3D());
+		BoardTransform.TransformPosition(LocalBoxCenter),
+		LocalBoxSize * BoardTransform.GetScale3D() / 100.0f);
 	OutTarget.bValid = true;
 }
 
@@ -1765,6 +1690,11 @@ ACastleBuildingBase* ACastleBoard::SpawnBuildingActor(const FCastleBuildingDescr
 		NewBuilding->Destroy();
 		return nullptr;
 	}
+	if (!NewBuilding->ConfigureFloorDecals(*this, OutFailureReason))
+	{
+		NewBuilding->Destroy();
+		return nullptr;
+	}
 
 	return NewBuilding;
 }
@@ -1882,6 +1812,21 @@ ACastleBuildingBase* ACastleBoard::FindMergePartner(ACastleBuildingBase* Buildin
 	return nullptr;
 }
 
+TConstArrayView<FIntVector> ACastleBoard::GetMergedShapeDimensions(const int32 ResultLevel)
+{
+	// 数组顺序也是拆除重组的优先级。正常合成只检查形状是否属于对应等级。
+	static const FIntVector Level2[] = {{2, 1, 1}, {1, 2, 1}, {1, 1, 2}};
+	static const FIntVector Level3[] = {{2, 2, 1}, {2, 1, 2}, {1, 2, 2}};
+	static const FIntVector Level4[] = {{2, 2, 2}};
+	switch (ResultLevel)
+	{
+	case 2: return MakeArrayView(Level2);
+	case 3: return MakeArrayView(Level3);
+	case 4: return MakeArrayView(Level4);
+	default: return {};
+	}
+}
+
 bool ACastleBoard::BuildMergedFootprint(const ACastleBuildingBase* First, const ACastleBuildingBase* Second, TArray<FIntVector>& OutFootprint) const
 {
 	OutFootprint.Reset();
@@ -1938,31 +1883,7 @@ bool ACastleBoard::BuildMergedFootprint(const ACastleBuildingBase* First, const 
 	}
 
 	const FIntVector Dimensions = Maximum - Minimum + FIntVector(1, 1, 1);
-	bool bValidShape = false;
-	switch (CurrentLevel)
-	{
-	case 1:
-		// 二级允许沿 X、Y 或 Z 紧贴的两格；三个轴只允许其中一个跨度为 2，斜接不能升级。
-		bValidShape = Dimensions == FIntVector(2, 1, 1)
-			|| Dimensions == FIntVector(1, 2, 1)
-			|| Dimensions == FIntVector(1, 1, 2);
-		break;
-	case 2:
-		// 三级必须填满一个 2x2 方形，既支持水平 XY，也支持垂直 XZ/YZ；四格直线仍非法。
-		// 只校验联合形状，不限制两座二级自身的方向，水平对和垂直对都能拼成同一个方形。
-		bValidShape = Dimensions == FIntVector(2, 2, 1)
-			|| Dimensions == FIntVector(2, 1, 2)
-			|| Dimensions == FIntVector(1, 2, 2);
-		break;
-	case 3:
-		// 三级合成四级固定为 2x2x2 立方体。
-		bValidShape = Dimensions == FIntVector(2, 2, 2);
-		break;
-	default:
-		break;
-	}
-
-	if (!bValidShape)
+	if (!GetMergedShapeDimensions(CurrentLevel + 1).Contains(Dimensions))
 	{
 		return false;
 	}
@@ -2055,8 +1976,7 @@ ACastleBuildingBase* ACastleBoard::MergeBuildings(ACastleBuildingBase* First, AC
 	TArray<FCastleBuildingDescriptor> RewardCards;
 	const UCastleBadgeSubsystem* Badges = UCastleBadgeSubsystem::GetForWorld(GetWorld());
 	const int64 RewardCount = Badges ? Badges->GetUpgradeBonusRoomCards() : 0;
-	if (RewardCount > 0 && First->GetBuildingType() != ECastleBuildingType::NormalRoom
-		&& First->GetBuildingType() != ECastleBuildingType::SpeedRoom)
+	if (RewardCount > 0 && First->GetBuildingType() != ECastleBuildingType::NormalRoom)
 	{
 		if (RewardCount > MAX_int32)
 		{
@@ -2073,11 +1993,12 @@ ACastleBuildingBase* ACastleBoard::MergeBuildings(ACastleBuildingBase* First, AC
 				*GetPathName(), *GetPathNameSafe(MergedDescriptor.Definition), *OutFailureReason.ToString());
 			return nullptr;
 		}
+		// 合成赠牌使用与商店相同的四种玩法色，避免奖励产生不可摆放的牌。
+		const TConstArrayView<ECastleTileColor> Colors = CastleTileColors::GetPlayable();
 		for (int32 Index = 0; Index < RewardCount; ++Index)
 		{
 			const UCastleBuildingDefinition* Definition = BuildingDefinitions[FMath::RandRange(0, BuildingDefinitions.Num() - 1)];
-			const auto Color = static_cast<ECastleTileColor>(FMath::RandRange(
-				static_cast<int32>(ECastleTileColor::Red), static_cast<int32>(ECastleTileColor::Purple)));
+			const ECastleTileColor Color = Colors[FMath::RandRange(0, Colors.Num() - 1)];
 			if (!Definition->CreateDescriptor(1, Color, FMath::RandRange(1, Director->GetCurrentMaxShopNumber()),
 				RewardCards.AddDefaulted_GetRef(), OutFailureReason))
 			{
@@ -2334,6 +2255,122 @@ bool ACastleBoard::HasPlacementMatch(const FIntVector& Coordinate, const FCastle
 	return false;
 }
 
+bool ACastleBoard::InitializeTowerSideStarterDeck(FText& OutReason)
+{
+	constexpr int32 HandSize = 5;
+	if (PrototypeBackpack->GetItemCount() != 0 || PrototypeBackpack->GetTempItemCount() != 0
+		|| !PrototypeBackpack->HasFreeSlots(HandSize))
+	{
+		OutReason = INVTEXT("开局建筑栏和临时栏须为空，建筑栏须至少有五个空槽。");
+		return false;
+	}
+	if (!ValidatePlacementSurface(OutReason) || !ValidateBuildingDefinitions(OutReason)) { return false; }
+
+	struct FFaceValue
+	{
+		ECastleTileColor Color;
+		int32 Number;
+
+		bool Matches(const FFaceValue& Other) const { return Color == Other.Color || Number == Other.Number; }
+	};
+	const FIntVector Base = GetBoardCenterCoordinate();
+	const ECastleGridFace Faces[] = {ECastleGridFace::PositiveX, ECastleGridFace::NegativeX,
+		ECastleGridFace::PositiveY, ECastleGridFace::NegativeY};
+	FFaceValue Sides[UE_ARRAY_COUNT(Faces)];
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Faces); ++Index)
+	{
+		const FCastleTowerSideCell* Cell = FindTowerSideCell(Base, Faces[Index]);
+		if (!Cell || !CastleTileColors::IsPlayable(Cell->Color) || Cell->Number < 1 || Cell->Number > 9)
+		{
+			OutReason = FText::Format(INVTEXT("塔底坐标 {0} 的面 {1} 缺少有效色号。"),
+				FText::FromString(Base.ToString()), static_cast<int32>(Faces[Index]));
+			return false;
+		}
+		Sides[Index] = {Cell->Color, Cell->Number};
+	}
+
+	// 这四类一级房均可通行。整池必须具备，抽牌前逐一校验，避免随机数决定是否暴露缺失定义。
+	const ECastleBuildingType Types[] = {ECastleBuildingType::NormalRoom, ECastleBuildingType::ArcherTower,
+		ECastleBuildingType::CannonTower, ECastleBuildingType::Farm};
+	UCastleBuildingDefinition* Definitions[UE_ARRAY_COUNT(Types)];
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Types); ++Index)
+	{
+		Definitions[Index] = FindBuildingDefinition(Types[Index]);
+		if (!IsValid(Definitions[Index]))
+		{
+			OutReason = FText::Format(INVTEXT("缺少 {0} 的一级可通行建筑定义。"),
+				StaticEnum<ECastleBuildingType>()->GetDisplayNameTextByValue(static_cast<int64>(Types[Index])));
+			return false;
+		}
+	}
+
+	// 固定测试种子派生出独立手牌流；正式每局使用独立新种子。
+	constexpr uint32 StarterDeckSeedSalt = 0x3b9a19d5u;
+	FRandomStream Random(bUseFixedTowerSideSeed ? static_cast<int32>(static_cast<uint32>(FixedTowerSideSeed) ^ StarterDeckSeedSalt)
+		: static_cast<int32>(GetTypeHash(FGuid::NewGuid())));
+	const TConstArrayView<ECastleTileColor> Colors = CastleTileColors::GetPlayable();
+	const auto MatchRandomAttribute = [&](const FFaceValue& Anchor)
+	{
+		return Random.RandRange(0, 1) == 0
+			? FFaceValue{Anchor.Color, Random.RandRange(1, 9)}
+			: FFaceValue{Colors[Random.RandRange(0, Colors.Num() - 1)], Anchor.Number};
+	};
+
+	const FFaceValue& Front = Sides[0];
+	const FFaceValue& Back = Sides[1];
+	const FFaceValue& Flank = Sides[Random.RandRange(2, 3)];
+	FFaceValue Chain[HandSize];
+	Chain[0] = MatchRandomAttribute(Front);
+	Chain[4] = MatchRandomAttribute(Back);
+	Chain[3] = MatchRandomAttribute(Chain[4]);
+	// C2 继承 C1 一维、继承侧面另一维。C3 保持侧面继承来的一维，并从 C4 取剩余一维。
+	// 因而 C3 同时能接 C2、C4，也能从选中的塔侧直接放到中间格，整个构造无需搜索重试。
+	if (Random.RandRange(0, 1) == 0)
+	{
+		Chain[1] = {Chain[0].Color, Flank.Number};
+		Chain[2] = {Chain[3].Color, Chain[1].Number};
+	}
+	else
+	{
+		Chain[1] = {Flank.Color, Chain[0].Number};
+		Chain[2] = {Chain[1].Color, Chain[3].Number};
+	}
+
+	// 在打乱和写入前验证门、五个相邻房间及绕行中心与侧面均满足现行 UNO 规则。
+	bool bValidChain = Front.Matches(Chain[0]) && Chain[4].Matches(Back) && Flank.Matches(Chain[2]);
+	for (int32 Index = 1; Index < HandSize; ++Index)
+	{
+		bValidChain &= Chain[Index - 1].Matches(Chain[Index]);
+	}
+	if (!bValidChain)
+	{
+		OutReason = INVTEXT("开局五张建筑牌的门到门连通自检失败。");
+		return false;
+	}
+
+	TArray<FCastleBuildingDescriptor> Hand;
+	Hand.Reserve(HandSize);
+	const int32 NormalRoomIndex = Random.RandRange(0, HandSize - 1);
+	for (int32 Index = 0; Index < HandSize; ++Index)
+	{
+		// 普通房间至少一张，其位置及其余牌的建筑类型均随机。
+		UCastleBuildingDefinition* Definition = Definitions[Index == NormalRoomIndex ? 0 : Random.RandRange(0, UE_ARRAY_COUNT(Definitions) - 1)];
+		FCastleBuildingDescriptor& Card = Hand.AddDefaulted_GetRef();
+		if (!Definition->CreateDescriptor(1, Chain[Index].Color, Chain[Index].Number, Card, OutReason))
+		{
+			OutReason = FText::Format(INVTEXT("建筑定义 {0} 无法生成开局牌：{1}"),
+				FText::FromString(Definition->GetPathName()), OutReason);
+			return false;
+		}
+	}
+	Algo::RandomShuffle(Hand, Random);
+	// 已检查主栏容量且两栏均为空，批量写入只占主栏，并一次发布背包变动。
+	if (!PrototypeBackpack->TryAddItemsAllowOverflow(Hand, OutReason)) { return false; }
+	PrototypePalette = MoveTemp(Hand);
+	SelectedPrototypeSlot = 0;
+	return true;
+}
+
 void ACastleBoard::InitializePrototypeDeck()
 {
 	PrototypePalette.Reset();
@@ -2344,6 +2381,17 @@ void ACastleBoard::InitializePrototypeDeck()
 		return;
 	}
 
+	if (PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides)
+	{
+		FText FailureReason;
+		if (!InitializeTowerSideStarterDeck(FailureReason))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 的主塔 %s 开局发牌失败：%s"),
+				*GetPathName(), *GetPathNameSafe(MainTowerActor.Get()), *FailureReason.ToString());
+		}
+		return;
+	}
+
 	if (PrototypeBackpack->GetItemCount() > 0)
 	{
 		// 允许关卡蓝图预先配置背包；检测到已有卡牌时不再偷偷追加样例卡。
@@ -2351,38 +2399,19 @@ void ACastleBoard::InitializePrototypeDeck()
 		return;
 	}
 
-	// 样例牌只从当前模式实际生成的格子取色号；塔侧模式从第一层不同面取三组。
+	// 旧地面模式的样例顺序和小棋盘行为保持原样。
 	struct FStarterMatch { ECastleTileColor Color; int32 Number; };
 	FStarterMatch Matches[3];
-	if (PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides)
+	const TArray<FCastleGroundCell>& FunctionalCells = GeneratedGroundCells;
+	if (FunctionalCells.IsEmpty())
 	{
-		FText FailureReason;
-		if (!ValidatePlacementSurface(FailureReason) || TowerSideGrid->GetCells().Num() < UE_ARRAY_COUNT(Matches))
-		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 无法按主塔 %s 的侧格准备样例牌：侧格不全。%s"),
-				*GetPathName(), *GetPathNameSafe(MainTowerActor.Get()), *FailureReason.ToString());
-			return;
-		}
-		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Matches); ++Index)
-		{
-			const FCastleTowerSideCell& Cell = TowerSideGrid->GetCells()[Index];
-			Matches[Index] = {Cell.Color, Cell.Number};
-		}
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 原型卡组初始化失败：生成结果中没有功能地面格。"), *GetPathName());
+		return;
 	}
-	else
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Matches); ++Index)
 	{
-		const TArray<FCastleGroundCell>& FunctionalCells = GeneratedGroundCells;
-		if (FunctionalCells.IsEmpty())
-		{
-			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 原型卡组初始化失败：生成结果中没有功能地面格。"), *GetPathName());
-			return;
-		}
-		// 旧地面模式的样例顺序和小棋盘行为保持原样。
-		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Matches); ++Index)
-		{
-			const FCastleGroundCell& Cell = FunctionalCells[FMath::Min(Index, FunctionalCells.Num() - 1)];
-			Matches[Index] = {Cell.Color, Cell.Number};
-		}
+		const FCastleGroundCell& Cell = FunctionalCells[FMath::Min(Index, FunctionalCells.Num() - 1)];
+		Matches[Index] = {Cell.Color, Cell.Number};
 	}
 
 	FText DefinitionReason;

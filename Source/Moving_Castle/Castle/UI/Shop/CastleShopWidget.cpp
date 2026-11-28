@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleShopWidget.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
@@ -253,6 +254,7 @@ void UCastleShopWidget::NativeConstruct()
 	}
 
 	Shop = Controller->GetShop();
+	Controller->RegisterShopFocusWidget(*this);
 	Economy = Controller->GetEconomy();
 	Portraits = GetWorld() ? GetWorld()->GetSubsystem<UCastleCardPortraitSubsystem>() : nullptr;
 	Shop->OnShopChanged.AddUniqueDynamic(this, &UCastleShopWidget::RefreshShop);
@@ -262,6 +264,7 @@ void UCastleShopWidget::NativeConstruct()
 
 void UCastleShopWidget::NativeDestruct()
 {
+	if (auto* Controller = GetOwningPlayer<ACastlePlayerController>()) { Controller->UnregisterShopFocusWidget(*this); }
 	if (IsValid(Shop))
 	{
 		Shop->OnShopChanged.RemoveDynamic(this, &UCastleShopWidget::RefreshShop);
@@ -350,7 +353,7 @@ void UCastleShopWidget::RefreshShop()
 		? BoundBoard->PrototypeBackpack->Capacity : FixedBenchCount;
 
 	GoldValueText->SetText(FText::AsNumber(CurrentGold));
-	RefreshTowerAndWaveHeader();
+	RefreshTowerAndWaveHeader(OwnedRooms, RoomLimit);
 
 	// 刷新按钮文案与余额预警着色。
 	const bool bFreeRefresh = Shop->RefreshCost == 0;
@@ -365,24 +368,31 @@ void UCastleShopWidget::RefreshShop()
 	RefreshBgStates->SetActiveWidgetIndex(0);
 	CloseBgStates->SetActiveWidgetIndex(0);
 
-	// 同步 6 个商品卡座。
+	// 仅教学货架支持空槽，保留常规商店六个商品的配置约束。
 	const TArray<FCastleShopOffer> Offers = Shop->GetOffers();
 	const auto OfferSlots = GetOfferSlots();
-	if (Offers.Num() != OfferSlots.Num())
+	if (Offers.Num() > OfferSlots.Num() || (!Shop->UsesScriptedOffers() && Offers.Num() != OfferSlots.Num()))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("商店商品数量 %d 与 WBP 固定槽位数 %d 不一致。"),
 			Offers.Num(), OfferSlots.Num());
 		return;
 	}
 
-	const bool bHasRoomAndBagCapacity = (OwnedRooms + 1 <= RoomLimit) && (BackpackItems.Num() < BackpackCapacity);
+	const bool bHasRoomAndBagCapacity = OwnedRooms >= 0 && OwnedRooms < RoomLimit && BackpackItems.Num() < BackpackCapacity;
 	for (int32 Index = 0; Index < OfferSlots.Num(); ++Index)
 	{
+		const bool bHasOffer = Offers.IsValidIndex(Index);
+		OfferSlots[Index]->SetVisibility(bHasOffer ? ESlateVisibility::Visible : ESlateVisibility::Hidden);
+		if (!bHasOffer) { continue; }
 		const FCastleShopOffer& Offer = Offers[Index];
 		const bool bCanAfford = CurrentGold >= Offer.Price;
 		const int32 MatchingCount = CountMatchingLv1CardsInBackpack(BackpackItems, Offer.Descriptor);
 		OfferSlots[Index]->ConfigureOffer(*this, Index, Offer, BoundBoard,
 			bCanAfford, bHasRoomAndBagCapacity, bFoilPreview, MatchingCount);
+	}
+	if (Shop->UsesScriptedOffers() && Offers.IsEmpty())
+	{
+		RefreshLabel->SetText(INVTEXT("暂时缺货 · 刷新 [R]"));
 	}
 
 	// 同步 10 格备战席。
@@ -403,10 +413,17 @@ void UCastleShopWidget::RefreshShop()
 	RefreshHoverDetail();
 }
 
-void UCastleShopWidget::RefreshTowerAndWaveHeader()
+void UCastleShopWidget::RefreshTowerAndWaveHeader(const int32 OwnedRooms, const int32 RoomLimit)
 {
-	const int32 OwnedRooms = Shop->GetOwnedRoomCount();
-	const int32 RoomLimit = Shop->RoomLimit;
+	if (OwnedRooms == INDEX_NONE)
+	{
+		// 统计接口已记录具体错误，容量和进度均不显示无效格数。
+		RoomLimitText->SetText(INVTEXT("房间总量读取失败"));
+		TowerRoomSummaryText->SetText(RoomLimitText->GetText());
+		TowerLevelText->SetText(INVTEXT("主塔房间进度读取失败"));
+		TowerExpBar->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
 	const bool bNearLimit = OwnedRooms >= RoomLimit;
 	const FLinearColor CapacityColor = bNearLimit
 		? FLinearColor(0.96f, 0.42f, 0.34f, 1.0f)
@@ -417,16 +434,26 @@ void UCastleShopWidget::RefreshTowerAndWaveHeader()
 	RoomLimitText->SetColorAndOpacity(FSlateColor(CapacityColor));
 
 	const UCastleDirectorSubsystem* Director = GetWorld() ? GetWorld()->GetSubsystem<UCastleDirectorSubsystem>() : nullptr;
-	if (IsValid(Director) && Director->IsRunning() && IsValid(Director->GetConfig()))
+	if (IsValid(Director) && Director->IsRunning())
 	{
 		const int32 TowerLv = Director->GetLevel();
-		const int32 Exp = Director->GetExperience();
-		const int32 ExpPerLevel = FMath::Max(1, Director->GetConfig()->ExpPerLevel);
+		const int32 TowerRoomLimit = Director->GetCurrentRoomLimit();
 		const int32 NextStep = Director->GetNextStep();
+		if (TowerRoomLimit == INDEX_NONE)
+		{
+			// 统计接口已记录具体错误，隐藏进度以免展示虚假的占格比例。
+			TowerLevelText->SetText(INVTEXT("主塔房间进度读取失败"));
+			TowerExpBar->SetVisibility(ESlateVisibility::Collapsed);
+			return;
+		}
 
-		TowerLevelText->SetText(FText::Format(NSLOCTEXT("CastleShop", "TowerLvExp", "主塔 Lv.{0}   ({1}/{2})"),
-			FText::AsNumber(TowerLv), FText::AsNumber(Exp), FText::AsNumber(ExpPerLevel)));
-		TowerExpBar->SetPercent(FMath::Clamp(static_cast<float>(Exp) / static_cast<float>(ExpPerLevel), 0.0f, 1.0f));
+		// Lv4 仍有购买容量，但已无下一等级。保留原 WBP 进度条绑定，只修改其数据来源。
+		const bool bMaxLevel = TowerLv == Director->GetConfig()->TowerLevels.Num();
+		TowerLevelText->SetText(bMaxLevel
+			? FText::Format(NSLOCTEXT("CastleShop", "TowerLvMax", "主塔 Lv.{0} (已满级)"), FText::AsNumber(TowerLv))
+			: FText::Format(NSLOCTEXT("CastleShop", "TowerLvRooms", "主塔 Lv.{0} ({1}/{2})"),
+				FText::AsNumber(TowerLv), FText::AsNumber(OwnedRooms), FText::AsNumber(TowerRoomLimit)));
+		TowerExpBar->SetPercent(bMaxLevel ? 1.0f : FMath::Clamp(static_cast<float>(OwnedRooms) / TowerRoomLimit, 0.0f, 1.0f));
 		TowerExpBar->SetVisibility(ESlateVisibility::HitTestInvisible);
 
 		TowerRoomSummaryText->SetText(FText::Format(
@@ -438,7 +465,7 @@ void UCastleShopWidget::RefreshTowerAndWaveHeader()
 	}
 	else
 	{
-		// 非导演运行的测试关卡不伪造主塔等级与经验条，如实展示自由测试状态与房间上限。
+		// 没有成长表的旧入口只展示房间容量，进度条仅供导演模式使用。
 		TowerLevelText->SetText(NSLOCTEXT("CastleShop", "SandboxTowerLabel", "主塔容量"));
 		TowerExpBar->SetVisibility(ESlateVisibility::Collapsed);
 		TowerRoomSummaryText->SetText(FText::Format(
@@ -525,6 +552,7 @@ void UCastleShopWidget::CancelOfferInspection()
 
 void UCastleShopWidget::HandleToggleFoil()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	bFoilPreview = !bFoilPreview;
 	FoilLabel->SetText(bFoilPreview
 		? NSLOCTEXT("CastleShop", "FoilOn", "箔光：开")
@@ -541,6 +569,7 @@ void UCastleShopWidget::HandleToggleFoil()
 
 void UCastleShopWidget::HandlePeekPressed()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	bPeekingCastle = true;
 	CancelOfferInspection();
 	ApplyPeekVisibility();
@@ -554,6 +583,7 @@ void UCastleShopWidget::HandlePeekReleased()
 
 void UCastleShopWidget::HandleOfferPurchaseRequested(const int32 OfferIndex)
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	HandleTrade(false, OfferIndex);
 }
 
@@ -573,6 +603,7 @@ void UCastleShopWidget::HandleOfferHovered(const int32 OfferIndex, const bool bH
 
 void UCastleShopWidget::HandleBenchSellRequested(const int32 BackpackSlotIndex)
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	HandleTrade(true, BackpackSlotIndex);
 }
 
@@ -678,13 +709,14 @@ void UCastleShopWidget::HandleTrade(const bool bSelling, const int32 SlotIndex)
 
 void UCastleShopWidget::HandleRefresh()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (!IsValid(Shop))
 	{
 		return;
 	}
 	FText Reason;
 	const bool bSuccess = Shop->TryRefreshOffers(Reason);
-	ShowResult(bSuccess, TEXT("刷新成功，已换入 6 张全新建筑卡牌。"), Reason);
+	ShowResult(bSuccess, FString::Printf(TEXT("刷新成功，已上架 %d 张建筑卡牌。"), Shop->GetOffers().Num()), Reason);
 }
 
 void UCastleShopWidget::HandleRefreshPressed()
@@ -705,6 +737,7 @@ void UCastleShopWidget::HandleRefreshReleased()
 
 void UCastleShopWidget::HandleClose()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (IsValid(Shop))
 	{
 		Shop->CloseShop();

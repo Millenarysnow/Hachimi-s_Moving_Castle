@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Castle/Input/CastleControlMode.h"
 #include "Blueprint/UserWidget.h"
 #include "CastlePinballNPCStatusWidget.generated.h"
 
@@ -12,7 +13,8 @@ class MOVING_CASTLE_API UCastlePinballNPCStatusWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
-	void RefreshStatus(int32 Gold, int32 Cost, int32 Recruited, int32 Total, double Position, double Angle);
+	/** 按当前操作模式同步投币键与瞄准态退出键提示。 */
+	void RefreshStatus(int32 Gold, int32 Cost, int32 Recruited, int32 Total, double Position, double Angle, ECastleControlMode ControlMode);
 	void SetFeedback(const FText& Message);
 
 protected:

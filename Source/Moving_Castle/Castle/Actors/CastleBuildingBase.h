@@ -13,11 +13,15 @@ class USceneComponent;
 class UStaticMesh;
 class UStaticMeshComponent;
 class UTextRenderComponent;
+class UDecalComponent;
+class ACastleBoard;
 class UBuildingMergeComponent;
 class UAssemblyFlightComponent;
 class UBuildingGameplayRootComponent;
 class UCastleBuildingEffectComponent;
 class UCastleBuildingPCGComponent;
+class UCastleDirectorSubsystem;
+class UCastleRoomTraitComponent;
 
 /**
  * 所有可放置建筑的共同 Actor 基类。
@@ -35,7 +39,7 @@ public:
 	/** 原生语义组件持有原件快照与动态变体，蓝图不承载 PCG 规则逻辑。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="建筑|PCG")
 	TObjectPtr<UCastleBuildingPCGComponent> BuildingPCG;
-	/** 创建逻辑根节点、功能分组和通用建筑标签，不创建替代美术模型。 */
+	/** 创建逻辑根节点和功能分组；各等级蓝图提供美术模型。 */
 	explicit ACastleBuildingBase(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 	/** 所有可放置建筑原生携带同一个效果入口；每个实例独立保存状态。 */
@@ -68,7 +72,7 @@ public:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Transient, Category="建筑|动画")
 	bool bHasCompletedPlacement = true;
 
-	/** 棋盘切换放置状态，并让标签只在建筑完整组装后出现。 */
+	/** 棋盘切换放置状态，主题贴花只在建筑完整组装后出现。 */
 	void SetPlacementComplete(bool bComplete);
 
 	/**
@@ -121,18 +125,28 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
 	FCastleBuildingDescriptor GetBuildingDescriptor() const;
 
+	/** 特质随原建筑实例保留，普通房间和炮塔仍沿用原有建造与合并身份。 */
+	ECastleRoomTrait GetRoomTrait() const { return RoomTrait; }
+	UCastleRoomTraitComponent* GetRoomTraitComponent() const { return RoomTraitComponent; }
+
 	/** 返回卡牌、场上建筑和升级结果共享的同一份建筑定义。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
 	UCastleBuildingDefinition* GetBuildingDefinition() const { return BuildingDefinition; }
 
-	/** 根据当前 Actor 自身的美术组件配置视觉与标签；缺少美术模型时返回明确错误。 */
+	/** 根据当前 Actor 的美术组件配置表现；缺少美术模型时返回明确错误。 */
 	bool ConfigureBuildingVisual(float InCellSize, float InLayerHeight, FText& OutFailureReason);
 
-	/** 返回当前 Actor 直接拥有的可见模型包围盒，供标签和卡片预览取景使用。 */
+	/** 依照棋盘每个占格的真实楼板标高，创建颜色和数字与建筑卡一致的地板贴花。 */
+	bool ConfigureFloorDecals(const ACastleBoard& Board, FText& OutFailureReason);
+
+	/** 返回当前 Actor 直接拥有的可见模型包围盒，供卡片预览取景使用。 */
 	FBox GetVisualBounds() const;
 
 	/** 预览模式下只允许 SceneCapture 看见模型，且关闭碰撞和阴影。 */
 	void PrepareForPreview();
+
+	/** 等待摄影实际可见的网格和材质。失败原因只在配置无效时给出，异步准备期间保持为空。 */
+	bool ArePreviewRenderResourcesReady(FText& OutFailureReason) const;
 
 	/** 判断当前建筑是否属于固定一级的普通房间。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|建筑")
@@ -164,18 +178,20 @@ public:
 protected:
 	/** 建筑可被关卡流送或直接销毁，必须撤销本实例的触发登记。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	/** 拆除或合并销毁建筑时，显式撤下各占格的地板贴花。 */
+	virtual void Destroyed() override;
 
-	/** 所有模型组件和通用标签的公共根节点。 */
+	/** 所有建筑模型组件的公共根节点。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "建筑模型")
 	TObjectPtr<USceneComponent> VisualRoot;
 
-	/** 仅供数字标签底牌使用的引擎资源，不得用于替代缺失的建筑模型。 */
+	/** Texture 分支提供的楼板 Deferred Decal 材质；缺失时建筑生成明确失败。 */
 	UPROPERTY()
-	TObjectPtr<UStaticMesh> LabelPlateMesh;
+	TObjectPtr<UMaterialInterface> FloorDecalMaterial;
 
-	/** 数字标签底牌的基础材质；每座建筑单独创建深色动态实例。 */
-	UPROPERTY()
-	TObjectPtr<UMaterialInterface> LabelPlateMaterial;
+	/** 每个逻辑占格各自拥有一个贴花，随建筑销毁且不参与碰撞或导航。 */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UDecalComponent>> FloorDecals;
 
 	/** 卡片捕获器也会创建建筑实例，必须显式排除它们的效果调用。 */
 	UPROPERTY(Transient)
@@ -205,11 +221,17 @@ protected:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "建筑")
 	TArray<FIntVector> OccupiedCoordinates;
 
-	/** 在模型配置成功后显示颜色、数字和等级，以便判断放置规则。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "建筑标签")
-	TObjectPtr<class UTextRenderComponent> PrototypeLabel;
+private:
+	friend class ACastleBoard;
+	friend class UCastleDirectorSubsystem;
 
-	/** 建筑标签的深色底牌，确保数字在各种建筑颜色上都能读取。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "建筑标签")
-	TObjectPtr<class UStaticMeshComponent> PrototypeLabelPlate;
+	/** 只在导演成功传送的提交点调用，同时移除门体的显示和准星碰撞。 */
+	void ConsumeSkyIslandPortal();
+
+	UPROPERTY(Transient)
+	TObjectPtr<UCastleRoomTraitComponent> RoomTraitComponent;
+	UPROPERTY(Transient)
+	ECastleRoomTrait RoomTrait = ECastleRoomTrait::None;
+	UPROPERTY(Transient)
+	int32 TraitRemainingRounds = 0;
 };

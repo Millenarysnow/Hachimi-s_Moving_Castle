@@ -3,7 +3,7 @@
 #include "CastleDirectorConfigDataAsset.h"
 
 #include "MassEntityConfigAsset.h"
-#include "Engine/StaticMesh.h"
+#include "NiagaraSystem.h"
 #include "Blueprint/UserWidget.h"
 #include "Castle/UI/Director/CastleDirectorWidgets.h"
 #include "Castle/UI/Director/CastleTowerUpgradeRewardWidget.h"
@@ -16,10 +16,10 @@ UCastleDirectorConfigDataAsset::UCastleDirectorConfigDataAsset()
 {
 	// 等级表与策划给定的数字上限、开放层、容量、气球和赠送项一一对应。
 	TowerLevels = {
-		{1, 3, 3, 150, 5, 1000.0f, 0, 0, 0},
-		{2, 4, 5, 250, 10, 2000.0f, 1, 2, 0},
-		{3, 5, 7, 350, 20, 4000.0f, 1, 5, 0},
-		{4, 6, 9, 450, 40, 8000.0f, 1, 10, 5}
+		{1, 3, 3, 30, 5, 1000.0f, 0, 0, 0},
+		{2, 4, 5, 80, 10, 2000.0f, 1, 2, 2},
+		{3, 5, 7, 150, 20, 4000.0f, 1, 5, 3},
+		{4, 6, 9, 500, 40, 8000.0f, 1, 10, 5}
 	};
 }
 
@@ -100,13 +100,22 @@ bool UCastleDirectorConfigDataAsset::ValidateConfig(FText& OutFailureReason) con
 		return Reject(TEXT("NodeArcDegrees"), FString::SanitizeFloat(NodeArcDegrees));
 	}
 	if (!FMath::IsFinite(NodeTriggerRadius) || NodeTriggerRadius <= 0.0f) { return Reject(TEXT("NodeTriggerRadius"), FString::SanitizeFloat(NodeTriggerRadius)); }
-	if (!IsValid(NodeMesh)) { return Reject(TEXT("NodeMesh"), TEXT("None")); }
-	if (!FMath::IsFinite(NodeMeshScale) || NodeMeshScale <= 0.0f) { return Reject(TEXT("NodeMeshScale"), FString::SanitizeFloat(NodeMeshScale)); }
+	if (!IsValid(NodePortalSystem)) { return Reject(TEXT("NodePortalSystem"), TEXT("None")); }
+	if (!FMath::IsFinite(NodePortalScale) || NodePortalScale <= 0.0f)
+	{
+		return Reject(TEXT("NodePortalScale"), FString::SanitizeFloat(NodePortalScale));
+	}
+	// Niagara 参数缺失时拒绝开局，避免出现显示尺寸或颜色却无法按配置应用的门户。
+	const auto& PortalParameters = NodePortalSystem->GetExposedParameters();
+	if (PortalParameters.IndexOf(FNiagaraVariableBase(FNiagaraTypeDefinition::GetFloatDef(), TEXT("User.Size"))) == INDEX_NONE
+		|| PortalParameters.IndexOf(FNiagaraVariableBase(FNiagaraTypeDefinition::GetColorDef(), TEXT("User.Color"))) == INDEX_NONE)
+	{
+		return Reject(TEXT("NodePortalSystem"), NodePortalSystem->GetPathName() + TEXT("（缺少浮点 User.Size 或颜色 User.Color）"));
+	}
 	if (!IsValid(NPCConfiguration)) { return Reject(TEXT("NPCConfiguration"), TEXT("None")); }
 	if (!IsValid(DispatchConfig)) { return Reject(TEXT("DispatchConfig"), TEXT("None")); }
 	if (!DispatchConfig->ValidateConfiguration(OutFailureReason)) { return false; }
-	if (RewardExp < 1) { return Reject(TEXT("RewardExp"), FString::FromInt(RewardExp)); }
-	if (ExpPerLevel < 1) { return Reject(TEXT("ExpPerLevel"), FString::FromInt(ExpPerLevel)); }
+	if (RewardGold < 1) { return Reject(TEXT("RewardGold"), FString::FromInt(RewardGold)); }
 	if (!ValidateTowerLevels(OutFailureReason)) { return false; }
 	if (!FMath::IsFinite(HealFraction) || HealFraction <= 0.0f || HealFraction > 1.0f)
 	{

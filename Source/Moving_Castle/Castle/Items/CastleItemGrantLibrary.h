@@ -4,6 +4,7 @@
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "CastleItemGrantLibrary.generated.h"
 
+class ACastleBoard;
 class UCastleBackpackComponent;
 class UCastleBadgeDataAsset;
 class UCastleBadgeSubsystem;
@@ -19,13 +20,17 @@ class MOVING_CASTLE_API UCastleItemGrantLibrary : public UBlueprintFunctionLibra
 public:
 	/** 直接发放时 OutPendingReward 为空，待领取项只在点击「获取」后开始选择。 */
 	static bool TryGrantRoomGroup(const UCastleRoomGroupDataAsset* Group, UCastleBackpackComponent* Backpack,
-		TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> DefinitionPool, FRandomStream& Random,
+		const ACastleBoard* Board, TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> DefinitionPool, FRandomStream& Random,
 		UCastlePendingRoomReward*& OutPendingReward, FText& OutFailureReason);
 
-	/** 展开完整的牌组或创建待领句柄。准备阶段只推进传入的随机流，不写入背包。 */
+	/** 准备发牌、待领句柄与主栏转换。调用方应使用候选随机流，失败时保留原随机流和背包。 */
 	static bool TryPrepareRoomGroup(const UCastleRoomGroupDataAsset* Group, UCastleBackpackComponent* Backpack,
-		TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> DefinitionPool, FRandomStream& Random,
-		TArray<FCastleBuildingDescriptor>& OutCards, UCastlePendingRoomReward*& OutPendingReward, FText& OutFailureReason);
+		const ACastleBoard* Board, TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> DefinitionPool, FRandomStream& Random,
+		FCastlePreparedRoomGroup& OutPrepared, FText& OutFailureReason);
+
+	/** 原子提交主栏转换与溢出发牌。待领句柄由调用方交给现有选择界面。 */
+	static bool TryCommitPreparedRoomGroup(const FCastlePreparedRoomGroup& Prepared, UCastleBackpackComponent* Backpack,
+		FText& OutFailureReason);
 
 	/** 普通奖励也可直接用万能卡规格创建独立待领取项。 */
 	static bool TryCreateWildcardReward(FText DisplayName, const FCastleWildcardRoomSpec& Spec,

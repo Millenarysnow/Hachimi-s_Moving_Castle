@@ -94,13 +94,13 @@ struct MOVING_CASTLE_API FCastlePCGCellAdjacency
 	bool bCanTraverse = false;
 };
 
-/** 当前棋盘由变体 LV2 激活的一处上下梯子连接，供导航系统查询其端点与方向。 */
+/** 当前棋盘激活的一处上下梯连接，供导航系统查询其端点与方向。 */
 USTRUCT(BlueprintType)
 struct MOVING_CASTLE_API FCastleActiveLadderConnection
 {
 	GENERATED_BODY()
 
-	/** 拥有变体 LV2 美术与功能组件的下层建筑。 */
+	/** 持有竖梯本体和 NavLink 的下层建筑，上层楼板归上层建筑。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="建筑PCG|梯子")
 	TObjectPtr<ACastleBuildingBase> Building = nullptr;
 

@@ -5,13 +5,16 @@
 #include "CastleBuildingTestUtilities.h"
 #include "Castle/PCG/HachimisV4/CastleHachimisV4Layout.h"
 #include "Components/Building/BuildingGameplayRootComponent.h"
+#include "Components/DecalComponent.h"
 #include "Components/Building/Effects/CastleBuildingEffectComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Components/Building/Effects/Shield/CastleShieldTowerEffectComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "NavigationSystem.h"
 
 /** 所有目标等级都走正式卡牌与棋盘入口，不能只在编辑器模板上看起来配置正确。 */
@@ -50,6 +53,12 @@ bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 	FText Reason;
 	if (!TestTrue(TEXT("配置所有等级的支撑地面"), Board->ApplyGroundGenerationResult(Ground, Reason))) { return false; }
 
+	// 同时验证所有功能建筑的图集编号，覆盖枚举顺序与作者图集编号不同的类别。
+	const TMap<ECastleBuildingType, float> ExpectedIcons = {
+		{ECastleBuildingType::NormalRoom, 0}, {ECastleBuildingType::Farm, 1}, {ECastleBuildingType::CannonTower, 2},
+		{ECastleBuildingType::ArcherTower, 3}, {ECastleBuildingType::ShieldTower, 4}, {ECastleBuildingType::BalloonTower, 5},
+		{ECastleBuildingType::BeeHive, 6}
+	};
 	for (const TCHAR* Family : { TEXT("NormalRoom"), TEXT("ArcherTower"), TEXT("CannonTower"), TEXT("Farm"), TEXT("ShieldTower"), TEXT("BalloonTower"), TEXT("BeeHive") })
 	{
 		const FString DefinitionPath = FString::Printf(TEXT("/Game/MovingCastle/Data/Buildings/DA_%s.DA_%s"), Family, Family);
@@ -78,6 +87,8 @@ bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("逻辑占用遵循各等级原规则"), Building->GetOccupiedCoordinates().Num(),
 				ACastleBuildingBase::GetExpectedFootprintCellCount(Level));
 			TestNull(TEXT("实际实例不再有原生占位组件"), Building->GetDefaultSubobjectByName(TEXT("PrototypeMesh")));
+			TestNull(TEXT("实际实例不再有头顶测试底板"), Building->GetDefaultSubobjectByName(TEXT("PrototypeLabelPlate")));
+			TestNull(TEXT("实际实例不再有头顶测试浮字"), Building->GetDefaultSubobjectByName(TEXT("PrototypeLabel")));
 			// 从逻辑占格推导世界空间楼板中心，再反算为建筑局部空间；这样也覆盖绕 Z 轴旋转的竖向合成蓝图。
 			// 建筑锚点位于最低占格的底面中心；五厘米厚的楼板中心低于对应层面 2.5 厘米。
 			const TArray<FIntVector>& OccupiedCoordinates = Building->GetOccupiedCoordinates();
@@ -86,6 +97,7 @@ bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 			const bool bAuthorHatch = Layout && Layout->Grid.Z == 2;
 			TArray<FVector> ExpectedGameplayFloorLocations;
 			TArray<FVector> ExpectedGameplayFloorScales;
+			TArray<FVector> ExpectedFloorDecalLocations;
 			for (const FIntVector& Coordinate : OccupiedCoordinates)
 			{
 				// 同一建筑内部的功能碰撞须覆盖格缝；每侧各承担半个间隙，外周边界仍与 500 厘米美术格面一致。
@@ -99,6 +111,9 @@ bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 						(PositiveYExtension - NegativeYExtension) * 0.5f,
 						-Board->LayerHeight * 0.5f - 2.5f + (Layout ? Layout->StandingHeight : 0.0)));
 				ExpectedGameplayFloorLocations.Add(Building->GetActorTransform().InverseTransformPosition(FloorCenterWorld));
+				const FVector FloorSurfaceWorld = FloorCenterWorld
+					+ Board->GetActorTransform().TransformVector(FVector(0.0f, 0.0f, 2.5f));
+				ExpectedFloorDecalLocations.Add(Building->GetActorTransform().InverseTransformPosition(FloorSurfaceWorld));
 				const FVector LocalXAxis = Building->GetActorTransform().InverseTransformVector(Board->GetActorTransform().TransformVector(
 					FVector((Layout ? Board->CellSize : Board->GroundTileSize) + NegativeXExtension + PositiveXExtension, 0.0f, 0.0f)));
 				const FVector LocalYAxis = Building->GetActorTransform().InverseTransformVector(Board->GetActorTransform().TransformVector(
@@ -158,7 +173,9 @@ bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 					const USceneComponent* Group = Mesh->GetAttachParent();
 					TestTrue(TEXT("每个美术拆件经 BuildingMeshGroup 挂在视觉根下"), Group != nullptr
 						&& Group->GetFName() == TEXT("BuildingMeshGroup") && Group->GetAttachParent() == Building->GetRootComponent());
-					TestEqual(TEXT("美术只参与选中查询"), Mesh->GetCollisionEnabled(), ECollisionEnabled::QueryOnly);
+					// 四分规则隐藏原装屋顶时也撤掉它的射线碰撞，避免射线命中已经收掉的屋檐。
+					TestEqual(TEXT("可见美术用于选中，隐藏原件关闭碰撞"), Mesh->GetCollisionEnabled(),
+						Mesh->IsVisible() ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
 					TestEqual(TEXT("美术阻挡选中射线"), Mesh->GetCollisionResponseToChannel(ECC_Visibility), ECR_Block);
 					TestEqual(TEXT("美术不阻挡 Pawn"), Mesh->GetCollisionResponseToChannel(ECC_Pawn), ECR_Ignore);
 					TestFalse(TEXT("表现组件不参与导航"), Mesh->CanEverAffectNavigation());
@@ -177,6 +194,46 @@ bool FCastleBuildingNormalRoomTemplateTest::RunTest(const FString& Parameters)
 					}
 				}
 			}
+			TArray<UDecalComponent*> Decals;
+			Building->GetComponents<UDecalComponent>(Decals);
+			int32 FloorDecalCount = 0;
+			FLinearColor ExpectedFloorTint;
+			TestTrue(TEXT("建筑属性色存在统一格面映射"), CastleTileColors::TryGetGridTint(Building->GetBuildingColor(), ExpectedFloorTint));
+			for (UDecalComponent* Decal : Decals)
+			{
+				if (!Decal->ComponentHasTag(TEXT("CastleBuildingFloorDecal"))) { continue; }
+				++FloorDecalCount;
+				const bool bIsPrimitive = Decal->GetClass()->IsChildOf(UPrimitiveComponent::StaticClass());
+				TestTrue(TEXT("地板贴花挂在功能根下且不是碰撞几何或导航数据源"), Decal->GetAttachParent() == Building->GameplayRoot
+					&& !bIsPrimitive && !Decal->CanEverAffectNavigation());
+				const FVector ExpectedProjectionDirection = Board->GetActorTransform().GetRotation().RotateVector(FVector(0, 0, -1));
+				TestTrue(TEXT("地板贴花投影方向朝向楼板"), FVector::DotProduct(
+					Decal->GetComponentTransform().GetUnitAxis(EAxis::X), ExpectedProjectionDirection) > 0.999f);
+				const int32 MatchingDecalIndex = ExpectedFloorDecalLocations.IndexOfByPredicate(
+					[Decal](const FVector& ExpectedLocation)
+					{
+						return ExpectedLocation.Equals(Decal->GetRelativeLocation(), 0.01f);
+					});
+				if (MatchingDecalIndex == INDEX_NONE)
+				{
+					AddError(FString::Printf(TEXT("建筑 %s 的贴花 %s 未对齐任何占格楼板：局部位置 %s。"),
+						*BuildingClass->GetPathName(), *GetNameSafe(Decal), *Decal->GetRelativeLocation().ToString()));
+					return false;
+				}
+				ExpectedFloorDecalLocations.RemoveAt(MatchingDecalIndex);
+				UMaterialInstanceDynamic* DecalMaterial = Cast<UMaterialInstanceDynamic>(Decal->GetDecalMaterial());
+				if (!TestNotNull(TEXT("每格地板使用独立动态贴花材质"), DecalMaterial)) { return false; }
+				TestEqual(TEXT("贴花使用新版父材质"), GetPathNameSafe(DecalMaterial->Parent.Get()),
+					FString(TEXT("/Game/ART/Material/MI_Floor_02.MI_Floor_02")));
+				TestTrue(TEXT("每格地板数字帧与建筑数字一致"), FMath::IsNearlyEqual(
+					DecalMaterial->K2_GetScalarParameterValue(TEXT("Number")), static_cast<float>(Building->GetBuildingNumber() - 1)));
+				TestEqual(TEXT("每格地板功能图标匹配建筑类别"), DecalMaterial->K2_GetScalarParameterValue(TEXT("Icon")),
+					ExpectedIcons.FindChecked(Building->GetBuildingType()));
+				TestTrue(TEXT("每格地板底纹颜色与建筑颜色一致"), DecalMaterial->K2_GetVectorParameterValue(TEXT("BackgroundColor"))
+					.Equals(ExpectedFloorTint, 0.001f));
+			}
+			TestEqual(TEXT("每个占格都有独立楼板贴花"), FloorDecalCount, OccupiedCoordinates.Num());
+			TestEqual(TEXT("所有楼板贴花都对齐对应楼板表面"), ExpectedFloorDecalLocations.Num(), 0);
 			// V4 取自持久化作者节点表。盾塔继续验证原套件的零件数。
 			const int32 ShieldCounts[] = { 10, 20, 33, 75, 75 };
 			const int32 ExpectedVisuals = Layout ? Layout->Parts.Num() : ShieldCounts[Level - 1];

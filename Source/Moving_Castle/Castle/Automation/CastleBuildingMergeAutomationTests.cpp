@@ -71,14 +71,27 @@ bool FCastleRealBuildingMergeTest::RunTest(const FString& Parameters)
 	ACastleBuildingBase* First = Board->PlaceBuilding(FIntVector::ZeroValue, Card, false, Reason);
 	if (!TestNotNull(TEXT("放置真实一级箭塔"), First)) { return false; }
 	if (!CastleBuildingTests::CompletePlacement(First)) { AddError(TEXT("原有一级箭塔飞入失败。")); return false; }
+	// 飞入结束后，常规屋面还有一次 PCG 视觉过渡。先到达稳定状态再核对本用例的合并来源。
+	First->BuildingMerge->TickComponent(10.0f, LEVELTICK_All, nullptr);
+	if (!TestFalse(TEXT("第一座塔的四分屋顶过渡已结束"), First->BuildingMerge->bIsPlaying)) { return false; }
+	const auto CountVisibleParts = [](ACastleBuildingBase& Building)
+	{
+		TArray<UStaticMeshComponent*> Meshes;
+		Building.GetComponents<UStaticMeshComponent>(Meshes);
+		return Meshes.FilterByPredicate([](const UStaticMeshComponent* Mesh)
+		{
+			// 功能楼板不在合并的美术快照中。四分屋角是可见目标的一部分。
+			return Mesh->GetStaticMesh() && Mesh->IsVisible() && !Mesh->bHiddenInGame
+				&& !Mesh->ComponentHasTag(TEXT("MergeExclude")) && !UBuildingGameplayRootComponent::IsInGameplayHierarchy(Mesh);
+		}).Num();
+	};
+	TestTrue(TEXT("首塔稳定后有可参与合并的美术件"), CountVisibleParts(*First) > 0);
 	TArray<UStaticMeshComponent*> FirstMeshes;
 	First->GetComponents<UStaticMeshComponent>(FirstMeshes);
-	const int32 SourceCount = FirstMeshes.FilterByPredicate([](const UStaticMeshComponent* Mesh)
+	TestEqual(TEXT("首塔稳定后有四片可见屋角"), FirstMeshes.FilterByPredicate([](const UStaticMeshComponent* Mesh)
 	{
-		// 功能分支的导航楼板不是美术零件，验收基数不能因新增可见功能 Cube 而增长。
-		return Mesh->GetStaticMesh() && Mesh->IsVisible() && !Mesh->ComponentHasTag(TEXT("MergeExclude"))
-			&& !UBuildingGameplayRootComponent::IsInGameplayHierarchy(Mesh);
-	}).Num() * 2;
+		return Mesh->IsVisible() && Mesh->ComponentHasTag(TEXT("CastlePCGGroup=RoofQuarter"));
+	}).Num(), 4);
 	ACastleBuildingBase* Result = Board->PlaceBuilding(FIntVector(1, 0, 0), Card, true, Reason);
 	if (!TestNotNull(TEXT("新建筑先开始原有放置飞入"), Result)) { AddError(Reason.ToString()); return false; }
 	TestFalse(TEXT("放置飞入期间不提前合并"), Result->BuildingMerge->bIsPlaying);
@@ -88,12 +101,10 @@ bool FCastleRealBuildingMergeTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("新建筑飞入完成后才触发真实合并"), Result)) { AddError(Reason.ToString()); return false; }
 	UBuildingMergeComponent* Merge = Result->BuildingMerge;
 	TestTrue(TEXT("合并自动启动原生组件"), Merge->bIsPlaying && Reason.IsEmpty());
-	TestEqual(TEXT("来源快照包含全部正式模型件"), Merge->SourcePartCount, SourceCount);
-	// V4 作者的屋顶、门与跨格木构使用新几何。验证实际匹配、移动、进退场及数量守恒。
-	const auto* FirstLayout = Definition->FindLevel(1)->BuildingClass->GetDefaultObject<ACastleBuildingBase>()->HachimisLayout.Get();
-	if (!TestNotNull(TEXT("一级使用持久化 V4 装配"), FirstLayout) || !TestNotNull(TEXT("二级使用持久化 V4 装配"), Result->HachimisLayout.Get())) { return false; }
-	TestEqual(TEXT("两座一级塔提供全部独立作者节点"), SourceCount, 2 * FirstLayout->Parts.Num());
-	TestEqual(TEXT("二级目标保留全部作者节点"), Merge->TargetPartCount, Result->HachimisLayout->Parts.Num());
+	// 棋盘先启动等级合并，再由 PCG 捕获途中快照并接续。此处的来源计数属于当前过渡。
+	const int32 SourceCount = Merge->SourcePartCount;
+	if (!TestNotNull(TEXT("二级使用持久化 V4 装配"), Result->HachimisLayout.Get())) { return false; }
+	TestTrue(TEXT("接续捕获了需要退场的旧屋面与其他美术件"), SourceCount > Merge->TargetPartCount);
 	TestTrue(TEXT("目录匹配跨等级同形零件，其中有原位和移动件"), Merge->ReusedPartCount > Merge->MovedPartCount && Merge->MovedPartCount > 0);
 	TestTrue(TEXT("新出现的零件从场外飞入"), Merge->AddedPartCount > 0 && Merge->IncomingPartCount >= Merge->AddedPartCount);
 	TestEqual(TEXT("原零件复用和退场合计覆盖全部来源"), Merge->ReusedPartCount + Merge->RemovedPartCount, SourceCount);
@@ -104,7 +115,7 @@ bool FCastleRealBuildingMergeTest::RunTest(const FString& Parameters)
 
 	TArray<UStaticMeshComponent*> Meshes;
 	Result->GetComponents<UStaticMeshComponent>(Meshes);
-	TMap<UStaticMeshComponent*, FTransform> Authored;
+	TMap<UStaticMeshComponent*, TPair<FTransform, bool>> Authored;
 	for (UStaticMeshComponent* Mesh : Meshes)
 	{
 		// 动画期间正式美术件会隐藏；用已登记的几何目录辨认这些原件，不能把本就隐藏的辅助 Cube 计入。
@@ -112,17 +123,19 @@ bool FCastleRealBuildingMergeTest::RunTest(const FString& Parameters)
 			&& !Mesh->HasAnyFlags(RF_Transient) && !Mesh->ComponentHasTag(TEXT("MergeExclude"))
 			&& !UBuildingGameplayRootComponent::IsInGameplayHierarchy(Mesh))
 		{
-			Authored.Add(Mesh, Mesh->GetRelativeTransform());
+			Authored.Add(Mesh, {Mesh->GetRelativeTransform(), Merge->GetStableVisibility(Mesh)});
 		}
 	}
-	TestEqual(TEXT("目标件数等于建筑的全部模型组件"), Merge->TargetPartCount, Authored.Num());
+	TestEqual(TEXT("蓝图所有作者节点继续保留"), Authored.Num(), Result->HachimisLayout->Parts.Num());
+	const int32 TargetCount = Merge->TargetPartCount;
 	Merge->TickComponent(1.6f, LEVELTICK_All, nullptr);
 	Merge->TickComponent(5.0f, LEVELTICK_All, nullptr);
 	TestFalse(TEXT("真实模型合并完成"), Merge->bIsPlaying);
+	TestEqual(TEXT("目标件数等于完成后实际可见的模型组件"), CountVisibleParts(*Result), TargetCount);
 	for (const auto& Pair : Authored)
 	{
-		TestTrue(TEXT("真实零件精确保留作者局部变换"), Pair.Key->GetRelativeTransform().Equals(Pair.Value));
-		TestTrue(TEXT("真实零件恢复可见"), Pair.Key->IsVisible());
+		TestTrue(TEXT("真实零件精确保留作者局部变换"), Pair.Key->GetRelativeTransform().Equals(Pair.Value.Key));
+		TestEqual(TEXT("真实零件恢复各自的目标显隐"), Pair.Key->IsVisible(), Pair.Value.Value);
 	}
 	return true;
 }

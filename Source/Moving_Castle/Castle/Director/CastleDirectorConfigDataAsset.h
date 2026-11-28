@@ -9,7 +9,7 @@
 #include "CastleDirectorConfigDataAsset.generated.h"
 
 class UMassEntityConfigAsset;
-class UStaticMesh;
+class UNiagaraSystem;
 class UCastleDirectorHUDWidget;
 class UCastleRewardChoiceWidget;
 class UCastleGameOverWidget;
@@ -18,6 +18,7 @@ class UCastleCombatConfigDataAsset;
 class UCastleTowerDispatchConfigDataAsset;
 class UCastleTowerUpgradeRewardWidget;
 class UCastleWildcardRoomPickerWidget;
+class UCastleDialogueScriptDataAsset;
 
 /** 单个主塔等级的固定成长数据；赠送数量仅在本次跨入对应等级时生成。 */
 USTRUCT(BlueprintType)
@@ -29,7 +30,8 @@ struct FCastleTowerLevelConfig
 	UPROPERTY(EditAnywhere, Category = "成长") int32 Level = 1;
 	UPROPERTY(EditAnywhere, Category = "成长") int32 MaxShopNumber = 3;
 	UPROPERTY(EditAnywhere, Category = "成长") int32 UnlockedLayers = 3;
-	UPROPERTY(EditAnywhere, Category = "成长") int32 RoomLimit = 150;
+	/** 本级房间容量，同时也是未满级时触发下一级的占格阈值。 */
+	UPROPERTY(EditAnywhere, Category = "成长") int32 RoomLimit = 30;
 	UPROPERTY(EditAnywhere, Category = "成长") int32 BalloonCount = 5;
 	/** 基础最大生命，当前已持有徽章倍率由主塔组件另行乘算。 */
 	UPROPERTY(EditAnywhere, Category = "成长") float BaseMaxHealth = 1000.0f;
@@ -68,6 +70,9 @@ public:
 
 	/** 工厂只接受显式登记的玩法类，波次 2 正式资产保留空映射。 */
 	UPROPERTY(EditAnywhere, Category = "导演|空岛") TMap<ECastleSkyIslandType, TSubclassOf<ACastleSkyIslandBase>> SkyIslandClasses;
+	/** MainMap 的三类奖励空岛逐一登记首次剧情，休息空岛没有剧本。 */
+	UPROPERTY(EditAnywhere, Category = "导演|空岛")
+	TMap<ECastleSkyIslandType, TObjectPtr<UCastleDialogueScriptDataAsset>> SkyIslandArrivalDialogues;
 	UPROPERTY(EditAnywhere, Category = "导演|空岛") float SkyIslandSpawnDistance = 9500.0f;
 	UPROPERTY(EditAnywhere, Category = "导演|空岛") float SkyIslandHeightOffset = 1200.0f;
 	UPROPERTY(EditAnywhere, Category = "导演|空岛") FKey SkyIslandInteractKey = EKeys::E;
@@ -88,12 +93,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|节点", meta = (Units = "cm"))
 	float NodeTriggerRadius = 300.0f;
 
-	/** 节点视觉网格与缩放。 */
+	/** 圆形门户 Niagara 资产必须公开 User.Size 和 User.Color，分别用于尺寸和节点类型配色。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|节点")
-	TObjectPtr<UStaticMesh> NodeMesh;
+	TObjectPtr<UNiagaraSystem> NodePortalSystem;
 
+	/** 写入门户的 User.Size 参数，使 Niagara 的世界空间粒子也统一受缩放。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|节点", meta = (ClampMin = "0.01"))
-	float NodeMeshScale = 4.0f;
+	float NodePortalScale = 1.0f;
 
 	/** 正式出兵策略和 NPC 模板分别显式指定，配置校验在单局启动时完成。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|NPC")
@@ -103,12 +109,9 @@ public:
 	UPROPERTY(EditAnywhere, Category = "导演|NPC") int32 InitialNPCCount = 8;
 	UPROPERTY(EditAnywhere, Category = "导演|成长") int32 InitialPathPointLimit = 2;
 
-	/** 通关奖励与成长参数。 */
+	/** 过关金币基础值，实际到账金额由经济组件按当前金币徽章计算。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|成长", meta = (ClampMin = "1"))
-	int32 RewardExp = 60;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "导演|成长", meta = (ClampMin = "1"))
-	int32 ExpPerLevel = 100;
+	int32 RewardGold = 60;
 
 	/** 恰好四行，商店、建造面和主塔共用这份等级数据。 */
 	UPROPERTY(EditAnywhere, Category = "导演|成长") TArray<FCastleTowerLevelConfig> TowerLevels;

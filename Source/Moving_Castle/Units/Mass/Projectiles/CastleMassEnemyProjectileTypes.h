@@ -18,5 +18,8 @@ struct MOVING_CASTLE_API FCastleMassEnemyProjectileSpawn
 	UPROPERTY() uint64 BalloonId = 0;
 	/** 锁定具体主塔组件，不在飞行中将过期目标替换成新主塔。 */
 	UPROPERTY() TWeakObjectPtr<UCastleMainTowerComponent> TargetTower;
+	/** 发射瞬间采样的主塔真实表面命中点，不能在弹体处理中退回塔心锚点。 */
+	UPROPERTY() FVector TargetLocation = FVector::ZeroVector;
+	UPROPERTY() bool bHasTargetLocation = false;
 	UPROPERTY() float Damage = 0.0f;
 };

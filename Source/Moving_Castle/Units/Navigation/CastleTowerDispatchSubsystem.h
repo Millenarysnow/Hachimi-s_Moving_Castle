@@ -30,6 +30,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|主塔出兵")
 	bool TryDispatchSingleNPC(FText& OutReason);
 
+	/** 临时士兵从门 A 出发到门 B 后销毁，不占正式待命池，也不参与徽章圈数累计。 */
+	bool TryDispatchTemporarySingleLapNPC(FText& OutReason);
+
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|主塔出兵")
 	bool SetAutoDispatchEnabled(bool bEnabled);
 
@@ -47,6 +50,8 @@ public:
 
 	/** 仅准星的首次按下开始连续派兵；松开或移开后需重新按下。 */
 	bool BeginManualDispatch(FText& OutReason);
+	/** 真实派兵提交后提供 Mass 实体句柄，教程气泡据此跟随出塔单位。 */
+	TMulticastDelegate<void(const FCastleMassUnitHandle&)> OnNPCDispatched;
 	void StopManualDispatch();
 
 	bool BeginBattleDispatch(int32 TotalPoolCount);
@@ -69,16 +74,22 @@ private:
 		bool bDespawnRequested = false;
 	};
 	TArray<FActiveNPC> ActiveNPCs;
+	/** 独立拥有临时实体的生命周期；正式待命池只与 ActiveNPCs 守恒。 */
+	TArray<FActiveNPC> TemporaryNPCs;
 	int32 ReserveCount = 0;
 	int32 SessionTotalNPCs = 0;
 	bool bSessionActive = false;
 	bool bEndingSession = false;
 	bool bAutoDispatchEnabled = false;
+	/** 教学战斗首次派兵必须由主塔点击提交，之后才开放自动循环。 */
+	bool bRequiresFirstManualDispatch = false;
+	bool bStartingManualDispatch = false;
 	bool bManualDispatchHeld = false;
 	double AutoDispatchElapsed = 0.0;
 	double HoldDispatchElapsed = 0.0;
 
 	void ReclaimFinishedNPCs();
+	bool DispatchNPC(bool bTemporaryOneLap, FText& OutReason);
 	bool Reject(FText& OutReason, const FString& Detail, bool bConfigurationError) const;
 	void ShowMessage(const FText& Message, bool bSuccess) const;
 	friend class FCastleMainTowerDispatchTest;

@@ -47,7 +47,7 @@ namespace
 	const FName CardAspectParameter(TEXT("CardAspect"));
 	const FName CardOpacityParameter(TEXT("CardOpacity"));
 
-	/** 使用设计好的五种玩法色；灰不是一种商品颜色，必须向调用处报告配置错误。 */
+	/** 卡面使用四种玩法色的既有色值，未知颜色交给调用处报告配置错误。 */
 	bool GetGameplayTint(ECastleTileColor Color, FLinearColor& OutColor)
 	{
 		const TCHAR* Hex = nullptr;
@@ -57,7 +57,6 @@ namespace
 		case ECastleTileColor::Blue: Hex = TEXT("287ADB"); break;
 		case ECastleTileColor::Green: Hex = TEXT("36A86F"); break;
 		case ECastleTileColor::Yellow: Hex = TEXT("E4AB31"); break;
-		case ECastleTileColor::Purple: Hex = TEXT("9658DC"); break;
 		default: return false;
 		}
 		OutColor = FLinearColor(FColor::FromHex(Hex));
@@ -172,6 +171,18 @@ void UCastleShopCardWidget::NativeOnInitialized()
 bool UCastleShopCardWidget::Configure(UCastleShopWidget& InShop, const FCastleBuildingDescriptor& Descriptor,
 	const ACastleBoard* Board, bool bSold)
 {
+	return ConfigurePresentation(&InShop, Descriptor, Board, bSold);
+}
+
+bool UCastleShopCardWidget::ConfigureStandalone(const FCastleBuildingDescriptor& Descriptor, const ACastleBoard* Board)
+{
+	// 与商品共用同一取景和拖拽手感，独立牌面只浏览建筑，点击不产生购买意图。
+	return ConfigurePresentation(nullptr, Descriptor, Board, false);
+}
+
+bool UCastleShopCardWidget::ConfigurePresentation(UCastleShopWidget* InShop, const FCastleBuildingDescriptor& Descriptor,
+	const ACastleBoard* Board, bool bSold)
+{
 	FText Reason;
 	if (!Descriptor.Validate(Reason))
 	{
@@ -264,8 +275,9 @@ bool UCastleShopCardWidget::Configure(UCastleShopWidget& InShop, const FCastleBu
 	TrailingNumber->SetText(CardNumber);
 	Title->SetText(Descriptor.Definition->DisplayName);
 	LevelLabel->SetText(FText::Format(NSLOCTEXT("CastleCard", "Level", "等级 {0}"), FText::AsNumber(Descriptor.Level)));
-	ShopOwner = &InShop;
+	ShopOwner = InShop;
 	DisplayedDescriptor = Descriptor;
+	bIsSold = bSold;
 	bCanInspect = !bSold;
 	RefreshPortrait();
 	ApplyFaceState();
@@ -459,12 +471,12 @@ FReply UCastleShopCardWidget::NativeOnMouseButtonDown(const FGeometry& MyGeometr
 	}
 	UCastleShopWidget* Shop = ShopOwner.Get();
 	const TSharedPtr<SWidget> Captor = GetCachedWidget();
-	if (Shop == nullptr || !Captor.IsValid())
+	if ((!Shop && ShopOwner.IsStale()) || !Captor.IsValid())
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("建筑卡牌 %s 无法抓取：商店或 Slate 接收控件已经失效。"), *GetPathName());
 		return FReply::Unhandled();
 	}
-	Shop->ActivateCardInspection(*this);
+	if (Shop) { Shop->ActivateCardInspection(*this); }
 	// 重新抓住同一张正在回正的牌时，从此刻的姿态接着拖，且直接视为拖拽态不误触短点购买。
 	bReturning = false;
 	const bool bResumingTilt = !InspectionOffset.IsZero();
@@ -519,7 +531,7 @@ FReply UCastleShopCardWidget::NativeOnMouseButtonUp(const FGeometry& MyGeometry,
 	{
 		FinishInspection();
 		const FReply Reply = FReply::Handled().ReleaseMouseCapture();
-		OnCardClicked.Broadcast(*this);
+		if (ShopOwner.IsValid()) { OnCardClicked.Broadcast(*this); }
 		return Reply;
 	}
 	if (InspectionOffset == FVector2D::ZeroVector)
@@ -565,8 +577,19 @@ void UCastleShopCardWidget::NativeTick(const FGeometry& MyGeometry, float InDelt
 	RefreshPortrait();
 }
 
+void UCastleShopCardWidget::NativeConstruct()
+{
+	Super::NativeConstruct();
+	// 菜单先完成卡牌配置再挂载，因此只有实际进入视口的独立牌驱动摄影。
+	if (Portraits && Portrait && !ShopOwner.IsValid())
+	{
+		Portraits->SetStandalonePortraitVisible(this, Portrait, true);
+	}
+}
+
 void UCastleShopCardWidget::NativeDestruct()
 {
 	CancelInspection();
+	if (Portraits) { Portraits->SetStandalonePortraitVisible(this, Portrait, false); }
 	Super::NativeDestruct();
 }

@@ -255,7 +255,8 @@ private:
 	void HandleTrade(bool bSelling, int32 SlotIndex);
 	void ShowResult(bool bSuccess, const FString& SuccessMessage, const FText& FailureReason);
 	void RefreshHoverDetail();
-	void RefreshTowerAndWaveHeader();
+	/** 进度、容量提示和可购买状态使用本次刷新读取的同一占格数。 */
+	void RefreshTowerAndWaveHeader(int32 OwnedRooms, int32 RoomLimit);
 	void ApplyPeekVisibility();
 
 	UPROPERTY(Transient)

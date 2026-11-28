@@ -72,6 +72,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|背包")
 	int32 GetTempItemCount() const { return TempItems.Num(); }
 
+	/** 直接统计两栏占格，供导演逐帧检查，避免复制含临时队列的卡牌数组。 */
+	bool TryCountStoredRoomCells(int32& OutCells, FText& OutReason) const;
+
 	/** 在指定槽位插入建筑卡牌，供放置失败时恢复原有槽位顺序。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|背包")
 	bool TryInsertItemAt(int32 Index, const FCastleBuildingDescriptor& Descriptor, FText& OutFailureReason);
@@ -118,8 +121,28 @@ protected:
 	TArray<FCastleBuildingDescriptor> Items;
 
 private:
+	/** 房间组提交入口需一次校验并替换主栏和临时栏，避免在中间状态广播。 */
+	friend class UCastleItemGrantLibrary;
+	friend class UCastleDirectorSubsystem;
+
+	/** 每次受理清场只快照主栏。余轮和所有奖励在导演提交返编辑时一并写入。 */
+	struct FPreparedSelfOrbitingRound
+	{
+		TArray<FCastleBuildingDescriptor> MainBarAfter;
+		TArray<FCastleBuildingDescriptor> Rewards;
+	};
+	bool TryPrepareSelfOrbitingRound(TConstArrayView<TObjectPtr<UCastleBuildingDefinition>> DefinitionPool,
+		FRandomStream& Random, FPreparedSelfOrbitingRound& OutRound, FText& OutReason) const;
+
 	UPROPERTY(VisibleInstanceOnly, Category = "背包")
 	TArray<FCastleBuildingDescriptor> TempItems;
+
+	/** 批次校验与写入分开，房间组可先核对主栏快照，消费首牌时按既有 FIFO 先补位。 */
+	bool CanApplyItemBatch(TConstArrayView<FCastleBuildingDescriptor> Descriptors,
+		const TArray<FCastleBuildingDescriptor>* MainBarAfter, bool bRefill, FText& OutFailureReason) const;
+	void ApplyValidatedItemBatch(TConstArrayView<FCastleBuildingDescriptor> Descriptors,
+		const TArray<FCastleBuildingDescriptor>* MainBarAfter, bool bRefill);
+	int32 RefillFromTempBar();
 
 	/** 只接收已通过整批校验的卡牌，由调用入口统一通知。 */
 	void AppendValidatedItem(const FCastleBuildingDescriptor& Descriptor);

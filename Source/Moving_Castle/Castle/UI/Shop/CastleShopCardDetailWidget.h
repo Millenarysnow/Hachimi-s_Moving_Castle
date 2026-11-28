@@ -35,7 +35,7 @@ protected:
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UImage> PanelBg;
 
-	/** 顶部玩法色强调条，直接反映该牌的红/蓝/绿/黄/紫玩法色。 */
+	/** 顶部强调条显示这张牌的红、黄、蓝或绿玩法色。 */
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UImage> ColorAccent;
 

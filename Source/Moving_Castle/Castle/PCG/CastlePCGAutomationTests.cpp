@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "CastleBuildingPCGSubsystem.h"
+#include "CastleBuildingPCGRule.h"
 #include "HachimisV4/CastleHachimisV4PCG.h"
 #include "CastleBackpackComponent.h"
 #include "CastleLadderLinkComponent.h"
@@ -153,39 +154,82 @@ bool FCastlePCGSemanticsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-/** 多格垂直规则不随输入顺序改变，平面规则双侧独立求值，装饰噪声扩展可直接复用接口。 */
+/** 塔和普通房共用层界择梯。从正式规则集读取，覆写的纯数据不会触碰世界。 */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastlePCGRuleTest, "MovingCastle.Castle.PCG.RuleEvaluation",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FCastlePCGRuleTest::RunTest(const FString& Parameters)
 {
-	FCastlePCGRuleContext Context;
-	Context.NoiseProvider=NewObject<UCastleDeterministicPCGNoise>();
-	Context.LadderChannel=TEXT("LadderPlacement");
-	// 纯逻辑规则仅以建筑身份分组，此处两个非空身份来自独立 CDO 类，不读取 Actor 状态。
-	Context.Building=nullptr;
-	for (const auto& Cell : TArray<FIntVector>{{1,1,0},{0,1,0},{1,0,0},{0,0,0}})
-	{
-		FCastlePCGCellAdjacency A;
-		A.FirstCell=Cell; A.Offset=FIntVector(0,0,1); A.SecondCell=Cell+A.Offset; A.bCanTraverse=true;
-		Context.Adjacencies.Add(A);
-	}
-	auto* Rule=NewObject<UCastlePCGVerticalRule>();
-	FCastlePCGTarget Target;
+	UCastlePCGRuleSetDataAsset* Config = DuplicateObject(CastlePCGTests::Rules(nullptr), GetTransientPackage());
+	if (!TestNotNull(TEXT("正式规则集"), Config)) { return false; }
+	UObject* Noise = NewObject<UCastleDeterministicPCGNoise>();
+	const FIntVector A(0, 0, 0), B(1, 0, 0), Up(0, 0, 1);
 	FString Error;
-	TestTrue(TEXT("四格可通行求值成功"),Rule->Evaluate(Context,Target,Error));
-	TestEqual(TEXT("四格均生成顶面"),Target.Ceilings.Num(),4);
-	TestEqual(TEXT("只有坐标首格为梯子"),Target.Ceilings[FIntVector::ZeroValue],uint8(2));
-	int32 Ladders=0;for(const auto& Pair:Target.Ceilings){Ladders+=Pair.Value==2;}
-	TestEqual(TEXT("一对建筑唯一梯子"),Ladders,1);
-	Context.bUseLadderNoise=true;
-	FCastlePCGTarget NoiseA,NoiseB;
-	Rule->Evaluate(Context,NoiseA,Error);
-	Algo::Reverse(Context.Adjacencies);
-	Rule->Evaluate(Context,NoiseB,Error);
-	TestEqual(TEXT("噪声择格与求值顺序无关"),NoiseA.StableKey(),NoiseB.StableKey());
-	for(auto& A:Context.Adjacencies){A.bCanTraverse=false;}
-	FCastlePCGTarget Closed;Rule->Evaluate(Context,Closed,Error);
-	for(const auto& Pair:Closed.Ceilings){TestEqual(TEXT("不可通行全为封闭平板"),Pair.Value,uint8(1));}
+	auto CheckSelection = [&](const FCastlePCGSemanticField& Field, const FIntVector& Selected)
+	{
+		int32 Ladders = 0;
+		for (const auto& Entry : Field.VerticalInterfaces) { Ladders += Entry.Value.State == ECastlePCGVertical::Ladder; }
+		TestEqual(TEXT("一对上下分量恰好一个梯井"), Ladders, 1);
+		TestTrue(TEXT("层界在期望的格有梯"), Field.VerticalInterfaces.FindChecked(Selected).State == ECastlePCGVertical::Ladder);
+		TestTrue(TEXT("上格只在选中的层界开洞"), Field.Cells.FindChecked(Selected + Up).Deck == ECastlePCGDeck::Hatch);
+	};
+
+	// 共用 BuildingRoot 模拟上下各一座横跨两格的功能塔。
+	TMap<FIntVector, FCastlePCGBoardCell> Towers;
+	for (const FIntVector& Cell : {A, B, A + Up, B + Up})
+	{
+		FCastlePCGBoardCell& Entry = Towers.Add(Cell);
+		Entry.BuildingRoot = FIntVector(0, 0, Cell.Z);
+		Entry.Color = 1;
+		Entry.Number = 7;
+	}
+	FCastlePCGSemanticField Field;
+	if (!Config->Solve(FCastlePCGBoardQuery(Towers, *Config, Noise, 0, 0), Field, Error)) { AddError(Error); return false; }
+	CheckSelection(Field, A);
+
+	// 四个独立房各自使用自己的根格。每层同色联通，仍应只择一个梯位。
+	const UCastleHachimisV4Layout* Room = Config->RoomExamples.FindRef(TEXT("L1"));
+	if (!TestNotNull(TEXT("正式 L1 房模型"), Room)) { return false; }
+	TMap<FIntVector, FCastlePCGBoardCell> Rooms;
+	TMap<FIntVector, FCastlePCGBoardCell> ReverseRooms;
+	const TArray<FIntVector> Order{A, B, A + Up, B + Up};
+	for (const FIntVector& Cell : Order) { Rooms.Add(Cell, {Cell, Room, 1, 7, 0.0, true}); }
+	for (int32 Index = Order.Num() - 1; Index >= 0; --Index) { ReverseRooms.Add(Order[Index], Rooms.FindChecked(Order[Index])); }
+	if (!Config->Solve(FCastlePCGBoardQuery(Rooms, *Config, Noise, 0, 0), Field, Error)) { AddError(Error); return false; }
+	CheckSelection(Field, A);
+	TestTrue(TEXT("同色房合并底盘与双包边"), Field.Cells.FindChecked(B).Deck == ECastlePCGDeck::Merged
+		&& Field.SideFaces.FindChecked({A, ECastlePCGFace::PositiveX}).State == ECastlePCGSide::MergedOpen);
+
+	int32 Seed = INDEX_NONE;
+	for (int32 Candidate = 0; Candidate < 64; ++Candidate)
+	{
+		const FName Channel = Config->LadderSelectionNoiseChannel;
+		if (UCastleDeterministicPCGNoise::SampleNoiseValue(Candidate, B, Channel)
+			> UCastleDeterministicPCGNoise::SampleNoiseValue(Candidate, A, Channel))
+		{
+			Seed = Candidate;
+			break;
+		}
+	}
+	if (!TestTrue(TEXT("选到明确偏好次格的确定性种子"), Seed != INDEX_NONE)) { return false; }
+	Config->bUseNoiseForLadderCellSelection = true;
+	if (!Config->Solve(FCastlePCGBoardQuery(Rooms, *Config, Noise, Seed, 0), Field, Error)) { AddError(Error); return false; }
+	CheckSelection(Field, B);
+	FCastlePCGSemanticField ReverseField;
+	if (!Config->Solve(FCastlePCGBoardQuery(ReverseRooms, *Config, Noise, Seed, 0), ReverseField, Error)) { AddError(Error); return false; }
+	CheckSelection(ReverseField, B);
+	TestEqual(TEXT("不同占用插入顺序保持相同梯向"), ReverseField.VerticalInterfaces.FindChecked(B).BoardYaw,
+		Field.VerticalInterfaces.FindChecked(B).BoardYaw);
+
+	Rooms.FindChecked(B).Color = 2;
+	if (!Config->Solve(FCastlePCGBoardQuery(Rooms, *Config, Noise, Seed, 0), Field, Error)) { AddError(Error); return false; }
+	const auto& Shared = Field.SideFaces.FindChecked({A, ECastlePCGFace::PositiveX});
+	const auto& FarSide = Field.SideFaces.FindChecked({B, ECastlePCGFace::NegativeX});
+	TestTrue(TEXT("异色同号保留带洞共享墙，归坐标较小侧"), Shared.State == ECastlePCGSide::OpenDoor
+		&& Shared.bOwnsWall && FarSide.State == ECastlePCGSide::OpenDoor && !FarSide.bOwnsWall);
+	Rooms.FindChecked(B).Number = 8;
+	if (!Config->Solve(FCastlePCGBoardQuery(Rooms, *Config, Noise, Seed, 0), Field, Error)) { AddError(Error); return false; }
+	TestTrue(TEXT("异色异号按闭墙求解"), Field.SideFaces.FindChecked({A, ECastlePCGFace::PositiveX}).State == ECastlePCGSide::Closed);
+	TestTrue(TEXT("异色异号交界不产生梯子"), Field.VerticalInterfaces.FindChecked(B).State == ECastlePCGVertical::Closed);
 	return true;
 }
 /** 正式棋盘放置/移除验证唯一梯子、双格护栏局部替换和动画中连续撤回的精确复原。 */
@@ -233,20 +277,19 @@ bool FCastlePCGRuntimeTest::RunTest(const FString& Parameters)
 	FString Error;
 	TestTrue(TEXT("同一布局幂等重算"),PCG->Recompute(Board,FVector::ZeroVector,Error));
 	TestEqual(TEXT("幂等重算不改目标"),Lower->BuildingPCG->GetAppliedKey(),Applied);
-	// 模拟试装末尾的动画参数错误。接口已存在时，失败仍须保留旧组件和已登记的 Link。
-	AActor* Snapshot = Lower->BuildingMerge->CreateVisualSnapshot(Error);
-	if (!TestNotNull(TEXT("生成失败事务的旧件快照"), Snapshot)) { AddError(Error); return false; }
+	// 视觉过渡与已登记的玩法 Link 独立。非法时长只使过渡失败，最终视觉签名仍提交。
 	const UCastleLadderLinkComponent* PriorLink = Lower->FindComponentByClass<UCastleLadderLinkComponent>();
+	const FString GameplayKey = Lower->BuildingPCG->GetAppliedGameplayKey();
 	const double Duration = Lower->BuildingMerge->Duration;
 	Lower->BuildingMerge->Duration = 0.0;
 	AddExpectedError(TEXT("零件合并失败：动画时长"), EAutomationExpectedErrorFlags::Contains, 1);
-	FCastlePCGApplyPlan InvalidMotion;
-	InvalidMotion.Key = TEXT("InvalidMotion");
-	const bool bApplied = Lower->BuildingPCG->Apply(Board, InvalidMotion, Snapshot, FVector::ZeroVector, Error);
-	Lower->BuildingPCG->FinishApply(false);
+	AddExpectedError(TEXT("的建筑 PCG 视觉过渡失败"), EAutomationExpectedErrorFlags::Contains, 1);
+	FCastlePCGVisualPlan VisualPlan;
+	VisualPlan.Key = TEXT("RestoredOriginalVisuals");
+	Lower->BuildingPCG->ApplyVisual(*Board, VisualPlan, FVector::ZeroVector, false);
 	Lower->BuildingMerge->Duration = Duration;
-	TestFalse(TEXT("非法动画的目标试装返回失败"), bApplied);
-	TestEqual(TEXT("目标失败恢复原键"), Lower->BuildingPCG->GetAppliedKey(), Applied);
+	TestEqual(TEXT("过渡失败推进视觉键"), Lower->BuildingPCG->GetAppliedVisualKey(), VisualPlan.Key);
+	TestEqual(TEXT("过渡失败保留玩法键"), Lower->BuildingPCG->GetAppliedGameplayKey(), GameplayKey);
 	TestTrue(TEXT("目标失败保留登记过的原梯组件"), PriorLink && PriorLink == Lower->FindComponentByClass<UCastleLadderLinkComponent>()
 		&& PriorLink->GetId().IsValid());
 	// 用恢复后的原状态撤回上层，检查最终显隐和导航组件全部复原。
@@ -366,7 +409,6 @@ bool FCastleV4IndependentRooms::RunTest(const FString& Parameters)
 	};
 	auto Verify = [&](FName DeckForm, FName FrameForm, int32 Links)
 	{
-		CastleV4PCG::FTargets Targets;
 		for (auto& Pair : Placed)
 		{
 			const ACastleBuildingBase* Room = Board->GetBuildingAt(Pair.Key);
@@ -375,17 +417,17 @@ bool FCastleV4IndependentRooms::RunTest(const FString& Parameters)
 			TestTrue(TEXT("每房仍保留原色、数、一级及单格"), Room->GetBuildingDefinition() == Definition && Room->GetBuildingLevel() == 1
 				&& Room->GetBuildingColor() == Card.Color && Room->GetBuildingNumber() == Card.Number
 				&& Room->GetOccupiedCoordinates() == TArray<FIntVector>{Pair.Key});
-			Targets.Add(Pair.Value);
 		}
 		TArray<FCastleActiveLadderConnection> Ladders;
 		PCG->GetActiveLadderConnections(Board, Ladders);
 		TestEqual(TEXT("互达层界择出期望梯数"), Ladders.Num(), Links);
 		FString Error;
-		CastleV4PCG::FRooms Rooms;
-		if (!CastleV4PCG::BuildRooms(*Board->PCGRuleSet, Placed, Targets, Rooms, Error)) { AddError(Error); return false; }
-		const auto& Origin = Rooms.FindChecked(FIntVector::ZeroValue);
-		TestEqual(TEXT("普通房使用对应作者底盘"), Origin.Deck.Layout->Form, DeckForm);
-		TestEqual(TEXT("同一格拥有自己的样例结构或保持露天"), Origin.Frame.Layout ? Origin.Frame.Layout->Form : NAME_None, FrameForm);
+		const FCastlePCGBoardQuery Query(*Board, Placed, NewObject<UCastleDeterministicPCGNoise>());
+		FCastlePCGSemanticField Field;
+		if (!Board->PCGRuleSet->Solve(Query, Field, Error)) { AddError(Error); return false; }
+		const auto& Origin = Field.Cells.FindChecked(FIntVector::ZeroValue);
+		TestEqual(TEXT("普通房使用对应作者底盘"), Origin.RoomDeck.Layout->Form, DeckForm);
+		TestEqual(TEXT("同一格拥有自己的样例结构或保持露天"), Origin.RoomFrame.Layout ? Origin.RoomFrame.Layout->Form : NAME_None, FrameForm);
 		return true;
 	};
 	// 保持上下两层 Actor 集合不变，单独改变垂直通行资格。这样开、封、再开使用同一套作者家具。
@@ -393,15 +435,14 @@ bool FCastleV4IndependentRooms::RunTest(const FString& Parameters)
 	{
 		using namespace CastleV4PCG;
 		const FIntVector Up(0,0,1);
-		FTargets Targets;
-		for (const auto& Pair : Placed) { Targets.Add(Pair.Value); }
-		FRooms Rooms;
+		const FCastlePCGBoardQuery BoardQuery(*Board, Placed, NewObject<UCastleDeterministicPCGNoise>());
+		FCastlePCGSemanticField Field;
 		FStairs Stairs;
 		FString Error;
-		if (!BuildRooms(*Board->PCGRuleSet, Placed, Targets, Rooms, Error)
-			|| !BuildStairs(*Board, Placed, Targets, Rooms, Stairs, Error)) { AddError(Error); return false; }
+		if (!Board->PCGRuleSet->Solve(BoardQuery, Field, Error)
+			|| !BuildStairs(*Board, Placed, Field, Stairs, Error)) { AddError(Error); return false; }
 		const FStairInterface* Stair = Stairs.Find(LowerCell);
-		const FRoomSample& Sample = Rooms.FindChecked(LowerCell).Frame;
+		const FCastlePCGRoomSample& Sample = Field.Cells.FindChecked(LowerCell).RoomFrame;
 		if (!TestNotNull(TEXT("相同格局按字典序保留一个梯格"), Stair)
 			|| !TestNotNull(TEXT("取得独立房的作者木构"), Sample.Layout)
 			|| !TestEqual(TEXT("多格样例保持作者 L3V"), Sample.Layout->Form, FName(TEXT("L3V")))

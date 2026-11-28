@@ -1,6 +1,7 @@
 #include "CastleHachimisV4PCG.h"
 
 #include "Castle/PCG/CastlePCGSemantics.h"
+#include "Castle/PCG/CastleBuildingPCGRule.h"
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
 #include "Engine/StaticMesh.h"
@@ -12,16 +13,13 @@ namespace CastleV4PCG
 		FCastlePCGApplyPlan& Plan, FString& Error);
 	void AddWallCollision(FCastlePCGApplyPlan& Plan, const FTransform& WallFrame, double FullWidth, double DoorWidth,
 		double SideOffset, double Stand, double Height);
-	void AddHeightTransition(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FIntVector& Cell,
-		const FIntVector& Side, const UCastlePCGRuleSetDataAsset& Rules, FCastlePCGApplyPlan& Plan);
 	const FCastleV4WallSlot* FindWall(const UCastleHachimisV4Layout& Layout, const FIntVector& Cell, const FIntVector& Direction);
 }
 
 namespace CastleRoomPCG
 {
 	using namespace CastleV4PCG;
-	const FIntVector Up(0, 0, 1);
-	const FIntVector Directions[] = {{1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}};
+	using FRoomSample = FCastlePCGRoomSample;
 
 	FIntVector ToBoard(const FRoomSample& Sample, const FIntVector& Local)
 	{
@@ -41,109 +39,29 @@ namespace CastleRoomPCG
 		return (Origin * Turn * Root).GetRelativeTransform(Building.GetActorTransform());
 	}
 
-	bool SameColorRoom(const FOccupancy& Occupancy, const ACastleBuildingBase& Building, const FIntVector& Cell)
-	{
-		const ACastleBuildingBase* Other = Occupancy.FindRef(Cell);
-		return IsRoom(Other) && Other->GetBuildingColor() == Building.GetBuildingColor();
-	}
-
 	bool SameSample(const FRoomSample& A, const FRoomSample& B)
 	{
 		return A.Layout == B.Layout && A.Origin == B.Origin && A.bTurn == B.bTurn;
 	}
 
-	/** 按层标记普通房的水平互达连通分量。层界的梯组由上下两个分量共同标识。 */
-	void HorizontalIslands(const TArray<FIntVector>& Cells, const FOccupancy& Occupancy, TMap<FIntVector, FIntVector>& Out)
-	{
-		for (const FIntVector& Start : Cells)
-		{
-			if (Out.Contains(Start)) { continue; }
-			TArray<FIntVector> Queue{Start};
-			Out.Add(Start, Start);
-			for (int32 Index = 0; Index < Queue.Num(); ++Index)
-			{
-				const FIntVector Current = Queue[Index];
-				for (const FIntVector& Direction : Directions)
-				{
-					const FIntVector Next = Current + Direction;
-					const ACastleBuildingBase* Neighbor = Occupancy.FindRef(Next);
-					if (!Out.Contains(Next) && IsRoom(Neighbor) && CanTraverse(*Occupancy.FindChecked(Current), *Neighbor))
-					{
-						Out.Add(Next, Start);
-						Queue.Add(Next);
-					}
-				}
-			}
-		}
-	}
-
-	/** 大样例先覆盖规整部分。剩余格用同一组面、角、层界规则逐格收口。 */
-	void MatchSamples(const TArray<FIntVector>& Cells, const UCastleHachimisV4Layout& Example, bool bTurn, bool bStack,
-		const FOccupancy& Occupancy, TSet<FIntVector>& Used, FRooms& Rooms)
-	{
-		for (const FIntVector& Origin : Cells)
-		{
-			const ACastleBuildingBase& Anchor = *Occupancy.FindChecked(Origin);
-			FRoomSample Sample{&Example, FIntVector::ZeroValue, Origin, bTurn};
-			TArray<FIntVector, TInlineAllocator<4>> Block;
-			for (int32 X = 0; X < Example.Grid.X; ++X)
-			for (int32 Y = 0; Y < Example.Grid.Y; ++Y)
-			{
-				const FIntVector Cell = ToBoard(Sample, FIntVector(X, Y, 0));
-				const ACastleBuildingBase* Lower = Occupancy.FindRef(Cell);
-				const ACastleBuildingBase* Upper = Occupancy.FindRef(Cell + Up);
-				if (Used.Contains(Cell) || !IsRoom(Lower)
-					|| (!bStack && Lower->GetBuildingColor() != Anchor.GetBuildingColor())
-					|| (bStack && (!IsRoom(Upper) || !CanTraverse(Anchor, *Lower))))
-				{
-					continue;
-				}
-				Block.Add(Cell);
-			}
-			if (Block.Num() != Example.Grid.X * Example.Grid.Y) { continue; }
-			for (int32 X = 0; X < Example.Grid.X; ++X)
-			for (int32 Y = 0; Y < Example.Grid.Y; ++Y)
-			{
-				Sample.Cell = FIntVector(X, Y, 0);
-				const FIntVector Cell = ToBoard(Sample, Sample.Cell);
-				Used.Add(Cell);
-				if (bStack)
-				{
-					// 三层以上时，同一房有上一界面和下一界面。优先用它自己的上接口作本层框架来源。
-					Rooms.FindChecked(Cell).Frame = Sample;
-					FRoomSample& Upper = Rooms.FindChecked(Cell + Up).Frame;
-					if (!Upper.Layout || Upper.Cell.Z != 0)
-					{
-						Upper = Sample;
-						Upper.Cell.Z = 1;
-					}
-				}
-				else
-				{
-					Rooms.FindChecked(Cell).Deck = Sample;
-				}
-			}
-		}
-	}
-
 	/** 跨格装饰的所有者由棋盘坐标确定。只有同一源样例仍存在且未被上楼遮挡的整件才装配。 */
 	bool OwnRoofKey(const FCastleV4Part& Part, const FRoomSample& Sample, const FIntVector& RoomCell,
-		const FOccupancy& Occupancy, const FRooms& Rooms)
+		const FCastlePCGSemanticField& Field)
 	{
 		TArray<FIntVector> Covered;
 		for (const FIntVector& Local : Part.Cells)
 		{
 			const FIntVector Cell = ToBoard(Sample, Local);
-			const FRoomCell* Data = Rooms.Find(Cell);
-			if (!Data || !SameSample(Data->Frame, Sample) || Occupancy.Contains(Cell + Up)) { return false; }
+			const FCastlePCGCellSpec* Data = Field.Cells.Find(Cell);
+			if (!Data || !SameSample(Data->RoomFrame, Sample) || Data->Roof != ECastlePCGRoof::Keep) { return false; }
 			Covered.Add(Cell);
 		}
 		Covered.Sort(CastlePCGSemantics::CellLess);
 		return !Covered.IsEmpty() && Covered[0] == RoomCell;
 	}
 
-	bool AtSharedDeckEdge(const FCastleV4Part& Part, const FRoomSample& Sample, const ACastleBuildingBase& Building,
-		const FOccupancy& Occupancy, const FIntVector& Cell)
+	bool AtSharedDeckEdge(const FCastleV4Part& Part, const FRoomSample& Sample,
+		const FCastlePCGSemanticField& Field, const FIntVector& Cell)
 	{
 		const FString Name = Part.Node.ToString();
 		if (!Name.StartsWith(TEXT("Deck_EndApron")) && !Name.StartsWith(TEXT("Deck_SideApron"))
@@ -151,15 +69,16 @@ namespace CastleRoomPCG
 		const FBox Box = Part.Mesh->GetBoundingBox().TransformBy(Part.Local.ToMatrixWithScale());
 		const FVector Relative = Box.GetCenter() - Sample.Layout->CellBottom(Sample.Cell);
 		// 外缘件只占作者底盘边缘 40 cm。宽跨边的长条不会被错误标成相邻两侧的边缘件。
-		for (const FIntVector& Direction : Directions)
+		for (const ECastlePCGFace Face : FCastlePCGBoardQuery::Sides)
 		{
-			if (!SameColorRoom(Occupancy, Building, Cell + Direction)) { continue; }
+			if (Field.SideFaces.FindChecked({Cell, Face}).State != ECastlePCGSide::MergedOpen) { continue; }
+			const FIntVector Direction = CastlePCGSemantics::FaceOffset(Face);
 			if (FVector::DotProduct(Relative, FVector(ToLocalDirection(Sample, Direction))) > Sample.Layout->CellPitch * 0.5 - 40.0) { return true; }
 		}
 		return false;
 	}
 
-	bool AddDeck(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FOccupancy& Occupancy,
+	bool AddDeck(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FCastlePCGSemanticField& Field,
 		const FRoomSample& Deck, const FIntVector& Cell, FCastlePCGApplyPlan& Plan, FString& Error)
 	{
 		const FTransform Frame = InRoom(Board, Building, Deck);
@@ -167,64 +86,24 @@ namespace CastleRoomPCG
 		{
 			if (Part.Group != TEXT("Foundation") || Part.Cells.Num() != 1 || Part.Cells[0] != Deck.Cell) { continue; }
 			if (!Part.Mesh) { return Reject(Building, Error, Part.Node.ToString() + TEXT(" 的 Room 底盘网格缺失")); }
-			if (!AtSharedDeckEdge(Part, Deck, Building, Occupancy, Cell) && !AddPart(Building, Part, Frame, Plan, Error)) { return false; }
+			if (!AtSharedDeckEdge(Part, Deck, Field, Cell) && !AddPart(Building, Part, Frame, Plan, Error)) { return false; }
 		}
 		for (const FCastleV4Part& Slice : Deck.Layout->FoundationSlices)
 		{
+			if (Slice.Cells.Num() != 1) { return Reject(Building, Error, Slice.Node.ToString() + TEXT(" 的 Room 底盘切片未指定唯一格")); }
 			if (Slice.Cells[0] != Deck.Cell) { continue; }
 			if (!Slice.Mesh) { return Reject(Building, Error, Slice.Node.ToString() + TEXT(" 的 Room 底盘切片缺失")); }
-			if (!AtSharedDeckEdge(Slice, Deck, Building, Occupancy, Cell) && !AddPart(Building, Slice, Frame, Plan, Error)) { return false; }
+			if (!AtSharedDeckEdge(Slice, Deck, Field, Cell) && !AddPart(Building, Slice, Frame, Plan, Error)) { return false; }
 		}
 		return true;
 	}
 
-	/** 单件归属由作者格局确定。榫卯、家具和梁不裁切，也不随楼板开洞改变所有者。 */
-	FIntVector FramePartOwner(const UCastleHachimisV4Layout& Layout, const FCastleV4Part& Part)
-	{
-		const FVector Center = Part.Local.TransformPosition(Part.Mesh->GetBoundingBox().GetCenter());
-		const int32 Layer = Center.Z >= Layout.StoryRise ? 1 : 0;
-		FIntVector Owner(0, 0, Layer);
-		double Closest = TNumericLimits<double>::Max();
-		for (int32 X = 0; X < Layout.Grid.X; ++X)
-		for (int32 Y = 0; Y < Layout.Grid.Y; ++Y)
-		{
-			const FIntVector Candidate(X, Y, Layer);
-			const double Distance = FVector::DistSquared2D(Center, Layout.CellBottom(Candidate));
-			if (Distance < Closest - 0.1) { Owner = Candidate; Closest = Distance; }
-		}
-		return Owner;
-	}
-
-	/** 取本房拥有的家具完整网格范围；只供计算梯井朝向，不改变任何家具装配。 */
-	bool CollectRoomFurniture(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FRoomSample& Sample,
-		TArray<TPair<FBox, FTransform>>& Bounds, FString& Error)
-	{
-		if (!Sample.Layout) { return Reject(Building, Error, TEXT("通梯普通房缺少对应双层木构")); }
-		const FTransform SampleWorld = InRoom(Board, Building, Sample) * Building.GetActorTransform();
-		for (const FCastleV4Part& Part : Sample.Layout->Parts)
-		{
-			if (Part.Group != TEXT("Furniture")) { continue; }
-			if (!Part.Mesh) { return Reject(Building, Error, Part.Node.ToString() + TEXT(" 的 Room 家具网格缺失")); }
-			if (FramePartOwner(*Sample.Layout, Part) == Sample.Cell)
-			{
-				const FBox MeshBounds = Part.Mesh->GetBoundingBox();
-				const FTransform PartWorld = Part.Local * SampleWorld;
-				if (!MeshBounds.IsValid || MeshBounds.Min.ContainsNaN() || MeshBounds.Max.ContainsNaN() || PartWorld.ContainsNaN())
-				{
-					return Reject(Building, Error, Part.Node.ToString() + TEXT(" 的 Room 家具边界或变换无效"));
-				}
-				Bounds.Emplace(MeshBounds, PartWorld);
-			}
-		}
-		return true;
-	}
-
-	bool AddFrame(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FOccupancy& Occupancy, const FRooms& Rooms,
+	bool AddFrame(const ACastleBoard& Board, const ACastleBuildingBase& Building, const FCastlePCGSemanticField& Field,
 		const FRoomSample& Sample, const FIntVector& Cell, FCastlePCGApplyPlan& Plan, FString& Error)
 	{
 		const FTransform Frame = InRoom(Board, Building, Sample);
 		const UCastleHachimisV4Layout& Layout = *Sample.Layout;
-		const bool bExposed = !Occupancy.Contains(Cell + Up);
+		const bool bExposed = Field.Cells.FindChecked(Cell).Roof == ECastlePCGRoof::Keep;
 		for (const FCastleV4Part& Part : Layout.Parts)
 		{
 			if (!Part.Mesh) { return Reject(Building, Error, Part.Node.ToString() + TEXT(" 的 Room 木构来源缺失")); }
@@ -235,10 +114,10 @@ namespace CastleRoomPCG
 			}
 			else if (Group == TEXT("RoofKeys"))
 			{
-				if (OwnRoofKey(Part, Sample, Cell, Occupancy, Rooms) && !AddPart(Building, Part, Frame, Plan, Error)) { return false; }
+				if (OwnRoofKey(Part, Sample, Cell, Field) && !AddPart(Building, Part, Frame, Plan, Error)) { return false; }
 			}
 			else if ((Group == TEXT("Structure") || Group == TEXT("WallJunction") || Group == TEXT("Furniture"))
-				&& FramePartOwner(Layout, Part) == Sample.Cell)
+				&& CastlePCGSemantics::RoomFramePartOwner(Layout, Part) == Sample.Cell)
 			{
 				// 梯井属于楼板＋梯套件的装配状态。家具不因任何洞口状态被隐藏或替换。
 				if (!AddPart(Building, Part, Frame, Plan, Error)) { return false; }
@@ -248,18 +127,12 @@ namespace CastleRoomPCG
 	}
 
 	bool AddWall(const ACastleBoard& Board, const ACastleBuildingBase& Building, const UCastlePCGRuleSetDataAsset& Rules,
-		const FIntVector& Cell, const FIntVector& Side, const FRoomSample& Sample, const ACastleBuildingBase* Other,
+		const FIntVector& Cell, const FIntVector& Side, const FRoomSample& Sample, const FCastlePCGSideFaceSpec& Face,
 		FCastlePCGApplyPlan& Plan, FString& Error)
 	{
-		const bool bRoomNeighbor = IsRoom(Other);
-		const bool bOpen = IsMainTowerDoorFace(Board, Cell, Side) || (Other && CanTraverse(Building, *Other));
-		if (bRoomNeighbor)
-		{
-			if (Building.GetBuildingColor() == Other->GetBuildingColor()) { return true; }
-			// 两个独立房保留共同门槛，只由坐标较小的一侧持有墙和功能件。
-			if (!CastlePCGSemantics::CellLess(Cell, Cell + Side)) { return true; }
-		}
-		if (!Other && !Sample.Layout) { return true; }
+		// 合并贯通或另一侧拥有共享墙的结果已由 Planar 规则写入。
+		if (!Face.bOwnsWall || Face.State == ECastlePCGSide::MergedOpen || (!Face.bHasNeighbor && !Sample.Layout)) { return true; }
+		const bool bOpen = Face.IsDoor();
 		const UCastleHachimisV4Layout* Model = Sample.Layout;
 		const FCastleV4WallSlot* Slot = nullptr;
 		FTransform Mount;
@@ -291,8 +164,6 @@ namespace CastleRoomPCG
 		else
 		{
 			// 裸底盘与异色房或功能塔接合时，按指南安装 Room L1 Bay。独立底盘不产生这个墙位。
-			const TObjectPtr<UCastleHachimisV4Layout>* Example = Rules.RoomExamples.Find(TEXT("L2V"));
-			if (!Example || !*Example || !(*Example)->Ladder) { return Reject(Building, Error, TEXT("Room 墙配置未初始化")); }
 			if (!Rules.RoomL1Bay || Rules.RoomL1Bay->WallKey != TEXT("Room_L1_Bay"))
 			{
 				return Reject(Building, Error, TEXT("普通房底盘缺少显式 Room_L1_Bay 配置"));
@@ -314,115 +185,30 @@ namespace CastleRoomPCG
 		}
 		AddWallCollision(Plan, Mount, Board.CellSize + 0.2, bOpen ? Kit->Opening : 0.0,
 			Mount.InverseTransformPosition(CellCenter).X, Building.HachimisLayout->StandingHeight, Rules.BarrierHeight);
-		if (bOpen && Other && !Other->HachimisLayout) { AddHeightTransition(Board, Building, Cell, Side, Rules, Plan); }
 		return true;
 	}
 }
 
-bool CastleV4PCG::BuildRooms(const UCastlePCGRuleSetDataAsset& Rules, const FOccupancy& Occupancy,
-	FTargets& Targets, FRooms& Rooms, FString& Error)
-{
-	using namespace CastleRoomPCG;
-	TArray<FIntVector> Cells;
-	for (const auto& Entry : Occupancy)
-	{
-		if (IsRoom(Entry.Value)) { Cells.Add(Entry.Key); Rooms.Add(Entry.Key); }
-	}
-	if (Cells.IsEmpty()) { return true; }
-	Cells.Sort(CastlePCGSemantics::CellLess);
-	const FName Names[] = {TEXT("L1"), TEXT("L2H"), TEXT("L3H"), TEXT("L2V"), TEXT("L3V"), TEXT("L4")};
-	const FIntVector Dimensions[] = {{1,1,1},{2,1,1},{2,2,1},{1,1,2},{2,1,2},{2,2,2}};
-	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Names); ++Index)
-	{
-		const TObjectPtr<UCastleHachimisV4Layout>* Model = Rules.RoomExamples.Find(Names[Index]);
-		if (!Model || !*Model || (*Model)->Family != TEXT("Room") || (*Model)->Form != Names[Index]
-			|| (*Model)->Grid != Dimensions[Index] || (*Model)->Parts.IsEmpty())
-		{
-			Error = Rules.GetPathName() + TEXT(" 缺少对应 Room 样例 ") + Names[Index].ToString();
-			return false;
-		}
-	}
-	TSet<FIntVector> DeckUsed;
-	MatchSamples(Cells, *Rules.RoomExamples.FindChecked(TEXT("L3H")), false, false, Occupancy, DeckUsed, Rooms);
-	MatchSamples(Cells, *Rules.RoomExamples.FindChecked(TEXT("L2H")), false, false, Occupancy, DeckUsed, Rooms);
-	MatchSamples(Cells, *Rules.RoomExamples.FindChecked(TEXT("L2H")), true, false, Occupancy, DeckUsed, Rooms);
-	MatchSamples(Cells, *Rules.RoomExamples.FindChecked(TEXT("L1")), false, false, Occupancy, DeckUsed, Rooms);
-	TSet<FIntVector> FrameUsed;
-	MatchSamples(Cells, *Rules.RoomExamples.FindChecked(TEXT("L4")), false, true, Occupancy, FrameUsed, Rooms);
-	MatchSamples(Cells, *Rules.RoomExamples.FindChecked(TEXT("L3V")), false, true, Occupancy, FrameUsed, Rooms);
-	MatchSamples(Cells, *Rules.RoomExamples.FindChecked(TEXT("L3V")), true, true, Occupancy, FrameUsed, Rooms);
-	MatchSamples(Cells, *Rules.RoomExamples.FindChecked(TEXT("L2V")), false, true, Occupancy, FrameUsed, Rooms);
-	TMap<FIntVector, FIntVector> Islands;
-	HorizontalIslands(Cells, Occupancy, Islands);
-	TSet<FString> StairPairs;
-	for (const FIntVector& Cell : Cells)
-	{
-		ACastleBuildingBase* Lower = Occupancy.FindChecked(Cell);
-		ACastleBuildingBase* Upper = Occupancy.FindRef(Cell + Up);
-		if (!IsRoom(Upper) || !CanTraverse(*Lower, *Upper)) { continue; }
-		const FString Pair = Islands.FindChecked(Cell).ToString() + TEXT("/") + Islands.FindChecked(Cell + Up).ToString();
-		Targets.FindChecked(Lower).Ceilings.Add(Cell, StairPairs.Contains(Pair) ? 1 : 2);
-		StairPairs.Add(Pair);
-	}
-	return true;
-}
-
-bool CastleV4PCG::OrientRoomStair(const ACastleBoard& Board, const ACastleBuildingBase& Lower,
-	const ACastleBuildingBase& Upper, const FRoomSample& LowerFrame, const FRoomSample& UpperFrame,
-	FStairInterface& Stair, FString& Error)
-{
-	using namespace CastleRoomPCG;
-	TArray<TPair<FBox, FTransform>> Furniture;
-	if (!CollectRoomFurniture(Board, Lower, LowerFrame, Furniture, Error)
-		|| !CollectRoomFurniture(Board, Upper, UpperFrame, Furniture, Error)) { return false; }
-
-	// 套件格局从作者标注的井口与上下落脚点得到净空，而不是对整个房组使用一块固定 XY 矩形。
-	// 梯套件（梯脚、口沿、上层楼板）和功能洞共用一份旋转；四个正交朝向均为正式装配。
-	FBox Shaft = Stair.Hatch.Opening;
-	Shaft += Stair.Hatch.BottomStand;
-	Shaft += Stair.Hatch.TopStand;
-	Shaft += Stair.Hatch.LadderBottom;
-	Shaft.Min.Z = Stair.Hatch.BottomStand.Z;
-	Shaft.Max.Z = Stair.Hatch.TopStand.Z + Board.LayerHeight;
-	for (int32 Quarter = 0; Quarter < 4; ++Quarter)
-	{
-		// 相同样例随格局旋转：在上房的作者方向中进行稳定的顺时针装配求值。
-		const FQuat Yaw(FVector::UpVector, (Quarter + int32(UpperFrame.bTurn)) * HALF_PI);
-		FTransform Candidate = Stair.WorldFrame;
-		Candidate.SetRotation(Board.GetActorQuat() * Yaw);
-		const bool bObstructed = Furniture.ContainsByPredicate([&](const TPair<FBox, FTransform>& Part)
-		{
-			const FTransform InKit = Part.Value.GetRelativeTransform(Candidate);
-			return Part.Key.TransformBy(InKit.ToMatrixWithScale()).Intersect(Shaft);
-		});
-		if (!bObstructed)
-		{
-			Stair.WorldFrame = Candidate;
-			return true;
-		}
-	}
-	return Reject(Lower, Error, Upper.GetPathName() + TEXT(" 的作者家具使同格四个正式梯向均无净空"));
-}
-
 bool CastleV4PCG::PrepareRoom(const ACastleBoard& Board, const ACastleBuildingBase& Building, const UCastlePCGRuleSetDataAsset& Rules,
-	const FOccupancy& Occupancy, const FRooms& Rooms, const FStairs& Stairs, TConstArrayView<FCastlePCGPartAnnotation> Original,
-	FCastlePCGApplyPlan& Plan, FString& Error)
+	const FCastlePCGSemanticField& Field, TConstArrayView<FCastlePCGPartAnnotation> Original, FCastlePCGApplyPlan& Plan, FString& Error)
 {
 	using namespace CastleRoomPCG;
 	const FIntVector Cell = Building.GetOccupiedCoordinates()[0];
-	const FRoomCell& Room = Rooms.FindChecked(Cell);
-	const bool bIncomingHatch = Stairs.Contains(Cell - Up);
-	bool bChangeDeck = bIncomingHatch || Room.Deck.Layout != Building.HachimisLayout;
-	for (const FIntVector& Direction : Directions) { bChangeDeck |= SameColorRoom(Occupancy, Building, Cell + Direction); }
-	if (bChangeDeck)
+	const FCastlePCGCellSpec& Room = Field.Cells.FindChecked(Cell);
+	const bool bIncomingHatch = Room.Deck == ECastlePCGDeck::Hatch;
+	const bool bDeckOverride = Room.DeckOverride.IsSet();
+	// 普通房独立拥有当前底盘，宽边套件和梯井组使用同一个格归属。
+	if (bDeckOverride || Room.Deck != ECastlePCGDeck::Solid || Room.RoomDeck.Layout != Building.HachimisLayout)
 	{
-		for (const auto& Part : Original) { Plan.Hidden.Add(Part.Component); }
-		if (!bIncomingHatch && !AddDeck(Board, Building, Occupancy, Room.Deck, Cell, Plan, Error)) { return false; }
+		for (const auto& Part : Original) { Plan.Visual.Hidden.Add(Part.Component); }
+		if (!bIncomingHatch && !bDeckOverride && !AddDeck(Board, Building, Field, Room.RoomDeck, Cell, Plan, Error)) { return false; }
 	}
-	if (Room.Frame.Layout && !AddFrame(Board, Building, Occupancy, Rooms, Room.Frame, Cell, Plan, Error)) { return false; }
-	for (const FIntVector& Side : Directions)
+	if (Room.RoomFrame.Layout && !AddFrame(Board, Building, Field, Room.RoomFrame, Cell, Plan, Error)) { return false; }
+	for (const ECastlePCGFace Direction : FCastlePCGBoardQuery::Sides)
 	{
-		if (!AddWall(Board, Building, Rules, Cell, Side, Room.Frame, Occupancy.FindRef(Cell + Side), Plan, Error)) { return false; }
+		const FCastlePCGSideFaceSpec& Face = Field.SideFaces.FindChecked({Cell, Direction});
+		const FIntVector Side = CastlePCGSemantics::FaceOffset(Direction);
+		if (!AddWall(Board, Building, Rules, Cell, Side, Room.RoomFrame, Face, Plan, Error)) { return false; }
 	}
 	return true;
 }

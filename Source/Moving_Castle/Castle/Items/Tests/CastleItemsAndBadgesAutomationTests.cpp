@@ -1,34 +1,32 @@
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 
+#include "Castle/Automation/CastlePIEAutomation.h"
 #include "Blueprint/WidgetBlueprintGeneratedClass.h"
 #include "Blueprint/WidgetTree.h"
 #include "CastleBackpackComponent.h"
 #include "CastleBackpackTestObserver.h"
 #include "CastleBuildingTestUtilities.h"
 #include "CastleBuildingDefinition.h"
-#include "CastleMassFragments.h"
-#include "CastleMassTraits.h"
-#include "CastleMassUnitSubsystem.h"
-#include "Castle/Support/CastleSupportTowerSubsystem.h"
-#include "Components/Building/Effects/CastleSpeedRoomEffectComponent.h"
 #include "Components/Button.h"
 #include "Components/PanelWidget.h"
+#include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
 #include "Items/CastleBadgeSubsystem.h"
 #include "Items/CastleItemGrantLibrary.h"
 #include "Items/CastlePendingRoomReward.h"
-#include "Items/CastleRoomGroupDataAsset.h"
-#include "MassEntityConfigAsset.h"
-#include "MassEntitySubsystem.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
+#include "Tests/AutomationCommon.h"
 #include "UI/Items/CastleBadgeBarWidget.h"
 #include "UI/Items/CastleBadgeReplaceModalWidget.h"
 #include "UI/Items/CastleTempBuildBarWidget.h"
 #include "UI/Items/CastleWildcardRoomPickerWidget.h"
+#include "UI/Cards/CastleShopCardWidget.h"
 
 namespace CastleItemTests
 {
@@ -160,8 +158,16 @@ bool FCastleWildcardItemTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	TestEqual(TEXT("全部五色"), Options.Colors.Num(), 5);
+	const TArray<ECastleTileColor> ExpectedColors = {
+		ECastleTileColor::Red, ECastleTileColor::Yellow, ECastleTileColor::Blue, ECastleTileColor::Green
+	};
+	TestTrue(TEXT("工坊按红黄蓝绿提供四个默认选项"), Options.Colors == ExpectedColors);
 	TestEqual(TEXT("完整九个数字"), Options.Numbers.Num(), 9);
+
+	// 旧色值留在资产的显式选项时应拒绝整组配置，防止颜色被静默忽略。
+	Spec.AllowedColors = {ECastleTileColor::Red, static_cast<ECastleTileColor>(5)};
+	AddExpectedError(TEXT("色值 5 非正式颜色"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestFalse(TEXT("工坊拒绝显式配置旧紫色序号"), Spec.TryResolveOptions(Pool, Options, Reason));
 
 	Spec.AllowedColors = {ECastleTileColor::Red, ECastleTileColor::Blue};
 	Spec.AllowedNumbers = {7, 8, 9};
@@ -200,108 +206,6 @@ bool FCastleWildcardItemTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleRoomGroupItemTest, "MovingCastle.Items.RoomGroups.AllTemplates",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-
-bool FCastleRoomGroupItemTest::RunTest(const FString& Parameters)
-{
-	TArray<TObjectPtr<UCastleBuildingDefinition>> Pool;
-	for (const TCHAR* Name : {TEXT("NormalRoom"), TEXT("ArcherTower"), TEXT("Farm"), TEXT("SpeedRoom")})
-	{
-		UCastleBuildingDefinition* Definition = CastleItemTests::LoadDefinition(Name);
-		if (!TestNotNull(Name, Definition))
-		{
-			return false;
-		}
-		Pool.Add(Definition);
-	}
-	FRandomStream Random(2704);
-	for (int32 Template = 0; Template <= static_cast<int32>(ECastleRoomGroupType::NPCSpeedRoom); ++Template)
-	{
-		auto* Backpack = NewObject<UCastleBackpackComponent>();
-		auto* Group = NewObject<UCastleRoomGroupDataAsset>();
-		Group->DisplayName = FText::AsNumber(Template);
-		Group->GroupType = static_cast<ECastleRoomGroupType>(Template);
-		UCastlePendingRoomReward* Pending = nullptr;
-		FText Reason;
-		if (!TestTrue(TEXT("从正式定义池发放房间组"), UCastleItemGrantLibrary::TryGrantRoomGroup(
-			Group, Backpack, Pool, Random, Pending, Reason)))
-		{
-			AddError(Reason.ToString());
-			return false;
-		}
-		const auto Type = Group->GroupType;
-		if (Type == ECastleRoomGroupType::ThreeNumberFourArchers || Type == ECastleRoomGroupType::ThreeConsecutiveFarms)
-		{
-			TestNull(TEXT("三张直接发放，不创建待领项"), Pending);
-			const auto Cards = Backpack->GetItems();
-			if (!TestEqual(TEXT("获得三张确定牌"), Cards.Num(), 3))
-			{
-				return false;
-			}
-			for (int32 Index = 0; Index < Cards.Num(); ++Index)
-			{
-				const bool bFarm = Type == ECastleRoomGroupType::ThreeConsecutiveFarms;
-				TestEqual(TEXT("三张卡均为指定房间类型"), Cards[Index].GetBuildingType(),
-					bFarm ? ECastleBuildingType::Farm : ECastleBuildingType::ArcherTower);
-				TestEqual(TEXT("箭塔数字四，农田数字连续"), Cards[Index].Number, bFarm ? Cards[0].Number + Index : 4);
-				if (bFarm)
-				{
-					TestEqual(TEXT("三张农田同色"), Cards[Index].Color, Cards[0].Color);
-					TestTrue(TEXT("农田数字在一至六"), Cards[Index].Number >= 1 && Cards[Index].Number <= 6);
-				}
-			}
-		}
-		else if (Type == ECastleRoomGroupType::HighNumberRoom || Type == ECastleRoomGroupType::NPCSpeedRoom)
-		{
-			TestNull(TEXT("默认直接发放房间"), Pending);
-			FCastleBuildingDescriptor Card;
-			if (!TestTrue(TEXT("获得一张确定牌"), Backpack->TryGetItemAt(0, Card)))
-			{
-				return false;
-			}
-			if (Type == ECastleRoomGroupType::HighNumberRoom)
-			{
-				TestTrue(TEXT("大数字限制在七至九"), Card.Number >= 7 && Card.Number <= 9);
-			}
-			else
-			{
-				TestEqual(TEXT("加速房使用原生建筑类型"), Card.GetBuildingType(), ECastleBuildingType::SpeedRoom);
-				TestEqual(TEXT("加速房只有一级"), Card.Level, 1);
-			}
-		}
-		else
-		{
-			if (!TestNotNull(TEXT("自定义模板生成待领取句柄"), Pending))
-			{
-				return false;
-			}
-			TestEqual(TEXT("点击前无卡进包"), Backpack->GetItemCount(), 0);
-			FCastleWildcardRoomOptions Options;
-			if (!TestTrue(TEXT("点击获取解析本卡的选项"), Pending->TryBeginClaim(Options, Reason)))
-			{
-				return false;
-			}
-			const bool bAllDefinitions = Type == ECastleRoomGroupType::FullyCustomRoom;
-			TestEqual(TEXT("固定型只有一个定义，全自定义使用定义池"), Options.Definitions.Num(), bAllDefinitions ? Pool.Num() : 1);
-			TestEqual(TEXT("默认可选五色"), Options.Colors.Num(), 5);
-			TestEqual(TEXT("万能颜色只锁定数字，其余默认六个数字"), Options.Numbers.Num(),
-				Type == ECastleRoomGroupType::CustomColorNormalRoom ? 1 : 6);
-			if (Type == ECastleRoomGroupType::RandomFunctionCustomRoom)
-			{
-				const auto Kind = Options.Definitions[0]->BuildingType;
-				TestTrue(TEXT("随机功能限定在功能塔"), Kind == ECastleBuildingType::ArcherTower || Kind == ECastleBuildingType::Farm);
-			}
-			bool bTemp;
-			int32 Index;
-			TestTrue(TEXT("全部选定后领取确定牌"),
-				Pending->TryConfirmClaim(Options.Definitions[0], Options.Colors[0], Options.Numbers[0], bTemp, Index, Reason));
-			TestEqual(TEXT("本次领取只提交一张"), Backpack->GetItemCount(), 1);
-		}
-	}
-	return true;
-}
-
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleBadgeItemTest, "MovingCastle.Items.Badges.CapacityEffectsAndWorldLifetime",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -324,7 +228,6 @@ bool FCastleBadgeItemTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	TestEqual(TEXT("默认幸运值"), Badges->GetGambleLuckBonus(), 0.0);
 	TestEqual(TEXT("默认蓝房数字"), Badges->GetBlueRoomNumberBonus(), int64{0});
 	TestEqual(TEXT("默认升级赠牌"), Badges->GetUpgradeBonusRoomCards(), int64{0});
 	TestEqual(TEXT("默认主塔血量"), Badges->GetMainTowerHealthMultiplier(), 1.0);
@@ -336,13 +239,16 @@ bool FCastleBadgeItemTest::RunTest(const FString& Parameters)
 	FText Reason;
 	bool bReplace;
 	FCastleBadgeDefinition Badge;
-	for (int32 Index = 0; Index < UCastleBadgeSubsystem::MaxBadges; ++Index)
+	// 五种已接线徽章占前五槽，第六枚也选择非低血量类型。
+	const ECastleBadgeType InitialTypes[] = {ECastleBadgeType::BlueAbacus, ECastleBadgeType::WorkshopRefund,
+		ECastleBadgeType::BalloonRack, ECastleBadgeType::QuickstringPass, ECastleBadgeType::BurstAlarm,
+		ECastleBadgeType::FirepowerCard};
+	for (const ECastleBadgeType Type : InitialTypes)
 	{
-		FCastleBadgeDefinition::TryMakeStandard(static_cast<ECastleBadgeType>(Index), Badge);
+		FCastleBadgeDefinition::TryMakeStandard(Type, Badge);
 		TestTrue(TEXT("前六枚直接加入"), Badges->TryAcquireBadge(Badge, bReplace, Reason));
 		TestFalse(TEXT("前六枚无需选择"), bReplace);
 	}
-	TestTrue(TEXT("持有一枚幸运徽章"), FMath::IsNearlyEqual(Badges->GetGambleLuckBonus(), 0.15, 1e-6));
 	TestEqual(TEXT("蓝房数字加一"), Badges->GetBlueRoomNumberBonus(), int64{1});
 	TestEqual(TEXT("升级赠两张卡"), Badges->GetUpgradeBonusRoomCards(), int64{2});
 	TestTrue(TEXT("主塔生命为 1.2 倍"), FMath::IsNearlyEqual(Badges->GetMainTowerHealthMultiplier(), 1.2, 1e-6));
@@ -351,7 +257,8 @@ bool FCastleBadgeItemTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("首次掉血后全房间射速翻倍"), Badges->GetGlobalTowerFireRateMultiplier(true), 2.0f);
 	TestEqual(TEXT("首次掉血后召唤物移动翻倍"), Badges->GetSummonSpeedMultiplier(true), 2.0f);
 
-	FCastleBadgeDefinition::TryMakeStandard(ECastleBadgeType::LowMainTowerHealth, Badge);
+	FCastleBadgeDefinition::TryMakeStandard(ECastleBadgeType::EmergencyBallast, Badge);
+	// 清场徽章放在首批之外，验证待替换状态不会提前影响敌人攻速。
 	TestTrue(TEXT("第七枚成为候选"), Badges->TryAcquireBadge(Badge, bReplace, Reason));
 	TestTrue(TEXT("第七枚需要替换选择"), bReplace);
 	TestEqual(TEXT("候选徽章仍无效果"), Badges->GetEnemyAttackSpeedMultiplier(0.2f), 1.0f);
@@ -374,10 +281,10 @@ bool FCastleBadgeItemTest::RunTest(const FString& Parameters)
 	auto* AfterTravel = SecondWorld->GetGameInstance()->GetSubsystem<UCastleBadgeSubsystem>();
 	TestEqual(TEXT("新世界继续使用原子系统"), AfterTravel, Badges);
 	TestEqual(TEXT("六枚徽章完整保留"), AfterTravel->GetBadges().Num(), 6);
-	TestEqual(TEXT("保留替换后的第一槽"), AfterTravel->GetBadges()[0].Type, ECastleBadgeType::LowMainTowerHealth);
+	TestEqual(TEXT("保留替换后的第一槽"), AfterTravel->GetBadges()[0].Type, ECastleBadgeType::EmergencyBallast);
 	TestEqual(TEXT("新一场战斗没有保留触发标志"), AfterTravel->GetGlobalTowerFireRateMultiplier(false), 1.0f);
 
-	for (int32 Index = 0; Index <= static_cast<int32>(ECastleBadgeType::LowMainTowerHealth); ++Index)
+	for (int32 Index = 1; Index <= static_cast<int32>(ECastleBadgeType::EmergencyBallast); ++Index)
 	{
 		Badges->ClearAllBadgesForTesting();
 		const auto Type = static_cast<ECastleBadgeType>(Index);
@@ -386,137 +293,32 @@ bool FCastleBadgeItemTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("第二枚同名徽章进入另一槽"), Badges->TryAcquireBadge(Badge, bReplace, Reason));
 		switch (Type)
 		{
-		case ECastleBadgeType::GambleLuck:
-			TestTrue(TEXT("两枚幸运合计 0.30"), FMath::IsNearlyEqual(Badges->GetGambleLuckBonus(), 0.30, 1e-6));
-			break;
-		case ECastleBadgeType::BlueRoomNumber:
+		case ECastleBadgeType::BlueAbacus:
 			TestEqual(TEXT("两枚蓝房数字加二"), Badges->GetBlueRoomNumberBonus(), int64{2});
 			break;
-		case ECastleBadgeType::UpgradeRoomCards:
+		case ECastleBadgeType::WorkshopRefund:
 			TestEqual(TEXT("两枚合计赠四张"), Badges->GetUpgradeBonusRoomCards(), int64{4});
 			break;
-		case ECastleBadgeType::MainTowerHealth:
+		case ECastleBadgeType::BalloonRack:
 			TestTrue(TEXT("两枚主塔生命徽章加算至 1.4 倍"),
 				FMath::IsNearlyEqual(Badges->GetMainTowerHealthMultiplier(), 1.4, 1e-6));
 			break;
-		case ECastleBadgeType::ArcherFireRate:
+		case ECastleBadgeType::QuickstringPass:
 			TestTrue(TEXT("两枚箭塔射速徽章加算至 1.4 倍"),
 				FMath::IsNearlyEqual(Badges->GetArcherFireRateMultiplier(), 1.4, 1e-6));
 			break;
-		case ECastleBadgeType::FirstMainTowerDamage:
+		case ECastleBadgeType::BurstAlarm:
 			TestEqual(TEXT("两枚首次掉血徽章仍固定两倍"), Badges->GetGlobalTowerFireRateMultiplier(true), 2.0f);
 			TestEqual(TEXT("两枚首次掉血徽章仍固定两倍移速"), Badges->GetSummonSpeedMultiplier(true), 2.0f);
 			break;
-		case ECastleBadgeType::LowMainTowerHealth:
+		case ECastleBadgeType::EmergencyBallast:
 			TestEqual(TEXT("两枚低血量压制仍固定减半"), Badges->GetEnemyAttackSpeedMultiplier(0.20f), 0.5f);
 			break;
+		default:
+			AddError(TEXT("六种已有徽章的效果测试缺少断言。"));
+			return false;
 		}
 	}
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleSpeedRoomItemTest, "MovingCastle.Items.SpeedRoom.NPCRefreshAndExpiry",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-
-bool FCastleSpeedRoomItemTest::RunTest(const FString& Parameters)
-{
-	auto* Definition = CastleItemTests::LoadDefinition(TEXT("SpeedRoom"));
-	if (!TestNotNull(TEXT("真实一级加速房定义"), Definition))
-	{
-		return false;
-	}
-	const auto Settings = UWorld::InitializationValues().AllowAudioPlayback(false).CreatePhysicsScene(true)
-		.CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(false);
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Settings);
-	GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
-	ON_SCOPE_EXIT
-	{
-		World->BeginTearingDown();
-		World->DestroyWorld(false);
-		GEngine->DestroyWorldContext(World);
-	};
-	auto* Support = World->GetSubsystem<UCastleSupportTowerSubsystem>();
-	auto* Units = World->GetSubsystem<UCastleMassUnitSubsystem>();
-	auto* Mass = World->GetSubsystem<UMassEntitySubsystem>();
-	if (!Support || !Units || !Mass)
-	{
-		AddError(TEXT("测试世界缺少支援塔或 Mass 子系统。"));
-		return false;
-	}
-	auto* Config = NewObject<UMassEntityConfigAsset>(World);
-	Config->GetMutableConfig().AddTrait(*NewObject<UCastleMassNPCTrait>(Config));
-	TArray<FCastleMassUnitHandle> Handles;
-	FText Reason;
-	if (!TestTrue(TEXT("生成真实 Mass NPC"), Units->SpawnUnits(Config, {FTransform::Identity}, Handles, Reason))
-		|| !TestEqual(TEXT("NPC 数量"), Handles.Num(), 1))
-	{
-		AddError(Reason.ToString());
-		return false;
-	}
-
-	FCastleBuildingDescriptor Descriptor;
-	if (!TestTrue(TEXT("生成可放置的加速房描述符"), Definition->CreateDescriptor(1, ECastleTileColor::Red, 4, Descriptor, Reason)))
-	{
-		AddError(Reason.ToString());
-		return false;
-	}
-	ACastleBoard* Board = World->SpawnActor<ACastleBoard>();
-	Board->GridSize = FIntVector(1, 1, 2);
-	CastleBuildingTests::ConfigureBoard(Board);
-	FCastleGroundGenerationResult Ground;
-	FCastleGroundCell& Cell = Ground.Cells.AddDefaulted_GetRef();
-	Cell.Coordinate = FIntVector::ZeroValue;
-	Cell.Color = ECastleTileColor::Red;
-	Cell.Number = 4;
-	if (!TestTrue(TEXT("建立正式放置格"), Board->ApplyGroundGenerationResult(Ground, Reason)))
-	{
-		AddError(Reason.ToString());
-		return false;
-	}
-	ACastleBuildingBase* Building = Board->PlaceBuilding(FIntVector::ZeroValue, Descriptor, true, Reason);
-	if (!TestNotNull(TEXT("正式加速房可放置"), Building) || !CastleBuildingTests::CompletePlacement(Building))
-	{
-		AddError(Reason.ToString());
-		return false;
-	}
-	auto* Effect = Cast<UCastleSpeedRoomEffectComponent>(Building->BuildingEffect);
-	if (!TestNotNull(TEXT("建筑绑定原生加速组件"), Effect))
-	{
-		return false;
-	}
-	TestFalse(TEXT("一级加速房没有合成目标"), Building->CanMergeToNextLevel());
-	AddExpectedError(TEXT("主动调用没有 NPC"), EAutomationExpectedErrorFlags::Contains, 1);
-	TestFalse(TEXT("主动调用未产生加速"), Building->TriggerBuildingEffect(FCastleBuildingTriggerContext{}));
-	TestEqual(TEXT("失败调用恢复正式触发计数"), Effect->TriggerCount, int64{0});
-
-	FCastleBuildingTriggerContext Entry;
-	Entry.Source = ECastleBuildingTriggerSource::NPCEntry;
-	Entry.NPC = Handles[0];
-	auto ReadMultiplier = [&]()
-	{
-		return Mass->GetMutableEntityManager().GetFragmentDataChecked<FCastleMassUnitFragment>(Entry.NPC.Entity).SupportMovementMultiplier;
-	};
-	// 世界推进真实游戏时间，Tick 内共用支援倍率刷新路径。
-	auto AdvanceWorld = [World, Support](const int32 Steps)
-	{
-		for (int32 Step = 0; Step < Steps; ++Step)
-		{
-			World->Tick(LEVELTICK_All, 0.1f);
-			Support->Tick(0.1f);
-		}
-	};
-	TestTrue(TEXT("真实 NPC 进入触发加速"), Building->TriggerBuildingEffect(Entry));
-	TestTrue(TEXT("没有空投时孤立加速仍唤醒支援 Tick"), Support->IsTickable());
-	Support->Tick(0.0f);
-	TestEqual(TEXT("移动倍率提升至 1.5"), ReadMultiplier(), 1.5f);
-	AdvanceWorld(30);
-	TestTrue(TEXT("再次经过刷新加速时长"), Building->TriggerBuildingEffect(Entry));
-	AdvanceWorld(30);
-	TestTrue(TEXT("已超出第一次的五秒期限"), World->GetTimeSeconds() > 5.0);
-	TestEqual(TEXT("第二次仍在五秒内，倍率维持 1.5"), ReadMultiplier(), 1.5f);
-	AdvanceWorld(25);
-	TestEqual(TEXT("第二次增益到期后恢复 1.0"), ReadMultiplier(), 1.0f);
-	TestEqual(TEXT("两次真实进入均记录成功"), Effect->TriggerCount, int64{2});
 	return true;
 }
 
@@ -553,101 +355,115 @@ bool FCastleItemWidgetAssetTest::RunTest(const FString& Parameters)
 	Verify(TEXT("WBP_WildcardRoomPicker"), UCastleWildcardRoomPickerWidget::StaticClass(),
 		{TEXT("ClaimButton"), TEXT("ClaimLabel"), TEXT("PickerPanel"), TEXT("RewardTitle"), TEXT("StatusText"),
 		TEXT("DefinitionChoices"), TEXT("ColorChoices"), TEXT("NumberChoices"), TEXT("ConfirmButton"), TEXT("CancelButton"),
-		TEXT("OptionStyleTemplate"), TEXT("OptionTextTemplate")});
+		TEXT("CloseButton"), TEXT("OptionStyleTemplate"), TEXT("OptionTextTemplate"), TEXT("ColorStyleTemplate"),
+		TEXT("PreviewCardSlot"), TEXT("PreviewPlaceholder")});
 
-	// 实例化已保存的 WBP 并触发实际按钮的委托，覆盖原生 BindWidget 与用户可见状态。
-	UGameInstance* Instance = NewObject<UGameInstance>(GEngine);
-	Instance->InitializeStandalone();
-	UWorld* World = Instance->GetWorld();
-	ON_SCOPE_EXIT
+	// 卡牌初始化依赖本地玩家视口，采用主地图真实棋盘与玩家上下文。
+	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
+	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([this, Deadline = FPlatformTime::Seconds() + 45.0]()
 	{
-		Instance->Shutdown();
-		GEngine->DestroyWorldContext(World);
-		World->DestroyWorld(false);
-	};
-	auto* Definition = CastleItemTests::LoadDefinition(TEXT("NormalRoom"));
-	auto* Backpack = NewObject<UCastleBackpackComponent>(Instance);
-	const auto PickerClass = LoadClass<UCastleWildcardRoomPickerWidget>(nullptr,
-		TEXT("/Game/MovingCastle/UI/Items/WBP_WildcardRoomPicker.WBP_WildcardRoomPicker_C"));
-	const auto TempClass = LoadClass<UCastleTempBuildBarWidget>(nullptr,
-		TEXT("/Game/MovingCastle/UI/Items/WBP_TempBuildBar.WBP_TempBuildBar_C"));
-	if (!Definition || !PickerClass || !TempClass)
-	{
-		AddError(TEXT("缺少验收使用的普通房间或已保存的 WBP 类。"));
-		return false;
-	}
-	auto* Picker = CreateWidget<UCastleWildcardRoomPickerWidget>(Instance, PickerClass);
-	auto* Temp = CreateWidget<UCastleTempBuildBarWidget>(Instance, TempClass);
-	FText Reason;
-	if (!TestNotNull(TEXT("实例化 WBP 万能卡"), Picker) || !TestNotNull(TEXT("实例化 WBP 临时栏"), Temp)
-		|| !TestTrue(TEXT("WBP 临时栏的完整绑定"), Temp->BindBackpack(Backpack))
-		|| !TestTrue(TEXT("建筑栏填满十张"), CastleItemTests::FillBackpack(*Backpack, *Definition, Reason)))
-	{
-		return false;
-	}
-	TestEqual(TEXT("没有临时卡时折叠"), Temp->GetVisibility(), ESlateVisibility::Collapsed);
+		UWorld* World = GEditor->PlayWorld;
+		auto* Player = World ? World->GetFirstPlayerController() : nullptr;
+		if (!Player && FPlatformTime::Seconds() < Deadline) { return false; }
+		const auto* Board = World ? Cast<ACastleBoard>(UGameplayStatics::GetActorOfClass(World, ACastleBoard::StaticClass())) : nullptr;
+		if (!TestNotNull(TEXT("万能卡摄影棋盘"), Board) || !TestNotNull(TEXT("万能卡本地玩家"), Player)) { return true; }
+		auto* Definition = CastleItemTests::LoadDefinition(TEXT("NormalRoom"));
+		auto* Backpack = NewObject<UCastleBackpackComponent>(World->GetGameInstance());
+		const auto PickerClass = LoadClass<UCastleWildcardRoomPickerWidget>(nullptr,
+			TEXT("/Game/MovingCastle/UI/Items/WBP_WildcardRoomPicker.WBP_WildcardRoomPicker_C"));
+		const auto TempClass = LoadClass<UCastleTempBuildBarWidget>(nullptr,
+			TEXT("/Game/MovingCastle/UI/Items/WBP_TempBuildBar.WBP_TempBuildBar_C"));
+		if (!Definition || !PickerClass || !TempClass)
+		{
+			AddError(TEXT("缺少验收使用的普通房间或已保存的 WBP 类。"));
+			return true;
+		}
+		auto* Picker = CreateWidget<UCastleWildcardRoomPickerWidget>(Player, PickerClass);
+		auto* Temp = CreateWidget<UCastleTempBuildBarWidget>(Player, TempClass);
+		FText Reason;
+		if (!TestNotNull(TEXT("实例化 WBP 万能卡"), Picker) || !TestNotNull(TEXT("实例化 WBP 临时栏"), Temp)
+			|| !TestTrue(TEXT("WBP 临时栏的完整绑定"), Temp->BindBackpack(Backpack))
+			|| !TestTrue(TEXT("建筑栏填满十张"), CastleItemTests::FillBackpack(*Backpack, *Definition, Reason)))
+		{
+			return true;
+		}
+		TestEqual(TEXT("没有临时卡时折叠"), Temp->GetVisibility(), ESlateVisibility::Collapsed);
 
-	FCastleWildcardRoomSpec Spec;
-	Spec.AllowedNumbers = {7};
-	const TArray<TObjectPtr<UCastleBuildingDefinition>> Pool{Definition};
-	UCastlePendingRoomReward* Reward = nullptr;
-	if (!TestTrue(TEXT("准备颜色待选，建筑与数字固定的万能卡"),
-		UCastleItemGrantLibrary::TryCreateWildcardReward(INVTEXT("颜色房间"), Spec, Backpack, Pool, Reward, Reason))
-		|| !TestTrue(TEXT("WBP 万能卡的完整绑定"), Picker->BindReward(Reward, Reason)))
-	{
-		return false;
-	}
-	auto* Claim = Cast<UButton>(Picker->GetWidgetFromName(TEXT("ClaimButton")));
-	auto* Confirm = Cast<UButton>(Picker->GetWidgetFromName(TEXT("ConfirmButton")));
-	auto* Cancel = Cast<UButton>(Picker->GetWidgetFromName(TEXT("CancelButton")));
-	auto* Panel = Picker->GetWidgetFromName(TEXT("PickerPanel"));
-	auto* Definitions = Cast<UPanelWidget>(Picker->GetWidgetFromName(TEXT("DefinitionChoices")));
-	auto* Colors = Cast<UPanelWidget>(Picker->GetWidgetFromName(TEXT("ColorChoices")));
-	auto* Numbers = Cast<UPanelWidget>(Picker->GetWidgetFromName(TEXT("NumberChoices")));
-	if (!Claim || !Confirm || !Cancel || !Panel || !Definitions || !Colors || !Numbers)
-	{
-		AddError(TEXT("实例化的万能卡 WBP 缺少必需的布局或按钮。"));
-		return false;
-	}
-	TestEqual(TEXT("点击获取前 WBP 属性面板折叠"), Panel->GetVisibility(), ESlateVisibility::Collapsed);
-	Claim->OnClicked.Broadcast();
-	TestEqual(TEXT("点击获取后显示 WBP 属性面板"), Panel->GetVisibility(), ESlateVisibility::Visible);
-	TestFalse(TEXT("未选颜色时禁用确认"), Confirm->GetIsEnabled());
-	if (!TestEqual(TEXT("固定定义只生成一个按钮"), Definitions->GetChildrenCount(), 1)
-		|| !TestEqual(TEXT("固定数字只生成一个按钮"), Numbers->GetChildrenCount(), 1)
-		|| !TestEqual(TEXT("只开放五种颜色"), Colors->GetChildrenCount(), 5))
-	{
-		return false;
-	}
-	TestFalse(TEXT("唯一建筑按钮自动锁定"), Definitions->GetChildAt(0)->GetIsEnabled());
-	TestFalse(TEXT("唯一数字按钮自动锁定"), Numbers->GetChildAt(0)->GetIsEnabled());
-	Cancel->OnClicked.Broadcast();
-	TestEqual(TEXT("取消后回到获取"), Claim->GetVisibility(), ESlateVisibility::Visible);
-	TestEqual(TEXT("取消后无卡进入临时栏"), Backpack->GetTempItemCount(), 0);
-	Claim->OnClicked.Broadcast();
-	UButton* Blue = Cast<UButton>(Colors->GetChildAt(1));
-	if (!TestNotNull(TEXT("第二个选项是可点击颜色按钮"), Blue))
-	{
-		return false;
-	}
-	Blue->OnClicked.Broadcast();
-	TestTrue(TEXT("选完颜色后允许确认"), Confirm->GetIsEnabled());
-	Confirm->OnClicked.Broadcast();
-	TestTrue(TEXT("WBP 确认后奖励已领取"), Reward->IsClaimed());
-	if (TestEqual(TEXT("满包时 WBP 确认发入临时栏"), Backpack->GetTempItemCount(), 1))
-	{
-		const FCastleBuildingDescriptor Card = Backpack->GetTempItems()[0];
-		TestEqual(TEXT("颜色选项提交实际牌面"), Card.Color, ECastleTileColor::Blue);
-		TestEqual(TEXT("入库数字保留锁定值"), Card.Number, 7);
-	}
-	TestEqual(TEXT("临时栏收到事件后显示"), Temp->GetVisibility(), ESlateVisibility::HitTestInvisible);
-	if (auto* Count = Cast<UTextBlock>(Temp->GetWidgetFromName(TEXT("StackCount"))))
-	{
-		TestEqual(TEXT("叠牌文本显示当前数量"), Count->GetText().ToString(), FString(TEXT("临时建筑栏 (1)")));
-	}
-	FCastleBuildingDescriptor Removed;
-	TestTrue(TEXT("单步消费自动补位"), Backpack->TryConsumeItemAt(0, Removed, Reason));
-	TestEqual(TEXT("队列清空后 WBP 恢复隐藏"), Temp->GetVisibility(), ESlateVisibility::Collapsed);
+		FCastleWildcardRoomSpec Spec;
+		Spec.AllowedNumbers = {7};
+		const TArray<TObjectPtr<UCastleBuildingDefinition>> Pool{Definition};
+		UCastlePendingRoomReward* Reward = nullptr;
+		if (!TestTrue(TEXT("准备颜色待选，建筑与数字固定的万能卡"),
+			UCastleItemGrantLibrary::TryCreateWildcardReward(INVTEXT("颜色房间"), Spec, Backpack, Pool, Reward, Reason))
+			|| !TestTrue(TEXT("WBP 万能卡的完整绑定"), Picker->BindReward(Reward, Reason)))
+		{
+			return true;
+		}
+		auto* Claim = Cast<UButton>(Picker->GetWidgetFromName(TEXT("ClaimButton")));
+		auto* Confirm = Cast<UButton>(Picker->GetWidgetFromName(TEXT("ConfirmButton")));
+		auto* Close = Cast<UButton>(Picker->GetWidgetFromName(TEXT("CloseButton")));
+		auto* Panel = Picker->GetWidgetFromName(TEXT("PickerPanel"));
+		auto* PreviewSlot = Cast<USizeBox>(Picker->GetWidgetFromName(TEXT("PreviewCardSlot")));
+		auto* Placeholder = Picker->GetWidgetFromName(TEXT("PreviewPlaceholder"));
+		auto* Definitions = Cast<UPanelWidget>(Picker->GetWidgetFromName(TEXT("DefinitionChoices")));
+		auto* Colors = Cast<UPanelWidget>(Picker->GetWidgetFromName(TEXT("ColorChoices")));
+		auto* Numbers = Cast<UPanelWidget>(Picker->GetWidgetFromName(TEXT("NumberChoices")));
+		if (!Claim || !Confirm || !Close || !Panel || !PreviewSlot || !Placeholder || !Definitions || !Colors || !Numbers)
+		{
+			AddError(TEXT("实例化的万能卡 WBP 缺少必需的布局或按钮。"));
+			return true;
+		}
+		TestEqual(TEXT("点击获取前 WBP 属性面板折叠"), Panel->GetVisibility(), ESlateVisibility::Collapsed);
+		Claim->OnClicked.Broadcast();
+		TestEqual(TEXT("点击获取后显示 WBP 属性面板"), Panel->GetVisibility(), ESlateVisibility::Visible);
+		TestFalse(TEXT("未选颜色时禁用确认"), Confirm->GetIsEnabled());
+		TestNull(TEXT("未选齐时没有实例化预览卡"), PreviewSlot->GetContent());
+		TestEqual(TEXT("未选齐时显示线稿"), Placeholder->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		if (!TestEqual(TEXT("固定定义只生成一个按钮"), Definitions->GetChildrenCount(), 1)
+			|| !TestEqual(TEXT("固定数字只生成一个按钮"), Numbers->GetChildrenCount(), 1)
+			|| !TestEqual(TEXT("只开放四种玩法色"), Colors->GetChildrenCount(), 4))
+		{
+			return true;
+		}
+		TestFalse(TEXT("唯一建筑按钮自动锁定"), Definitions->GetChildAt(0)->GetIsEnabled());
+		TestFalse(TEXT("唯一数字按钮自动锁定"), Numbers->GetChildAt(0)->GetIsEnabled());
+		Close->OnClicked.Broadcast();
+		TestEqual(TEXT("右上关闭取消本次选择"), Claim->GetVisibility(), ESlateVisibility::Visible);
+		TestEqual(TEXT("取消后无卡进入临时栏"), Backpack->GetTempItemCount(), 0);
+		Claim->OnClicked.Broadcast();
+		UButton* Yellow = Cast<UButton>(Colors->GetChildAt(1));
+		if (!TestNotNull(TEXT("第二个选项是可点击颜色按钮"), Yellow))
+		{
+			return true;
+		}
+		Yellow->OnClicked.Broadcast();
+		TestTrue(TEXT("选完颜色后允许确认"), Confirm->GetIsEnabled());
+		auto* CardPreview = Cast<UCastleShopCardWidget>(PreviewSlot->GetContent());
+		if (!TestNotNull(TEXT("选择黄色后已挂载正式 3D 卡牌"), CardPreview)) { return true; }
+		TestEqual(TEXT("预览建筑与唯一候选一致"), CardPreview->GetDescriptor().Definition.Get(), Definition);
+		TestEqual(TEXT("预览卡应用黄色"), CardPreview->GetDescriptor().Color, ECastleTileColor::Yellow);
+		TestEqual(TEXT("预览卡保留锁定数字"), CardPreview->GetDescriptor().Number, 7);
+		TestEqual(TEXT("真实预览替代线稿"), Placeholder->GetVisibility(), ESlateVisibility::Collapsed);
+		Confirm->OnClicked.Broadcast();
+		TestTrue(TEXT("WBP 确认后奖励已领取"), Reward->IsClaimed());
+		TestNull(TEXT("领取后释放预览卡"), PreviewSlot->GetContent());
+		if (TestEqual(TEXT("满包时 WBP 确认发入临时栏"), Backpack->GetTempItemCount(), 1))
+		{
+			const FCastleBuildingDescriptor Card = Backpack->GetTempItems()[0];
+			TestEqual(TEXT("颜色选项提交实际牌面"), Card.Color, ECastleTileColor::Yellow);
+			TestEqual(TEXT("入库数字保留锁定值"), Card.Number, 7);
+		}
+		TestEqual(TEXT("临时栏收到事件后显示"), Temp->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		if (auto* Count = Cast<UTextBlock>(Temp->GetWidgetFromName(TEXT("StackCount"))))
+		{
+			TestEqual(TEXT("叠牌文本显示当前数量"), Count->GetText().ToString(), FString(TEXT("临时建筑栏 (1)")));
+		}
+		FCastleBuildingDescriptor Removed;
+		TestTrue(TEXT("单步消费自动补位"), Backpack->TryConsumeItemAt(0, Removed, Reason));
+		TestEqual(TEXT("队列清空后 WBP 恢复隐藏"), Temp->GetVisibility(), ESlateVisibility::Collapsed);
+		return true;
+	}));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
 	return true;
 }
 

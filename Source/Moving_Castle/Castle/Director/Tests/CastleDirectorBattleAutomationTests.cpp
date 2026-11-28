@@ -1,21 +1,26 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
+#include "Audio/CastleAudioSubsystem.h"
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
+#include "Castle/Automation/CastlePIEAutomation.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
 #include "Castle/Combat/CastleCombatSubsystem.h"
 #include "Castle/Combat/CastleCombatConfigDataAsset.h"
+#include "Castle/Combat/CastleDifficultyCurveDataAsset.h"
 #include "Castle/Actors/CastleBoard.h"
 #include "Castle/Placement/CastleTowerSideGridComponent.h"
 #include "Castle/Actors/CastleBuildingBase.h"
 #include "Castle/PCG/HachimisV4/CastleHachimisV4Layout.h"
+#include "Castle/SkyIslands/CastleSkyIslandBase.h"
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Components/CastleShopComponent.h"
 #include "Castle/Components/CastleMainTowerComponent.h"
 #include "Castle/Components/CastleEconomyComponent.h"
 #include "Castle/Automation/CastleBuildingTestUtilities.h"
+#include "Castle/Automation/CastleTowerOverviewTestUtilities.h"
 #include "Units/Navigation/Interaction/CastlePatrolRoute.h"
 #include "Units/Navigation/Interaction/CastlePatrolWaypointMarker.h"
 #include "Units/Navigation/CastleNavigationSubsystem.h"
@@ -23,6 +28,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "GameFramework/PawnMovementComponent.h"
 #include "HAL/IConsoleManager.h"
 #include "Castle/UI/BuildBar/CastleBuildBarWidget.h"
 #include "Castle/UI/Common/CastleHUDControls.h"
@@ -54,6 +60,18 @@ public:
 		if (!World || !World->HasBegunPlay()) { return false; }
 		auto* Director = World->GetSubsystem<UCastleDirectorSubsystem>();
 		if (!Test->TestTrue(TEXT("正式地图导演已运行"), Director && Director->IsRunning())) { return true; }
+		const auto* Audio = UCastleAudioSubsystem::GetForWorld(World);
+		if (!Test->TestNotNull(TEXT("正式局音频实例"), Audio)) { return true; }
+		// 战斗流程测试通过原本的节点事务驱动每一阶段，音频须在同一帧与阶段一致。
+		switch (Director->GetPhase())
+		{
+		case ECastleDirectorPhase::Editing:
+		case ECastleDirectorPhase::Reward: Test->TestEqual(TEXT("编辑及奖励阶段使用建造 BGM"), Audio->GetCurrentBGMTrack(), ECastleBGMTrack::Build); break;
+		case ECastleDirectorPhase::Battle: Test->TestEqual(TEXT("正式战斗使用战斗 BGM"), Audio->GetCurrentBGMTrack(), ECastleBGMTrack::Battle); break;
+		case ECastleDirectorPhase::SkyIsland: Test->TestEqual(TEXT("正式空岛使用空岛 BGM"), Audio->GetCurrentBGMTrack(), ECastleBGMTrack::SkyIsland); break;
+		case ECastleDirectorPhase::GameOver: Test->TestEqual(TEXT("结束阶段停止音乐"), Audio->GetCurrentBGMTrack(), ECastleBGMTrack::None); break;
+		case ECastleDirectorPhase::Inactive: break;
+		}
 		auto* Board = Director->Board.Get();
 		auto* Navigation = World->GetSubsystem<UCastleNavigationSubsystem>();
 		auto* Dispatch = World->GetSubsystem<UCastleTowerDispatchSubsystem>();
@@ -63,6 +81,20 @@ public:
 			// 所有故障注入只改临时副本，不改磁盘上的 DA 或编辑器原始地图。
 			Director->Config = DuplicateObject<UCastleDirectorConfigDataAsset>(Director->Config, World);
 			Director->Config->CombatConfig = DuplicateObject<UCastleCombatConfigDataAsset>(Director->Config->CombatConfig, Director->Config);
+			auto* CombatConfig = Director->Config->CombatConfig.Get();
+			auto* Curve = DuplicateObject(CombatConfig->DifficultyCurve.Get(), CombatConfig);
+			CombatConfig->DifficultyCurve = Curve;
+			if (!Test->TestTrue(TEXT("正式 DA 的关卡间隔和普通表可用于空岛回归"),
+				Director->Config->EliteEveryNSteps == 5 && Curve->NormalBattles.Num() >= 5)) { return true; }
+			// 区分普通表第 4、5 项，确保第 6 关不能沿用按实际战斗次数选出的第 4 项。
+			FCastleCombatWaveDefinition RaidWave;
+			RaidWave.BugCurve.bEnabled = false;
+			auto& Raid = RaidWave.RaidEntries.AddDefaulted_GetRef();
+			Raid.EnemyId = TEXT("MiasmaWelp");
+			Raid.Count = 4;
+			Raid.SpawnInterval = 0.0f;
+			Curve->NormalBattles[3].Waves = {RaidWave};
+			Curve->NormalBattles[4].Waves = {RaidWave, RaidWave};
 			if (!Test->TestTrue(TEXT("临时战斗配置初始化"), Director->Combat->InitializeCombat(Director->Config->CombatConfig, Reason))) { return true; }
 			Navigation->ClearSharedRoute();
 			ACastleDirectorNodeActor* First = Director->Nodes[0];
@@ -186,7 +218,7 @@ public:
 			Test->TestTrue(TEXT("失败不销毁节点"), Director->Nodes.Num() >= 2 && IsValid(Director->Nodes[0]));
 			Test->TestFalse(TEXT("失败恢复塔侧格"), Board->IsPlacementSurfacePresentationHidden());
 			Test->TestFalse(TEXT("失败关闭出兵会话"), Dispatch->IsSessionActive());
-			Test->TestEqual(TEXT("失败不推进普通场次"), Director->NormalBattles, 0);
+			Test->TestEqual(TEXT("失败仍待进入第 1 关"), Director->GetNextStep(), 1);
 			Test->TestEqual(TEXT("失败保持编辑阶段"), Director->GetPhase(), ECastleDirectorPhase::Editing);
 			Director->Config->CombatConfig->SpawnInnerRadius = Radius;
 			Stage = 2;
@@ -208,14 +240,37 @@ public:
 				}
 			}
 			Test->TestEqual(TEXT("MainMap 同时显示 1、2 两个编号"), Numbers.Num(), 2);
-			if (!Test->TestTrue(TEXT("真实开战成功"), Director->TryStartSelectedBattle(Director->Nodes[0], Reason))) { Test->AddError(Reason.ToString()); return true; }
+			// 使用飞行移动组件的实际 sweep 穿过第二层塔身，然后移动进入正式节点触发球。
+			APawn* Pawn = Director->Controller->GetPawn();
+			UPawnMovementComponent* Movement = Pawn ? Pawn->GetMovementComponent() : nullptr;
+			if (!Test->TestNotNull(TEXT("玩家飞行移动组件"), Movement)) { return true; }
+			const FVector Forward = Board->GetActorForwardVector();
+			const FVector TowerMiddle = Board->GetGridWorldLocation(Board->GetBoardCenterCoordinate()) + FVector::UpVector * Board->LayerHeight;
+			const FVector SweepStart = TowerMiddle - Forward * Board->CellSize * 2.0;
+			const FVector SweepEnd = TowerMiddle + Forward * Board->CellSize * 2.0;
+			Pawn->SetActorLocation(SweepStart);
+			FHitResult Hit;
+			Movement->SafeMoveUpdatedComponent(SweepEnd - SweepStart, Pawn->GetActorQuat(), true, Hit);
+			Test->TestTrue(TEXT("飞行胶囊扫过实体塔身无阻挡"), !Hit.bBlockingHit && Pawn->GetActorLocation().Equals(SweepEnd, 1.0));
+
+			const ACastleDirectorNodeActor* BattleNode = Director->Nodes[0];
+			const FVector NodeCenter = BattleNode->GetActorLocation();
+			const FVector Approach = Forward * 800.0;
+			Pawn->SetActorLocation(NodeCenter - Approach);
+			Movement->SafeMoveUpdatedComponent(Approach, Pawn->GetActorQuat(), true, Hit);
+			if (!Test->TestTrue(TEXT("真实触发球重叠排队开战"), Director->PendingNode.Get() == BattleNode && !Hit.bBlockingHit)) { return true; }
+			Movement->Velocity = Forward * 425.0;
+			Director->Tick(0);
+			if (!Test->TestEqual(TEXT("真实触碰后提交开战"), Director->GetPhase(), ECastleDirectorPhase::Battle)) { return true; }
+			CastleTowerOverviewTests::Check(*Test, *Board, *Director->Controller);
+			CastleTowerOverviewTests::Capture(TEXT("03-battle-tower-overview.png"));
 			int32 Reserve = 0, Active = 0;
 			Dispatch->GetDispatchCounts(Reserve, Active);
 			Test->TestEqual(TEXT("开战登记 8 名待命 NPC"), Reserve, 8);
 			Test->TestEqual(TEXT("手动模式开战没有自动派兵"), Active, 0);
 			Test->TestTrue(TEXT("战斗隐藏塔侧格"), Board->IsPlacementSurfacePresentationHidden());
 			Test->TestEqual(TEXT("成功才清除节点"), Director->Nodes.Num(), 0);
-			Test->TestEqual(TEXT("普通计数提交为1"), Director->NormalBattles, 1);
+			Test->TestEqual(TEXT("开战后仍处于第 1 关"), Director->GetNextStep(), 1);
 			Test->TestTrue(TEXT("HUD显示真实剩余敌人"), Director->GetHUDSummary().Contains(TEXT("剩余敌人")));
 			// 验证进入战斗界面后 HUD 切换到战斗模式、显示骷髅进度条(初值 0)、隐藏建造栏，以及暂停/倍速切换与恢复。
 			TArray<UUserWidget*> DirectorHUDs;
@@ -277,9 +332,10 @@ public:
 			Test->AddExpectedError(TEXT("导演拒绝非法或重复清场通知"), EAutomationExpectedErrorFlags::Contains, 1);
 			Director->Combat->OnBattleCleared.Broadcast(ECastleBattleKind::Normal, 1);
 			Test->TestEqual(TEXT("重复通知不重复记关"), Director->ClearedSteps, 1);
-			if (!Test->TestTrue(TEXT("选择经验恢复编辑"), Director->TryChooseReward(ECastleDirectorReward::Experience, Reason))) { return true; }
+			const int32 GoldBeforeReward = Director->Controller->GetEconomy()->GetGold();
+			if (!Test->TestTrue(TEXT("选择金币恢复编辑"), Director->TryChooseReward(ECastleDirectorReward::Gold, Reason))) { return true; }
 			Test->TestFalse(TEXT("选择奖励后显示塔侧格"), Board->IsPlacementSurfacePresentationHidden());
-			Test->TestEqual(TEXT("实际经验60"), Director->Experience, 60);
+			Test->TestEqual(TEXT("实际发放60金币"), Director->Controller->GetEconomy()->GetGold() - GoldBeforeReward, 60);
 			Test->TestTrue(TEXT("下一关节点已生成"), Director->Nodes.Num() >= 2);
 			Test->TestFalse(TEXT("奖励关闭恢复移动"), Director->Controller->IsMoveInputIgnored());
 			Test->TestFalse(TEXT("奖励关闭恢复视角"), Director->Controller->IsLookInputIgnored());
@@ -288,7 +344,7 @@ public:
 		}
 		if (Stage == 4)
 		{
-			// 升级新增塔身碰撞会重建正式导航，玩家需等新快照就绪才可选择战斗。
+			// 等待正式门到门导航的当前快照就绪后选择战斗节点。
 			if (!Navigation->IsNavigationReady()) { return false; }
 			// 第二关在 Mass 处理作用域中记录选择；边界内禁止创建 NPC，随后由导演 Tick 消费。
 			if (Director->ClearedSteps == 1)
@@ -310,13 +366,19 @@ public:
 			if (!Test->TestEqual(TEXT("进入正式战斗阶段"), Director->GetPhase(), ECastleDirectorPhase::Battle)) { return true; }
 			if (Director->ClearedSteps == 4)
 			{
-				Test->TestEqual(TEXT("第5关使用精英战斗"), Director->ActiveBattleKind, ECastleBattleKind::Elite);
-				Test->TestEqual(TEXT("精英独立从第1场开始"), Director->EliteBattles, 1);
-				Test->TestEqual(TEXT("普通场次不因精英增加"), Director->NormalBattles, 4);
+				Test->TestTrue(TEXT("第 4 关选择空岛后开始第 5 关精英战斗"),
+					Director->GetStatusMessage().ToString().Contains(TEXT("第 5 关 · 精英战斗开始")));
+			}
+			if (Director->ClearedSteps == 5)
+			{
+				// 从实际战斗快照读取波数，避免测试只检查节点文字或选表公式。
+				int32 Wave = 0, TotalWaves = 0;
+				Test->TestTrue(TEXT("第 6 关实际生成战斗计划"), Director->Combat->GetCurrentWaveProgress(Wave, TotalWaves));
+				Test->TestEqual(TEXT("第 6 关使用普通表第 5 项的两波配置"), TotalWaves, 2);
 			}
 			FText GateReason;
 			Test->TestFalse(TEXT("战斗编辑门控关闭"), Director->IsEditingAllowed(GateReason));
-			Test->TestFalse(TEXT("战斗商店权限收回"), Director->IsShopAccessAllowed(GateReason));
+			Test->TestFalse(TEXT("战斗阶段仍限制打开普通商店"), Director->IsShopAccessAllowed(GateReason));
 			Test->TestFalse(TEXT("战斗保持飞行输入"), Director->Controller->IsMoveInputIgnored());
 			Stage = 5;
 			return false;
@@ -335,44 +397,50 @@ public:
 				Test->TestTrue(TEXT("首次精英胜利解锁雾瘴幼龙"), Director->Combat->HasUnlockedEnemyTag(TEXT("Unlock.MiasmaWelp")));
 				Director->DiscardTowerUpgradeRewards();
 				Director->Controller->GetShop()->CloseShop();
-				Stage = 6;
+				Stage = 4;
 				return false;
 			}
 			if (!Test->TestEqual(TEXT("普通战斗清场进入奖励"), Director->GetPhase(), ECastleDirectorPhase::Reward)) { return true; }
-			ECastleDirectorReward Reward = ECastleDirectorReward::Experience;
+			ECastleDirectorReward Reward = ECastleDirectorReward::Gold;
 			if (Director->ClearedSteps == 3)
 			{
 				Director->Tower->ApplyDamage(500);
 				Reward = ECastleDirectorReward::Healing;
+				// 用临时配置确保第 4 关有真实的休息岛节点，仍走导演生成的节点与返塔流程。
+				Director->Config->NodeCountMin = Director->Config->NodeCountMax = 2;
+				Director->Config->NormalNodeWeight = Director->Config->RewardNodeWeight = 0;
+				Director->Config->RestNodeWeight = 1;
 			}
-			if (Director->ClearedSteps == 4) { Reward = ECastleDirectorReward::Shop; }
+			if (Director->ClearedSteps == 6) { Reward = ECastleDirectorReward::Shop; }
 			const int32 Gold = Director->Controller->GetEconomy()->GetGold();
 			const float HealthBeforeReward = Director->Tower->CurrentHealth;
 			const int32 AttacksBeforeReward = Director->Tower->AttackCount;
 			if (!Test->TestTrue(TEXT("实际奖励应用"), Director->TryChooseReward(Reward, Reason))) { Test->AddError(Reason.ToString()); return true; }
 			if (Director->ClearedSteps == 2)
 			{
-				Test->TestEqual(TEXT("第二次经验升到2级"), Director->Level, 2);
-				Test->TestEqual(TEXT("2级房间上限250"), Director->Controller->GetShop()->RoomLimit, 250);
-				Test->TestEqual(TEXT("Lv2 有三项待领取"), Director->UpgradeRewards.Num(), 3);
-				Director->ClaimTowerUpgradeReward(0);
-				Test->TestEqual(TEXT("点击只消耗一项"), Director->UpgradeRewards.Num(), 2);
-				Director->DiscardTowerUpgradeRewards();
-				Test->TestTrue(TEXT("关闭清空未领取项"), Director->UpgradeRewards.IsEmpty());
+				// 主塔成长由房间占格驱动，连续领取金币不能推进等级。
+				Test->TestEqual(TEXT("第二次金币奖励到账60"), Director->Controller->GetEconomy()->GetGold() - Gold, 60);
+				Test->TestEqual(TEXT("第二次领奖后仍是Lv1"), Director->Level, 1);
+				Test->TestTrue(TEXT("房间未达标没有升级奖励"), Director->UpgradeRewards.IsEmpty());
 			}
 			if (Director->ClearedSteps == 3)
 			{
 				Test->TestEqual(TEXT("实际回血恢复300"), Director->Tower->CurrentHealth, FMath::Min(Director->Tower->MaxHealth, HealthBeforeReward + Director->Tower->MaxHealth * 0.3f));
 				Test->TestEqual(TEXT("实际回血不改攻击次数"), Director->Tower->AttackCount, AttacksBeforeReward);
-			}
-			if (Director->ClearedSteps == 4)
-			{
-				Test->TestTrue(TEXT("商店奖励自动打开"), Director->Controller->GetShop()->IsShopOpen());
-				Test->TestEqual(TEXT("免费换批不扣金币"), Director->Controller->GetEconomy()->GetGold(), Gold);
-				Director->Controller->ToggleShop();
-				Test->TestFalse(TEXT("关闭商店后移动恢复"), Director->Controller->IsMoveInputIgnored());
-				Director->Controller->ToggleShop();
-				Test->TestTrue(TEXT("本轮B可重新打开商店"), Director->Controller->GetShop()->IsShopOpen());
+				if (!Test->TestTrue(TEXT("第 4 关生成休息岛节点"), Director->Nodes.Num() == 2
+					&& Director->Nodes.Last()->GetKind() == ECastleDirectorNodeKind::RestIsland)) { return true; }
+				Director->HandleNodeTouched(Director->Nodes.Last());
+				Director->Tick(0);
+				if (!Test->TestEqual(TEXT("第 4 关进入真实休息岛"), Director->GetPhase(), ECastleDirectorPhase::SkyIsland)) { return true; }
+				const auto* Portal = Director->ActiveSkyIsland->FindComponentByClass<UCastleSkyIslandDepartureComponent>();
+				if (!Test->TestNotNull(TEXT("找到休息岛传送门"), Portal)) { return true; }
+				const FVector PortalLocation = Portal->GetComponentLocation();
+				if (!Test->TestTrue(TEXT("准星命中离岛传送门"), Director->TryInteractWithSkyIsland(
+					PortalLocation + FVector::UpVector * 450.0, PortalLocation, Reason))) { return true; }
+				Director->Tick(0);
+				Test->TestEqual(TEXT("返塔后待进入第 5 关"), Director->GetNextStep(), 5);
+				if (!Test->TestTrue(TEXT("休息岛返塔发布第 5 关节点"), Director->GetPhase() == ECastleDirectorPhase::Editing
+					&& Director->Nodes.Num() == 2)) { return true; }
 				for (ACastleDirectorNodeActor* Node : Director->Nodes)
 				{
 					Test->TestEqual(TEXT("第5关全部精英节点"), Node->GetKind(), ECastleDirectorNodeKind::Elite);
@@ -384,7 +452,16 @@ public:
 					Test->TestEqual(TEXT("精英标签关卡文本"), Text.ToString(), FString(TEXT("精英 · 第 5 关")));
 				}
 			}
-			Stage = Director->ClearedSteps < 5 ? 4 : 6;
+			if (Director->ClearedSteps == 6)
+			{
+				Test->TestTrue(TEXT("商店奖励自动打开"), Director->Controller->GetShop()->IsShopOpen());
+				Test->TestEqual(TEXT("免费换批不扣金币"), Director->Controller->GetEconomy()->GetGold(), Gold);
+				Director->Controller->ToggleShop();
+				Test->TestFalse(TEXT("关闭商店后移动恢复"), Director->Controller->IsMoveInputIgnored());
+				Director->Controller->ToggleShop();
+				Test->TestTrue(TEXT("本轮B可重新打开商店"), Director->Controller->GetShop()->IsShopOpen());
+			}
+			Stage = Director->ClearedSteps < 6 ? 4 : 6;
 			return false;
 		}
 		if (Stage == 6)
@@ -400,7 +477,7 @@ public:
 		{
 			if (Director->ClearedSteps != 0 || Director->GetPhase() != ECastleDirectorPhase::Editing) { return false; }
 			Test->TestEqual(TEXT("重新加载重置等级"), Director->Level, 1);
-			Test->TestEqual(TEXT("重新加载重置经验"), Director->Experience, 0);
+			Test->TestEqual(TEXT("重新加载重置房间上限"), Director->GetCurrentRoomLimit(), 30);
 			Test->TestEqual(TEXT("重新加载恢复 5×5×9 棋盘容量"), Board->GridSize, FIntVector(5, 5, 9));
 			Test->TestEqual(TEXT("重新加载恢复主塔开局三层"), Board->GetUnlockedLayerCount(), 3);
 			Test->TestTrue(TEXT("重新加载生成第一关节点"), Director->Nodes.Num() >= 2);
@@ -475,40 +552,15 @@ private:
 	TWeakObjectPtr<ACastleBuildingBase> Building;
 };
 
-/** 始终退出本测试启动的 PIE；正式地图内容不保存。 */
-class FDirectorBattleStopPIE final : public IAutomationLatentCommand
-{
-public:
-	bool Update() override
-	{
-		for (const auto& Context : GEngine->GetWorldContexts())
-		{
-			if (Context.WorldType != EWorldType::PIE) { continue; }
-			if (!bRequested)
-			{
-				UClass* Tool = FindObject<UClass>(nullptr, TEXT("/Script/EditorToolset.EditorAppToolset"));
-				UFunction* Stop = Tool ? Tool->FindFunctionByName(TEXT("StopPIE")) : nullptr;
-				check(Stop);
-				struct FParams { UObject* ReturnValue = nullptr; } Params;
-				Tool->GetDefaultObject()->ProcessEvent(Stop, &Params);
-				bRequested = true;
-			}
-			return false;
-		}
-		return true;
-	}
-private:
-	bool bRequested = false;
-};
-
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDirectorBattleIntegrationTest, "MovingCastle.Director.BattleIntegration",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FCastleDirectorBattleIntegrationTest::RunTest(const FString& Parameters)
 {
-	if (!AutomationOpenMap(TEXT("/Game/MovingCastle/Maps/MainMap"), true)) { return false; }
+	// 完整战斗场景独占一次 MainMap PIE，结束后交回编辑器视口。
+	if (!CastlePIEAutomation::StartPIE(*this, TEXT("/Game/MovingCastle/Maps/MainMap"))) { return false; }
 	ADD_LATENT_AUTOMATION_COMMAND(FEngineWaitLatentCommand(0.2f));
 	ADD_LATENT_AUTOMATION_COMMAND(FDirectorBattleScenario(this));
-	ADD_LATENT_AUTOMATION_COMMAND(FDirectorBattleStopPIE());
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>(CastlePIEAutomation::StopPIE()));
 	return true;
 }
 #endif

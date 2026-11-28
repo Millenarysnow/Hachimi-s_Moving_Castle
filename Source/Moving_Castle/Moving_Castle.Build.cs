@@ -33,11 +33,13 @@ public class Moving_Castle : ModuleRules
 			"SlateCore"
 		});
 
-		PrivateDependencyModuleNames.AddRange(new string[] { });
+		// 主塔表现组件与导演浮空门户均引用 Niagara，由运行时模块公开导出该依赖。
+		PublicDependencyModuleNames.Add("Niagara");
 		// 几何身份在编辑器离线生成；正式游戏只读取目录，不依赖 MeshDescription 或 CPU 顶点。
 		if (Target.bBuildEditor)
 		{
-			PrivateDependencyModuleNames.AddRange(new string[] { "MeshDescription", "StaticMeshDescription", "Json", "UnrealEd", "AssetRegistry", "FBX", "UMGEditor" });
+			// 建筑配色需要读取作者源图并制作独立 mip 的纹理数组，ImageCore 只用于编辑器制作。
+			PrivateDependencyModuleNames.AddRange(new string[] { "MeshDescription", "StaticMeshDescription", "Json", "UnrealEd", "AssetRegistry", "FBX", "UMGEditor", "Kismet", "AssetTools", "ImageCore" });
 		}
 
 		PublicIncludePaths.AddRange(new string[] {

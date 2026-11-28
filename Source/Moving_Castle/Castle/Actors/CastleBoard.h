@@ -22,6 +22,7 @@ class UCastleBackpackComponent;
 class UCastleCombatDataAsset;
 class UCastleGroundGenerator;
 class UCastleMainTowerComponent;
+class UCastleMainTowerBalloonComponent;
 class UCastleTowerSideGridComponent;
 class UCastleTowerDispatchConfigDataAsset;
 class UStaticMeshComponent;
@@ -124,6 +125,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|建造面", meta = (Units = "cm", EditCondition = "PlacementSurfaceMode == ECastlePlacementSurfaceMode::MainTowerSides"))
 	float TowerSideSurfaceOffset = 0.0f;
 
+	/** 教学地图显式固定塔侧花色；正式游局保持每局独立采样。 */
+	UPROPERTY(EditAnywhere, Category = "棋盘|建造面")
+	bool bUseFixedTowerSideSeed = false;
+
+	UPROPERTY(EditAnywhere, Category = "棋盘|建造面", meta = (EditCondition = "bUseFixedTowerSideSeed"))
+	int32 FixedTowerSideSeed = 93;
+
 	/** 由正式塔侧关卡开启；地面棋盘及旧塔侧夹具仍使用它们自己的 GridSize.Z。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|主塔扩层")
 	bool bEnableProgressiveTowerLayers = false;
@@ -149,7 +157,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
 	int32 GetUnlockedLayerCount() const;
 
-	/** 完整追加新塔身和侧格之后才发布新的建筑高度上限。 */
+	/** 整塔和吊挂套件切换、侧格追加完成后才发布新的建筑高度上限。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|棋盘")
 	bool ExpandMainTowerLayers(int32 TargetLayerCount, FText& OutReason);
 
@@ -203,9 +211,12 @@ public:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "战斗|敌人")
 	TObjectPtr<ACastleMassEnemySpawner> InitialEnemySpawner;
 
-	/** 原型背包装入普通房间、箭塔、炮塔、农田和盾塔各两张五色 1～9 号卡。 */
+	/** 塔侧开局存放五张连通牌，地面棋盘沿用原型样牌。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "棋盘|原型操作")
 	TObjectPtr<UCastleBackpackComponent> PrototypeBackpack;
+	/** 教程地图显式关闭样例牌，由教学导演按步骤发放固定手牌。 */
+	UPROPERTY(EditAnywhere, Category = "棋盘|原型操作")
+	bool bDealPrototypeDeckOnBeginPlay = true;
 
 	/** 当前数字键对应的样例卡牌，便于在没有 UI 资源时直接验证放置和合成。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "棋盘|原型操作")
@@ -297,9 +308,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|棋盘")
 	bool RemoveBuilding(ACastleBuildingBase* Building, FText& OutFailureReason);
 
-	/** 移除场上建筑并将其当前描述放回背包，背包满时整个操作失败。 */
+	/** 无目标格的旧入口仅允许单格建筑，多格建筑必须明确指定拆除坐标。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|棋盘")
 	bool RemoveBuildingToBackpack(ACastleBuildingBase* Building, UCastleBackpackComponent* Backpack, FText& OutFailureReason);
+
+	/** 按棋盘局部格宽、层高归一化选择命中点所属占格，同距时取字典序最小值。 */
+	bool TryResolveBuildingCell(const ACastleBuildingBase& Building, const FVector& WorldImpactPoint, FIntVector& OutCell) const;
+
+	/** 原子回收一格为一级牌，落定同属性剩余建筑，随后提交一次棋盘布局。 */
+	bool DemolishBuildingCellToBackpack(ACastleBuildingBase* Building, const FIntVector& TargetCell,
+		UCastleBackpackComponent* Backpack, FText& OutFailureReason);
 
 	/** 返回当前场上独立建筑 Actor 的数量，合成建筑只计一个 Actor。 */
 	UFUNCTION(BlueprintPure, Category = "移动城堡|棋盘")
@@ -318,6 +336,10 @@ public:
 
 	/** 查询指定坐标当前登记的建筑（含侧挂越界格）；未占用时返回空指针。 */
 	ACastleBuildingBase* GetBuildingAt(const FIntVector& Coordinate) const;
+
+	/** 有效道路是已建成的高速公路，且正上方紧贴的一格没有其他房间。 */
+	bool IsHighwayCellActive(const FIntVector& Coordinate) const;
+	TArray<FIntVector> GetActiveHighwayCells() const;
 
 	/** 正下方底面投影内扫描指定层数；-1 表示全部下层，结果不含自身且按建筑实例去重。 */
 	bool GetBuildingsBelow(const ACastleBuildingBase* Source, int32 LayerCount, TArray<ACastleBuildingBase*>& OutBuildings) const;
@@ -378,6 +400,12 @@ protected:
 
 	/** 生成原型背包的样例卡，属性来自本次实际生成的建造面。 */
 	void InitializePrototypeDeck();
+	/** 按第一层四个实际侧格生成五张可绕行的一级建筑牌，并整批加入背包。 */
+	bool InitializeTowerSideStarterDeck(FText& OutReason);
+
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FCastleTowerStarterDeckTest;
+#endif
 
 	/** 查找背包中与当前样例卡牌完全匹配的第一张卡牌。 */
 	int32 FindPrototypeCardIndex(const FCastleBuildingDescriptor& Descriptor) const;
@@ -396,7 +424,8 @@ protected:
 	void DestroyGroundTileActors();
 
 	/** 根据命中信息生成一个完整的网格指针结果。 */
-	void BuildGridCursorTarget(const FIntVector& Cell, const FVector& LocalImpactPoint, const FVector& LocalNormal, FCastleGridCursorTarget& OutTarget) const;
+	void BuildGridCursorTarget(const FIntVector& Cell, const FVector& LocalNormal, bool bGroundTarget,
+		FCastleGridCursorTarget& OutTarget) const;
 
 	/** 在屏幕上显示当前原型操作结果和失败原因。 */
 	void ShowPrototypeMessage(const FString& Message, const FColor& Color = FColor::White) const;
@@ -455,6 +484,9 @@ protected:
 	/** 校验两个建筑的联合占用坐标是否符合当前等级规定的形状。 */
 	bool BuildMergedFootprint(const ACastleBuildingBase* First, const ACastleBuildingBase* Second, TArray<FIntVector>& OutFootprint) const;
 
+	/** 合成与拆除共用合法形状表；同级顺序也是降级拆分的轴向优先级。 */
+	static TConstArrayView<FIntVector> GetMergedShapeDimensions(int32 ResultLevel);
+
 	/** 生成高一级 Actor 并替换坐标索引；旧 Actor 由整次连续合成抓取视觉后统一销毁。 */
 	ACastleBuildingBase* MergeBuildings(ACastleBuildingBase* First, ACastleBuildingBase* Second, const TArray<FIntVector>& MergedFootprint, FText& OutFailureReason);
 
@@ -473,15 +505,8 @@ protected:
 	/** 只有启用逐级扩层的塔侧关卡使用此运行时状态。 */
 	int32 CurrentUnlockedLayers = 0;
 	bool UsesProgressiveTowerLayers() const;
-	/** 塔身网格由主塔持有。这里记录每段的原碰撞状态，揭开新层时恢复。 */
-	struct FTowerBodyPart
-	{
-		TWeakObjectPtr<UStaticMeshComponent> Mesh;
-		ECollisionEnabled::Type Collision = ECollisionEnabled::NoCollision;
-		bool bAffectsNavigation = false;
-	};
-	TArray<TArray<FTowerBodyPart>> TowerBodySections;
-	UPROPERTY(Transient) TObjectPtr<USceneComponent> TowerCrownAnchor;
+	/** 主塔持有表现组件；棋盘只在开局和侧格扩层事务中切换整套美术。 */
+	UPROPERTY(Transient) TObjectPtr<UCastleMainTowerBalloonComponent> TowerPresentation;
 	bool InitializeProgressiveTowerPresentation(AActor& Tower, UCastleMainTowerComponent& Health, FText& OutReason);
 
 	/** 塔侧模式的中心整列不可被房间占用，在预览和真正登记时共同校验。 */

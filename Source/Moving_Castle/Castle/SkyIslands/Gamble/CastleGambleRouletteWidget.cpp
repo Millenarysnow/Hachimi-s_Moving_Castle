@@ -1,4 +1,5 @@
 #include "CastleGambleRouletteWidget.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "CastleGambleSkyIsland.h"
 #include "Components/Button.h"
@@ -50,6 +51,7 @@ void UCastleGambleRouletteWidget::RefreshActions()
 
 void UCastleGambleRouletteWidget::SelectBet(const ECastleRouletteColor Color)
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	Bet = Color;
 	const FText Labels[] = {BlackLabel->GetText(), RedLabel->GetText(), GreenLabel->GetText()};
 	BetLabel->SetText(FText::Format(INVTEXT("已押 {0}"), Labels[static_cast<uint8>(Color)]));
@@ -58,6 +60,7 @@ void UCastleGambleRouletteWidget::SelectBet(const ECastleRouletteColor Color)
 
 void UCastleGambleRouletteWidget::HandleReturnAll()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (!Island.IsValid()) { return; }
 	FText Reason;
 	const bool bReturned = Island->TryReturnAllCards(Reason);
@@ -67,6 +70,7 @@ void UCastleGambleRouletteWidget::HandleReturnAll()
 
 void UCastleGambleRouletteWidget::HandleReturn()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (!Island.IsValid()) { return; }
 	FText Reason;
 	const bool bReturned = Island->TryReturnLastCard(Reason);
@@ -80,6 +84,7 @@ void UCastleGambleRouletteWidget::HandleGreen() { SelectBet(ECastleRouletteColor
 
 void UCastleGambleRouletteWidget::HandleSpin()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (!Island.IsValid() || !Bet.IsSet()) { return; }
 	FText Reason;
 	const bool bStarted = Island->TrySpinRoulette(Bet.GetValue(), Reason);
@@ -95,6 +100,7 @@ void UCastleGambleRouletteWidget::FinishSpin(const FText& Result)
 
 void UCastleGambleRouletteWidget::HandleClose()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	FText Reason;
 	if (Island.IsValid() && !Island->TryCloseRoulettePanel(Reason)) { ResultLabel->SetText(Reason); }
 }

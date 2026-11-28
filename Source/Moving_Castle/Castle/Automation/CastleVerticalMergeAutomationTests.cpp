@@ -6,7 +6,10 @@
 #include "NavigationSystem.h"
 #include "CastleBackpackComponent.h"
 #include "BuildingMergeComponent.h"
+#include "Castle/Items/CastleBadgeSubsystem.h"
+#include "Castle/PCG/CastleBuildingPCGSubsystem.h"
 #include "Engine/Engine.h"
+#include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
@@ -22,7 +25,7 @@ namespace CastleVerticalMergeTests
 		if (World != nullptr)
         {
             GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
-            // 三维合成夹具现在同时覆盖PCG梯子生命周期，显式创建导航输入。
+            // 合成与拆除的动画会登记导航观察者，显式创建导航输入。
             check(FNavigationSystem::GetCurrent<UNavigationSystemV1>(World)->GetDefaultNavDataInstance(FNavigationSystem::Create));
         }
 		return World;
@@ -50,6 +53,12 @@ namespace CastleVerticalMergeTests
 		}
 		FText Reason;
 		if (!Board->ApplyGroundGenerationResult(Ground, Reason)) { return nullptr; }
+		// 此夹具的原生立方体不含 PCG 楼板，逻辑测试单独验证占格、合成与过渡。
+		// 正式蓝图的梯口和导航由同套件的 DaoDunBlueprints 及 PCG 专项使用正式资产验证。
+		auto* PCG = World->GetSubsystem<UCastleBuildingPCGSubsystem>();
+		check(PCG);
+		PCG->ObserveBoard(Board);
+		Board->OnLayoutCommitted.RemoveAll(PCG);
 		return Board;
 	}
 }
@@ -131,18 +140,263 @@ bool FCastleVerticalMergeShapesTest::RunTest(const FString& Parameters)
 			Result->BuildingMerge->TickComponent(100.0f, LEVELTICK_All, nullptr);
 			TestFalse(Context + TEXT("：合并动画正常结束"), Result->BuildingMerge->bIsPlaying);
 
-			// 垂直建筑回收必须释放各层索引；背包保留等级身份，再次放置仍采用既有标准朝向。
-			if (!TestTrue(Context + TEXT("：回收成功"), Board->RemoveBuildingToBackpack(Result, Board->PrototypeBackpack, Reason))) { return false; }
-			TestEqual(Context + TEXT("：回收清空全部占格"), Board->GetOccupiedRoomCellCount(), 0);
+			// 从底层起点拆一格，避免将底下仍有原支撑的上层复放条件混入回收语义。
+			if (!TestTrue(Context + TEXT("：只回收指定格"), Board->DemolishBuildingCellToBackpack(
+				Result, Board->GridOrigin, Board->PrototypeBackpack, Reason))) { AddError(Reason.ToString()); return false; }
+			TestEqual(Context + TEXT("：回收后其余层仍占用"), Board->GetOccupiedRoomCellCount(), Shape.Cells.Num() - 1);
+			for (const FIntVector& Cell : Shape.Cells)
+			{
+				if (Cell != FIntVector::ZeroValue)
+				{
+					TestNotNull(Context + TEXT("：未拆格仍由降级建筑占用"), Board->GetBuildingAt(Board->GridOrigin + Cell));
+				}
+			}
 			ACastleBuildingBase* Replaced = Board->PlaceBuildingFromBackpack(Board->GridOrigin, Board->PrototypeBackpack, 0, false, Reason);
 			if (!TestNotNull(Context + TEXT("：回收卡可重新放置"), Replaced)) { AddError(Reason.ToString()); return false; }
 			if (!CastleBuildingTests::CompletePlacement(Replaced)) { return false; }
-			TestEqual(Context + TEXT("：回收后等级不变"), Replaced->GetBuildingLevel(), Shape.Level);
+			TestEqual(Context + TEXT("：回收卡重新放置是一级"), Replaced->GetBuildingLevel(), 1);
 			TestEqual(Context + TEXT("：重新放置仅消耗一张卡"), Board->PrototypeBackpack->GetItemCount(), 0);
-			if (!Board->RemoveBuilding(Replaced, Reason)) { AddError(Reason.ToString()); return false; }
+			for (ACastleBuildingBase* Actor : Board->GetPlacedBuildings())
+			{
+				if (!Board->RemoveBuilding(Actor, Reason)) { AddError(Reason.ToString()); return false; }
+			}
 			AddInfo(Context + TEXT("：占格、锚点、动画与回收验证通过。"));
 		}
 	}
+	return true;
+}
+
+/** 分开记录每种占格的精确降级结果，方便定位哪个优先形状或坐标发生偏差。 */
+IMPLEMENT_COMPLEX_AUTOMATION_TEST(FCastleDemolitionShapeTest, "MovingCastle.Logic.Demolition.Shape",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+void FCastleDemolitionShapeTest::GetTests(TArray<FString>& OutNames, TArray<FString>& OutCommands) const
+{
+	OutNames = {TEXT("Lv2"), TEXT("Lv3.Horizontal"), TEXT("Lv3.Vertical"), TEXT("Lv4")};
+	OutCommands = OutNames;
+}
+
+bool FCastleDemolitionShapeTest::RunTest(const FString& Shape)
+{
+	UWorld* World = CastleVerticalMergeTests::MakeWorld();
+	if (!TestNotNull(TEXT("创建单格拆除测试世界"), World)) { return false; }
+	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
+	CastleBuildingTests::FScopedNativeBuildingModels TestModels(World);
+	auto* Definition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::ShieldTower);
+	auto* Board = CastleVerticalMergeTests::MakeBoard(World, Definition);
+	if (!TestNotNull(TEXT("建立同色号的旋转棋盘夹具"), Board)) { return false; }
+
+	FText Reason;
+	FCastleBuildingDescriptor Card;
+	const FIntVector Origin = Board->GridOrigin;
+	struct FExpectedBuilding
+	{
+		int32 Level;
+		TArray<FIntVector> Cells;
+	};
+	TArray<FExpectedBuilding> Expected;
+	FIntVector RemovedOffset;
+	ACastleBuildingBase* Original = nullptr;
+	if (Shape == TEXT("Lv3.Vertical"))
+	{
+		// 用实际垂直飞入合成 XZ 四格，不依赖默认水平的多格直接生成入口。
+		if (!Definition->CreateDescriptor(1, ECastleTileColor::Red, 3, Card, Reason)) { AddError(Reason.ToString()); return false; }
+		for (const FIntVector& Cell : {FIntVector(0, 0, 0), FIntVector(0, 0, 1), FIntVector(1, 0, 0), FIntVector(1, 0, 1)})
+		{
+			if (!CastleBuildingTests::CompletePlacement(Board->PlaceBuilding(Origin + Cell, Card, true, Reason)))
+			{
+				AddError(Reason.ToString());
+				return false;
+			}
+		}
+		Original = Board->GetBuildingAt(Origin);
+		RemovedOffset = FIntVector(1, 0, 1);
+		Expected = {{2, {{0, 0, 0}, {1, 0, 0}}}, {1, {{0, 0, 1}}}};
+	}
+	else
+	{
+		int32 Level = 0;
+		if (Shape == TEXT("Lv2"))
+		{
+			Level = 2;
+			RemovedOffset = FIntVector(1, 0, 0);
+			Expected = {{1, {{0, 0, 0}}}};
+		}
+		else if (Shape == TEXT("Lv3.Horizontal"))
+		{
+			Level = 3;
+			RemovedOffset = FIntVector(1, 1, 0);
+			Expected = {{2, {{0, 0, 0}, {1, 0, 0}}}, {1, {{0, 1, 0}}}};
+		}
+		else if (Shape == TEXT("Lv4"))
+		{
+			Level = 4;
+			RemovedOffset = FIntVector(1, 1, 1);
+			// 缺少顶层一角时，应先留下水平四格，然后取顶层 X 向一对，最后保留单格。
+			Expected = {{3, {{0, 0, 0}, {0, 1, 0}, {1, 0, 0}, {1, 1, 0}}},
+				{2, {{0, 0, 1}, {1, 0, 1}}}, {1, {{0, 1, 1}}}};
+		}
+		else
+		{
+			AddError(TEXT("未知的拆除形状验收场景。"));
+			return false;
+		}
+		if (!Definition->CreateDescriptor(Level, ECastleTileColor::Red, 3, Card, Reason))
+		{
+			AddError(Reason.ToString());
+			return false;
+		}
+		Original = Board->PlaceBuilding(Origin, Card, false, Reason);
+		if (!CastleBuildingTests::CompletePlacement(Original)) { AddError(Reason.ToString()); return false; }
+	}
+	if (!TestNotNull(TEXT("待拆建筑已完整占用测试坐标"), Original)) { return false; }
+	Original->BuildingMerge->TickComponent(100.0f, LEVELTICK_All, nullptr);
+	const FIntVector Target = Origin + RemovedOffset;
+	FIntVector Resolved;
+	TestTrue(TEXT("变换后的指定格中心能解析回同一占格"),
+		Board->TryResolveBuildingCell(*Original, Board->GetGridWorldLocation(Target), Resolved) && Resolved == Target);
+	const FVector Midpoint = (Board->GetGridWorldLocation(Origin) + Board->GetGridWorldLocation(Origin + FIntVector(1, 0, 0))) * 0.5;
+	TestTrue(TEXT("旋转缩放棋盘的等距格界仍选字典序首格"),
+		Board->TryResolveBuildingCell(*Original, Midpoint, Resolved) && Resolved == Origin);
+	const int32 OriginalCellCount = Original->GetOccupiedCoordinates().Num();
+	int32 LayoutCommitCount = 0;
+	const FDelegateHandle LayoutHandle = Board->OnLayoutCommitted.AddLambda(
+		[&](const ACastleBoard*, const FVector&) { ++LayoutCommitCount; });
+	ON_SCOPE_EXIT { Board->OnLayoutCommitted.Remove(LayoutHandle); };
+	if (!Board->DemolishBuildingCellToBackpack(Original, Target, Board->PrototypeBackpack, Reason))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	TestEqual(TEXT("仅提交一次最终布局"), LayoutCommitCount, 1);
+	TestNull(TEXT("指定格被释放"), Board->GetBuildingAt(Target));
+	TestEqual(TEXT("其余占格数守恒"), Board->GetOccupiedRoomCellCount(), OriginalCellCount - 1);
+	TestEqual(TEXT("生成预期的降级 Actor 数量"), Board->GetPlacedBuildingCount(), Expected.Num());
+	TestEqual(TEXT("只回收一张牌"), Board->PrototypeBackpack->GetItemCount(), 1);
+	FCastleBuildingDescriptor Returned;
+	TestTrue(TEXT("回收的是同定义同色同号一级卡"), Board->PrototypeBackpack->TryGetItemAt(0, Returned)
+		&& Returned.Level == 1 && Returned.Definition == Definition && Returned.Color == Card.Color && Returned.Number == Card.Number);
+	for (const FExpectedBuilding& Building : Expected)
+	{
+		const ACastleBuildingBase* Result = Board->GetBuildingAt(Origin + Building.Cells[0]);
+		if (!TestNotNull(TEXT("预期锚格已有降级建筑"), Result)) { return false; }
+		TestTrue(TEXT("降级建筑处于预期等级且已经落定"), Result->GetBuildingLevel() == Building.Level
+			&& Result->CanReceiveBuildingTrigger() && Result->GetOccupiedCoordinates().Num() == Building.Cells.Num());
+		for (const FIntVector& Cell : Building.Cells)
+		{
+			TestTrue(TEXT("重组按轴向优先级占据精确格组"), Board->GetBuildingAt(Origin + Cell) == Result);
+		}
+	}
+	return true;
+}
+
+/** 用真实徽章子系统证明邻接规整绕开赠牌，且回收入口的所有拒绝保持原索引与库存。 */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDemolitionNoBadgeRewardTest, "MovingCastle.Logic.Demolition.NoUpgradeBadgeReward",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCastleDemolitionNoBadgeRewardTest::RunTest(const FString&)
+{
+	UWorld* World = CastleVerticalMergeTests::MakeWorld();
+	if (!TestNotNull(TEXT("创建带玩家徽章的拆除夹具"), World)) { return false; }
+	ON_SCOPE_EXIT { World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
+	UGameInstance* Instance = NewObject<UGameInstance>(GEngine);
+	Instance->InitializeStandalone();
+	UWorld* InstanceWorld = Instance->GetWorld();
+	ON_SCOPE_EXIT
+	{
+		World->SetGameInstance(nullptr);
+		Instance->Shutdown();
+		GEngine->DestroyWorldContext(InstanceWorld);
+		InstanceWorld->DestroyWorld(false);
+	};
+	World->SetGameInstance(Instance);
+	auto* Badges = UCastleBadgeSubsystem::GetForWorld(World);
+	if (!TestNotNull(TEXT("玩家持有真实的徽章子系统"), Badges)) { return false; }
+	FCastleBadgeDefinition Badge;
+	FText Reason;
+	bool bNeedsReplacement = false;
+	if (!FCastleBadgeDefinition::TryMakeStandard(ECastleBadgeType::WorkshopRefund, Badge)
+		|| !Badges->TryAcquireBadge(Badge, bNeedsReplacement, Reason))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	TestEqual(TEXT("已激活两张升级赠牌"), Badges->GetUpgradeBonusRoomCards(), int64{2});
+	CastleBuildingTests::FScopedNativeBuildingModels TestModels(World);
+	auto* Definition = CastleBuildingTests::MakeDefinition(ECastleBuildingType::ShieldTower);
+	auto* Board = CastleVerticalMergeTests::MakeBoard(World, Definition);
+	if (!TestNotNull(TEXT("建立合成与外接邻居测试棋盘"), Board)) { return false; }
+	FCastleBuildingDescriptor Level1, Level2;
+	if (!Definition->CreateDescriptor(1, ECastleTileColor::Red, 3, Level1, Reason)
+		|| !Definition->CreateDescriptor(2, ECastleTileColor::Red, 3, Level2, Reason))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	const FIntVector Target = Board->GridOrigin;
+	const FIntVector SurvivingCell = Target + FIntVector(1, 0, 0);
+	const FIntVector NeighborCell = Target + FIntVector(2, 0, 0);
+	auto* Original = Board->PlaceBuilding(Target, Level2, false, Reason);
+	auto* Neighbor = Board->PlaceBuilding(NeighborCell, Level1, false, Reason);
+	if (!CastleBuildingTests::CompletePlacement(Original) || !CastleBuildingTests::CompletePlacement(Neighbor))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	auto* Backpack = Board->PrototypeBackpack.Get();
+	int32 Index = INDEX_NONE;
+	bool bOverflow = false;
+	AddExpectedError(TEXT("建筑栏仅允许一级单格建筑卡"), EAutomationExpectedErrorFlags::Contains, 3);
+	TestFalse(TEXT("背包拒绝写入多格卡"), Backpack->TryAddItem(Level2, Index, Reason));
+	TestFalse(TEXT("背包拒绝插入多格卡"), Backpack->TryInsertItemAt(0, Level2, Reason));
+	TestFalse(TEXT("允许溢出的入口也拒绝多格卡"), Backpack->TryAddItemAllowOverflow(Level2, bOverflow, Index, Reason));
+	AddExpectedError(TEXT("拒绝无坐标回收建筑"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestFalse(TEXT("无坐标回收整栋接口拒绝多格建筑"), Board->RemoveBuildingToBackpack(Original, Backpack, Reason));
+	// 刻意用只有一格的五级测试建筑覆盖 D9，验证按格数进入兼容接口也无法退成一级牌。
+	FCastleBuildingDescriptor Level5;
+	if (!Definition->CreateDescriptor(5, ECastleTileColor::Red, 3, Level5, Reason))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	const FIntVector HighLevelCell = Target + FIntVector(0, 2, 0);
+	auto* HighLevel = Board->PlaceBuilding(HighLevelCell, Level5, false, Reason);
+	if (!CastleBuildingTests::CompletePlacement(HighLevel)
+		|| !TestTrue(TEXT("五级夹具已落定并且只占目标格"), IsValid(HighLevel)
+			&& HighLevel->GetBuildingLevel() == 5 && HighLevel->CanReceiveBuildingTrigger()
+			&& HighLevel->GetOccupiedCoordinates().Num() == 1 && Board->GetBuildingAt(HighLevelCell) == HighLevel))
+	{
+		AddError(FString::Printf(TEXT("无法建立单格五级拆除夹具：%s"), *Reason.ToString()));
+		return false;
+	}
+	AddExpectedError(TEXT("拆除只支持一级至四级建筑"), EAutomationExpectedErrorFlags::Contains, 2);
+	TestFalse(TEXT("指定格拆除拒绝单格五级建筑"), Board->DemolishBuildingCellToBackpack(HighLevel, HighLevelCell, Backpack, Reason));
+	TestFalse(TEXT("无坐标回收拒绝单格五级建筑"), Board->RemoveBuildingToBackpack(HighLevel, Backpack, Reason));
+	TestTrue(TEXT("单格五级拒绝后保留占格和空背包"), Board->GetBuildingAt(HighLevelCell) == HighLevel
+		&& Backpack->GetItemCount() == 0 && Backpack->GetTempItemCount() == 0);
+	if (!Backpack->TrySetCapacity(1, Reason) || !Backpack->TryAddItem(Level1, Index, Reason))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	TestFalse(TEXT("满背包时拒绝单格拆除"), Board->DemolishBuildingCellToBackpack(Original, Target, Backpack, Reason));
+	TestFalse(TEXT("不属于原建筑的坐标不可拆除"), Board->DemolishBuildingCellToBackpack(Original, NeighborCell, Backpack, Reason));
+	TestTrue(TEXT("拒绝保持两座 Actor、原有格子与唯一背包卡"), Board->GetBuildingAt(Target) == Original
+		&& Board->GetBuildingAt(SurvivingCell) == Original && Board->GetBuildingAt(NeighborCell) == Neighbor
+		&& Backpack->GetItemCount() == 1 && Backpack->GetTempItemCount() == 0);
+	FCastleBuildingDescriptor RemovedCard;
+	if (!Backpack->TryRemoveItemAt(Index, RemovedCard, Reason)
+		|| !Board->DemolishBuildingCellToBackpack(Original, Target, Backpack, Reason))
+	{
+		AddError(Reason.ToString());
+		return false;
+	}
+	const auto* Combined = Board->GetBuildingAt(SurvivingCell);
+	TestTrue(TEXT("降级一级与已落定外部相邻一级立即合成"), Combined && Combined != Original && Combined != Neighbor
+		&& Combined->GetBuildingLevel() == 2 && Board->GetBuildingAt(NeighborCell) == Combined);
+	TestNull(TEXT("只有目标格清空"), Board->GetBuildingAt(Target));
+	TestEqual(TEXT("建筑栏只有目标格退回的一张牌"), Backpack->GetItemCount(), 1);
+	TestEqual(TEXT("临时建筑栏没有升级赠牌"), Backpack->GetTempItemCount(), 0);
 	return true;
 }
 

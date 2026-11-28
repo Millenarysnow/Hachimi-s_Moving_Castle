@@ -7,6 +7,7 @@
 #include "Castle/PCG/CastleBuildingPCGSubsystem.h"
 #include "CastleLadderLinkComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
 #include "CastleNavigationSubsystem.h"
 #include "CastleBuildingPreviewSubsystem.h"
 #include "AssemblyFlightComponent.h"
@@ -61,12 +62,12 @@ namespace CastleV4NavigationTests
 			TArray<FCastleActiveLadderConnection> Links;
 			PCG->GetActiveLadderConnections(Board, Links);
 			Test.TestFalse(TEXT("移除上楼后卸载对应接口梯"), Links.ContainsByPredicate([&](const auto& Link) { return Link.Building == Lower; }));
-			if (Scene == 5) { VerifyShieldRoof(false); }
+			if (Scene >= 5) { VerifyStepRoof(false); }
 			if (!Remove(Lower) || !Remove(Support)) { Cleanup(); return true; }
 			for (ACastleBuildingBase*& Building : Extra) { if (!Remove(Building)) { Cleanup(); return true; } }
 			Extra.Reset();
 			Stage = 0;
-			if (++Scene < 6) { return false; }
+			if (++Scene < 8) { return false; }
 			if (FParse::Param(FCommandLine::Get(), TEXT("HachimisV4Capture"))) { CaptureRoomsAndPreviews(); }
 			Cleanup();
 			return true;
@@ -118,12 +119,13 @@ namespace CastleV4NavigationTests
 			const bool bRotatedRooms = Scene == 4;
 			const bool bShieldBelow = Scene == 2 || Scene == 5;
 			const TCHAR* LowerName = bRotatedRooms ? TEXT("NormalRoom") : bShieldBelow ? TEXT("ShieldTower") : TEXT("ArcherTower");
-			const TCHAR* UpperName = bRotatedRooms ? TEXT("NormalRoom") : Scene == 1 ? TEXT("ShieldTower") : TEXT("CannonTower");
+			const TCHAR* UpperName = bRotatedRooms || Scene == 7 ? TEXT("NormalRoom")
+				: Scene == 1 ? TEXT("ShieldTower") : TEXT("CannonTower");
 			const int32 Level = Scene == 0 ? 2 : 1;
-			const bool bClosed = Scene == 3;
+			const bool bClosed = Scene == 3 || Scene == 6;
 			FCastleBuildingDescriptor LowerCard, UpperCard;
 			// 五级保持单格，正式玩法仍不自动合成五级；夹具直接放置，验证其不会再被旧 PCG 排除。
-			const int32 LowerLevel = Scene == 2 ? 5 : Scene == 5 ? 2 : Level;
+			const int32 LowerLevel = Scene == 2 ? 5 : Scene >= 5 ? 2 : Level;
 			if (!MakeCard(LowerName, LowerLevel, ECastleTileColor::Red, 3, LowerCard)
 				|| !MakeCard(UpperName, Level, bRotatedRooms ? ECastleTileColor::Red : ECastleTileColor::Blue,
 					bClosed ? 4 : 3, UpperCard)) { return false; }
@@ -202,7 +204,7 @@ namespace CastleV4NavigationTests
 
 		void VerifyStack()
 		{
-			const bool bClosed = Scene == 3;
+			const bool bClosed = Scene == 3 || Scene == 6;
 			const FString Label = FString::Printf(TEXT("场景 %d %s / %s"), Scene, *Lower->GetClass()->GetName(), *Upper->GetClass()->GetName());
 			TArray<FCastleActiveLadderConnection> Links;
 			PCG->GetActiveLadderConnections(Board, Links);
@@ -210,6 +212,12 @@ namespace CastleV4NavigationTests
 			{
 				Test.TestFalse(Label + TEXT(" 上下不匹配时无重合格梯"), Links.ContainsByPredicate([&](const auto& Link) { return Link.LowerCell == Center; }));
 				TraceFloor(Center + Up, FVector(120, 120, 0), true);
+				if (Scene == 6)
+				{
+					VerifyStepRoof(true);
+					VerifyStepDeck(false);
+					VerifySecondUpper();
+				}
 				return;
 			}
 			if (!Test.TestEqual(Label + TEXT(" 唯一跨栋梯"), Links.Num(), 1)) { return; }
@@ -256,7 +264,11 @@ namespace CastleV4NavigationTests
 			}
 			TraceFloor(Links[0].UpperCell, Offset, false);
 			TraceFloor(Links[0].UpperCell, FVector::ZeroVector, true);
-			if (Scene == 5) { VerifyShieldRoof(true); }
+			if (Scene == 5 || Scene == 7)
+			{
+				VerifyStepRoof(true);
+				VerifyStepDeck(true);
+			}
 			if (Scene == 0)
 			{
 				const FIntVector Other = Links[0].UpperCell == Center + Up ? Center + Up + FIntVector(1,0,0) : Center + Up;
@@ -266,11 +278,11 @@ namespace CastleV4NavigationTests
 			Test.AddInfo(Label + TEXT(" 梯口与闭环断言完成"));
 		}
 
-		/** 单格上塔只移走实际覆盖的盾塔屋面和接缝，移走上塔后所有作者件原地恢复。 */
-		void VerifyShieldRoof(bool bCovered)
+		/** 原二级屋面由两格的语义共同决定，坡顶留在外露格并朝远离上层的一侧。 */
+		void VerifyStepRoof(bool bCovered)
 		{
 			const UCastleHachimisV4Layout* Layout = Lower->HachimisLayout;
-			if (!Test.TestNotNull(TEXT("水平二级盾塔的逐格屋面装配"), Layout)) { return; }
+			if (!Test.TestNotNull(TEXT("水平二级功能塔的逐格屋面装配"), Layout)) { return; }
 			TArray<FCastlePCGPartAnnotation> Parts;
 			TMap<FIntVector, FIntVector> Cells;
 			FString Error;
@@ -279,19 +291,119 @@ namespace CastleV4NavigationTests
 				Test.AddError(Error);
 				return;
 			}
-			int32 CoveredBays = 0, ExposedBays = 0, Keys = 0;
+			int32 RoofParts = 0;
 			for (int32 Index = 0; Index < Layout->Parts.Num(); ++Index)
 			{
 				const FCastleV4Part& Part = Layout->Parts[Index];
 				if (Part.Group != TEXT("Roof") && Part.Group != TEXT("RoofKeys")) { continue; }
-				const bool bOverlap = Part.Cells.ContainsByPredicate([&](const FIntVector& Cell) { return Cells.FindChecked(Cell) == Center; });
-				Keys += Part.Group == TEXT("RoofKeys") && bOverlap;
-				CoveredBays += Part.Group == TEXT("Roof") && bOverlap;
-				ExposedBays += Part.Group == TEXT("Roof") && !bOverlap;
-				Test.TestEqual(Part.Node.ToString() + TEXT(" 可见性与实际叠放格面相符"),
-					Parts[Index].Component->IsVisible(), !(bCovered && bOverlap));
+				++RoofParts;
+				Test.TestEqual(Part.Node.ToString() + TEXT(" 原二级屋面在半坡启用时隐藏，拆楼后恢复"),
+					Parts[Index].Component->IsVisible(), !bCovered);
 			}
-			Test.TestTrue(TEXT("盾塔被覆盖和未覆盖屋面及跨格接缝均参与核对"), Keys > 0 && CoveredBays > 0 && ExposedBays > 0);
+			Test.TestTrue(TEXT("核对了非空的原装屋面"), RoofParts > 0);
+			const auto* Exposed = Lower->GetOccupiedCoordinates().FindByPredicate([&](const FIntVector& Cell)
+			{
+				return Cell != Center;
+			});
+			if (!Test.TestNotNull(TEXT("找到水平二级外露格"), Exposed)) { return; }
+			const FTransform Frame = CastleV4PCG::CellFrame(*Board, *Exposed + Up);
+			int32 StepParts = 0;
+			for (const auto* Part : TInlineComponentArray<UStaticMeshComponent*>(Lower))
+			{
+				const UStaticMesh* Mesh = Part->GetStaticMesh();
+				if (!Part->IsVisible() || !Mesh || !(Mesh->GetName().EndsWith(TEXT("_Slope"))
+					|| Mesh->GetName().EndsWith(TEXT("_WallApron")))) { continue; }
+				++StepParts;
+				const FVector Out = Frame.InverseTransformVectorNoScale(Part->GetComponentTransform().TransformVectorNoScale(FVector::RightVector));
+				Test.TestTrue(TEXT("坡顶及墙裙锚于外露格顶；高边朝上层，低檐朝外"),
+					Part->GetComponentLocation().Equals(Frame.GetLocation(), 0.1) && Out.Equals(FVector(*Exposed - Center), 0.01));
+				Test.TestTrue(TEXT("坡顶可被选中且不参与导航"), Part->GetCollisionResponseToChannel(ECC_Visibility) == ECR_Block
+					&& !Part->CanEverAffectNavigation());
+			}
+			Test.TestEqual(TEXT("只在单侧叠放时装配坡顶与墙裙"), StepParts, bCovered ? 2 : 0);
+		}
+
+		void VerifyStepDeck(bool bHatch)
+		{
+			const FString MeshName = FString::Printf(TEXT("SM_HC515_%s_Deck"), *Lower->HachimisLayout->Family.ToString());
+			const auto& LadderParts = Lower->HachimisLayout->Ladder->Parts;
+			int32 Decks = 0, Floors = 0, ExpectedFloors = 0;
+			for (const FCastleV4Part& Part : LadderParts) { ExpectedFloors += Part.Group == TEXT("UpperFloor"); }
+			for (const auto* Part : TInlineComponentArray<UStaticMeshComponent*>(Upper))
+			{
+				const UStaticMesh* Mesh = Part->GetStaticMesh();
+				if (!Part->IsVisible() || !Mesh) { continue; }
+				if (Mesh->GetName() == MeshName)
+				{
+					++Decks;
+				}
+				const bool bFloor = Part->ComponentHasTag(TEXT("CastlePCGGroup=UpperFloor"));
+				if (bFloor)
+				{
+					++Floors;
+					Test.TestTrue(TEXT("带孔上层楼板来自下层本族正式梯具"), LadderParts.ContainsByPredicate([&](const FCastleV4Part& Floor)
+					{
+						return Floor.Group == TEXT("UpperFloor") && Floor.Mesh == Mesh
+							&& Part->ComponentHasTag(FName(TEXT("CastlePCGNode=") + Floor.Node.ToString()));
+					}));
+				}
+				if (bFloor || Mesh->GetName() == MeshName)
+				{
+					// 两种视觉楼板只负责选中，行走面由玩法碰撞提供。
+					Test.TestTrue(TEXT("上层宽边板只阻挡选中查询"), Part->GetCollisionResponseToChannel(ECC_Visibility) == ECR_Block
+						&& Part->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Ignore && !Part->CanEverAffectNavigation());
+				}
+			}
+			Test.TestEqual(TEXT("无梯井时上层才持有一块本族实心宽边板"), Decks, bHatch ? 0 : 1);
+			Test.TestEqual(TEXT("有梯井时上层持有全部带孔楼板作者件"), Floors, bHatch ? ExpectedFloors : 0);
+			TArray<FCastlePCGPartAnnotation> Original;
+			FString Error;
+			if (!CastleV4PCG::Extract(*Upper, *Board, Original, Error)) { Test.AddError(Error); return; }
+			const auto& Parts = Upper->HachimisLayout->Parts;
+			for (int32 Index = 0; Index < Parts.Num(); ++Index)
+			{
+				if (Parts[Index].Group == TEXT("Foundation"))
+				{
+					Test.TestFalse(TEXT("上层原装底盘视觉已隐藏"), Original[Index].Component->IsVisible());
+				}
+			}
+		}
+
+		void VerifySecondUpper()
+		{
+			// 用第一个上层塔的同号侧面延伸到第二格，两个下层接触面均保持封闭。
+			const auto* Exposed = Lower->GetOccupiedCoordinates().FindByPredicate([&](const FIntVector& Cell) { return Cell != Center; });
+			if (!Exposed) { Test.AddError(TEXT("第二座上层建筑缺少目标格")); return; }
+			FCastleBuildingDescriptor Card;
+			if (!MakeCard(TEXT("CannonTower"), 1, ECastleTileColor::Blue, 4, Card)) { return; }
+			const FIntVector Offset = *Exposed - Center;
+			FCastleGridCursorTarget Cursor;
+			Cursor.bValid = true;
+			Cursor.Surface = ECastleGridCursorSurface::Building;
+			Cursor.Cell = Center + Up;
+			Cursor.AdjacentCell = *Exposed + Up;
+			if (Offset.X > 0) { Cursor.Face = ECastleGridFace::PositiveX; }
+			else if (Offset.X < 0) { Cursor.Face = ECastleGridFace::NegativeX; }
+			else if (Offset.Y > 0) { Cursor.Face = ECastleGridFace::PositiveY; }
+			else { Cursor.Face = ECastleGridFace::NegativeY; }
+			FText Error;
+			ACastleBuildingBase* Second = Board->PlaceBuildingAtCursor(Cursor, Card, false, Error);
+			if (!Second) { Test.AddError(Error.ToString()); return; }
+			FinishAnimations();
+			const auto HasStepMesh = [](const ACastleBuildingBase* Building, const TCHAR* Suffix)
+			{
+				for (const auto* Part : TInlineComponentArray<UStaticMeshComponent*>(Building))
+				{
+					if (Part->IsVisible() && Part->GetStaticMesh() && Part->GetStaticMesh()->GetName().EndsWith(Suffix)) { return true; }
+				}
+				return false;
+			};
+			Test.TestFalse(TEXT("第二格被占后外倾坡顶卸下"), HasStepMesh(Lower, TEXT("_Slope")));
+			Test.TestFalse(TEXT("第二格被占后第一个上层宽边板卸下"), HasStepMesh(Upper, TEXT("_Deck")));
+			if (!Remove(Second)) { Extra.Insert(Second, 0); return; }
+			FinishAnimations();
+			VerifyStepRoof(true);
+			VerifyStepDeck(false);
 		}
 
 		void TraceFloor(const FIntVector& Cell, const FVector& Offset, bool bSolid)
