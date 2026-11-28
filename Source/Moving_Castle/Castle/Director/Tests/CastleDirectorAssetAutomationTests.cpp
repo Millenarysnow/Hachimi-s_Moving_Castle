@@ -21,6 +21,9 @@ bool FCastleDirectorAssetsTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("正式导演DA配置通过校验"), Config->ValidateConfig(Reason))) { AddError(Reason.ToString()); return false; }
 	TestEqual(TEXT("正式导演配置引用 Overview 圆形传送门 8 的 Light 效果"), Config->NodePortalSystem->GetPathName(),
 		FString(TEXT("/Game/Portals_VFXPack/Particles/P_Light_SpherePortal.P_Light_SpherePortal")));
+	TestEqual(TEXT("正式浮空门户缩放"), Config->NodePortalScale, 2.5f);
+	TestEqual(TEXT("正式开局待命 NPC"), Config->InitialNPCCount, 1);
+	TestEqual(TEXT("正式精英关间隔"), Config->EliteEveryNSteps, 10);
 	// 复用正式资产上的依赖，只在临时副本上覆盖节点权重和数量。
 	UCastleDirectorConfigDataAsset* WeightConfig = DuplicateObject(Config, GetTransientPackage());
 	WeightConfig->NodeCountMin = 2;

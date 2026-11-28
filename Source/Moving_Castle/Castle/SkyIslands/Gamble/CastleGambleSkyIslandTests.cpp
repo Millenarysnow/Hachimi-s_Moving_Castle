@@ -352,6 +352,12 @@ bool FCastleGambleOddsAutomationTest::RunTest(const FString& Parameters)
 {
 	auto* Config = LoadGambleConfig();
 	if (!TestNotNull(TEXT("赌博空岛 DA"), Config)) { return false; }
+	// 固定正式 DA 的五档权重，分布检验同时覆盖机台实际使用的抽样入口。
+	TestEqual(TEXT("未中奖权重"), Config->SlotWeights.Miss, 70);
+	TestEqual(TEXT("双倍金币权重"), Config->SlotWeights.DoubleGold, 16);
+	TestEqual(TEXT("头奖权重"), Config->SlotWeights.Jackpot, 6);
+	TestEqual(TEXT("房间组权重"), Config->SlotWeights.RoomGroup, 6);
+	TestEqual(TEXT("徽章权重"), Config->SlotWeights.Badge, 2);
 	int32 SlotHits = 0;
 	int32 RouletteFrequency[3] = {};
 	FRandomStream Random(1352227);
@@ -371,7 +377,7 @@ bool FCastleGambleOddsAutomationTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("黑色接近 18/37"), FMath::Abs(RouletteFrequency[0] / double(Samples) - 18.0 / 37.0) < 0.005);
 	TestTrue(TEXT("红色接近 18/37"), FMath::Abs(RouletteFrequency[1] / double(Samples) - 18.0 / 37.0) < 0.005);
 	TestTrue(TEXT("绿色接近 1/37"), FMath::Abs(RouletteFrequency[2] / double(Samples) - 1.0 / 37.0) < 0.005);
-	TestTrue(TEXT("老虎机中奖率接近 60%"), FMath::Abs(SlotHits / double(Samples) - 0.60) < 0.005);
+	TestTrue(TEXT("老虎机中奖率接近 30%"), FMath::Abs(SlotHits / double(Samples) - 0.30) < 0.005);
 
 	UClass* Panel = LoadClass<UCastleGambleRouletteWidget>(nullptr,
 		TEXT("/Game/MovingCastle/UI/SkyIslands/Gamble/WBP_GambleRoulettePanel.WBP_GambleRoulettePanel_C"));

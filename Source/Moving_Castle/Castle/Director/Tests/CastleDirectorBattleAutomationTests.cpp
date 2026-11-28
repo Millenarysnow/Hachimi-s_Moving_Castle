@@ -85,7 +85,10 @@ public:
 			auto* Curve = DuplicateObject(CombatConfig->DifficultyCurve.Get(), CombatConfig);
 			CombatConfig->DifficultyCurve = Curve;
 			if (!Test->TestTrue(TEXT("正式 DA 的关卡间隔和普通表可用于空岛回归"),
-				Director->Config->EliteEveryNSteps == 5 && Curve->NormalBattles.Num() >= 5)) { return true; }
+				Director->Config->EliteEveryNSteps == 10 && Curve->NormalBattles.Num() >= 5)) { return true; }
+			// 流程夹具在第五步覆盖精英节点，并保留足够待命兵员覆盖出兵和回收。
+			Director->Config->EliteEveryNSteps = 5;
+			Director->RunNPCCount = 8;
 			// 区分普通表第 4、5 项，确保第 6 关不能沿用按实际战斗次数选出的第 4 项。
 			FCastleCombatWaveDefinition RaidWave;
 			RaidWave.BugCurve.bEnabled = false;

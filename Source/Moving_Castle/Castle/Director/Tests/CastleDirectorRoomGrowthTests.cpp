@@ -151,7 +151,7 @@ namespace
 			Test.TestEqual(TEXT("Lv2 补满到2000"), Tower->CurrentHealth, 2000.0f);
 			Test.TestEqual(TEXT("Lv2 容量更新到80"), Shop.RoomLimit, 80);
 			CastChecked<UButton>(Rows->GetChildAt(1))->OnClicked.Broadcast();
-			Test.TestEqual(TEXT("点击 Lv2 普通 NPC 项后待命池加2"), Director.GetRunNPCCount(), 10);
+			Test.TestEqual(TEXT("点击 Lv2 普通 NPC 项后待命池加2"), Director.GetRunNPCCount(), 3);
 			Director.DiscardTowerUpgradeRewards();
 
 			// 一次达到 Lv3 阈值，从 Lv2 直接升到 Lv4，两级待领奖励在同一面板。
@@ -161,7 +161,7 @@ namespace
 				|| !Test.TestEqual(TEXT("Lv3 与 Lv4 合计 19 行赠品"), Rows->GetChildrenCount(), 19)) { return; }
 			CastChecked<UButton>(Rows->GetChildAt(1))->OnClicked.Broadcast();
 			CastChecked<UButton>(Rows->GetChildAt(7))->OnClicked.Broadcast();
-			Test.TestEqual(TEXT("跨级两行分别可领 3 与 5 名 NPC"), Director.GetRunNPCCount(), 18);
+			Test.TestEqual(TEXT("跨级两行分别可领 3 与 5 名 NPC"), Director.GetRunNPCCount(), 11);
 			Director.DiscardTowerUpgradeRewards();
 			if (!AddCells(Backpack, OneCell, 350)) { return; }
 			Director.Tick(0.0f);

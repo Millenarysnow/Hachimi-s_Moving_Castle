@@ -405,6 +405,15 @@ bool FCastleNPCSpeedAnimationTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("正式 NPC 人形动画配置"), Visual) || !TestNotNull(TEXT("旧敌人人形动画配置"), OldVisual)
 		|| !TestNotNull(TEXT("正式 NPC 动画提供器"), Visual->AnimationProvider.Get())) { return false; }
 	TestEqual(TEXT("旧敌人不启用跑步"), OldVisual->RunSequence, INDEX_NONE);
+	// 验证放大后的 Polyart 网格仍以实体原点为脚底，动画提供器继续使用正式素材。
+	TestEqual(TEXT("正式 NPC 动画提供器"), Visual->AnimationProvider->GetFName(), FName(TEXT("ATP_MassNPC_Polyart")));
+	TestTrue(TEXT("正式 NPC 放大至 1.7 倍"), Visual->MeshOffset.GetScale3D().Equals(FVector(1.7)));
+	const auto* Mesh = Cast<USkeletalMesh>(Visual->AnimationProvider->GetSkinnedAsset());
+	if (!TestNotNull(TEXT("正式 NPC 骨骼网格"), Mesh)) { return false; }
+	const FBoxSphereBounds Bounds = Mesh->GetBounds();
+	const double FootZ = Bounds.Origin.Z - Bounds.BoxExtent.Z;
+	TestTrue(TEXT("放大后的模型脚底与实体原点对齐"),
+		FMath::IsNearlyZero(Visual->MeshOffset.TransformPosition(FVector(0.0, 0.0, FootZ)).Z, 0.01));
 	const auto& Sequences = Visual->AnimationProvider->GetSequences();
 	if (!TestTrue(TEXT("正式 NPC 的走跑使用提供器中的两个完整序列"), Sequences.IsValidIndex(Visual->MoveSequence)
 		&& Sequences.IsValidIndex(Visual->RunSequence) && Sequences[Visual->MoveSequence].Sequence
@@ -640,7 +649,8 @@ bool FCastleConcreteEnemyAssetTest::RunTest(const FString& Parameters)
 	const float Healths[] = {120, 20, 55, 12};
 	const float Speeds[] = {140, 300, 240, 420};
 	const float Radii[] = {55, 28, 38, 22};
-	const float Scales[] = {1.35f, 0.65f, 1.1f, 0.6f};
+	// Night3 将四个正式兵种统一改为放大后的各自比例。
+	const double Scales[] = {3.0, 1.3, 2.4, 1.2};
 	const TCHAR* MeshNames[] = {TEXT("BeholderSK"), TEXT("BeholderSK"), TEXT("FlyingDemonSK"), TEXT("SpecterSK")};
 	const TCHAR* AttackNames[] = {TEXT("Beholder_Attack01Anim"), TEXT("Beholder_Attack02RPTAnim"), TEXT("FlyingDemon_Attack01Anim"), TEXT("Specter_Attack01Anim")};
 	const float Damages[] = {40, 5, 15, 4};

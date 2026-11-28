@@ -77,7 +77,7 @@ private:
 	{
 		FText Reason;
 		auto* Shop = Director.Controller->GetShop();
-		Test.TestEqual(TEXT("开局 8 名普通 NPC"), Director.RunNPCCount, 8);
+		Test.TestEqual(TEXT("开局 1 名普通 NPC"), Director.RunNPCCount, 1);
 		Test.TestEqual(TEXT("开局可标两个路径点"), Director.PatrolRoute->GetMaxPlayerWaypoints(), 2);
 		const int32 Balloons[] = {5, 10, 20, 40};
 		const int32 Rooms[] = {0, 2, 5, 10};
@@ -89,7 +89,7 @@ private:
 		const auto* Definition = Director.Board->FindBuildingDefinition(ECastleBuildingType::NormalRoom);
 		if (!Test.TestTrue(TEXT("成长测试使用正式普通房牌面"), Definition && Definition->CreateDescriptor(
 			1, ECastleTileColor::Red, 1, Card, Reason))) { return; }
-		int32 ExpectedNPCs = 8;
+		int32 ExpectedNPCs = 1;
 		for (int32 Level = 1; Level <= 4; ++Level)
 		{
 			if (Level > 1)
@@ -123,7 +123,7 @@ private:
 			Test.TestEqual(TEXT("最大生命"), Director.Tower->MaxHealth, Health[Level - 1]);
 			Test.TestEqual(TEXT("升级补满生命"), Director.Tower->CurrentHealth, Health[Level - 1]);
 		}
-		Test.TestEqual(TEXT("Lv4 领完三次普通NPC后有18名"), Director.RunNPCCount, 18);
+		Test.TestEqual(TEXT("Lv4 领完三次普通NPC后有11名"), Director.RunNPCCount, 11);
 		// 按正式精英关号注入两次清场，覆盖前两个精英关的解锁与奖励。
 		for (int32 EliteStage = 1; EliteStage <= 2; ++EliteStage)
 		{
