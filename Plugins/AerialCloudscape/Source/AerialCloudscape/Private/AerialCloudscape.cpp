@@ -24,7 +24,18 @@ namespace
     const FName DensityParameter(TEXT("CloudExtinction"));
     const FName FadeStartParameter(TEXT("CloudFadeStartKm"));
     const FName FadeEndParameter(TEXT("CloudFadeEndKm"));
+    const FName BandLowerParameter(TEXT("CloudBandLower"));
+    const FName BandUpperParameter(TEXT("CloudBandUpper"));
+    const FName SunlitTintParameter(TEXT("CloudSunlitTint"));
+    const FName InteriorTintParameter(TEXT("CloudInteriorTint"));
     constexpr double CentimetersPerKilometer = 100000.0;
+
+    // 编辑器实例可以覆盖配色，运行时拒绝不在线性反照率范围内的三个通道。
+    bool IsValidCloudAlbedo(const FLinearColor& Color)
+    {
+        return Color.R >= 0.0f && Color.R <= 1.0f && Color.G >= 0.0f && Color.G <= 1.0f
+            && Color.B >= 0.0f && Color.B <= 1.0f;
+    }
 
     // 负方向也从 [0,1) 进入材质，细节纹理每个完整云周期重复整数次。
     double WrapCloudPhase(double UnwrappedPhase)
@@ -123,6 +134,20 @@ bool AAerialCloudscape::InitializeMaterial()
         FadeStartKm <= 0.0f || FadeEndKm <= FadeStartKm)
     {
         StopCloud(TEXT("材质缺少云相位、周期、消光、覆盖图、三维形状图，或远景参数无效"));
+        return false;
+    }
+
+    float BandLower = 0.0f;
+    float BandUpper = 0.0f;
+    FLinearColor SunlitTint;
+    FLinearColor InteriorTint;
+    if (!Material->GetScalarParameterValue(FMaterialParameterInfo(BandLowerParameter), BandLower) ||
+        !Material->GetScalarParameterValue(FMaterialParameterInfo(BandUpperParameter), BandUpper) ||
+        !(BandLower >= 0.0f && BandLower < BandUpper && BandUpper <= 1.0f) ||
+        !Material->GetVectorParameterValue(FMaterialParameterInfo(SunlitTintParameter), SunlitTint) || !IsValidCloudAlbedo(SunlitTint) ||
+        !Material->GetVectorParameterValue(FMaterialParameterInfo(InteriorTintParameter), InteriorTint) || !IsValidCloudAlbedo(InteriorTint))
+    {
+        StopCloud(*FString::Printf(TEXT("材质 %s 的云顶、云腹反照率或软色阶上下界无效"), *Material->GetPathName()));
         return false;
     }
 

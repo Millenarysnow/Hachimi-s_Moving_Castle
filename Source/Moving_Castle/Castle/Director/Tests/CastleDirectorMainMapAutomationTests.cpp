@@ -79,6 +79,9 @@ namespace
 	UCastleDirectorSubsystem* Director = World->GetSubsystem<UCastleDirectorSubsystem>();
 	ACastlePlayerController* Controller = Cast<ACastlePlayerController>(World->GetFirstPlayerController());
 	if (!Test->TestNotNull(TEXT("本地控制器类型正确"), Controller)) { return true; }
+	// 编辑器的隐式测试命令可能在 PlayerInput 前推进。至少跨过一帧完整的游戏 Tick，
+	// 以免两次 P 键在同一次输入分发中连续进入并退出路径编辑。
+	if (GFrameCounter < CheckInputAfterFrame) { return false; }
 
 	if (Stage == 0)
 	{
@@ -175,6 +178,7 @@ namespace
 		// 通过真实输入栈投递 P 键，等待下一帧 PlayerInput 分发后再检查路径编辑界面切换。
 		Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::P, IE_Pressed, 1.0f));
 		Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::P, IE_Released, 0.0f));
+		CheckInputAfterFrame = GFrameCounter + 2;
 		Stage = 1;
 		return false;
 	}
@@ -201,6 +205,7 @@ namespace
 		}
 		Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::P, IE_Pressed, 1.0f));
 		Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::P, IE_Released, 0.0f));
+		CheckInputAfterFrame = GFrameCounter + 2;
 		Stage = 2;
 		return false;
 	}
@@ -239,6 +244,7 @@ namespace
  private:
   FAutomationTestBase* Test;
   const double StartupDeadline = FPlatformTime::Seconds() + 20.0;
+  uint64 CheckInputAfterFrame = 0;
   int32 Stage = 0;
  };
 #if !UE_BUILD_SHIPPING

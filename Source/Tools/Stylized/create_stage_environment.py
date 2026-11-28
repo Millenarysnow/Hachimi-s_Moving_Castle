@@ -150,7 +150,9 @@ def author_environment():
     if shell.get_editor_property('static_mesh') != sphere:
         require(shell.set_static_mesh(sphere), f'{dome.get_path_name()} 无法赋给天空网格')
     dome.set_actor_scale3d(ue.Vector(140000.0, 140000.0, 140000.0))
-    shell.set_collision_enabled(ue.CollisionEnabled.NO_COLLISION)
+    # 碰撞配置名随关卡序列化。仅设置当前 BodyInstance 的状态会在 PIE 重载网格后恢复默认预设。
+    shell.set_collision_profile_name('NoCollision')
+    shell.set_editor_property('generate_overlap_events', False)
     shell.set_editor_properties(dict(cast_shadow=False, can_ever_affect_navigation=False))
     shell.set_material(0, sky)
     shell.set_mobility(ue.ComponentMobility.STATIC)
@@ -174,6 +176,21 @@ def author_environment():
     skylight.recapture_sky()
     require(levels.save_current_level(), f'无法保存 {MAP}')
     ue.log(f'STYLIZED_ENVIRONMENT {MAP} 已保存')
+
+
+def bind_cloud_palette():
+    """关卡使用插件提供的可调实例，保留已有的体积云组件及追踪配置。"""
+    levels = ue.get_editor_subsystem(ue.LevelEditorSubsystem)
+    actors = ue.get_editor_subsystem(ue.EditorActorSubsystem)
+    require(not levels.is_in_play_in_editor(), '需先结束 PIE 再绑定云海实例')
+    require(levels.load_level(MAP), f'无法打开 {MAP}')
+    cloud, = [actor for actor in actors.get_all_level_actors() if isinstance(actor, ue.VolumetricCloud)]
+    component, = cloud.get_components_by_class(ue.VolumetricCloudComponent)
+    material = ASSETS.load_asset('/AerialCloudscape/Materials/MI_AerialCloudscape')
+    require(isinstance(material, ue.MaterialInstanceConstant), '缺少 MI_AerialCloudscape 云海实例')
+    if component.get_editor_property('material') != material:
+        component.set_editor_property('material', material)
+        require(levels.save_current_level(), f'无法保存 {MAP}')
 
 
 if __name__ == '__main__':

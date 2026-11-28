@@ -600,6 +600,8 @@ namespace
 				if (!Test.TestNotNull(TEXT("MainMap 路径编辑入口"), Route)) { return true; }
 				auto* Building = Board->GetBuildingAt(RoomCell);
 				if (!Test.TestNotNull(TEXT("路径门控使用真实普通房"), Building)) { return true; }
+				// 让 PlayerInput 完成一帧分发，并让控制器刷新悬停，再读取两者的结果。
+				if (GFrameCounter < CheckPathInputAfterFrame) { return false; }
 				switch (PathHoverSubstage)
 				{
 				case 0:
@@ -608,6 +610,7 @@ namespace
 						return true;
 					}
 					Press(*Player, EKeys::P);
+					CheckPathInputAfterFrame = GFrameCounter + 2;
 					PathHoverSubstage = 1;
 					return false;
 				case 1:
@@ -617,6 +620,7 @@ namespace
 						return true;
 					}
 					Press(*Player, EKeys::P);
+					CheckPathInputAfterFrame = GFrameCounter + 2;
 					PathHoverSubstage = 2;
 					return false;
 				case 2:
@@ -626,6 +630,7 @@ namespace
 						return true;
 					}
 					SendInput(*Player, EKeys::LeftAlt, IE_Pressed, 1.0f);
+					CheckPathInputAfterFrame = GFrameCounter + 2;
 					PathHoverSubstage = 3;
 					return false;
 				case 3:
@@ -636,6 +641,7 @@ namespace
 						return true;
 					}
 					SendInput(*Player, EKeys::LeftAlt, IE_Released, 0.0f);
+					CheckPathInputAfterFrame = GFrameCounter + 2;
 					PathHoverSubstage = 4;
 					return false;
 				case 4:
@@ -864,6 +870,7 @@ namespace
 		FAutomationTestBase& Test;
 		double Deadline = FPlatformTime::Seconds() + 40.0;
 		int32 Stage = 0;
+		uint64 CheckPathInputAfterFrame = 0;
 		int32 PathHoverSubstage = 0;
 		int32 DesignHoverSubstage = 0;
 		ACastleBoard* Board = nullptr;

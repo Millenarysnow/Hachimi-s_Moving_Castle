@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleTowerSideGridComponent.h"
+#include "Castle/Rendering/CastleRenderingConstants.h"
 
 #include "Castle/PCG/CastleDeterministicPCGNoise.h"
 #include "Components/StaticMeshComponent.h"
@@ -171,6 +172,9 @@ bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, F
 			Panel->SetVisibility(!bPresentationHidden);
 			Panel->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 			Panel->SetCastShadow(false);
+			// 数字面板写入信息位，独立于悬停子系统拥有的 bit 1。
+			Panel->SetCustomDepthStencilValue(CastleRenderingConstants::StylizedNoOutlineStencilBit);
+			Panel->SetRenderCustomDepth(true);
 			Panel->SetStaticMesh(PanelMesh);
 			Panel->SetMaterial(0, Material);
 

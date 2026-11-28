@@ -184,6 +184,17 @@ def make_material(coverage, volume):
     assert not errors, f'{path} 编译失败：{errors}'
     save(material)
     ue.log(f'AERIAL_CLOUD_ASSET {material.get_path_name()}：云团、薄云与散射配色已制作。')
+    instance_path = f'{folder}/MI_AerialCloudscape'
+    if ASSETS.does_asset_exist(instance_path):
+        instance = ASSETS.load_asset(instance_path)
+    else:
+        instance = TOOLS.create_asset('MI_AerialCloudscape', folder, ue.MaterialInstanceConstant,
+                                      ue.MaterialInstanceConstantFactoryNew())
+    assert isinstance(instance, ue.MaterialInstanceConstant), f'无法建立 {instance_path}'
+    if instance.get_editor_property('parent') != material:
+        EDIT.set_material_instance_parent(instance, material)
+    save(instance)
+    return instance
 
 
 if __name__ == '__main__':
