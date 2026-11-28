@@ -164,7 +164,14 @@ void ACastlePlayerController::Tick(float DeltaSeconds)
 		UpdateTowerDispatchInput();
 		UpdateHoverHighlight();
 		FText EditReason;
-		if (BuildingDemolishMenu)
+		if (const auto* Route = Cast<ACastlePatrolRoute>(UGameplayStatics::GetActorOfClass(
+			GetWorld(), ACastlePatrolRoute::StaticClass())); Route && Route->IsEditing())
+		{
+			// 路径编辑占用世界瞄准射线，立即清掉上一帧的建造落点和全息块。
+			CurrentGridCursorTarget = FCastleGridCursorTarget();
+			if (GridCursor) { GridCursor->HideCursor(); }
+		}
+		else if (BuildingDemolishMenu)
 		{
 			if (!CanUseBuildingDemolishMenu(EditReason)) { CloseBuildingDemolishMenu(); }
 		}
