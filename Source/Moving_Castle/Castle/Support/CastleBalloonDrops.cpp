@@ -1,4 +1,5 @@
 #include "CastleSupportTowerSubsystem.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
@@ -188,6 +189,8 @@ void UCastleSupportTowerSubsystem::TickBalloons(const float DeltaTime, FMassEnti
 			Visual->SetActorLocation(NewPosition);
 			if (NewPosition.Equals(End, 0.01))
 			{
+				// 表现箱已抵达地面；与之后各项落地加成的结算结果无关。
+				UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::CrateLanded);
 				if (!ApplyLanding(Flight, Manager, Enemies))
 				{
 					UE_LOG(LogMoving_Castle, Error, TEXT("空投塔 %s 气球 %llu 的落地效果未全部成功。"), *Flight.Source->GetPathName(), Id);

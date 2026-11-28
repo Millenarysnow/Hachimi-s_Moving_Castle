@@ -1,4 +1,5 @@
 #include "CastleMassEnemyLaserAttackProcessor.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "CastleMainTowerComponent.h"
 #include "CastleMassDeathSplitFragments.h"
@@ -154,6 +155,7 @@ void UCastleMassEnemyLaserAttackProcessor::Execute(FMassEntityManager& EntityMan
 			if (bApplied)
 			{
 				++Attack.AttackCount;
+				UCastleAudioSubsystem::PlaySFX(World, ECastleSFXEvent::DragonFire);
 				// 引导期间每次伤害结算后使用当前世界倍率，离开射程仍立即清空冷却。
 				Attack.AttackCooldown = static_cast<double>(Attack.AttackInterval) / UnitSubsystem->GetGlobalEnemyAttackSpeedMultiplier();
 			}

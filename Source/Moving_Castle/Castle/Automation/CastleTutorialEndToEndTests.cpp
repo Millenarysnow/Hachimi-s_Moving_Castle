@@ -1,4 +1,5 @@
 #if WITH_EDITOR && WITH_DEV_AUTOMATION_TESTS && !UE_BUILD_SHIPPING
+#include "Audio/CastleAudioSubsystem.h"
 #include "Castle/Automation/CastlePIEAutomation.h"
 #include "Blueprint/SlateBlueprintLibrary.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
@@ -52,6 +53,7 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/Paths.h"
 #include "Slate/SceneViewport.h"
+#include "Sound/SoundBase.h"
 #include "Tests/AutomationCommon.h"
 #include "UnrealClient.h"
 #include "Widgets/SWindow.h"
@@ -116,6 +118,8 @@ public:
 			return true;
 		}
 		if (Step == 0) { return Wait(TEXT("教学导演未初始化")); }
+		const auto* Audio = UCastleAudioSubsystem::GetForWorld(World);
+		if (!Audio) { return Fail(TEXT("教程没有音频子系统")); }
 		if (Step == 1 && !bTutorialHealthLockChecked)
 		{
 			auto* MainTowerSubsystem = World->GetSubsystem<UCastleMainTowerSubsystem>();
@@ -134,6 +138,8 @@ public:
 		if (Step != LastStep)
 		{
 			Test.TestEqual(TEXT("逐步推进，无跳步"), Step, LastStep + 1);
+			Test.TestEqual(TEXT("仅 S10 战斗期间切换战斗 BGM"), Audio->GetCurrentBGMTrack(),
+				Step == 10 ? ECastleBGMTrack::Battle : ECastleBGMTrack::Build);
 			Test.TestFalse(TEXT("正式导演在 TutorialMap 保持关闭"), World->GetSubsystem<UCastleDirectorSubsystem>()->IsRunning());
 			LastStep = Step;
 			Action = 0;
@@ -307,6 +313,8 @@ public:
 				const bool bDispatched = Dispatch->BeginManualDispatch(Reason);
 				Dispatch->OnNPCDispatched.Remove(CaptureHandle);
 				if (!bDispatched) { return Fail(Reason.ToString()); }
+				Test.TestEqual(TEXT("城主派出气泡选择独立配音"), GetNameSafe(Audio->GetCurrentVoiceSound()),
+					FString(TEXT("SW_Voice_CryBubble")));
 				Dispatch->StopManualDispatch();
 				// 出门后的第一段有房间墙体，等城主走到巡逻路线中段再拍摄。
 				LordCaptureTime = World->GetTimeSeconds() + 6.0;

@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleMainTowerBalloonComponent.h"
+#include "Audio/CastleAudioSubsystem.h"
 #include "Castle/MainMenu/CastleMenuModel.h"
 
 #include "Components/StaticMeshComponent.h"
@@ -401,6 +402,7 @@ bool UCastleMainTowerBalloonComponent::UpdateHealth(const float CurrentHealth, c
 	}
 	if (Count < LiveCount)
 	{
+		UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::BalloonPop);
 		UE_LOG(LogMoving_Castle, Display, TEXT("主塔 %s 破裂 %d 颗大气球，剩余 %d 颗。"),
 			*GetPathNameSafe(GetOwner()), LiveCount - Count, Count);
 	}

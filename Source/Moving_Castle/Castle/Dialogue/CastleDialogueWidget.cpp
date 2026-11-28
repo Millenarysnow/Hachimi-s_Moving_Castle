@@ -1,4 +1,5 @@
 #include "CastleDialogueWidget.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Dialogue/CastleDialogueSubsystem.h"
@@ -141,6 +142,7 @@ void UCastleDialogueWidget::HandleContinueClicked()
 	// 鼠标和确认键共用推进处理，保留当前揭示位置以便诊断输入。
 	UE_LOG(LogMoving_Castle, Verbose, TEXT("对话控件 %s 收到推进输入（行 %s，已揭示 %d/%d）。"),
 		*GetPathName(), *CurrentLine.LineId.ToString(), RevealedCharacterCount, FullText.Len());
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (!IsValid(DialogueSubsystem))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("对话 WBP %s 点击推进失败：对话子系统已失效。"), *GetPathName());
@@ -162,6 +164,7 @@ void UCastleDialogueWidget::HandleControlModeChanged(const ECastleControlMode)
 
 void UCastleDialogueWidget::Choose(const FName TargetLineId)
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (IsValid(DialogueSubsystem)) { DialogueSubsystem->SelectChoice(TargetLineId); }
 }
 

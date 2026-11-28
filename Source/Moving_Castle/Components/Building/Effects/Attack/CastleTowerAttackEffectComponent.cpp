@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleTowerAttackEffectComponent.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Castle/Actors/CastleBuildingBase.h"
 #include "Castle/Data/CastleBuildingDefinition.h"
@@ -344,6 +345,13 @@ bool UCastleTowerAttackEffectComponent::FireProjectile(const UCastleTowerAttackD
 		check(SpawnedProjectiles.Num() == 1);
 		MassEntities->GetMutableEntityManager().GetFragmentDataChecked<FCastleMassHomingProjectileFragment>(
 			SpawnedProjectiles[0].Entity).bArcherTowerArrow = true;
+		// 两个独立录音分别反馈拉弓和已成功发出的追踪箭。
+		UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::BowShot);
+		UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::ArrowFlight);
+	}
+	else if (Building->GetBuildingType() == ECastleBuildingType::CannonTower)
+	{
+		UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::CannonFire);
 	}
 	return true;
 }

@@ -1,4 +1,5 @@
 #include "Items/CastlePendingRoomReward.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "CastleBackpackComponent.h"
 #include "CastleBuildingDefinition.h"
@@ -105,6 +106,7 @@ bool UCastlePendingRoomReward::TryConfirmClaim(UCastleBuildingDefinition* Defini
 		return false;
 	}
 	State = EClaimState::Claimed;
+	UCastleAudioSubsystem::PlaySFX(Target->GetWorld(), ECastleSFXEvent::Reward);
 	if (OnClaimCompleted) { OnClaimCompleted(EClaimResult::Granted); }
 	UE_LOG(LogMoving_Castle, Display, TEXT("已领取房间奖励 %s，建筑 %s，色值 %d，数字 %d。"),
 		*DisplayName.ToString(), *Definition->GetPathName(), static_cast<int32>(Color), Number);

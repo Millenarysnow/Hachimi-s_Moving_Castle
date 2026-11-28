@@ -1,4 +1,5 @@
 #include "Castle/Tutorial/CastleTutorialWidgets.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Castle/Tutorial/CastleTutorialDirector.h"
 #include "Castle/UI/Cards/CastleShopCardWidget.h"
@@ -66,10 +67,12 @@ bool UCastleTutorialRewardWidget::ShowCard(const FCastleBuildingDescriptor& Desc
 
 void UCastleTutorialRewardWidget::ChooseCopy()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (auto* Director = OwnerDirector.Get()) { Director->ChooseCopyReward(); }
 }
 
 void UCastleTutorialRewardWidget::ClaimCard()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (auto* Director = OwnerDirector.Get()) { Director->ClaimCopyReward(); }
 }

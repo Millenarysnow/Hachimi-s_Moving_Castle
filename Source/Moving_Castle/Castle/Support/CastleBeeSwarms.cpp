@@ -1,4 +1,5 @@
 #include "CastleSupportTowerSubsystem.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
@@ -85,6 +86,7 @@ bool UCastleSupportTowerSubsystem::LaunchSwarm(FSwarm&& Batch, const FVector& St
 	UE_LOG(LogMoving_Castle, Display, TEXT("蜂巢 Lv%d %s：%s出动 %d 只。"), Batch.Level, *GetNameSafe(Batch.Source.Get()),
 		Batch.Schedule ? (Batch.Source == Batch.Home ? TEXT("主巢") : TEXT("备用巢")) : TEXT("蜂群"), Batch.Count);
 	Swarms.Add(MoveTemp(Batch));
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Bees);
 	return true;
 }
 

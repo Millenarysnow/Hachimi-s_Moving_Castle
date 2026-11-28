@@ -1,4 +1,5 @@
 #include "CastleGuideSubsystem.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Castle/Controllers/CastlePlayerController.h"
 #include "Castle/Dialogue/CastleDialogueSubsystem.h"
@@ -203,6 +204,7 @@ UClass* UCastleGuideSubsystem::LoadRequiredWidgetClass(const TCHAR* AssetPath, F
 void UCastleGuideSubsystem::CloseEntryPopup()
 {
 	if (!ActivePopup) { return; }
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::ClosePanel);
 	const FName LearnedEntryId = PendingEntryId;
 	if (ACastlePlayerController* Controller = ActiveController.Get())
 	{
@@ -220,6 +222,7 @@ void UCastleGuideSubsystem::CloseEntryPopup()
 void UCastleGuideSubsystem::CloseGuideBook()
 {
 	if (!ActiveBook) { return; }
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::ClosePanel);
 	if (ACastlePlayerController* Controller = ActiveController.Get())
 	{
 		Controller->SetPresentationModalState(false, ActiveBook);
@@ -270,6 +273,7 @@ void UCastleGuidePopupWidget::NativeOnInitialized()
 
 void UCastleGuidePopupWidget::HandleCloseClicked()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (!IsValid(GuideSubsystem))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("百科条目 %s 关闭失败：图文百科子系统已失效。"), *EntryId.ToString());
@@ -313,20 +317,25 @@ void UCastleGuideBookWidget::NativeOnInitialized()
 
 void UCastleGuideBookWidget::HandlePreviousClicked()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (CurrentEntryIndex <= 0) { return; }
 	--CurrentEntryIndex;
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::PageTurn);
 	DisplayCurrentEntry();
 }
 
 void UCastleGuideBookWidget::HandleNextClicked()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (!Entries.IsValidIndex(CurrentEntryIndex + 1)) { return; }
 	++CurrentEntryIndex;
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::PageTurn);
 	DisplayCurrentEntry();
 }
 
 void UCastleGuideBookWidget::HandleCloseClicked()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (!IsValid(GuideSubsystem))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("图文百科面板 %s 关闭失败：百科子系统已失效。"), *GetPathName());

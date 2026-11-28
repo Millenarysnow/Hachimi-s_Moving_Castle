@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleBuildingDemolishMenuWidget.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Blueprint/WidgetLayoutLibrary.h"
 #include "CastleBoard.h"
@@ -98,5 +99,6 @@ FReply UCastleBuildingDemolishMenuWidget::NativeOnMouseButtonDoubleClick(const F
 
 void UCastleBuildingDemolishMenuWidget::HandleDemolishClicked()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (auto* Controller = GetOwningPlayer<ACastlePlayerController>()) { Controller->ConfirmBuildingDemolish(*this); }
 }

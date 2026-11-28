@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CastleShopWidget.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
@@ -551,6 +552,7 @@ void UCastleShopWidget::CancelOfferInspection()
 
 void UCastleShopWidget::HandleToggleFoil()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	bFoilPreview = !bFoilPreview;
 	FoilLabel->SetText(bFoilPreview
 		? NSLOCTEXT("CastleShop", "FoilOn", "箔光：开")
@@ -567,6 +569,7 @@ void UCastleShopWidget::HandleToggleFoil()
 
 void UCastleShopWidget::HandlePeekPressed()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	bPeekingCastle = true;
 	CancelOfferInspection();
 	ApplyPeekVisibility();
@@ -580,6 +583,7 @@ void UCastleShopWidget::HandlePeekReleased()
 
 void UCastleShopWidget::HandleOfferPurchaseRequested(const int32 OfferIndex)
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	HandleTrade(false, OfferIndex);
 }
 
@@ -599,6 +603,7 @@ void UCastleShopWidget::HandleOfferHovered(const int32 OfferIndex, const bool bH
 
 void UCastleShopWidget::HandleBenchSellRequested(const int32 BackpackSlotIndex)
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	HandleTrade(true, BackpackSlotIndex);
 }
 
@@ -704,6 +709,7 @@ void UCastleShopWidget::HandleTrade(const bool bSelling, const int32 SlotIndex)
 
 void UCastleShopWidget::HandleRefresh()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (!IsValid(Shop))
 	{
 		return;
@@ -731,6 +737,7 @@ void UCastleShopWidget::HandleRefreshReleased()
 
 void UCastleShopWidget::HandleClose()
 {
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Button);
 	if (IsValid(Shop))
 	{
 		Shop->CloseShop();

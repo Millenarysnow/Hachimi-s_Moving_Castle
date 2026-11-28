@@ -1,5 +1,6 @@
 #include "Castle/Tutorial/CastleTutorialDirector.h"
 
+#include "Audio/CastleAudioSubsystem.h"
 #include "Castle/Combat/CastleCombatConfigDataAsset.h"
 #include "Castle/Combat/CastleCombatSubsystem.h"
 #include "Castle/Dialogue/CastleDialogueScriptDataAsset.h"
@@ -224,6 +225,8 @@ bool ACastleTutorialDirector::EnterStep(const int32 Number, FText& OutReason)
 
 	UE_LOG(LogMoving_Castle, Display, TEXT("教程 %s 进入 S%d。"), *GetPathName(), Step);
 	const auto& Row = Configuration->Steps[Step - 1];
+	// 教程复用正式局音乐，只有成功进入 S10 战斗步骤时切换战斗曲。
+	UCastleAudioSubsystem::SetBGM(GetWorld(), Step == 10 ? ECastleBGMTrack::Battle : ECastleBGMTrack::Build);
 	return !Row.Dialogue || ShowDialogue(Row.Dialogue, OutReason);
 }
 
@@ -529,6 +532,8 @@ void ACastleTutorialDirector::HandleDispatched(const FCastleMassUnitHandle& Unit
 		Fail(INVTEXT("城主气泡的文字控件无法绑定。"));
 		return;
 	}
+	// 只有气泡的文字绑定成功，才从共享语音通道播放城主发言。
+	if (auto* Audio = UCastleAudioSubsystem::GetForWorld(GetWorld())) { Audio->PlayTutorialCryBubbleVoice(); }
 	DispatchedUnit = Unit;
 	// 首次派兵由玩家触发。之后使用正式待命池循环巡逻，清场时结束出兵会话。
 	if (!bDispatched && !Dispatch->SetAutoDispatchEnabled(true))
@@ -541,7 +546,13 @@ void ACastleTutorialDirector::HandleDispatched(const FCastleMassUnitHandle& Unit
 
 void ACastleTutorialDirector::HandleBattleCleared(ECastleBattleKind Kind, int32 Ordinal)
 {
-	if (Step == 10 && Kind == ECastleBattleKind::Normal && Ordinal == 1) { bBattleCleared = true; }
+	if (Step == 10 && Kind == ECastleBattleKind::Normal && Ordinal == 1)
+	{
+		bBattleCleared = true;
+		// S10 仅在战斗清场事件已提交后恢复建造曲与胜利提示。
+		UCastleAudioSubsystem::SetBGM(GetWorld(), ECastleBGMTrack::Build);
+		UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Victory);
+	}
 }
 
 void ACastleTutorialDirector::HandleBattleFailed(ECastleBattleKind, int32, const FText& Reason)
@@ -575,6 +586,8 @@ void ACastleTutorialDirector::ClaimCopyReward()
 		return;
 	}
 	bCopyClaimed = true;
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::Reward);
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::ClosePanel);
 	Controller->SetPresentationModalState(false, Reward);
 	Reward->RemoveFromParent();
 	Reward = nullptr;
@@ -614,6 +627,8 @@ void ACastleTutorialDirector::Fail(const FText& Reason)
 
 void ACastleTutorialDirector::EndPlay(const EEndPlayReason::Type Reason)
 {
+	// 即使停留在没有对话窗口的派出步骤，切图也会停止城主气泡。
+	if (auto* Audio = UCastleAudioSubsystem::GetForWorld(GetWorld())) { Audio->StopDialogueVoice(); }
 	// 订阅与界面跟随本关卡销毁，GameInstance 不保留旧教程 Actor。
 	if (Controller) { Controller->OnBuildingDemolishedToBackpack.RemoveAll(this); }
 	if (Dispatch) { Dispatch->OnNPCDispatched.RemoveAll(this); }

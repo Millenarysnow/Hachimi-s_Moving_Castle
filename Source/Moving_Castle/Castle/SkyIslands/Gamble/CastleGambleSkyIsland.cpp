@@ -1,4 +1,5 @@
 #include "CastleGambleSkyIsland.h"
+#include "Audio/CastleAudioSubsystem.h"
 
 #include "CastleBackpackComponent.h"
 #include "CastleBoard.h"
@@ -126,7 +127,10 @@ bool UCastleGambleMachineComponent::ExecuteInteract(const FCastleSkyIslandIntera
 	auto* Island = CastChecked<ACastleGambleSkyIsland>(GetOwner());
 	switch (Machine)
 	{
-	case ECastleGambleMachine::Roulette: return Island->OpenRoulettePanel(OutReason);
+	case ECastleGambleMachine::Roulette:
+		if (!Island->OpenRoulettePanel(OutReason)) { return false; }
+		UCastleAudioSubsystem::PlaySFX(Island->GetWorld(), ECastleSFXEvent::Gamble);
+		return true;
 	case ECastleGambleMachine::Slot: return Island->TryPlaySlot(OutReason);
 	case ECastleGambleMachine::Recycler: return Island->TryRecycleBalloon(OutReason);
 	}
@@ -331,6 +335,7 @@ bool ACastleGambleSkyIsland::TryCloseRoulettePanel(FText& OutReason)
 void ACastleGambleSkyIsland::RemoveRoulettePanel()
 {
 	if (!RoulettePanel) { return; }
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::ClosePanel);
 	RoulettePanel->RemoveFromParent();
 	RoulettePanel = nullptr;
 	if (ACastlePlayerController* Controller = GetIslandContext().Controller.Get())

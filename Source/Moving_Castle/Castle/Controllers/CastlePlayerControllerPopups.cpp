@@ -2,6 +2,7 @@
 
 #include "CastlePlayerController.h"
 
+#include "Audio/CastleAudioSubsystem.h"
 #include "CastleBoard.h"
 #include "CastleBuildingBase.h"
 #include "Castle/Guide/CastleGuideSubsystem.h"
@@ -32,6 +33,8 @@ void ACastlePlayerController::ToggleControlSettings()
 {
 	if (ControlSettings)
 	{
+		// 设置共用齿轮、快捷键与关闭按钮入口，实际关闭时只播一次。
+		UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::ClosePanel);
 		RemoveControlSettingsWidget();
 		RefreshModalInput(true);
 		return;
@@ -190,6 +193,7 @@ void ACastlePlayerController::RemoveBuildingDemolishWidget()
 void ACastlePlayerController::CloseBuildingDemolishMenu()
 {
 	if (!BuildingDemolishMenu) { return; }
+	UCastleAudioSubsystem::PlaySFX(GetWorld(), ECastleSFXEvent::ClosePanel);
 	RemoveBuildingDemolishWidget();
 	RefreshModalInput(true);
 }
