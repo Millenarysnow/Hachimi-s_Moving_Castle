@@ -9,11 +9,12 @@ ASSETS = unreal.get_editor_subsystem(unreal.EditorAssetSubsystem)
 TOOLS = unreal.CastleStylizedMaterialTools
 FRONT = unreal.MaterialProperty.MP_FRONT_MATERIAL
 
-# 色阶在线性空间中取样。单位的暗部略亮，金属同时保留窄而硬的高光。
+# 线性暗阶给建筑投影一点冷蓝，单位暗阶单独提亮以保留剪影内的细节。
+# 金属与建筑共用漫反射暗阶，只在亮部保留窄暖高光。
 PROFILES = {
-    "Surface": ((0.48, 0.51, 0.62), (0.0, 0.0, 0.0), 0.0, 1.0),
-    "Unit": ((0.58, 0.62, 0.72), (0.0, 0.0, 0.0), 0.0, 1.0),
-    "Metal": ((0.48, 0.51, 0.62), (0.65, 0.53, 0.39), 0.35, 0.34),
+    "Surface": ((0.32, 0.37, 0.52), (0.0, 0.0, 0.0), 0.0, 1.0),
+    "Unit": ((0.44, 0.49, 0.62), (0.0, 0.0, 0.0), 0.0, 1.0),
+    "Metal": ((0.32, 0.37, 0.52), (0.65, 0.53, 0.39), 0.35, 0.34),
 }
 
 

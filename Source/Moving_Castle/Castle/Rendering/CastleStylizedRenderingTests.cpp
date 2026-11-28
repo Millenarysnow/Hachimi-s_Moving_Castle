@@ -72,7 +72,10 @@ bool FCastleStylizedAssets::RunTest(const FString& Parameters)
 		if (TestNotNull(FString::Printf(TEXT("%s Profile"), Kind), Profile))
 		{
 			TestTrue(TEXT("漫反射色阶包含 VSM 阴影"), Profile->Settings.bDiffuseRampIncludeShadow);
-			TestEqual(TEXT("遮挡距离不影响阴影色阶"), Profile->Settings.ShadowExtinctionCoefficient, 0.0f);
+			// 零消光在发行版的 VSM 透射路径中会使 Toon 接收面的遮挡失效。
+			TestEqual(TEXT("Toon 近景 VSM 投影消光系数"), Profile->Settings.ShadowExtinctionCoefficient, 0.65f);
+			// 过强的间接光会盖过色阶。检查序列化的 Profile 和制作器使用同一补光比例。
+			TestEqual(TEXT("限制间接漫反射以保留受光和背光反差"), Profile->Settings.DiffuseIndirectScale, 0.30f);
 			TestEqual(TEXT("漫反射色阶有四个控制点"), Profile->Settings.DiffuseRamp.ColorCurves[0].GetNumKeys(), 4);
 		}
 		const UMaterialFunction* Function = LoadObject<UMaterialFunction>(nullptr,

@@ -49,9 +49,11 @@ bool UCastleStylizedMaterialTools::ConfigureToonProfile(UToonProfile* Profile, F
 	Profile->Modify();
 	FToonProfileStruct& Settings = Profile->Settings;
 	Settings.bDiffuseRampIncludeShadow = true;
-	// 纯 VSM 遮挡统一进入背光档，不随遮挡物与接收面的距离变化。
-	Settings.ShadowExtinctionCoefficient = 0.0f;
-	Settings.DiffuseIndirectScale = 1.0f;
+	// UE 5.8.2 的 VSM 在 Toon 接收面按遮挡距离计算透射，零消光会完全透射。
+	// 0.65 m⁻¹ 让近处的建筑投影进入冷蓝暗阶，同时保留暗部的漫反射层次。
+	Settings.ShadowExtinctionCoefficient = 0.65f;
+	// 压低间接漫反射，保留浅蓝天光对塔底和单位暗部的补光，同时拉开背光阶与向阳阶。
+	Settings.DiffuseIndirectScale = 0.30f;
 	Settings.SpecularIndirectScale = 1.0f;
 	// 半 Lambert 与 VSM 透射共同决定横轴，窄过渡保留斜面抗锯齿。
 	SetRamp(Settings.DiffuseRamp, ShadowColor, FLinearColor::White, 0.53f, 0.56f);
