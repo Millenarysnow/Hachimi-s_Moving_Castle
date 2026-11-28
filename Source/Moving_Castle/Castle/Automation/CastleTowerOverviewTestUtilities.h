@@ -30,12 +30,12 @@ namespace CastleTowerOverviewTests
 		if (!Test.TestNotNull(TEXT("塔顶到达后的玩家 Pawn"), Pawn)
 			|| !Test.TestNotNull(TEXT("塔顶参照的正式主塔"), Board.MainTowerActor.Get())) { return; }
 		const FVector FromTower = Pawn->GetActorLocation() - Board.MainTowerActor->GetActorLocation();
-		const FVector Behind = -Board.GetActorForwardVector().GetSafeNormal2D() * 650.0;
-		Test.TestTrue(TEXT("到达当前开放层顶面上方 1200 cm、塔后 650 cm"),
+		const FVector Behind = -Board.GetActorForwardVector().GetSafeNormal2D() * 1800.0;
+		Test.TestTrue(TEXT("到达当前开放层顶面上方 2500 cm、塔后 1800 cm"),
 			FVector(FromTower.X, FromTower.Y, 0.0).Equals(Behind, 5.0)
-			&& FMath::IsNearlyEqual(FromTower.Z, Board.GetUnlockedLayerCount() * Board.LayerHeight + 1200.0, 5.0));
-		const FRotator ExpectedView(-28.0, Board.GetActorRotation().Yaw, 0.0);
-		Test.TestTrue(TEXT("到达后以 28 度俯角朝向塔前战场"), Player.GetControlRotation().Equals(ExpectedView, 1.0));
+			&& FMath::IsNearlyEqual(FromTower.Z, Board.GetUnlockedLayerCount() * Board.LayerHeight + 2500.0, 5.0));
+		const FRotator ExpectedView(-32.0, Board.GetActorRotation().Yaw, 0.0);
+		Test.TestTrue(TEXT("到达后以 32 度俯角朝向塔前战场"), Player.GetControlRotation().Equals(ExpectedView, 1.0));
 		Test.TestTrue(TEXT("到达时清除飞行速度"), Pawn->GetVelocity().IsNearlyZero(1.0));
 	}
 }

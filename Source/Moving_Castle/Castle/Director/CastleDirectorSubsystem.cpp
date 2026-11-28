@@ -688,11 +688,12 @@ bool UCastleDirectorSubsystem::PrepareTowerOverview(FTransform& OutView, FText& 
 	{
 		return Reject(INVTEXT("主塔当前开放层数或层高无效。"));
 	}
-	// 棋盘正面朝向当前节点圆弧。沿其反方向水平退开吊挂，保持视线朝战场俯瞰。
+	// 棋盘正面朝向当前节点圆弧。高度须越过塔冠尖顶与主气球（檐口上方约 2500 cm），
+	// 并沿反方向水平退开 1800 cm，以 32 度俯角越过塔顶清晰俯瞰城堡与前方战场/节点。
 	const FRotator Facing(0.0, Board->GetActorRotation().Yaw, 0.0);
-	const FVector Location = TowerActor->GetActorLocation() - Facing.Vector() * 650.0
-		+ FVector::UpVector * (Layers * Board->LayerHeight + 1200.0);
-	const FRotator View(-28.0, Facing.Yaw, 0.0);
+	const FVector Location = TowerActor->GetActorLocation() - Facing.Vector() * 1800.0
+		+ FVector::UpVector * (Layers * Board->LayerHeight + 2500.0);
+	const FRotator View(-32.0, Facing.Yaw, 0.0);
 	if (Location.ContainsNaN() || View.ContainsNaN())
 	{
 		return Reject(INVTEXT("俯瞰坐标或朝向包含非有限值。"));
