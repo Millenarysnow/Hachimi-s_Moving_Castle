@@ -11,12 +11,20 @@
 #include "InputCoreTypes.h"
 #include "Moving_Castle.h"
 
+namespace
+{
+	/** 飞行速度档位，单位为厘米每秒。 */
+	constexpr float FlightSpeedTiers[] = {200.0f, 350.0f, 550.0f, 900.0f, 1350.0f, 1900.0f, 2600.0f, 3600.0f};
+	constexpr float FlightAccelerationRatio = 5.5f;
+}
+
 ACastleFlightPawn::ACastleFlightPawn()
 {
 	// 飞行移动需要每帧读取按键状态，但不需要额外的游戏逻辑 Tick。
 	PrimaryActorTick.bCanEverTick = true;
 
 	GetCapsuleComponent()->InitCapsuleSize(42.0f, 96.0f);
+	ConfigureObserverCollision();
 
 	// 不让角色网格或碰撞体自动跟随移动方向旋转，视角方向由控制器单独管理。
 	bUseControllerRotationPitch = false;
@@ -26,9 +34,7 @@ ACastleFlightPawn::ACastleFlightPawn()
 	UCharacterMovementComponent* MovementComponent = GetCharacterMovement();
 	MovementComponent->SetMovementMode(MOVE_Flying);
 	MovementComponent->GravityScale = 0.0f;
-	MovementComponent->MaxFlySpeed = FlightSpeed;
-	MovementComponent->MaxAcceleration = FlightAcceleration;
-	MovementComponent->BrakingDecelerationFlying = FlightBrakingDeceleration;
+	ApplyFlightSpeedTier();
 	MovementComponent->AirControl = 1.0f;
 
 	// 相机臂长度为 0，玩家从角色眼睛位置观察世界，屏幕中心天然就是指针。
@@ -55,13 +61,60 @@ void ACastleFlightPawn::BeginPlay()
 	UCharacterMovementComponent* MovementComponent = GetCharacterMovement();
 	MovementComponent->SetMovementMode(MOVE_Flying);
 	MovementComponent->GravityScale = 0.0f;
-	MovementComponent->MaxFlySpeed = FlightSpeed;
-	MovementComponent->MaxAcceleration = FlightAcceleration;
-	MovementComponent->BrakingDecelerationFlying = FlightBrakingDeceleration;
+	ConfigureObserverCollision();
+	ApplyFlightSpeedTier();
 
 	CameraBoom->TargetArmLength = 0.0f;
 	CameraBoom->bDoCollisionTest = false;
 	CameraBoom->SocketOffset = FVector(0.0f, 0.0f, 64.0f);
+}
+
+void ACastleFlightPawn::ConfigureObserverCollision()
+{
+	// 导演节点以 WorldDynamic 查询 Pawn。保留双向 Overlap，其他通道均忽略，包括玩家自己的交互射线。
+	UCapsuleComponent* Capsule = GetCapsuleComponent();
+	Capsule->SetCollisionObjectType(ECC_Pawn);
+	Capsule->SetCollisionResponseToAllChannels(ECR_Ignore);
+	Capsule->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Overlap);
+	Capsule->SetGenerateOverlapEvents(true);
+	Capsule->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+}
+
+void ACastleFlightPawn::ApplyFlightSpeedTier()
+{
+	UCharacterMovementComponent* Movement = GetCharacterMovement();
+	const float Speed = FlightSpeedTiers[FlightSpeedTierIndex];
+	Movement->MaxFlySpeed = Speed;
+	Movement->MaxAcceleration = Speed * FlightAccelerationRatio;
+	Movement->BrakingDecelerationFlying = Speed * FlightAccelerationRatio;
+}
+
+void ACastleFlightPawn::DecreaseFlightSpeed()
+{
+	StepFlightSpeed(-1);
+}
+
+void ACastleFlightPawn::IncreaseFlightSpeed()
+{
+	StepFlightSpeed(1);
+}
+
+void ACastleFlightPawn::StepFlightSpeed(const int32 Direction)
+{
+	const auto* CastleController = Cast<ACastlePlayerController>(Controller);
+	if (!IsValid(CastleController))
+	{
+		UE_LOG(LogMoving_Castle, Error, TEXT("飞行 Pawn %s 无法调节飞行速度：控制器 %s 无效。"),
+			*GetPathName(), *GetPathNameSafe(Controller));
+		return;
+	}
+	const int32 NextIndex = FlightSpeedTierIndex + Direction;
+	// 模态界面独占输入。触及端点后继续按键时，速度和提示均不变。
+	if (CastleController->IsModalInputActive() || NextIndex < 0 || NextIndex >= UE_ARRAY_COUNT(FlightSpeedTiers)) { return; }
+	FlightSpeedTierIndex = NextIndex;
+	ApplyFlightSpeedTier();
+	UE_LOG(LogMoving_Castle, Display, TEXT("飞行速度 %d/%d 档（%.0f cm/s）。"),
+		FlightSpeedTierIndex + 1, UE_ARRAY_COUNT(FlightSpeedTiers), FlightSpeedTiers[FlightSpeedTierIndex]);
 }
 
 void ACastleFlightPawn::Tick(float DeltaSeconds)
@@ -97,6 +150,10 @@ void ACastleFlightPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 	PlayerInputComponent->BindKey(EKeys::Q, IE_Released, this, &ACastleFlightPawn::DescendReleased);
 	PlayerInputComponent->BindKey(EKeys::E, IE_Pressed, this, &ACastleFlightPawn::DesignAscendPressed);
 	PlayerInputComponent->BindKey(EKeys::E, IE_Released, this, &ACastleFlightPawn::AscendReleased);
+
+	// 只绑定按下事件，两个模式的调速键均不随操作预设变化。
+	PlayerInputComponent->BindKey(EKeys::LeftBracket, IE_Pressed, this, &ACastleFlightPawn::DecreaseFlightSpeed);
+	PlayerInputComponent->BindKey(EKeys::RightBracket, IE_Pressed, this, &ACastleFlightPawn::IncreaseFlightSpeed);
 
 	// 鼠标轴只传入相对移动量；当前模式及模态门控由控制器查询。
 	PlayerInputComponent->BindAxisKey(EKeys::MouseX, this, &ACastleFlightPawn::HandleMouseYaw);

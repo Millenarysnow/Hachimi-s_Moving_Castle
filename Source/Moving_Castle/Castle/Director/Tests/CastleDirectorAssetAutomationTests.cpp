@@ -7,6 +7,7 @@
 #include "Castle/UI/Director/CastleDirectorWidgets.h"
 #include "Blueprint/UserWidget.h"
 #include "Engine/World.h"
+#include "NiagaraSystem.h"
 
 /** 重载正式资产并创建实例，不能只用 WidgetTree 的名字清单冒充 BindWidget 已成功。 */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDirectorAssetsTest, "MovingCastle.Director.Assets",
@@ -18,6 +19,8 @@ bool FCastleDirectorAssetsTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("设置引用的正式导演DA可加载"), Config)) { return false; }
 	FText Reason;
 	if (!TestTrue(TEXT("正式导演DA配置通过校验"), Config->ValidateConfig(Reason))) { AddError(Reason.ToString()); return false; }
+	TestEqual(TEXT("正式导演配置引用 Overview 圆形传送门 8 的 Light 效果"), Config->NodePortalSystem->GetPathName(),
+		FString(TEXT("/Game/Portals_VFXPack/Particles/P_Light_SpherePortal.P_Light_SpherePortal")));
 	// 复用正式资产上的依赖，只在临时副本上覆盖节点权重和数量。
 	UCastleDirectorConfigDataAsset* WeightConfig = DuplicateObject(Config, GetTransientPackage());
 	WeightConfig->NodeCountMin = 2;

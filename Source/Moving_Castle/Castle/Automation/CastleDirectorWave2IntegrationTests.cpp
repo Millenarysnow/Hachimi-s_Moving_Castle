@@ -3,6 +3,7 @@
 #include "Misc/ScopeExit.h"
 #include "Tests/AutomationCommon.h"
 #include "Castle/Automation/CastlePIEAutomation.h"
+#include "Castle/Automation/CastleTowerOverviewTestUtilities.h"
 #include "Castle/Combat/CastleCombatSubsystem.h"
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
@@ -63,7 +64,8 @@ public:
 			Test.TestEqual(TEXT("离开只推进一步"), Director->ClearedSteps, BeforeIsland + 1);
 			Test.TestFalse(TEXT("离开恢复主塔建造面"), Director->Board->IsPlacementSurfacePresentationHidden());
 			Test.TestTrue(TEXT("离开准备并激活下一批节点"), Director->Nodes.Num() >= 2);
-			Test.TestTrue(TEXT("玩家返回入岛前的主塔视角位置"), Director->Controller->GetPawn()->GetActorLocation().Equals(ReturnLocation, 5.0f));
+			// 本用例先升到九层，核对返塔高度随已开放层变化。
+			CastleTowerOverviewTests::Check(Test, *Director->Board, *Director->Controller);
 			Test.TestFalse(TEXT("测试空岛已销毁"), static_cast<bool>(TActorIterator<ACastleSkyIslandTestFixture>(World)));
 			return true;
 		}
@@ -175,7 +177,6 @@ private:
 		Test.TestEqual(TEXT("拒绝后仍可选择其他节点"), Director.Phase, ECastleDirectorPhase::Editing);
 		Director.Config->SkyIslandClasses.Add(ECastleSkyIslandType::Rest, ACastleSkyIslandTestFixture::StaticClass());
 		BeforeIsland = Director.ClearedSteps;
-		ReturnLocation = Director.Controller->GetPawn()->GetActorLocation();
 		Director.HandleNodeTouched(IslandNode);
 		Director.Tick(0.0f);
 		if (!Test.TestNotNull(TEXT("节点生成配置夹具"), Director.ActiveSkyIsland.Get())) { return; }
@@ -426,7 +427,6 @@ private:
 	double Started = FPlatformTime::Seconds();
 	int32 Stage = 0;
 	int32 BeforeIsland = 0;
-	FVector ReturnLocation = FVector::ZeroVector;
 };
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCastleDirectorWave2IntegrationTest, "MovingCastle.Director.Wave2Integration",

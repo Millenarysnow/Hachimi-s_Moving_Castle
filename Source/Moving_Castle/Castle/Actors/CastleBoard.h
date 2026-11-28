@@ -211,7 +211,7 @@ public:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "战斗|敌人")
 	TObjectPtr<ACastleMassEnemySpawner> InitialEnemySpawner;
 
-	/** 原型背包装入普通房间、箭塔、炮塔、农田和盾塔各两张四种玩法色的 1～9 号卡。 */
+	/** 塔侧开局存放五张连通牌，地面棋盘沿用原型样牌。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "棋盘|原型操作")
 	TObjectPtr<UCastleBackpackComponent> PrototypeBackpack;
 	/** 教程地图显式关闭样例牌，由教学导演按步骤发放固定手牌。 */
@@ -400,6 +400,12 @@ protected:
 
 	/** 生成原型背包的样例卡，属性来自本次实际生成的建造面。 */
 	void InitializePrototypeDeck();
+	/** 按第一层四个实际侧格生成五张可绕行的一级建筑牌，并整批加入背包。 */
+	bool InitializeTowerSideStarterDeck(FText& OutReason);
+
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FCastleTowerStarterDeckTest;
+#endif
 
 	/** 查找背包中与当前样例卡牌完全匹配的第一张卡牌。 */
 	int32 FindPrototypeCardIndex(const FCastleBuildingDescriptor& Descriptor) const;

@@ -36,7 +36,7 @@ void UCastleControlSettingsWidget::RefreshMode(ECastleControlMode Mode)
 	const auto FormatKeys = [](ECastleControlMode Preset, const FText& LookText)
 	{
 		const auto& Keys = CastleControlInput::GetBindings(Preset);
-		return FText::Format(INVTEXT("{0} 放置 / 交互 · {1} 拆除\n{2}"),
+		return FText::Format(INVTEXT("{0} 放置 / 交互 · {1} 拆除\n{2}\n[ / ] 调节飞行速度"),
 			CastleControlInput::GetKeyDisplayText(Keys.Get(ECastleWorldInputAction::PrimaryInteract)),
 			CastleControlInput::GetKeyDisplayText(Keys.Get(ECastleWorldInputAction::Demolish)), LookText);
 	};

@@ -3,6 +3,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "NiagaraSystem.h"
 #include "CastleTowerDispatchConfigDataAsset.h"
 #include "Castle/UI/Director/CastleTowerUpgradeRewardWidget.h"
 #include "Castle/UI/Items/CastleWildcardRoomPickerWidget.h"
@@ -264,7 +265,7 @@ bool FCastleDirectorFoundationTest::RunTest(const FString& Parameters)
 {
 	AddExpectedError(TEXT("房间上限设置失败：收到无效值"), EAutomationExpectedErrorFlags::Contains, 1);
 	AddExpectedError(TEXT("主塔回血失败"), EAutomationExpectedErrorFlags::Contains, 2);
-	AddExpectedError(TEXT("字段 NodeMesh 值 None 无效"), EAutomationExpectedErrorFlags::Contains, 1);
+	AddExpectedError(TEXT("字段 NodePortalSystem 值 None 无效"), EAutomationExpectedErrorFlags::Contains, 1);
 	AddExpectedError(TEXT("字段 NodeCountMin/NodeCountMax"), EAutomationExpectedErrorFlags::Contains, 1);
 	AddExpectedError(TEXT("字段 NodeLabelWidgetClass 值 None 无效"), EAutomationExpectedErrorFlags::Contains, 1);
 	AddExpectedError(TEXT("奖励换批失败"), EAutomationExpectedErrorFlags::Contains, 1);
@@ -325,7 +326,9 @@ bool FCastleDirectorFoundationTest::RunTest(const FString& Parameters)
 
 	UCastleDirectorConfigDataAsset* Config = NewObject<UCastleDirectorConfigDataAsset>();
 	TestFalse(TEXT("缺失资产和界面配置拒绝启动"), Config->ValidateConfig(Reason));
-	Config->NodeMesh = GetMutableDefault<UStaticMesh>();
+	// 后续校验使用真实的 Niagara 圆环，保证用户参数也经过导演配置校验。
+	Config->NodePortalSystem = LoadObject<UNiagaraSystem>(nullptr,
+		TEXT("/Game/Portals_VFXPack/Particles/P_Light_SpherePortal.P_Light_SpherePortal"));
 	Config->NPCConfiguration = GetMutableDefault<UMassEntityConfigAsset>();
 	Config->HUDWidgetClass = UCastleDirectorHUDWidget::StaticClass();
 	Config->RewardWidgetClass = UCastleRewardChoiceWidget::StaticClass();
@@ -349,9 +352,9 @@ bool FCastleDirectorFoundationTest::RunTest(const FString& Parameters)
 	Config->NodeHeightOffset = std::numeric_limits<float>::infinity();
 	TestFalse(TEXT("无限高度拒绝"), Config->ValidateConfig(Reason));
 	Config->NodeHeightOffset = 1200.0f;
-	Config->NodeMeshScale = 0.0f;
-	TestFalse(TEXT("零网格缩放拒绝"), Config->ValidateConfig(Reason));
-	Config->NodeMeshScale = 4.0f;
+	Config->NodePortalScale = 0.0f;
+	TestFalse(TEXT("零传送门缩放拒绝"), Config->ValidateConfig(Reason));
+	Config->NodePortalScale = 2.5f;
 	Config->InitialNPCCount = 0;
 	AddExpectedError(TEXT("成长表必须含连续四级"), EAutomationExpectedErrorFlags::Contains, 2);
 	TestFalse(TEXT("非正初始NPC数量拒绝"), Config->ValidateConfig(Reason));

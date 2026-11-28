@@ -6,6 +6,7 @@
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Castle/Dialogue/CastleDialogueScriptDataAsset.h"
+#include "Castle/Automation/CastleTowerOverviewTestUtilities.h"
 #include "Castle/Dialogue/CastleDialogueSubsystem.h"
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
@@ -138,8 +139,6 @@ namespace
 			}
 			Test.TestEqual(TEXT("每次从正常编辑阶段进入"), Director.GetPhase(), ECastleDirectorPhase::Editing);
 			Test.TestEqual(TEXT("前序访问各提交一次"), Director.GetClearedSteps(), VisitIndex);
-			BeforeLocation = Controller.GetPawn()->GetActorLocation();
-			BeforeView = Controller.GetControlRotation();
 			PreviousNodes.Reset();
 			for (TActorIterator<ACastleDirectorNodeActor> Node(World); Node; ++Node) { PreviousNodes.Add(*Node); }
 			Test.TestTrue(TEXT("当前关有正式节点"), PreviousNodes.Num() >= 2);
@@ -588,8 +587,11 @@ namespace
 			UWorld* World = Director.GetWorld();
 			Test.TestEqual(TEXT("离岛恢复编辑阶段"), Director.GetPhase(), ECastleDirectorPhase::Editing);
 			Test.TestEqual(TEXT("离岛恰好推进一关"), Director.GetClearedSteps(), VisitIndex + 1);
-			Test.TestTrue(TEXT("返回入岛前的位置和视角"), Controller.GetPawn()->GetActorLocation().Equals(BeforeLocation, 5.0f)
-				&& Controller.GetControlRotation().Equals(BeforeView, 1.0f));
+			CastleTowerOverviewTests::Check(Test, Board, Controller);
+			if (VisitIndex == 0)
+			{
+				CastleTowerOverviewTests::Capture(TEXT("04-island-return-tower-overview.png"));
+			}
 			Test.TestFalse(TEXT("建造面恢复可见"), Board.IsPlacementSurfacePresentationHidden());
 			Test.TestFalse(TEXT("玩家输入和临时商店已关闭"), Controller.IsMoveInputIgnored()
 				|| Controller.IsLookInputIgnored() || Controller.GetShop()->IsShopOpen());
@@ -659,8 +661,6 @@ namespace
 		bool bModalSuppressionChecked = false;
 		EHoverStage HoverStage = EHoverStage::AwaitTarget;
 		double Deadline = FPlatformTime::Seconds() + 30.0;
-		FVector BeforeLocation;
-		FRotator BeforeView;
 		TWeakObjectPtr<ACastleSkyIslandBase> ActiveIsland;
 		TWeakObjectPtr<ACameraActor> HoverCamera;
 		TWeakObjectPtr<AActor> PreviousViewTarget;

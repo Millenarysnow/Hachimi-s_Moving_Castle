@@ -55,6 +55,9 @@ public:
 	bool TryResolveHit(const FHitResult& Hit, FCastleGridCursorTarget& OutTarget) const;
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FCastleTowerStarterDeckTest;
+#endif
 	/** 单面 Plane 只显示格面正面；缺少网格或材质时初始化直接失败。 */
 	UPROPERTY(Transient) TObjectPtr<UStaticMesh> PanelMesh;
 	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> PanelMaterial;

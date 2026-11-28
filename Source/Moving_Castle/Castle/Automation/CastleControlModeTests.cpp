@@ -27,6 +27,7 @@
 #include "Castle/Rendering/CastleHoverHighlightSubsystem.h"
 #include "Components/Animation/BuildingMergeComponent.h"
 #include "Components/Button.h"
+#include "Components/CapsuleComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/TextBlock.h"
 #include "Engine/Engine.h"
@@ -35,6 +36,7 @@
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "InputKeyEventArgs.h"
 #include "Interaction/CastlePatrolRoute.h"
 #include "Kismet/GameplayStatics.h"
@@ -82,6 +84,21 @@ namespace
 		Test.TestEqual(KeyLabel + TEXT(" 按下的垂直飞行输入"), ReadVerticalFlightInput(Player, Pawn), ExpectedZ);
 		SendInput(Player, Key, IE_Released, 0.0f);
 		Test.TestEqual(KeyLabel + TEXT(" 松开后的垂直飞行输入"), ReadVerticalFlightInput(Player, Pawn), 0.0);
+	}
+
+	/** 通过真实输入栈调档，验证速度与两项加减速同时生效。 */
+	void CheckSpeedKey(FAutomationTestBase& Test, ACastlePlayerController& Player, const FKey& Key, const float Speed)
+	{
+		const auto* Pawn = Cast<ACastleFlightPawn>(Player.GetPawn());
+		if (!Test.TestNotNull(TEXT("用于调速的正式飞行 Pawn"), Pawn)) { return; }
+		Press(Player, Key);
+		Player.PlayerTick(InputTickSeconds);
+		const auto* Movement = Pawn->GetCharacterMovement();
+		const FString Label = FString::Printf(TEXT("%s模式 %s"), Player.GetControlMode() == ECastleControlMode::Design
+			? TEXT("设计") : TEXT("经典"), *Key.ToString());
+		Test.TestEqual(Label + TEXT(" 飞行上限"), Movement->MaxFlySpeed, Speed);
+		Test.TestEqual(Label + TEXT(" 飞行加速"), Movement->MaxAcceleration, Speed * 5.5f);
+		Test.TestEqual(Label + TEXT(" 飞行制动"), Movement->BrakingDecelerationFlying, Speed * 5.5f);
 	}
 
 	/** 使用正式视口投影移动设计模式指针，下一步可由世界主点击重算射线。 */
@@ -179,9 +196,13 @@ namespace
 					&& ClassicKeys->GetText().ToString().Contains(TEXT("Space/Ctrl 升降")));
 				Test.TestTrue(TEXT("设置文案说明设计模式 Q 下降与 E 上升"), DesignKeys
 					&& DesignKeys->GetText().ToString().Contains(TEXT("Q 下降 / E 上升")));
+				Test.TestTrue(TEXT("设置在两个操作模式中均说明中括号调速"), ClassicKeys && DesignKeys
+					&& ClassicKeys->GetText().ToString().Contains(TEXT("[ / ] 调节飞行速度"))
+					&& DesignKeys->GetText().ToString().Contains(TEXT("[ / ] 调节飞行速度")));
 				auto* Design = Cast<UButton>(Panel->GetWidgetFromName(TEXT("DesignButton")));
 				if (!Test.TestNotNull(TEXT("设计模式按钮已绑定"), Design)) { return true; }
 				Test.TestTrue(TEXT("设置是模态界面"), Player->IsModalInputActive() && Player->IsLookInputIgnored());
+				CheckSpeedKey(Test, *Player, EKeys::RightBracket, 900.0f);
 				Design->OnClicked.Broadcast();
 				Test.TestTrue(TEXT("设计模式即时生效"), Player->GetControlMode() == ECastleControlMode::Design
 					&& Player->GetPrimaryPlaceInteractKey() == EKeys::LeftMouseButton
@@ -222,6 +243,8 @@ namespace
 				CheckFlightKey(Test, *Player, *FlightPawn, EKeys::E, 1.0);
 				CheckFlightKey(Test, *Player, *FlightPawn, EKeys::SpaceBar, 0.0);
 				CheckFlightKey(Test, *Player, *FlightPawn, EKeys::LeftControl, 0.0);
+				CheckSpeedKey(Test, *Player, EKeys::RightBracket, 1350.0f);
+				CheckSpeedKey(Test, *Player, EKeys::LeftBracket, 900.0f);
 				Player->SetControlMode(ECastleControlMode::Classic, false);
 				return false;
 			}
@@ -233,24 +256,45 @@ namespace
 				CheckFlightKey(Test, *Player, *FlightPawn, EKeys::LeftControl, -1.0);
 				CheckFlightKey(Test, *Player, *FlightPawn, EKeys::Q, 0.0);
 				CheckFlightKey(Test, *Player, *FlightPawn, EKeys::E, 0.0);
-				SendInput(*Player, EKeys::LeftAlt, IE_Pressed, 1.0f);
+				for (const float Speed : {550.0f, 350.0f, 200.0f, 200.0f})
+				{
+					CheckSpeedKey(Test, *Player, EKeys::LeftBracket, Speed);
+				}
+				for (const float Speed : {350.0f, 550.0f, 900.0f, 1350.0f, 1900.0f, 2600.0f, 3600.0f, 3600.0f})
+				{
+					CheckSpeedKey(Test, *Player, EKeys::RightBracket, Speed);
+				}
+				const UCapsuleComponent* Capsule = FlightPawn->GetCapsuleComponent();
+				Test.TestTrue(TEXT("飞行碰撞继续查询 WorldDynamic 对 Pawn 的重叠"), Capsule->GetGenerateOverlapEvents()
+					&& Capsule->GetCollisionEnabled() == ECollisionEnabled::QueryOnly && Capsule->GetCollisionObjectType() == ECC_Pawn);
+				for (int32 Channel = 0; Channel < ECC_MAX; ++Channel)
+				{
+					Test.TestEqual(FString::Printf(TEXT("观察者胶囊通道 %d 的响应"), Channel),
+						Capsule->GetCollisionResponseToChannel(static_cast<ECollisionChannel>(Channel)),
+						Channel == ECC_WorldDynamic ? ECR_Overlap : ECR_Ignore);
+				}
+				// 连续多档输入在同一个测试帧中执行。将临时 HUD 指针放到下一次潜伏更新，
+				// 让真实 PlayerInput 队列按常规帧序处理独占按键。
 				return false;
 			}
 			case 5:
+				SendInput(*Player, EKeys::LeftAlt, IE_Pressed, 1.0f);
+				return false;
+			case 6:
 				Test.TestTrue(TEXT("经典按住左 Alt 释放 HUD 指针并停用视角"), Player->bShowMouseCursor
 					&& !Player->CanRotateCameraFromMouse() && !Player->ShouldDrawCenterCrosshair());
 				SendInput(*Player, EKeys::LeftAlt, IE_Released, 0.0f);
 				return false;
-			case 6:
+			case 7:
 				Test.TestTrue(TEXT("松开左 Alt 恢复经典准星与自由视角"), !Player->bShowMouseCursor
 					&& Player->CanRotateCameraFromMouse() && Player->ShouldDrawCenterCrosshair());
 				Press(*Player, EKeys::O);
 				return false;
-			case 7:
+			case 8:
 				Test.TestNotNull(TEXT("O 键打开设置 WBP"), FindWidget<UCastleControlSettingsWidget>(*Player));
 				Press(*Player, EKeys::Escape);
 				return false;
-			case 8:
+			case 9:
 				Test.TestNull(TEXT("Esc 关闭设置 WBP"), FindWidget<UCastleControlSettingsWidget>(*Player));
 				return true;
 			default:
@@ -434,11 +478,8 @@ namespace
 				}
 				// 使用背包正常放置，并等同于飞入完成后再读取已经注册的门体碰撞。
 				Card.RoomTrait = ECastleRoomTrait::SkyIslandPortal;
-				// MainMap 的开局建筑栏已填满，先移除临时 PIE 的第一张牌给测试门卡腾出一格。
-				FCastleBuildingDescriptor RemovedStarter;
 				int32 BackpackIndex;
-				if (!Board->PrototypeBackpack->TryRemoveItemAt(0, RemovedStarter, Reason)
-					|| !Board->PrototypeBackpack->TryAddItem(Card, BackpackIndex, Reason))
+				if (!Board->PrototypeBackpack->TryAddItem(Card, BackpackIndex, Reason))
 				{
 					Test.AddError(Reason.ToString());
 					return true;

@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Castle/Automation/CastlePIEAutomation.h"
+#include "Castle/Director/CastleDirectorConfigDataAsset.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/SkyIslands/Rest/CastleRestSkyIsland.h"
@@ -26,12 +27,15 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerStart.h"
 #include "HAL/IConsoleManager.h"
 #include "InputKeyEventArgs.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/OutputDeviceNull.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Tests/AutomationCommon.h"
+#include "NiagaraComponent.h"
 #include "Units/Navigation/Interaction/CastlePatrolRoute.h"
 
 
@@ -84,8 +88,20 @@ namespace
 		Test->TestEqual(TEXT("开局等级为1"), Director->GetLevel(), 1);
 		Test->TestEqual(TEXT("开局 Lv1 房间上限30"), Director->GetCurrentRoomLimit(), 30);
 		int32 NodeCount = 0;
-		for (TActorIterator<ACastleDirectorNodeActor> It(World); It; ++It) { ++NodeCount; }
+		for (TActorIterator<ACastleDirectorNodeActor> It(World); It; ++It)
+		{
+			++NodeCount;
+			const auto* Portal = It->FindComponentByClass<UNiagaraComponent>();
+			Test->TestTrue(TEXT("已激活浮空节点播放正式 Niagara 圆环，同时保有屏幕标签"),
+				Portal && Portal->GetAsset() == Director->GetConfig()->NodePortalSystem && It->IsLabelReady());
+			Test->TestTrue(TEXT("门户特效自身不参与碰撞或导航"), Portal
+				&& Portal->GetCollisionEnabled() == ECollisionEnabled::NoCollision && !Portal->CanEverAffectNavigation());
+		}
 		Test->TestTrue(TEXT("真实世界中生成2至3个节点"), NodeCount >= 2 && NodeCount <= 3);
+		const TActorIterator<APlayerStart> Start(World);
+		Test->TestTrue(TEXT("正式 PIE 从主塔正门前的新起点出生"), Start && Controller->GetPawn()
+			&& Controller->GetPawn()->GetActorLocation().Equals(Start->GetActorLocation(), 1.0)
+			&& Start->GetActorLocation().Equals(FVector(2680, 580, 1882), 1.0));
 		FText Reason;
 		// 真实 MainMap 开局通过控制器的统一开关入口打开商店，再关闭后继续验证 HUD。
 		Test->TestTrue(TEXT("正式开局即可使用普通商店"), Director->IsShopAccessAllowed(Reason));
@@ -93,7 +109,7 @@ namespace
 		Test->TestTrue(TEXT("正式开局的B键入口可打开商店"), Controller->GetShop()->IsShopOpen());
 		Controller->ToggleShop();
 		Test->TestFalse(TEXT("关闭后商店界面收起"), Controller->GetShop()->IsShopOpen());
-		Test->TestTrue(TEXT("真实HUD显示开局房间计数10/30"), Director->GetHUDSummary().Contains(TEXT("房间 10/30")));
+		Test->TestTrue(TEXT("真实HUD显示开局房间计数5/30"), Director->GetHUDSummary().Contains(TEXT("房间 5/30")));
 		if (UCastleEconomyHUDWidget* Balance = FindMainMapWidget<UCastleEconomyHUDWidget>(*Test, World))
 		{
 			// 真实账户事件应该在同一帧更新 WBP，HUD 不应参与中心指针的命中测试。
@@ -147,7 +163,8 @@ namespace
 				CheckActionIconStates(*Test, const_cast<UCastleHUDIconButtonWidget*>(GuideBtn), TEXT("ActionButton"), TEXT("IconStates"));
 				if (BuildBar)
 				{
-					Test->TestEqual(TEXT("建造页显示建造栏"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+					Test->TestEqual(TEXT("建造页显示且仅卡槽接收鼠标的建造栏"),
+						BuildBar->GetVisibility(), ESlateVisibility::SelfHitTestInvisible);
 				}
 
 				Test->TestTrue(TEXT("非致死伤害走原生命入口"), IConsoleManager::Get().ProcessUserConsoleInput(TEXT("CastleDamageMainTower 25"), Output, World));
@@ -202,7 +219,8 @@ namespace
 		}
 		if (BuildBar)
 		{
-			Test->TestEqual(TEXT("回到建造页恢复建造栏显示"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+			Test->TestEqual(TEXT("回到建造页恢复建造栏及卡槽命中穿透"),
+				BuildBar->GetVisibility(), ESlateVisibility::SelfHitTestInvisible);
 		}
 	}
 
@@ -279,7 +297,7 @@ namespace
 		TActorIterator<ACastleRestSkyIsland> Island(World);
 		if (!BuildBar || !Test.TestTrue(TEXT("正式休息岛已生成"), static_cast<bool>(Island))) { return true; }
 		ACastleRestSkyIsland* RestIsland = *Island;
-		Test.TestEqual(TEXT("入岛后建造栏可见"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		Test.TestEqual(TEXT("入岛后建造栏可见"), BuildBar->GetVisibility(), ESlateVisibility::SelfHitTestInvisible);
 		Test.TestFalse(TEXT("岛内主塔商店权限不可用"), Director->IsShopAccessAllowed(Reason));
 		Controller->ToggleShop();
 		Test.TestFalse(TEXT("岛内 B 键入口无法打开主塔商店"), Controller->GetShop()->IsShopOpen());
@@ -288,7 +306,7 @@ namespace
 		Test.TestTrue(TEXT("空岛商店已打开"), Controller->GetShop()->IsShopOpen());
 		Test.TestEqual(TEXT("空岛商店打开时折叠建造栏"), BuildBar->GetVisibility(), ESlateVisibility::Collapsed);
 		Controller->GetShop()->CloseShop();
-		Test.TestEqual(TEXT("空岛商店关闭后恢复建造栏"), BuildBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		Test.TestEqual(TEXT("空岛商店关闭后恢复建造栏"), BuildBar->GetVisibility(), ESlateVisibility::SelfHitTestInvisible);
 		if (!Interact(*Director, RestIsland->FindComponentByClass<UCastleSkyIslandDepartureComponent>(), TEXT("离开传送门")))
 		{
 			return true;
@@ -415,12 +433,18 @@ namespace
    const FVector TowerBottom = Board->MainTowerActor->GetActorLocation();
    Test->TestFalse(TEXT("塔顶不提供放置格"), Board->TryResolveGridCursorTarget(
        TowerBottom + FVector(0, 0, 7000), TowerBottom + FVector(0, 0, 5000), Other));
-   FCastleBuildingDescriptor Starter;
-   if (!Test->TestTrue(TEXT("起始背包槽位 1 有可放卡"), Board->PrototypeBackpack->TryGetItemAt(0, Starter))) { return true; }
-   Test->TestTrue(TEXT("实际开局卡匹配首层 -X"), Board->CanPlaceBuildingAtCursor(BottomTarget, Starter, Reason));
+   // 正式手牌已打乱。按实际落点找到能匹配后门的任一张牌，再从同一槽用生产入口放置。
+   const auto Hand = Board->PrototypeBackpack->GetItems();
+   const int32 StarterIndex = Hand.IndexOfByPredicate([&](const FCastleBuildingDescriptor& Card)
+   {
+    return Board->CanPlaceBuildingAtCursor(BottomTarget, Card, Reason);
+   });
+   if (!Test->TestTrue(TEXT("五张实际开局牌中至少一张匹配首层 -X"), Hand.Num() == 5 && StarterIndex != INDEX_NONE)) { return true; }
+   const FCastleBuildingDescriptor& Starter = Hand[StarterIndex];
    const FCastleTowerSideCell* BottomCell = Board->FindTowerSideCell(Base, Faces[0]);
    FCastleBuildingDescriptor OffColor = Starter;
    OffColor.Color = BottomCell->Color == ECastleTileColor::Red ? ECastleTileColor::Blue : ECastleTileColor::Red;
+   OffColor.Number = BottomCell->Number;
    Test->TestTrue(TEXT("不同色同数字可放"), Board->CanPlaceBuildingAtCursor(BottomTarget, OffColor, Reason));
    OffColor.Number = BottomCell->Number % 9 + 1;
    Test->TestFalse(TEXT("颜色和数字都不同拒绝"), Board->CanPlaceBuildingAtCursor(BottomTarget, OffColor, Reason));
@@ -443,7 +467,7 @@ namespace
        && Board->FindTowerSideCell(Base, Faces[0]) == BottomCell && Board->CanPlaceBuildingAtCursor(Other, Starter, Reason));
 
    const int32 Before = Board->PrototypeBackpack->GetItemCount();
-   ACastleBuildingBase* Room = Board->PlaceBackpackBuildingAtCursor(BottomTarget, 0, Reason);
+   ACastleBuildingBase* Room = Board->PlaceBackpackBuildingAtCursor(BottomTarget, StarterIndex, Reason);
    if (!Test->TestTrue(TEXT("沿正式背包入口放置并完成飞入"), CastleBuildingTests::CompletePlacement(Room)))
    {
     Test->AddError(Reason.ToString());

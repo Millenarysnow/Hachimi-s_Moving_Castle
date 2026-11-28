@@ -103,18 +103,6 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "组件", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCameraComponent> FollowCamera;
 
-	/** 飞行最大速度。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "飞行控制", meta = (ClampMin = "1.0"))
-	float FlightSpeed = 900.0f;
-
-	/** 飞行加速度。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "飞行控制", meta = (ClampMin = "1.0"))
-	float FlightAcceleration = 5000.0f;
-
-	/** 松开按键后的飞行减速度。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "飞行控制", meta = (ClampMin = "1.0"))
-	float FlightBrakingDeceleration = 5000.0f;
-
 	/** 鼠标旋转倍率；引擎已在输入配置中设置 MouseX/MouseY 灵敏度，默认不再额外压低轴值。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "飞行控制", meta = (ClampMin = "0.001"))
 	float MouseSensitivity = 1.0f;
@@ -126,4 +114,16 @@ protected:
 	bool bMoveLeft = false;
 	bool bAscend = false;
 	bool bDescend = false;
+
+private:
+	/** 每个 Pawn 从标准档开始，两个操作模式使用同一套速度表。 */
+	int32 FlightSpeedTierIndex = 3;
+
+	/** 胶囊只查询门户重叠，不作为世界或其他 Pawn 的阻挡体。 */
+	void ConfigureObserverCollision();
+	/** 加速、制动与速度上限一起应用，维持各档相近的加减速时间。 */
+	void ApplyFlightSpeedTier();
+	void DecreaseFlightSpeed();
+	void IncreaseFlightSpeed();
+	void StepFlightSpeed(int32 Direction);
 };

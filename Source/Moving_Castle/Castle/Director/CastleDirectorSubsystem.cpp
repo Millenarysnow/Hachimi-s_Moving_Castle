@@ -411,6 +411,8 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 	}
 	const ECastleBattleKind Kind = Node->GetKind() == ECastleDirectorNodeKind::Elite ? ECastleBattleKind::Elite : ECastleBattleKind::Normal;
 	FText Failure;
+	FTransform TowerView;
+	if (!PrepareTowerOverview(TowerView, Failure)) { return Reject(Failure.ToString()); }
 	// 显隐校验在撤下商店和巡逻草稿之前，失败不得推进开战事务。
 	if (!Board->SetPlacementSurfacePresentationHidden(true, Failure)) { return Reject(Failure.ToString()); }
 	const bool bShopWasOpen = Controller->GetShop()->IsShopOpen();
@@ -431,6 +433,13 @@ bool UCastleDirectorSubsystem::TryStartSelectedBattle(ACastleDirectorNodeActor* 
 	}
 	DestroyNodes();
 	SetPhase(ECastleDirectorPhase::Battle);
+	// 开战和 NPC 会话已提交，只有销毁该批门户后才移动玩家，避免视角移动引发一次重复选择。
+	if (!TeleportPlayerToTowerOverview(TowerView, Failure))
+	{
+		OutReason = FText::Format(INVTEXT("第 {0} 关战斗已开始。{1}"), Stage, Failure);
+		ShowMessage(OutReason, true);
+		return false;
+	}
 	const FText BattleLabel = Kind == ECastleBattleKind::Elite ? INVTEXT("精英战斗开始") : INVTEXT("普通战斗开始");
 	ShowMessage(FText::Format(INVTEXT("第 {0} 关 · {1}"), Stage, BattleLabel), false);
 	UE_LOG(LogMoving_Castle, Display, TEXT("导演开战提交：第 %d 关，门到门待命池 %d 个 NPC。"), Stage, RunNPCCount);
@@ -544,8 +553,6 @@ bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirector
 		}
 	}
 	const FTransform Arrival = Island->GetPlayerArrivalTransform();
-	const FTransform ReturnTransform = Pawn->GetActorTransform();
-	const FRotator ReturnControlRotation = Controller->GetControlRotation();
 	if (!Pawn->TeleportTo(Arrival.GetLocation(), Arrival.Rotator()))
 	{
 		if (ArrivalWidget) { ArrivalWidget->RemoveFromParent(); }
@@ -554,9 +561,7 @@ bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirector
 		if (!Board->SetPlacementSurfacePresentationHidden(false, RestoreReason)) { return Reject(RestoreReason); }
 		return Reject(INVTEXT("玩家无法传送至空岛到达锚点。"));
 	}
-	// 传送成功后再提交返塔信息并处理节点。额外空岛暂时隐藏原节点，正式空岛仍消耗节点批次。
-	IslandReturnTransform = ReturnTransform;
-	IslandReturnControlRotation = ReturnControlRotation;
+	// 传送成功后再处理节点。额外空岛暂时隐藏原节点，正式空岛消耗节点批次。
 	Pawn->GetMovementComponent()->StopMovementImmediately();
 	Controller->SetControlRotation(Arrival.Rotator());
 	Controller->GetShop()->CloseShop();
@@ -599,13 +604,14 @@ bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirector
 bool UCastleDirectorSubsystem::TryDepartSkyIsland(FText& OutReason)
 {
 	if (!ValidateIslandAction(ActiveSkyIsland, OutReason)) { return false; }
-	APawn* Pawn = Controller->GetPawn();
-	if (!IsValid(Pawn) || !Pawn->GetMovementComponent() || (!bCurrentIslandIsBonus && GetNextStep() >= MAX_int32))
+	if (!bCurrentIslandIsBonus && GetNextStep() >= MAX_int32)
 	{
-		OutReason = INVTEXT("玩家 Pawn 或下一步编号无效，无法离岛。");
-		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+		OutReason = INVTEXT("下一步编号无效，无法离岛。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("空岛 %s：%s"), *ActiveSkyIsland->GetPathName(), *OutReason.ToString());
 		return false;
 	}
+	FTransform TowerView;
+	if (!PrepareTowerOverview(TowerView, OutReason)) { return false; }
 	// 正式空岛先准备下一步批次；额外空岛核对本步藏起的原节点，返塔时重新启用。
 	const bool bReturningFromBonusIsland = bCurrentIslandIsBonus;
 	TArray<TObjectPtr<ACastleDirectorNodeActor>> Candidates;
@@ -624,22 +630,22 @@ bool UCastleDirectorSubsystem::TryDepartSkyIsland(FText& OutReason)
 		for (ACastleDirectorNodeActor* Candidate : Candidates) { Candidate->Destroy(); }
 		return false;
 	}
-	if (!Pawn->TeleportTo(IslandReturnTransform.GetLocation(), IslandReturnTransform.Rotator()))
+	if (!TeleportPlayerToTowerOverview(TowerView, OutReason))
 	{
+		// 返塔未提交，撤销这次准备的节点与建造面显隐。原空岛及关号仍属于本次访问。
 		for (ACastleDirectorNodeActor* Candidate : Candidates) { Candidate->Destroy(); }
-		if (!Board->SetPlacementSurfacePresentationHidden(true, OutReason)) { return false; }
-		OutReason = INVTEXT("无法传送回主塔视角位置。");
-		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+		FText RestoreReason;
+		if (!Board->SetPlacementSurfacePresentationHidden(true, RestoreReason))
+		{
+			UE_LOG(LogMoving_Castle, Error, TEXT("空岛 %s 返塔回滚失败：%s"), *ActiveSkyIsland->GetPathName(), *RestoreReason.ToString());
+			OutReason = FText::Format(INVTEXT("{0} 建造面恢复失败：{1}"), OutReason, RestoreReason);
+		}
 		return false;
 	}
-	Pawn->GetMovementComponent()->StopMovementImmediately();
-	Controller->SetControlRotation(IslandReturnControlRotation);
 	Controller->GetShop()->CloseShop();
 	ActiveSkyIsland->Destroy();
 	ActiveSkyIsland = nullptr;
-	// 返塔成功才丢弃本次访问的锚点与临时商店领取状态。
-	IslandReturnTransform = FTransform::Identity;
-	IslandReturnControlRotation = FRotator::ZeroRotator;
+	// 返塔成功才清除本次岛屿的临时商店领取状态。
 	bIslandShopGranted = false;
 	bCurrentIslandIsBonus = false;
 	if (!bReturningFromBonusIsland)
@@ -658,6 +664,56 @@ bool UCastleDirectorSubsystem::TryDepartSkyIsland(FText& OutReason)
 	ShowMessage(bReturningFromBonusIsland ? INVTEXT("已返回主塔，可继续选择当前节点。")
 		: INVTEXT("已离开空岛，飞向节点进入下一步。"), false);
 	UE_LOG(LogMoving_Castle, Display, TEXT("导演离开空岛，已完成 %d 步。"), ClearedSteps);
+	return true;
+}
+
+bool UCastleDirectorSubsystem::PrepareTowerOverview(FTransform& OutView, FText& OutReason) const
+{
+	const AActor* TowerActor = IsValid(Tower) ? Tower->GetOwner() : nullptr;
+	const APawn* Pawn = IsValid(Controller) ? Controller->GetPawn() : nullptr;
+	const auto Reject = [&](const FText& Reason)
+	{
+		OutReason = Reason;
+		UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s、主塔 %s、Pawn %s 无法准备塔顶俯瞰位：%s"),
+			*GetPathNameSafe(Board), *GetPathNameSafe(TowerActor), *GetPathNameSafe(Pawn), *Reason.ToString());
+		return false;
+	};
+	if (!IsValid(Board) || !IsValid(TowerActor) || !IsValid(Pawn) || !IsValid(Pawn->GetMovementComponent()))
+	{
+		return Reject(INVTEXT("棋盘、主塔或玩家移动组件无效。"));
+	}
+	const int32 Layers = Board->GetUnlockedLayerCount();
+	if (Layers <= 0 || !FMath::IsFinite(Board->LayerHeight) || Board->LayerHeight <= 0.0f)
+	{
+		return Reject(INVTEXT("主塔当前开放层数或层高无效。"));
+	}
+	// 棋盘正面朝向当前节点圆弧。沿其反方向水平退开吊挂，保持视线朝战场俯瞰。
+	const FRotator Facing(0.0, Board->GetActorRotation().Yaw, 0.0);
+	const FVector Location = TowerActor->GetActorLocation() - Facing.Vector() * 650.0
+		+ FVector::UpVector * (Layers * Board->LayerHeight + 1200.0);
+	const FRotator View(-28.0, Facing.Yaw, 0.0);
+	if (Location.ContainsNaN() || View.ContainsNaN())
+	{
+		return Reject(INVTEXT("俯瞰坐标或朝向包含非有限值。"));
+	}
+	OutView = FTransform(View, Location);
+	return true;
+}
+
+bool UCastleDirectorSubsystem::TeleportPlayerToTowerOverview(const FTransform& View, FText& OutReason)
+{
+	APawn* Pawn = IsValid(Controller) ? Controller->GetPawn() : nullptr;
+	UPawnMovementComponent* Movement = IsValid(Pawn) ? Pawn->GetMovementComponent() : nullptr;
+	if (!IsValid(Movement) || !Pawn->TeleportTo(View.GetLocation(), View.Rotator(), false, true))
+	{
+		OutReason = INVTEXT("玩家无法传送至主塔塔顶俯瞰位。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("Pawn %s 传送至主塔 %s 的俯瞰位 %s 失败。"),
+			*GetPathNameSafe(Pawn), *GetPathNameSafe(Tower), *View.GetLocation().ToString());
+		return false;
+	}
+	Movement->StopMovementImmediately();
+	Pawn->ConsumeMovementInputVector();
+	Controller->SetControlRotation(View.Rotator());
 	return true;
 }
 
