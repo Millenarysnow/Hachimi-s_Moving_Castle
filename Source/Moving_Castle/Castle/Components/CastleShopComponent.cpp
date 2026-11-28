@@ -541,7 +541,7 @@ bool UCastleShopComponent::TryBuyOffer(int32 OfferIndex, FText& OutFailureReason
 		}
 		for (int64 Index = 0; Index < RebateCount; ++Index)
 		{
-			if (!GenerateRandomRoom(CandidateStream, 1, 6, {}, RebateCards.AddDefaulted_GetRef(), OutFailureReason))
+			if (!GenerateRandomRoom(CandidateStream, MinOfferNumber, MaxOfferNumber, {}, RebateCards.AddDefaulted_GetRef(), OutFailureReason))
 			{
 				return false;
 			}

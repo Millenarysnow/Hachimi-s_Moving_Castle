@@ -138,6 +138,17 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 	}
 	// MainMap 的开局依赖主塔侧格；旧地图仍可以显式使用地面格。
 	if (!Board->ValidatePlacementSurface(OutReason)) { return false; }
+	// 棋盘先生成开局侧格和手牌，导演在发布节点前核对完整四档配置。
+	for (int32 Tier = 0; Tier < Config->TowerLevels.Num(); ++Tier)
+	{
+		if (Board->TowerMaxNumberByTier.Num() != 4 || Board->TowerMaxNumberByTier[Tier] != Config->TowerLevels[Tier].MaxShopNumber)
+		{
+			OutReason = FText::FromString(FString::Printf(TEXT("棋盘 %s 的 Lv%d 数字上限与导演资产 %s 不一致。"),
+				*Board->GetPathName(), Tier + 1, *Config->GetPathName()));
+			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+			return false;
+		}
+	}
 	Tower = GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>()->GetRegisteredMainTower();
 	Controller = Cast<ACastlePlayerController>(GetWorld()->GetFirstPlayerController());
 	if (!IsValid(Tower) || !IsValid(Controller) || !Controller->IsLocalController())
@@ -1150,7 +1161,7 @@ bool UCastleDirectorSubsystem::TryCheckTowerUpgrade(FText& OutReason)
 		}
 	}
 	if (!Tower->PrepareTowerBalloonTier(Target.BalloonCount, Target.BaseMaxHealth, true, OutReason)
-		|| !Board->ExpandMainTowerLayers(Target.UnlockedLayers, OutReason))
+		|| !Board->ExpandMainTowerLayers(Target.UnlockedLayers, OutReason, Target.MaxShopNumber))
 	{
 		Tower->DiscardPreparedBalloonTier();
 		return Reject(OutReason);

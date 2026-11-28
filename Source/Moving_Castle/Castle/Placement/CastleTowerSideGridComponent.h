@@ -37,10 +37,10 @@ public:
 
 	/** 以塔底为局部原点生成四面；失败时调用方不提交主塔及本批侧格。 */
 	bool Initialize(const FIntVector& BaseCell, int32 LayerCount, float CellWidth, float GridCellSize, float LayerHeight,
-		float SurfaceOffset, int32 Seed, FText& OutReason);
+		float SurfaceOffset, int32 Seed, int32 MaxNumber, FText& OutReason);
 
 	/** 仅追加新开放的塔层，完整生成之后才加入原侧格索引。 */
-	bool ExpandToLayerCount(int32 TargetLayerCount, FText& OutReason);
+	bool ExpandToLayerCount(int32 TargetLayerCount, int32 MaxNumber, FText& OutReason);
 
 	/** 不依赖可见状态；导演在奖励阶段仍需要检查隐藏中的侧格是否完整。 */
 	bool ValidatePresentation(FText& OutReason) const;
@@ -75,5 +75,5 @@ private:
 	float TowerLayerHeight = 0.0f;
 	float TowerSurfaceOffset = 0.0f;
 
-	bool AppendLayers(int32 TargetLayerCount, FText& OutReason);
+	bool AppendLayers(int32 TargetLayerCount, int32 MaxNumber, FText& OutReason);
 };

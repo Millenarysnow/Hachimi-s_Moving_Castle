@@ -208,19 +208,30 @@ bool FCastleMainTowerSideGrowthTest::RunTest(const FString& Parameters)
 	UCastleTowerSideGridComponent* Grid = NewObject<UCastleTowerSideGridComponent>(Tower);
 	Grid->RegisterComponent();
 	FText Reason;
-	if (!TestTrue(TEXT("生成开局三层"), Grid->Initialize(FIntVector::ZeroValue, 3, 500.0f, 515.0f, 560.0f, 290.0f, 17, Reason)))
+	if (!TestTrue(TEXT("生成开局三层"), Grid->Initialize(FIntVector::ZeroValue, 3, 500.0f, 515.0f, 560.0f, 290.0f, 17, 3, Reason)))
 	{
 		AddError(Reason.ToString());
 		return false;
 	}
 	TestEqual(TEXT("开局四面各三格"), Grid->GetCells().Num(), 12);
+	// 初始四面都使用 Lv1 数字上限。
+	for (const auto& Cell : Grid->GetCells())
+	{
+		TestTrue(TEXT("初始侧格数字在 1 至 3"), Cell.Number >= 1 && Cell.Number <= 3);
+	}
 	const FCastleTowerSideCell& FirstSideCell = Grid->GetCells()[0];
 	TestTrue(TEXT("塔侧格使用没有窄边的 Plane 网格"), IsValid(FirstSideCell.Panel)
 		&& FirstSideCell.Panel->GetStaticMesh() && FirstSideCell.Panel->GetStaticMesh()->GetFName() == TEXT("Plane"));
 	for (const int32 Target : {5, 7, 9})
 	{
 		const TArray<FCastleTowerSideCell> Old = Grid->GetCells();
-		if (!TestTrue(TEXT("成功追加两层"), Grid->ExpandToLayerCount(Target, Reason))) { return false; }
+		const int32 MaxNumber = (Target + 3) / 2;
+		if (!TestTrue(TEXT("成功追加两层"), Grid->ExpandToLayerCount(Target, MaxNumber, Reason))) { return false; }
+		for (int32 Index = Old.Num(); Index < Grid->GetCells().Num(); ++Index)
+		{
+			const int32 Number = Grid->GetCells()[Index].Number;
+			TestTrue(TEXT("新侧格数字落在本级区间"), Number >= 1 && Number <= MaxNumber);
+		}
 		TestEqual(TEXT("四侧都有新层"), Grid->GetCells().Num(), Target * 4);
 		for (const FCastleTowerSideCell& Cell : Old)
 		{
@@ -232,8 +243,8 @@ bool FCastleMainTowerSideGrowthTest::RunTest(const FString& Parameters)
 		}
 	}
 	AddExpectedError(TEXT("目标层数"), EAutomationExpectedErrorFlags::Contains, 2);
-	TestFalse(TEXT("不允许缩层"), Grid->ExpandToLayerCount(7, Reason));
-	TestFalse(TEXT("侧格拒绝超出自身有效范围"), Grid->ExpandToLayerCount(65, Reason));
+	TestFalse(TEXT("不允许缩层"), Grid->ExpandToLayerCount(7, 5, Reason));
+	TestFalse(TEXT("侧格拒绝超出自身有效范围"), Grid->ExpandToLayerCount(65, 6, Reason));
 	TestEqual(TEXT("失败后原九层仍完整"), Grid->GetCells().Num(), 36);
 	return true;
 }

@@ -142,6 +142,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|主塔扩层")
 	int32 MaxTowerLayers = 9;
 
+	/** 四档数字上限在导演启动前供塔侧格和开局发牌使用。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|主塔扩层")
+	TArray<int32> TowerMaxNumberByTier = {3, 4, 5, 6};
+
 	/** 四个等级的气球容量；基础最大生命等于容量与基础每球生命的乘积。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "棋盘|主塔扩层")
 	TArray<int32> TowerBalloonLimitsByTier = {5, 10, 20, 40};
@@ -159,7 +163,7 @@ public:
 
 	/** 整塔和吊挂套件切换、侧格追加完成后才发布新的建筑高度上限。 */
 	UFUNCTION(BlueprintCallable, Category = "移动城堡|棋盘")
-	bool ExpandMainTowerLayers(int32 TargetLayerCount, FText& OutReason);
+	bool ExpandMainTowerLayers(int32 TargetLayerCount, FText& OutReason, int32 MaxNumber = -1);
 
 	/** 校验当前模式的实际数据，不能从缺失的塔侧格回退到地面。 */
 	bool ValidatePlacementSurface(FText& OutFailureReason) const;
