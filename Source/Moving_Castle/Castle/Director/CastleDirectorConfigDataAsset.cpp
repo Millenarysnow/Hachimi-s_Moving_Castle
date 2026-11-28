@@ -11,6 +11,7 @@
 #include "Castle/Combat/CastleCombatConfigDataAsset.h"
 #include "Moving_Castle.h"
 #include "CastleTowerDispatchConfigDataAsset.h"
+#include "Castle/SkyIslands/CastleSkyIslandWeightsDataAsset.h"
 
 UCastleDirectorConfigDataAsset::UCastleDirectorConfigDataAsset()
 {
@@ -92,6 +93,9 @@ bool UCastleDirectorConfigDataAsset::ValidateConfig(FText& OutFailureReason) con
 		return Reject(TEXT("SkyIslandSpawnDistance/SkyIslandHeightOffset"),
 			FString::Printf(TEXT("%g/%g"), SkyIslandSpawnDistance, SkyIslandHeightOffset));
 	}
+	// 两个空岛入口都使用显式配置，缺少资产或权重无效时拒绝开局。
+	if (!IsValid(SkyIslandWeights)) { return Reject(TEXT("SkyIslandWeights"), TEXT("None")); }
+	if (!SkyIslandWeights->ValidateConfiguration(OutFailureReason)) { return false; }
 	if (!SkyIslandInteractKey.IsValid()) { return Reject(TEXT("SkyIslandInteractKey"), SkyIslandInteractKey.ToString()); }
 	if (!FMath::IsFinite(NodeRingRadius) || NodeRingRadius <= 0.0f) { return Reject(TEXT("NodeRingRadius"), FString::SanitizeFloat(NodeRingRadius)); }
 	if (!FMath::IsFinite(NodeHeightOffset)) { return Reject(TEXT("NodeHeightOffset"), FString::SanitizeFloat(NodeHeightOffset)); }

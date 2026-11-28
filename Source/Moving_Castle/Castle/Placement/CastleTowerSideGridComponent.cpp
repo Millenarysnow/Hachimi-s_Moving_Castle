@@ -42,7 +42,7 @@ UCastleTowerSideGridComponent::UCastleTowerSideGridComponent()
 }
 
 bool UCastleTowerSideGridComponent::Initialize(const FIntVector& BaseCell, const int32 LayerCount, const float CellWidth,
-	const float GridCellSize, const float LayerHeight, const float SurfaceOffset, const int32 Seed, FText& OutReason)
+	const float GridCellSize, const float LayerHeight, const float SurfaceOffset, const int32 Seed, const int32 MaxNumber, FText& OutReason)
 {
 	OutReason = FText::GetEmpty();
 	AActor* Tower = GetOwner();
@@ -77,11 +77,11 @@ bool UCastleTowerSideGridComponent::Initialize(const FIntVector& BaseCell, const
 	TowerLayerHeight = LayerHeight;
 	TowerSurfaceOffset = SurfaceOffset;
 	RunSeed = Seed;
-	bInitialized = AppendLayers(LayerCount, OutReason);
+	bInitialized = AppendLayers(LayerCount, MaxNumber, OutReason);
 	return bInitialized;
 }
 
-bool UCastleTowerSideGridComponent::ExpandToLayerCount(const int32 TargetLayerCount, FText& OutReason)
+bool UCastleTowerSideGridComponent::ExpandToLayerCount(const int32 TargetLayerCount, const int32 MaxNumber, FText& OutReason)
 {
 	if (!ValidatePresentation(OutReason))
 	{
@@ -95,11 +95,19 @@ bool UCastleTowerSideGridComponent::ExpandToLayerCount(const int32 TargetLayerCo
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
 	}
-	return AppendLayers(TargetLayerCount, OutReason);
+	return AppendLayers(TargetLayerCount, MaxNumber, OutReason);
 }
 
-bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, FText& OutReason)
+bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, const int32 MaxNumber, FText& OutReason)
 {
+	// 格面图集仅有九帧，生成之前拒绝非法上限。
+	if (MaxNumber < 1 || MaxNumber > 9)
+	{
+		OutReason = FText::FromString(FString::Printf(TEXT("主塔 %s 的侧格数字上限 %d 无效（须为 1 至 9）。"),
+			*GetPathNameSafe(GetOwner()), MaxNumber));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+		return false;
+	}
 	AActor* Tower = GetOwner();
 	USceneComponent* Root = Tower->GetRootComponent();
 	TArray<FCastleTowerSideCell> Pending;
@@ -131,7 +139,7 @@ bool UCastleTowerSideGridComponent::AppendLayers(const int32 TargetLayerCount, F
 			Cell.Face = Face.Face;
 			Cell.Color = Colors[ColorIndex];
 			Cell.Number = 1 + FMath::FloorToInt(UCastleDeterministicPCGNoise::SampleNoiseValue(
-				RunSeed, SampleCell, TEXT("TowerSideNumber")) * 9);
+				RunSeed, SampleCell, TEXT("TowerSideNumber")) * MaxNumber);
 
 			// 采样色值缺少材质映射时撤销本批次，避免发布无法正确显示的格面。
 			FLinearColor PanelTint;

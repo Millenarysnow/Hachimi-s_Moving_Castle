@@ -35,7 +35,7 @@ bool FCastleTowerStarterDeckTest::RunTest(const FString& Parameters)
 	Board->TowerSideGrid = Grid;
 	FText Reason;
 	const FIntVector Base = Board->GetBoardCenterCoordinate();
-	if (!TestTrue(TEXT("初始化一组真实主塔四面样格"), Grid->Initialize(Base, 1, 500.0f, 515.0f, 560.0f, 260.0f, 0, Reason)))
+	if (!TestTrue(TEXT("初始化一组真实主塔四面样格"), Grid->Initialize(Base, 1, 500.0f, 515.0f, 560.0f, 260.0f, 0, Board->TowerMaxNumberByTier[0], Reason)))
 	{
 		AddError(Reason.ToString());
 		return false;
@@ -60,7 +60,7 @@ bool FCastleTowerStarterDeckTest::RunTest(const FString& Parameters)
 			FCastleTowerSideCell* Cell = const_cast<FCastleTowerSideCell*>(Grid->FindCell(Base, Faces[SideIndex]));
 			if (!TestNotNull(Label + TEXT("重新设置随机塔面属性"), Cell)) { return false; }
 			Cell->Color = Colors[SideRandom.RandRange(0, Colors.Num() - 1)];
-			Cell->Number = SideRandom.RandRange(1, 9);
+			Cell->Number = SideRandom.RandRange(1, Board->TowerMaxNumberByTier[0]);
 			auto* Material = Cast<UMaterialInstanceDynamic>(Cell->Panel->GetMaterial(0));
 			FLinearColor Tint = FLinearColor::Transparent;
 			if (!TestTrue(Label + TEXT("读取真实塔面动态材质与色值"), Material && CastleTileColors::TryGetGridTint(Cell->Color, Tint)))
@@ -96,7 +96,8 @@ bool FCastleTowerStarterDeckTest::RunTest(const FString& Parameters)
 		bool bHasNormalRoom = false;
 		for (const FCastleBuildingDescriptor& Card : Hand)
 		{
-			if (!TestTrue(Label + TEXT("有效一级卡"), Card.Level == 1 && Card.Validate(Reason))) { return false; }
+			if (!TestTrue(Label + TEXT("有效一级卡且数字符合 Lv1"), Card.Level == 1 && Card.Validate(Reason)
+				&& Card.Number >= 1 && Card.Number <= 3)) { return false; }
 			const ECastleBuildingType Type = Card.GetBuildingType();
 			if (!TestTrue(Label + TEXT("每张均为可通行建筑"), Type == ECastleBuildingType::NormalRoom
 				|| Type == ECastleBuildingType::ArcherTower || Type == ECastleBuildingType::CannonTower || Type == ECastleBuildingType::Farm))

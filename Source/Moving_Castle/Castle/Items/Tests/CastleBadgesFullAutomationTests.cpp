@@ -506,13 +506,14 @@ bool FCastleBadgesFullShopTest::RunTest(const FString&)
 	TestEqual(TEXT("失败不偷偷加入商品"), Backpack->GetItemCount(), 0);
 	TestFalse(TEXT("失败货位保持可购买"), Shop->GetOffers()[0].bSold);
 	Game.Board->BuildingDefinitions = Definitions;
+	// 将当前数字区间切换到明确的单点，验证赠牌同时读取下界与上界。
+	TestTrue(TEXT("设置当前商店数字区间"), Shop->TrySetOfferNumberRange(4, 4, Reason));
 	TestTrue(TEXT("修复同一笔可重试"), Shop->TryBuyOffer(0, Reason));
 	TestEqual(TEXT("购买卡进入主栏"), Backpack->GetItemCount(), 1);
 	TestEqual(TEXT("两枚返利共发两张临时栏卡"), Backpack->GetTempItemCount(), 2);
 	for (const auto& Reward : Backpack->GetTempItems())
 	{
-		TestTrue(TEXT("返利是独立的标准四色 1–6 一级卡"), Reward.Level == 1 && Reward.Number >= 1
-			&& Reward.Number <= 6 && CastleTileColors::IsPlayable(Reward.Color) && Definitions.Contains(Reward.Definition));
+		TestTrue(TEXT("返利是当前数字区间的一级四色卡"), Reward.Level == 1 && Reward.Number == 4 && CastleTileColors::IsPlayable(Reward.Color) && Definitions.Contains(Reward.Definition));
 	}
 
 	// 纯数据商店可以脱离游戏世界做配置校验和交易，不能误用上述玩家徽章或取消已有购买能力。

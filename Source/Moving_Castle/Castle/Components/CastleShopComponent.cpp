@@ -23,6 +23,14 @@ UCastleShopComponent::UCastleShopComponent()
 
 bool UCastleShopComponent::InitializeShop(UCastleEconomyComponent* InEconomy, ACastleBoard* InBoard, FText& OutFailureReason)
 {
+	if (!InitializeShopState(InEconomy, InBoard, OutFailureReason)) { return false; }
+	// 成功绑定的正式商店即使关闭，棋盘仍执行该房间容量。
+	InBoard->BoundShops.Add(this);
+	return true;
+}
+
+bool UCastleShopComponent::InitializeShopState(UCastleEconomyComponent* InEconomy, ACastleBoard* InBoard, FText& OutFailureReason)
+{
 	OutFailureReason = FText::GetEmpty();
 	if (bInitialized || !IsValid(InEconomy) || !IsValid(InBoard) || !IsValid(InBoard->PrototypeBackpack))
 	{
@@ -303,7 +311,7 @@ bool UCastleShopComponent::PrepareRewardShop(UCastleEconomyComponent* InEconomy,
 		Candidate.RandomStream = RandomStream;
 		Candidate.bInitialized = true;
 	}
-	else if (!Candidate.InitializeShop(InEconomy, InBoard, OutFailureReason))
+	else if (!Candidate.InitializeShopState(InEconomy, InBoard, OutFailureReason))
 	{
 		UE_LOG(LogMoving_Castle, Error, TEXT("%s 商店奖励初始化失败：%s"), *GetPathName(), *OutFailureReason.ToString());
 		return false;
@@ -316,6 +324,8 @@ void UCastleShopComponent::CommitRewardShop(UCastleShopComponent& Candidate)
 	// 广播前写完所有在免费换批中共同提交的商店字段。
 	Economy = Candidate.Economy;
 	Board = Candidate.Board;
+	// 只有正式提交才能让新商店约束棋盘，临时换批对象从不登记。
+	Board->BoundShops.AddUnique(this);
 	Backpack = Candidate.Backpack;
 	PricingStrategy = Candidate.PricingStrategy;
 	Offers = MoveTemp(Candidate.Offers);
@@ -454,18 +464,9 @@ int32 UCastleShopComponent::GetOwnedRoomCount() const
 {
 	// 未绑定棋盘的商店沿用公开查询原有的空状态；导演开局直接从自己的棋盘读取。
 	if (!bInitialized) { return 0; }
-	if (!IsValid(Board) || !IsValid(Backpack) || Board->PrototypeBackpack != Backpack)
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("商店 %s 房间计数失败：绑定的棋盘 %s 或背包 %s 无效。"),
-			*GetPathName(), *GetPathNameSafe(Board), *GetPathNameSafe(Backpack));
-		return INDEX_NONE;
-	}
 	int32 Cells = INDEX_NONE;
 	FText Reason;
-	if (!TryCountOwnedRoomCells(Board, Cells, Reason))
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("商店 %s 房间计数失败：%s"), *GetPathName(), *Reason.ToString());
-	}
+	TryCountOwnedRoomCells(Board, Cells, Reason);
 	return Cells;
 }
 
@@ -473,23 +474,14 @@ bool UCastleShopComponent::TryCountOwnedRoomCells(const ACastleBoard* InBoard, i
 {
 	OutCells = INDEX_NONE;
 	OutReason = FText::GetEmpty();
-	if (!IsValid(InBoard) || !IsValid(InBoard->PrototypeBackpack))
+	if (!IsValid(InBoard))
 	{
-		OutReason = FText::FromString(FString::Printf(TEXT("棋盘 %s 或其背包无效，无法统计已拥有的房间。"),
-			*GetPathNameSafe(InBoard)));
+		OutReason = FText::FromString(FString::Printf(TEXT("棋盘 %s 无效，无法统计场内占格。"), *GetPathNameSafe(InBoard)));
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
 		return false;
 	}
-	const UCastleBackpackComponent* Storage = InBoard->PrototypeBackpack;
-	int32 StoredCells = 0;
-	if (!Storage->TryCountStoredRoomCells(StoredCells, OutReason)) { return false; }
-	const int32 OccupiedCells = InBoard->GetOccupiedRoomCellCount();
-	if (StoredCells > MAX_int32 - OccupiedCells)
-	{
-		OutReason = FText::FromString(FString::Printf(TEXT("棋盘 %s 与背包 %s 合计房间总格数超过整数上限。"),
-			*InBoard->GetPathName(), *Storage->GetPathName()));
-		return false;
-	}
-	OutCells = OccupiedCells + StoredCells;
+	// 占用索引已逐格登记多格房间。主建筑栏与临时栏只影响库存。
+	OutCells = InBoard->GetOccupiedRoomCellCount();
 	return true;
 }
 
@@ -541,7 +533,7 @@ bool UCastleShopComponent::TryBuyOffer(int32 OfferIndex, FText& OutFailureReason
 		}
 		for (int64 Index = 0; Index < RebateCount; ++Index)
 		{
-			if (!GenerateRandomRoom(CandidateStream, 1, 6, {}, RebateCards.AddDefaulted_GetRef(), OutFailureReason))
+			if (!GenerateRandomRoom(CandidateStream, MinOfferNumber, MaxOfferNumber, {}, RebateCards.AddDefaulted_GetRef(), OutFailureReason))
 			{
 				return false;
 			}

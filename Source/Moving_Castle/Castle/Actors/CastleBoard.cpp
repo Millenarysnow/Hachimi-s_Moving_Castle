@@ -20,6 +20,7 @@
 #include "CastleMainTowerBalloonComponent.h"
 #include "CastleMainTowerComponent.h"
 #include "CastleMassEnemySpawner.h"
+#include "CastleShopComponent.h"
 #include "CastleNavigationSubsystem.h"
 #include "CastleTowerDispatchConfigDataAsset.h"
 #include "CastleTowerDispatchSubsystem.h"
@@ -327,12 +328,22 @@ bool ACastleBoard::SpawnMainTower(FText& OutFailureReason)
 			TowerActor->Destroy();
 			return false;
 		}
+		// 开局发牌早于导演 Tick，先校验棋盘自有的四档上限再生成格面。
+		if (TowerMaxNumberByTier.Num() != 4 || TowerMaxNumberByTier[0] < 1 || TowerMaxNumberByTier[3] > 9
+			|| TowerMaxNumberByTier[0] >= TowerMaxNumberByTier[1] || TowerMaxNumberByTier[1] >= TowerMaxNumberByTier[2]
+			|| TowerMaxNumberByTier[2] >= TowerMaxNumberByTier[3])
+		{
+			OutFailureReason = FText::FromString(FString::Printf(TEXT("棋盘 %s 的主塔数字上限须为四个严格递增的 1 至 9 整数。"), *GetPathName()));
+			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutFailureReason.ToString());
+			TowerActor->Destroy();
+			return false;
+		}
 		UCastleTowerSideGridComponent* Grid = NewObject<UCastleTowerSideGridComponent>(TowerActor, TEXT("TowerSideGrid"));
 		TowerActor->AddInstanceComponent(Grid);
 		Grid->RegisterComponent();
 		const int32 RunSeed = bUseFixedTowerSideSeed ? FixedTowerSideSeed : static_cast<int32>(GetTypeHash(FGuid::NewGuid()));
 		if (!Grid->Initialize(GetBoardCenterCoordinate(), GetUnlockedLayerCount(), GroundTileSize, CellSize, LayerHeight,
-			TowerSideSurfaceOffset, RunSeed, OutFailureReason))
+			TowerSideSurfaceOffset, RunSeed, TowerMaxNumberByTier[0], OutFailureReason))
 		{
 			TowerActor->Destroy();
 			return false;
@@ -403,7 +414,7 @@ bool ACastleBoard::InitializeProgressiveTowerPresentation(AActor& Tower, UCastle
 	return true;
 }
 
-bool ACastleBoard::ExpandMainTowerLayers(const int32 TargetLayerCount, FText& OutReason)
+bool ACastleBoard::ExpandMainTowerLayers(const int32 TargetLayerCount, FText& OutReason, const int32 MaxNumber)
 {
 	OutReason = FText::GetEmpty();
 	const auto Reject = [&](const TCHAR* Detail)
@@ -417,7 +428,8 @@ bool ACastleBoard::ExpandMainTowerLayers(const int32 TargetLayerCount, FText& Ou
 	{
 		return Reject(TEXT("当前地图未启用扩层，或整塔表现、侧格未就绪"));
 	}
-	if (TargetLayerCount > MaxPlayableTowerLayers || UCastleMainTowerBalloonComponent::FindTierIndex(TargetLayerCount) == INDEX_NONE)
+	const int32 Tier = UCastleMainTowerBalloonComponent::FindTierIndex(TargetLayerCount);
+	if (TargetLayerCount > MaxPlayableTowerLayers || Tier == INDEX_NONE)
 	{
 		return Reject(TEXT("主塔棋盘只开放 3、5、7、9 层"));
 	}
@@ -425,6 +437,13 @@ bool ACastleBoard::ExpandMainTowerLayers(const int32 TargetLayerCount, FText& Ou
 	{
 		return Reject(TEXT("目标层数必须严格大于当前开放层数且不得超过最大主塔层数"));
 	}
+	// 独立棋盘和调试入口按目标塔层查四档表。导演显式传值时必须和棋盘配置一致。
+	if (!TowerMaxNumberByTier.IsValidIndex(Tier) || TowerMaxNumberByTier[Tier] < 1 || TowerMaxNumberByTier[Tier] > 9
+		|| (MaxNumber != INDEX_NONE && MaxNumber != TowerMaxNumberByTier[Tier]))
+	{
+		return Reject(TEXT("目标档位的数字上限无效或与导演配置不一致"));
+	}
+	const int32 TierMaxNumber = TowerMaxNumberByTier[Tier];
 	UCastleMainTowerComponent* Health = MainTowerActor->FindComponentByClass<UCastleMainTowerComponent>();
 	if (!IsValid(Health)) { return Reject(TEXT("主塔生命组件缺失")); }
 	const float NewShaftHeight = static_cast<float>(TargetLayerCount) * LayerHeight;
@@ -438,7 +457,7 @@ bool ACastleBoard::ExpandMainTowerLayers(const int32 TargetLayerCount, FText& Ou
 
 	// 先注册隐藏吊挂，再追加侧格。任一步失败都保留原等级网格、吊挂及旧房间索引。
 	if (!TowerPresentation->PrepareTier(TargetLayerCount, OutReason)) { return false; }
-	if (!TowerSideGrid->ExpandToLayerCount(TargetLayerCount, OutReason))
+	if (!TowerSideGrid->ExpandToLayerCount(TargetLayerCount, TierMaxNumber, OutReason))
 	{
 		TowerPresentation->DiscardPreparedTier();
 		return false;
@@ -818,6 +837,43 @@ bool ACastleBoard::CanPlaceBuildingInternal(const FIntVector& Coordinate, const 
 		{
 			OutFailureReason = FText::FromString(TEXT("建筑占用范围中有格子已被占用。"));
 			return false;
+		}
+	}
+	// 多格建筑按本次实际占用的格数计量，恰好达到本级容量时仍可放置。
+	const int64 ResultingCells = static_cast<int64>(GetOccupiedRoomCellCount()) + Footprint.Num();
+	const auto WithinRoomLimit = [&](const int32 Limit, const UObject* Source)
+	{
+		if (Limit < 1)
+		{
+			OutFailureReason = INVTEXT("主塔房间上限无效，无法放置。");
+			UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 的房间上限来源 %s 返回了无效容量 %d。"),
+				*GetPathName(), *GetPathNameSafe(Source), Limit);
+			return false;
+		}
+		if (ResultingCells > Limit)
+		{
+			OutFailureReason = FText::Format(INVTEXT("本次放置会超过当前主塔房间上限（{0} 格）。"), Limit);
+			return false;
+		}
+		return true;
+	};
+	const UWorld* World = GetWorld();
+	const auto* Director = World ? World->GetSubsystem<UCastleDirectorSubsystem>() : nullptr;
+	if (Director && Director->IsRunning())
+	{
+		if (!WithinRoomLimit(Director->GetCurrentRoomLimit(), Director)) { return false; }
+	}
+	else
+	{
+		for (const UCastleShopComponent* Shop : BoundShops)
+		{
+			if (!IsValid(Shop))
+			{
+				OutFailureReason = INVTEXT("棋盘绑定的商店无效，无法读取房间上限。");
+				UE_LOG(LogMoving_Castle, Error, TEXT("棋盘 %s 的绑定商店 %s 无效。"), *GetPathName(), *GetPathNameSafe(Shop));
+				return false;
+			}
+			if (!WithinRoomLimit(Shop->RoomLimit, Shop)) { return false; }
 		}
 	}
 	// 整座建筑只逐格检查高度、水平边界与占用，不要求下方存在地面或建筑。
@@ -2276,11 +2332,13 @@ bool ACastleBoard::InitializeTowerSideStarterDeck(FText& OutReason)
 	const FIntVector Base = GetBoardCenterCoordinate();
 	const ECastleGridFace Faces[] = {ECastleGridFace::PositiveX, ECastleGridFace::NegativeX,
 		ECastleGridFace::PositiveY, ECastleGridFace::NegativeY};
+	// 塔底格与开局手牌共用 Lv1 上限，继承数字时也须满足该区间。
+	const int32 MaxNumber = TowerMaxNumberByTier[0];
 	FFaceValue Sides[UE_ARRAY_COUNT(Faces)];
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Faces); ++Index)
 	{
 		const FCastleTowerSideCell* Cell = FindTowerSideCell(Base, Faces[Index]);
-		if (!Cell || !CastleTileColors::IsPlayable(Cell->Color) || Cell->Number < 1 || Cell->Number > 9)
+		if (!Cell || !CastleTileColors::IsPlayable(Cell->Color) || Cell->Number < 1 || Cell->Number > MaxNumber)
 		{
 			OutReason = FText::Format(INVTEXT("塔底坐标 {0} 的面 {1} 缺少有效色号。"),
 				FText::FromString(Base.ToString()), static_cast<int32>(Faces[Index]));
@@ -2312,7 +2370,7 @@ bool ACastleBoard::InitializeTowerSideStarterDeck(FText& OutReason)
 	const auto MatchRandomAttribute = [&](const FFaceValue& Anchor)
 	{
 		return Random.RandRange(0, 1) == 0
-			? FFaceValue{Anchor.Color, Random.RandRange(1, 9)}
+			? FFaceValue{Anchor.Color, Random.RandRange(1, MaxNumber)}
 			: FFaceValue{Colors[Random.RandRange(0, Colors.Num() - 1)], Anchor.Number};
 	};
 

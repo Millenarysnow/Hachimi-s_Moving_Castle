@@ -1,5 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #include "CastleDirectorSubsystem.h"
+#include "Castle/SkyIslands/CastleSkyIslandWeightsDataAsset.h"
 #include "Audio/CastleAudioSubsystem.h"
 #include "Castle/MainMenu/CastleMenuModel.h"
 #include "Castle/Support/CastleSupportTowerSubsystem.h"
@@ -138,6 +139,17 @@ bool UCastleDirectorSubsystem::StartDirector(FText& OutReason)
 	}
 	// MainMap 的开局依赖主塔侧格；旧地图仍可以显式使用地面格。
 	if (!Board->ValidatePlacementSurface(OutReason)) { return false; }
+	// 棋盘先生成开局侧格和手牌，导演在发布节点前核对完整四档配置。
+	for (int32 Tier = 0; Tier < Config->TowerLevels.Num(); ++Tier)
+	{
+		if (Board->TowerMaxNumberByTier.Num() != 4 || Board->TowerMaxNumberByTier[Tier] != Config->TowerLevels[Tier].MaxShopNumber)
+		{
+			OutReason = FText::FromString(FString::Printf(TEXT("棋盘 %s 的 Lv%d 数字上限与导演资产 %s 不一致。"),
+				*Board->GetPathName(), Tier + 1, *Config->GetPathName()));
+			UE_LOG(LogMoving_Castle, Error, TEXT("%s"), *OutReason.ToString());
+			return false;
+		}
+	}
 	Tower = GetWorld()->GetSubsystem<UCastleMainTowerSubsystem>()->GetRegisteredMainTower();
 	Controller = Cast<ACastlePlayerController>(GetWorld()->GetFirstPlayerController());
 	if (!IsValid(Tower) || !IsValid(Controller) || !Controller->IsLocalController())
@@ -468,6 +480,15 @@ bool UCastleDirectorSubsystem::RecallBattleNPCs(FText& OutReason)
 bool UCastleDirectorSubsystem::TryEnterSkyIsland(ACastleDirectorNodeActor& Node,
 	const UCastleDirectorConfigDataAsset& IslandConfig, FText& OutReason)
 {
+	ECastleSkyIslandType Type;
+	int32 Seed;
+	return TryResolveSkyIslandNode(Node, IslandConfig, Type, Seed, OutReason)
+		&& TryEnterConfiguredSkyIsland(IslandConfig, Type, Seed, &Node, OutReason);
+}
+
+bool UCastleDirectorSubsystem::TryResolveSkyIslandNode(const ACastleDirectorNodeActor& Node,
+	const UCastleDirectorConfigDataAsset& IslandConfig, ECastleSkyIslandType& OutType, int32& OutSeed, FText& OutReason) const
+{
 	const int32 NodeIndex = Nodes.IndexOfByKey(&Node);
 	if (NodeIndex == INDEX_NONE
 		|| (Node.GetKind() != ECastleDirectorNodeKind::RewardIsland && Node.GetKind() != ECastleDirectorNodeKind::RestIsland))
@@ -481,9 +502,24 @@ bool UCastleDirectorSubsystem::TryEnterSkyIsland(ACastleDirectorNodeActor& Node,
 	const uint32 Seed = static_cast<uint32>(IslandConfig.RunSeed) ^ (static_cast<uint32>(GetNextStep()) * 0x9e3779b9u)
 		^ (static_cast<uint32>(NodeIndex) * 0x85ebca6bu);
 	FRandomStream Random(static_cast<int32>(Seed));
-	const auto Type = Node.GetKind() == ECastleDirectorNodeKind::RestIsland ? ECastleSkyIslandType::Rest
-		: static_cast<ECastleSkyIslandType>(Random.RandRange(0, 2));
-	return TryEnterConfiguredSkyIsland(IslandConfig, Type, Random.GetCurrentSeed(), &Node, OutReason);
+	if (!IsValid(IslandConfig.SkyIslandWeights))
+	{
+		OutReason = INVTEXT("缺少必填的空岛概率资产 SkyIslandWeights。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演配置 %s：%s"), *IslandConfig.GetPathName(), *OutReason.ToString());
+		return false;
+	}
+	// 休息节点由节点类型直接决定，仍校验正式资产，且保留原来不消耗随机流的顺序。
+	if (Node.GetKind() == ECastleDirectorNodeKind::RestIsland)
+	{
+		if (!IslandConfig.SkyIslandWeights->ValidateConfiguration(OutReason)) { return false; }
+		OutType = ECastleSkyIslandType::Rest;
+	}
+	else if (!IslandConfig.SkyIslandWeights->TrySelectRewardSkyIsland(Random, OutType, OutReason))
+	{
+		return false;
+	}
+	OutSeed = Random.GetCurrentSeed();
+	return true;
 }
 
 bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirectorConfigDataAsset& IslandConfig,
@@ -768,7 +804,9 @@ bool UCastleDirectorSubsystem::TryEnterBonusSkyIslandFromPortal(ACastleBuildingB
 	const uint32 Seed = static_cast<uint32>(Config->RunSeed) ^ (static_cast<uint32>(GetNextStep()) * 0x9e3779b9u)
 		^ ((BonusSkyIslandVisitCount + 1u) * 0x85ebca6bu);
 	FRandomStream Random(static_cast<int32>(Seed));
-	const ECastleSkyIslandType Type = Types[Random.RandRange(0, UE_ARRAY_COUNT(Types) - 1)];
+	if (!IsValid(Config->SkyIslandWeights)) { return Reject(INVTEXT("缺少必填的空岛概率资产 SkyIslandWeights。")); }
+	ECastleSkyIslandType Type;
+	if (!Config->SkyIslandWeights->TrySelectBonusSkyIsland(Random, Type, OutReason)) { return false; }
 	return TryEnterConfiguredSkyIsland(*Config, Type, Random.GetCurrentSeed(), nullptr, OutReason, PortalRoom);
 }
 
@@ -842,6 +880,18 @@ bool UCastleDirectorSubsystem::TryEnterSkyIslandByTypeForDebug(const ECastleSkyI
 	// 调试入口无需场上有奖励节点，按本局种子和步数生成稳定的玩法种子。
 	const uint32 Seed = static_cast<uint32>(Config->RunSeed) ^ (static_cast<uint32>(GetNextStep()) * 0x9e3779b9u);
 	return TryEnterConfiguredSkyIsland(*Config, Type, static_cast<int32>(Seed), nullptr, OutReason);
+}
+
+bool UCastleDirectorSubsystem::TryPreviewSkyIsland(const ACastleDirectorNodeActor& Node, ECastleSkyIslandType& OutType, FText& OutReason) const
+{
+	if (!IsValid(Config))
+	{
+		OutReason = INVTEXT("缺少导演配置，无法查询空岛节点。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s：%s"), *GetPathName(), *OutReason.ToString());
+		return false;
+	}
+	int32 Seed;
+	return TryResolveSkyIslandNode(Node, *Config, OutType, Seed, OutReason);
 }
 
 bool UCastleDirectorSubsystem::TryEnterSkyIslandFixture(FText& OutReason)
@@ -1051,10 +1101,7 @@ int32 UCastleDirectorSubsystem::GetOwnedRoomCount() const
 {
 	int32 Cells = INDEX_NONE;
 	FText Reason;
-	if (!UCastleShopComponent::TryCountOwnedRoomCells(Board, Cells, Reason))
-	{
-		UE_LOG(LogMoving_Castle, Error, TEXT("导演配置 %s 无法读取房间总量：%s"), *GetPathNameSafe(Config), *Reason.ToString());
-	}
+	UCastleShopComponent::TryCountOwnedRoomCells(Board, Cells, Reason);
 	return Cells;
 }
 
@@ -1150,7 +1197,7 @@ bool UCastleDirectorSubsystem::TryCheckTowerUpgrade(FText& OutReason)
 		}
 	}
 	if (!Tower->PrepareTowerBalloonTier(Target.BalloonCount, Target.BaseMaxHealth, true, OutReason)
-		|| !Board->ExpandMainTowerLayers(Target.UnlockedLayers, OutReason))
+		|| !Board->ExpandMainTowerLayers(Target.UnlockedLayers, OutReason, Target.MaxShopNumber))
 	{
 		Tower->DiscardPreparedBalloonTier();
 		return Reject(OutReason);

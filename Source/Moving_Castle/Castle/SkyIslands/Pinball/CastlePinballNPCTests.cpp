@@ -8,6 +8,7 @@
 #include "Castle/Components/CastleEconomyComponent.h"
 #include "Castle/Components/CastleMainTowerComponent.h"
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
+#include "Castle/SkyIslands/CastleSkyIslandWeightsDataAsset.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "CastleBoard.h"
@@ -71,7 +72,10 @@ namespace
 		Config->SetFlags(RF_Transient);
 		Config->SkyIslandClasses.Reset();
 		Config->SkyIslandClasses.Add(ECastleSkyIslandType::NPC, ACastlePinballNPCSkyIsland::StaticClass());
-		// 导演按棋盘前弧的负角度向正角度发布节点，选择序号 0 并为它构造确定的 NPC 种子。
+		// 设置单类测试权重，交给正式导演决定奖励节点抽样与种子。
+		Config->SkyIslandWeights = NewObject<UCastleSkyIslandWeightsDataAsset>(Config);
+		Config->SkyIslandWeights->RewardShopWeight = 0;
+		Config->SkyIslandWeights->RewardGambleWeight = 0;
 		TArray<ACastleDirectorNodeActor*> Nodes;
 		for (TActorIterator<ACastleDirectorNodeActor> Node(World); Node; ++Node) { Nodes.Add(*Node); }
 		if (!Test.TestTrue(TEXT("编辑阶段有正式节点"), !Nodes.IsEmpty())) { return false; }
@@ -82,14 +86,6 @@ namespace
 			return FMath::FindDeltaAngleDegrees(BoardYaw, (A.GetActorLocation() - Center).Rotation().Yaw)
 				< FMath::FindDeltaAngleDegrees(BoardYaw, (B.GetActorLocation() - Center).Rotation().Yaw);
 		});
-		int32 Seed = 0;
-		for (;; ++Seed)
-		{
-			FRandomStream Choice(Seed);
-			if (Choice.RandRange(0, 2) == static_cast<int32>(ECastleSkyIslandType::NPC)) { break; }
-		}
-		const uint32 StepSeed = static_cast<uint32>(Director.GetNextStep()) * 0x9e3779b9u;
-		Config->RunSeed = static_cast<int32>(static_cast<uint32>(Seed) ^ StepSeed);
 		if (!Test.TestTrue(TEXT("布置真实导演持有的 NPC 奖励节点"),
 			Nodes[0]->Configure(*Config, Director.GetNextStep(), ECastleDirectorNodeKind::RewardIsland)))
 		{

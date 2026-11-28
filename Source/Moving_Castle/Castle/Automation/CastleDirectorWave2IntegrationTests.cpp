@@ -77,7 +77,7 @@ private:
 	{
 		FText Reason;
 		auto* Shop = Director.Controller->GetShop();
-		Test.TestEqual(TEXT("开局 8 名普通 NPC"), Director.RunNPCCount, 8);
+		Test.TestEqual(TEXT("开局 1 名普通 NPC"), Director.RunNPCCount, 1);
 		Test.TestEqual(TEXT("开局可标两个路径点"), Director.PatrolRoute->GetMaxPlayerWaypoints(), 2);
 		const int32 Balloons[] = {5, 10, 20, 40};
 		const int32 Rooms[] = {0, 2, 5, 10};
@@ -87,18 +87,26 @@ private:
 		Director.Config = DuplicateObject(Director.Config.Get(), Director.GetWorld());
 		FCastleBuildingDescriptor Card;
 		const auto* Definition = Director.Board->FindBuildingDefinition(ECastleBuildingType::NormalRoom);
-		if (!Test.TestTrue(TEXT("成长测试使用正式普通房牌面"), Definition && Definition->CreateDescriptor(
-			1, ECastleTileColor::Red, 1, Card, Reason))) { return; }
-		int32 ExpectedNPCs = 8;
+		// 用真实塔侧面启动一个连续房间布局，后续各级都以实际建造达到阈值。
+		const FIntVector Base = Director.Board->GetBoardCenterCoordinate();
+		const auto* Side = Director.Board->FindTowerSideCell(Base, ECastleGridFace::PositiveY);
+		if (!Test.TestTrue(TEXT("成长测试使用正式普通房牌面"), Side && Definition && Definition->CreateDescriptor(
+			1, Side->Color, Side->Number, Card, Reason))) { return; }
+		FCastleGridCursorTarget Cursor;
+		Cursor.bValid = true;
+		Cursor.Surface = ECastleGridCursorSurface::MainTowerSide;
+		Cursor.Face = ECastleGridFace::PositiveY;
+		Cursor.Cell = Base;
+		Cursor.AdjacentCell = Base + FIntVector(0, 1, 0);
+		auto* Seed = Director.Board->PlaceBuildingAtCursor(Cursor, Card, false, Reason);
+		if (!Test.TestTrue(TEXT("登记增长布局起始格"), CastleBuildingTests::CompletePlacement(Seed))) { return; }
+		int32 ExpectedNPCs = 1;
 		for (int32 Level = 1; Level <= 4; ++Level)
 		{
 			if (Level > 1)
 			{
 				Director.Tower->ApplyDamage(25.0f);
-				// 达到当前等级阈值，补发的房间允许溢出到临时栏，和局内房间组走相同入口。
-				TArray<FCastleBuildingDescriptor> Cards;
-				Cards.Init(Card, Limits[Level - 2] - Director.GetOwnedRoomCount());
-				if (!Test.TestTrue(TEXT("批量补足升级所需占格"), Director.Board->PrototypeBackpack->TryAddItemsAllowOverflow(Cards, Reason))
+				if (!Test.TestTrue(TEXT("建造至当前等级阈值"), CastleBuildingTests::FillRoomCells(*Director.Board, *Seed, Card, Limits[Level - 2], Reason))
 					|| !Test.TestTrue(TEXT("达标触发升级"), Director.TryCheckTowerUpgrade(Reason)))
 				{
 					Test.AddError(Reason.ToString());
@@ -123,7 +131,16 @@ private:
 			Test.TestEqual(TEXT("最大生命"), Director.Tower->MaxHealth, Health[Level - 1]);
 			Test.TestEqual(TEXT("升级补满生命"), Director.Tower->CurrentHealth, Health[Level - 1]);
 		}
-		Test.TestEqual(TEXT("Lv4 领完三次普通NPC后有18名"), Director.RunNPCCount, 18);
+		Test.TestEqual(TEXT("Lv4 领完三次普通NPC后有11名"), Director.RunNPCCount, 11);
+		// 成长布局已验收。拆除房间保留已提交等级，并释放后续徽章与支援塔场景需要的侧格。
+		for (ACastleBuildingBase* Building : Director.Board->GetPlacedBuildings())
+		{
+			if (!Test.TestTrue(TEXT("释放成长测试的场内占格"), Director.Board->RemoveBuilding(Building, Reason)))
+			{
+				Test.AddError(Reason.ToString());
+				return;
+			}
+		}
 		// 按正式精英关号注入两次清场，覆盖前两个精英关的解锁与奖励。
 		for (int32 EliteStage = 1; EliteStage <= 2; ++EliteStage)
 		{

@@ -2,6 +2,7 @@
 
 #include "Castle/Automation/CastleBuildingTestUtilities.h"
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
+#include "Castle/SkyIslands/CastleSkyIslandWeightsDataAsset.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
 #include "Castle/Items/CastleItemGrantLibrary.h"
@@ -767,9 +768,15 @@ bool FCastlePortalRoomTraitTest::RunTest(const FString& Parameters)
 	{
 		Config->SkyIslandClasses.Add(Type, ACastleSkyIslandTestFixture::StaticClass());
 	}
+	// 逐项设置单类权重，确保四种实际门体事务都跑到。
+	Config->SkyIslandWeights = NewObject<UCastleSkyIslandWeightsDataAsset>(Config);
 	TSet<FString> IslandTypes;
-	for (int32 Visit = 0; Visit < 16 && IslandTypes.Num() < 4; ++Visit)
+	for (int32 Visit = 0; Visit < 4; ++Visit)
 	{
+		Config->SkyIslandWeights->BonusShopWeight = Visit == 0 ? 100 : 0;
+		Config->SkyIslandWeights->BonusNPCWeight = Visit == 1 ? 100 : 0;
+		Config->SkyIslandWeights->BonusGambleWeight = Visit == 2 ? 100 : 0;
+		Config->SkyIslandWeights->BonusRestWeight = Visit == 3 ? 100 : 0;
 		Door = Room->GetRoomTraitComponent();
 		const FVector Center = Door->GetComponentLocation();
 		bHitPortal = false;

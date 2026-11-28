@@ -5,9 +5,7 @@
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
-#include "Castle/Components/CastleMainTowerComponent.h"
 #include "CastleRestSkyIsland.h"
-#include "CastleBoard.h"
 #include "Containers/Ticker.h"
 #include "Engine/Engine.h"
 #include "EngineUtils.h"
@@ -22,42 +20,18 @@ namespace
 		if (GEngine) { GEngine->AddOnScreenDebugMessage(INDEX_NONE, 5.0f, FColor::Yellow, Message.ToString()); }
 	}
 
-	ACastleDirectorNodeActor* FindAcceptanceNode(const UCastleDirectorSubsystem& Director, const ECastleSkyIslandType Type)
+	ACastleDirectorNodeActor* FindAcceptanceNode(const UCastleDirectorSubsystem& Director, const ECastleSkyIslandType Type, FText& OutReason)
 	{
-		UWorld* World = Director.GetWorld();
-		const auto* Config = Director.GetConfig();
-		if (Type == ECastleSkyIslandType::Rest)
+		// 节点序号、种子和权重直接使用导演的正式解析入口。
+		for (TActorIterator<ACastleDirectorNodeActor> Node(Director.GetWorld()); Node; ++Node)
 		{
-			for (TActorIterator<ACastleDirectorNodeActor> Node(World); Node; ++Node)
-			{
-				if (Node->GetKind() == ECastleDirectorNodeKind::RestIsland) { return *Node; }
-			}
-			return nullptr;
+			const auto Kind = Node->GetKind();
+			if (Kind != ECastleDirectorNodeKind::RewardIsland && Kind != ECastleDirectorNodeKind::RestIsland) { continue; }
+			ECastleSkyIslandType Selected;
+			if (!Director.TryPreviewSkyIsland(**Node, Selected, OutReason)) { return nullptr; }
+			if (Selected == Type) { return *Node; }
 		}
-
-		const auto* Towers = World->GetSubsystem<UCastleMainTowerSubsystem>();
-		const auto* Tower = Towers ? Towers->GetRegisteredMainTower() : nullptr;
-		const TActorIterator<ACastleBoard> Board(World);
-		if (!Tower || !Board) { return nullptr; }
-
-		TArray<ACastleDirectorNodeActor*> Nodes;
-		for (TActorIterator<ACastleDirectorNodeActor> Node(World); Node; ++Node) { Nodes.Add(*Node); }
-		const FVector Center = Tower->GetTargetLocation();
-		const double ForwardYaw = Board->GetActorForwardVector().Rotation().Yaw;
-		// 导演从棋盘前方圆弧的负角度向正角度生成节点。恢复节点序号以核对奖励岛的实际类型。
-		Nodes.Sort([Center, ForwardYaw](const ACastleDirectorNodeActor& A, const ACastleDirectorNodeActor& B)
-		{
-			return FMath::FindDeltaAngleDegrees(ForwardYaw, (A.GetActorLocation() - Center).Rotation().Yaw)
-				< FMath::FindDeltaAngleDegrees(ForwardYaw, (B.GetActorLocation() - Center).Rotation().Yaw);
-		});
-		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
-		{
-			if (Nodes[Index]->GetKind() != ECastleDirectorNodeKind::RewardIsland) { continue; }
-			const uint32 Seed = static_cast<uint32>(Config->RunSeed) ^ (static_cast<uint32>(Director.GetNextStep()) * 0x9e3779b9u)
-				^ (static_cast<uint32>(Index) * 0x85ebca6bu);
-			FRandomStream Random(static_cast<int32>(Seed));
-			if (static_cast<ECastleSkyIslandType>(Random.RandRange(0, 2)) == Type) { return Nodes[Index]; }
-		}
+		OutReason = INVTEXT("当前步没有对应类型的空岛节点。请推进关卡后重试。");
 		return nullptr;
 	}
 }
@@ -72,10 +46,11 @@ void CastleQueueSkyIslandAcceptance(UWorld* World, const ECastleSkyIslandType Ty
 		ShowIslandAcceptanceMessage(INVTEXT("请在 MainMap 的 PIE 编辑阶段运行空岛验收命令。"));
 		return;
 	}
-	auto* Node = FindAcceptanceNode(*Director, Type);
+	FText Reason;
+	auto* Node = FindAcceptanceNode(*Director, Type, Reason);
 	if (!Node)
 	{
-		ShowIslandAcceptanceMessage(INVTEXT("当前步没有对应类型的空岛节点。请推进关卡后重试。"));
+		ShowIslandAcceptanceMessage(Reason);
 		return;
 	}
 

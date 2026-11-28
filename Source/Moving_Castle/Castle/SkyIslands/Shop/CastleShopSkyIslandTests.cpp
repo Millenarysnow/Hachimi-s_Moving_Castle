@@ -5,6 +5,7 @@
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Castle/Components/CastleEconomyComponent.h"
 #include "Castle/Director/CastleDirectorConfigDataAsset.h"
+#include "Castle/SkyIslands/CastleSkyIslandWeightsDataAsset.h"
 #include "Castle/Director/CastleDirectorNodeActor.h"
 #include "Castle/Director/CastleDirectorSettings.h"
 #include "Castle/Director/CastleDirectorSubsystem.h"
@@ -597,20 +598,10 @@ static bool QueueShopSkyIslandScenario(FAutomationTestBase& Test, const EShopIsl
 	if (!Test.TestNotNull(TEXT("正式导演配置"), Source)) { return false; }
 	TStrongObjectPtr<UCastleDirectorConfigDataAsset> Config(DuplicateObject(Source, GetTransientPackage()));
 	Config->SkyIslandClasses.Add(ECastleSkyIslandType::Shop, ACastleShopSkyIsland::StaticClass());
-	// 找到开局各有效节点序号都抽到商店的测试种子，避免测试依赖迭代器枚举顺序。
-	bool bFoundSeed = false;
-	for (int32 Seed = 0; Seed < 100000 && !bFoundSeed; ++Seed)
-	{
-		bFoundSeed = true;
-		for (int32 Index = 0; Index < Config->NodeCountMax; ++Index)
-		{
-			FRandomStream Random(static_cast<int32>(static_cast<uint32>(Seed) ^ 0x9e3779b9u
-				^ (static_cast<uint32>(Index) * 0x85ebca6bu)));
-			bFoundSeed &= Random.RandRange(0, 2) == static_cast<int32>(ECastleSkyIslandType::Shop);
-		}
-		if (bFoundSeed) { Config->RunSeed = Seed; }
-	}
-	if (!Test.TestTrue(TEXT("指定商店节点的测试种子"), bFoundSeed)) { return false; }
+	// 事务场景需要固定商店岛，使用合法的单类分布，所有种子与节点序号均可复现。
+	Config->SkyIslandWeights = NewObject<UCastleSkyIslandWeightsDataAsset>(Config.Get());
+	Config->SkyIslandWeights->RewardNPCWeight = 0;
+	Config->SkyIslandWeights->RewardGambleWeight = 0;
 	Settings->DirectorConfig = Config.Get();
 	// 只等待本用例显式启动的 PIE 导演，避免全量队列中引擎等待到另一个测试的游戏世界。
 	ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/MovingCastle/Maps/MainMap")));
