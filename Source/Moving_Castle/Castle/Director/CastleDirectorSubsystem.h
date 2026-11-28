@@ -75,6 +75,8 @@ public:
 	/** 在编辑阶段从本局正式配置指定空岛，沿用节点入岛与离岛的事务。 */
 	bool TryEnterSkyIslandByTypeForDebug(ECastleSkyIslandType Type, FText& OutReason);
 	bool TryEnterSkyIslandFixture(FText& OutReason);
+	/** 验收辅助通过正式节点序号及权重预览本次抽样。 */
+	bool TryPreviewSkyIsland(const ACastleDirectorNodeActor& Node, ECastleSkyIslandType& OutType, FText& OutReason) const;
 #endif
 	/** 战斗清场或空岛成功返塔后提交，节点与正式战斗都读取同一关卡进度。 */
 	int32 GetClearedSteps() const { return ClearedSteps; }
@@ -141,6 +143,9 @@ private:
 	bool TryStartSelectedBattle(ACastleDirectorNodeActor* Node, FText& OutReason);
 	/** 真实节点先根据关数和节点序号确定类型及玩法种子。 */
 	bool TryEnterSkyIsland(ACastleDirectorNodeActor& Node, const UCastleDirectorConfigDataAsset& IslandConfig, FText& OutReason);
+	/** 入岛和验收共用同一份节点序号、种子及结果。 */
+	bool TryResolveSkyIslandNode(const ACastleDirectorNodeActor& Node, const UCastleDirectorConfigDataAsset& IslandConfig,
+		ECastleSkyIslandType& OutType, int32& OutSeed, FText& OutReason) const;
 	/** 统一提交生成与传送；传送门入口保留当前节点，且在传送成功后才消费门体。 */
 	bool TryEnterConfiguredSkyIsland(const UCastleDirectorConfigDataAsset& IslandConfig, ECastleSkyIslandType Type,
 		int32 Seed, const ACastleDirectorNodeActor* Node, FText& OutReason, ACastleBuildingBase* PortalRoom = nullptr);

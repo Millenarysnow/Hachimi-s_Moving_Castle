@@ -109,7 +109,7 @@ namespace
 		Test->TestTrue(TEXT("正式开局的B键入口可打开商店"), Controller->GetShop()->IsShopOpen());
 		Controller->ToggleShop();
 		Test->TestFalse(TEXT("关闭后商店界面收起"), Controller->GetShop()->IsShopOpen());
-		Test->TestTrue(TEXT("真实HUD显示开局房间计数5/30"), Director->GetHUDSummary().Contains(TEXT("房间 5/30")));
+		Test->TestTrue(TEXT("真实 HUD 显示开局场内占格 0/30"), Director->GetHUDSummary().Contains(TEXT("房间 0/30")));
 		if (UCastleEconomyHUDWidget* Balance = FindMainMapWidget<UCastleEconomyHUDWidget>(*Test, World))
 		{
 			// 真实账户事件应该在同一帧更新 WBP，HUD 不应参与中心指针的命中测试。

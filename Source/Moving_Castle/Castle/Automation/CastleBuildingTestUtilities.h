@@ -72,6 +72,9 @@ namespace CastleBuildingTests
 		const FIntVector Offsets[] = {{1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}};
 		const ECastleGridFace Faces[] = {ECastleGridFace::PositiveX, ECastleGridFace::NegativeX,
 			ECastleGridFace::PositiveY, ECastleGridFace::NegativeY, ECastleGridFace::Up, ECastleGridFace::Down};
+		// 放置允许建筑从棋盘边缘伸出，测试布局使用与正式入口相同的坐标边界。
+		FIntPoint Min, Max;
+		Board.GetBoardExtent(Min, Max);
 		const FIntVector TowerBase = Board.GetBoardCenterCoordinate();
 		TArray<FIntVector> Pending = Seed.GetOccupiedCoordinates();
 		TSet<FIntVector> Visited;
@@ -81,7 +84,10 @@ namespace CastleBuildingTests
 			for (int32 Side = 0; Side < UE_ARRAY_COUNT(Offsets) && Board.GetOccupiedRoomCellCount() < TargetCount; ++Side)
 			{
 				const FIntVector Adjacent = Cell + Offsets[Side];
-				if ((Reserved.IsSet() && Reserved.GetValue() == Adjacent) || Visited.Contains(Adjacent) || !Board.IsCoordinateWithinBoard(Adjacent)
+				if ((Reserved.IsSet() && Reserved.GetValue() == Adjacent) || Visited.Contains(Adjacent)
+					|| Adjacent.X < Min.X - Board.MaxOverhangCells || Adjacent.X > Max.X + Board.MaxOverhangCells
+					|| Adjacent.Y < Min.Y - Board.MaxOverhangCells || Adjacent.Y > Max.Y + Board.MaxOverhangCells
+					|| Adjacent.Z < Board.GridOrigin.Z || Adjacent.Z >= Board.GridOrigin.Z + Board.GetUnlockedLayerCount()
 					|| (Adjacent.X == TowerBase.X && Adjacent.Y == TowerBase.Y)) { continue; }
 				Visited.Add(Adjacent);
 				if (!Board.GetBuildingAt(Adjacent))
@@ -98,7 +104,7 @@ namespace CastleBuildingTests
 			}
 		}
 		if (Board.GetOccupiedRoomCellCount() == TargetCount) { return true; }
-		OutReason = INVTEXT("测试布局没有足够的连续空格。");
+		OutReason = FText::Format(INVTEXT("测试布局填入 {0} 格，目标为 {1} 格。"), Board.GetOccupiedRoomCellCount(), TargetCount);
 		return false;
 	}
 

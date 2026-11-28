@@ -1,5 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #include "CastleDirectorSubsystem.h"
+#include "Castle/SkyIslands/CastleSkyIslandWeightsDataAsset.h"
 #include "Audio/CastleAudioSubsystem.h"
 #include "Castle/MainMenu/CastleMenuModel.h"
 #include "Castle/Support/CastleSupportTowerSubsystem.h"
@@ -479,6 +480,15 @@ bool UCastleDirectorSubsystem::RecallBattleNPCs(FText& OutReason)
 bool UCastleDirectorSubsystem::TryEnterSkyIsland(ACastleDirectorNodeActor& Node,
 	const UCastleDirectorConfigDataAsset& IslandConfig, FText& OutReason)
 {
+	ECastleSkyIslandType Type;
+	int32 Seed;
+	return TryResolveSkyIslandNode(Node, IslandConfig, Type, Seed, OutReason)
+		&& TryEnterConfiguredSkyIsland(IslandConfig, Type, Seed, &Node, OutReason);
+}
+
+bool UCastleDirectorSubsystem::TryResolveSkyIslandNode(const ACastleDirectorNodeActor& Node,
+	const UCastleDirectorConfigDataAsset& IslandConfig, ECastleSkyIslandType& OutType, int32& OutSeed, FText& OutReason) const
+{
 	const int32 NodeIndex = Nodes.IndexOfByKey(&Node);
 	if (NodeIndex == INDEX_NONE
 		|| (Node.GetKind() != ECastleDirectorNodeKind::RewardIsland && Node.GetKind() != ECastleDirectorNodeKind::RestIsland))
@@ -492,9 +502,24 @@ bool UCastleDirectorSubsystem::TryEnterSkyIsland(ACastleDirectorNodeActor& Node,
 	const uint32 Seed = static_cast<uint32>(IslandConfig.RunSeed) ^ (static_cast<uint32>(GetNextStep()) * 0x9e3779b9u)
 		^ (static_cast<uint32>(NodeIndex) * 0x85ebca6bu);
 	FRandomStream Random(static_cast<int32>(Seed));
-	const auto Type = Node.GetKind() == ECastleDirectorNodeKind::RestIsland ? ECastleSkyIslandType::Rest
-		: static_cast<ECastleSkyIslandType>(Random.RandRange(0, 2));
-	return TryEnterConfiguredSkyIsland(IslandConfig, Type, Random.GetCurrentSeed(), &Node, OutReason);
+	if (!IsValid(IslandConfig.SkyIslandWeights))
+	{
+		OutReason = INVTEXT("缺少必填的空岛概率资产 SkyIslandWeights。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("导演配置 %s：%s"), *IslandConfig.GetPathName(), *OutReason.ToString());
+		return false;
+	}
+	// 休息节点由节点类型直接决定，仍校验正式资产，且保留原来不消耗随机流的顺序。
+	if (Node.GetKind() == ECastleDirectorNodeKind::RestIsland)
+	{
+		if (!IslandConfig.SkyIslandWeights->ValidateConfiguration(OutReason)) { return false; }
+		OutType = ECastleSkyIslandType::Rest;
+	}
+	else if (!IslandConfig.SkyIslandWeights->TrySelectRewardSkyIsland(Random, OutType, OutReason))
+	{
+		return false;
+	}
+	OutSeed = Random.GetCurrentSeed();
+	return true;
 }
 
 bool UCastleDirectorSubsystem::TryEnterConfiguredSkyIsland(const UCastleDirectorConfigDataAsset& IslandConfig,
@@ -779,7 +804,9 @@ bool UCastleDirectorSubsystem::TryEnterBonusSkyIslandFromPortal(ACastleBuildingB
 	const uint32 Seed = static_cast<uint32>(Config->RunSeed) ^ (static_cast<uint32>(GetNextStep()) * 0x9e3779b9u)
 		^ ((BonusSkyIslandVisitCount + 1u) * 0x85ebca6bu);
 	FRandomStream Random(static_cast<int32>(Seed));
-	const ECastleSkyIslandType Type = Types[Random.RandRange(0, UE_ARRAY_COUNT(Types) - 1)];
+	if (!IsValid(Config->SkyIslandWeights)) { return Reject(INVTEXT("缺少必填的空岛概率资产 SkyIslandWeights。")); }
+	ECastleSkyIslandType Type;
+	if (!Config->SkyIslandWeights->TrySelectBonusSkyIsland(Random, Type, OutReason)) { return false; }
 	return TryEnterConfiguredSkyIsland(*Config, Type, Random.GetCurrentSeed(), nullptr, OutReason, PortalRoom);
 }
 
@@ -853,6 +880,18 @@ bool UCastleDirectorSubsystem::TryEnterSkyIslandByTypeForDebug(const ECastleSkyI
 	// 调试入口无需场上有奖励节点，按本局种子和步数生成稳定的玩法种子。
 	const uint32 Seed = static_cast<uint32>(Config->RunSeed) ^ (static_cast<uint32>(GetNextStep()) * 0x9e3779b9u);
 	return TryEnterConfiguredSkyIsland(*Config, Type, static_cast<int32>(Seed), nullptr, OutReason);
+}
+
+bool UCastleDirectorSubsystem::TryPreviewSkyIsland(const ACastleDirectorNodeActor& Node, ECastleSkyIslandType& OutType, FText& OutReason) const
+{
+	if (!IsValid(Config))
+	{
+		OutReason = INVTEXT("缺少导演配置，无法查询空岛节点。");
+		UE_LOG(LogMoving_Castle, Error, TEXT("%s：%s"), *GetPathName(), *OutReason.ToString());
+		return false;
+	}
+	int32 Seed;
+	return TryResolveSkyIslandNode(Node, *Config, OutType, Seed, OutReason);
 }
 
 bool UCastleDirectorSubsystem::TryEnterSkyIslandFixture(FText& OutReason)

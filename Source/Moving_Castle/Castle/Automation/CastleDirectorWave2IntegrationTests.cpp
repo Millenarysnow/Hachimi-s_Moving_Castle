@@ -132,6 +132,15 @@ private:
 			Test.TestEqual(TEXT("升级补满生命"), Director.Tower->CurrentHealth, Health[Level - 1]);
 		}
 		Test.TestEqual(TEXT("Lv4 领完三次普通NPC后有11名"), Director.RunNPCCount, 11);
+		// 成长布局已验收。拆除房间保留已提交等级，并释放后续徽章与支援塔场景需要的侧格。
+		for (ACastleBuildingBase* Building : Director.Board->GetPlacedBuildings())
+		{
+			if (!Test.TestTrue(TEXT("释放成长测试的场内占格"), Director.Board->RemoveBuilding(Building, Reason)))
+			{
+				Test.AddError(Reason.ToString());
+				return;
+			}
+		}
 		// 按正式精英关号注入两次清场，覆盖前两个精英关的解锁与奖励。
 		for (int32 EliteStage = 1; EliteStage <= 2; ++EliteStage)
 		{

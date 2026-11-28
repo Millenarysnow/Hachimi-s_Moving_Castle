@@ -95,7 +95,7 @@ bool FCastleDirectorStateTest::RunTest(const FString& Parameters)
 			Board->FindBuildingDefinition(ECastleBuildingType::ArcherTower), 1, ECastleTileColor::Red, 3, AddedIndex, Reason));
 	}
 	TestFalse(TEXT("HUD读取不提前初始化商店"), Controller->GetShop()->IsInitialized());
-	TestTrue(TEXT("商店未初始化时HUD已有正确占用格数"), Director->GetHUDSummary().Contains(TEXT("房间 2/30")));
+	TestTrue(TEXT("商店未初始化时 HUD 只计场内，库存两张仍显示零格"), Director->GetHUDSummary().Contains(TEXT("房间 0/30")));
 	// 正式单局的编辑阶段从开局起允许使用普通商店，奖励是否选店只影响免费换批事务。
 	TestTrue(TEXT("开局编辑可用"), Director->IsEditingAllowed(Reason));
 	TestTrue(TEXT("正式单局开局即可使用普通商店"), Director->IsShopAccessAllowed(Reason));

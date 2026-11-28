@@ -19,6 +19,7 @@ class UCastleTowerDispatchConfigDataAsset;
 class UCastleTowerUpgradeRewardWidget;
 class UCastleWildcardRoomPickerWidget;
 class UCastleDialogueScriptDataAsset;
+class UCastleSkyIslandWeightsDataAsset;
 
 /** 单个主塔等级的固定成长数据；赠送数量仅在本次跨入对应等级时生成。 */
 USTRUCT(BlueprintType)
@@ -70,6 +71,9 @@ public:
 
 	/** 工厂只接受显式登记的玩法类，波次 2 正式资产保留空映射。 */
 	UPROPERTY(EditAnywhere, Category = "导演|空岛") TMap<ECastleSkyIslandType, TSubclassOf<ACastleSkyIslandBase>> SkyIslandClasses;
+	/** 正式单局必填，奖励节点与房间传送门分别使用独立权重。 */
+	UPROPERTY(EditAnywhere, Category = "导演|空岛") TObjectPtr<UCastleSkyIslandWeightsDataAsset> SkyIslandWeights;
+
 	/** MainMap 的三类奖励空岛逐一登记首次剧情，休息空岛没有剧本。 */
 	UPROPERTY(EditAnywhere, Category = "导演|空岛")
 	TMap<ECastleSkyIslandType, TObjectPtr<UCastleDialogueScriptDataAsset>> SkyIslandArrivalDialogues;
